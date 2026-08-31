@@ -1,0 +1,358 @@
+#!/usr/bin/env python3
+"""Verify the progressively enabled real-board routing corpus without mutating it."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def run_json(
+    command: list[str], timeout: int, allowed_returncodes: tuple[int, ...] = (0,)
+) -> dict:
+    completed = subprocess.run(
+        command,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    if completed.returncode not in allowed_returncodes:
+        raise RuntimeError(
+            f"command failed ({completed.returncode}): {' '.join(command)}\n"
+            f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
+        )
+    try:
+        return json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        raise RuntimeError(
+            f"command did not produce JSON: {' '.join(command)}\n{completed.stdout}"
+        ) from error
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise RuntimeError(message)
+
+
+def verify_hash(path: Path, expected: str, label: str) -> None:
+    require(path.is_file(), f"missing {label}: {path}")
+    actual = sha256(path)
+    require(actual == expected, f"{label} hash mismatch: expected {expected}, got {actual}")
+
+
+def render_copper_layers(
+    board: Path, output_dir: Path, kicad_cli: Path, inkscape: Path
+) -> None:
+    script = Path(__file__).with_name("export_copper_pngs.py")
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--board",
+            str(board),
+            "--output-dir",
+            str(output_dir),
+            "--kicad-cli",
+            str(kicad_cli),
+            "--inkscape",
+            str(inkscape),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"copper render failed ({completed.returncode}) for {board}\n"
+            f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
+        )
+
+
+def require_kicad_drc(board: Path, report: Path, kicad_cli: Path) -> None:
+    completed = subprocess.run(
+        [
+            str(kicad_cli),
+            "pcb",
+            "drc",
+            "--format",
+            "json",
+            "--severity-error",
+            "--exit-code-violations",
+            "--output",
+            str(report),
+            str(board),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"KiCad DRC rejected final copper ({completed.returncode}): {board}\n"
+            f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
+        )
+
+
+def verify_board(
+    flux_cli: Path,
+    corpus: Path,
+    artifacts: Path,
+    kicad_cli: Path,
+    inkscape: Path,
+    board: dict,
+) -> None:
+    board_id = board["id"]
+    source = corpus / f"{board_id}.kicad_pcb"
+    project = corpus / f"{board_id}.kicad_pro"
+    reference = corpus / "reference" / f"{board_id}.kicad_pcb"
+    license_path = corpus / board["license_file"]
+
+    verify_hash(source, board["board_sha256"], f"{board_id} stripped board")
+    verify_hash(reference, board["reference_sha256"], f"{board_id} routed reference")
+    verify_hash(project, board["project_sha256"], f"{board_id} project")
+    verify_hash(license_path, board["license_sha256"], f"{board_id} license")
+    before = sha256(source)
+    reference_before = sha256(reference)
+
+    inspected = run_json([str(flux_cli), "inspect-kicad", str(source)], timeout=30)
+    require(inspected.get("strict") is True, f"{board_id}: import is not strict")
+    require(inspected.get("lossy") is False, f"{board_id}: import is lossy")
+    expected = board["expected"]
+    for field in ("footprints", "nets", "tracks", "vias", "zones"):
+        require(
+            inspected.get(field) == expected[field],
+            f"{board_id}: expected {field}={expected[field]}, got {inspected.get(field)}",
+        )
+    require(
+        inspected.get("core_validation_errors", sys.maxsize)
+        <= expected["max_core_validation_errors"],
+        f"{board_id}: structural errors regressed from the recorded bound",
+    )
+
+    if board["status"] in {"qualified", "unlocked"}:
+        if board["status"] == "qualified":
+            require(
+                inspected.get("open_connections") == expected["open_connections"],
+                f"{board_id}: connection inventory changed",
+            )
+        router_args = board.get("router_args", [])
+        require(
+            isinstance(router_args, list) and all(isinstance(arg, str) for arg in router_args),
+            f"{board_id}: router_args must be a list of strings",
+        )
+        routed = run_json(
+            [
+                str(flux_cli),
+                "route-kicad",
+                str(source),
+                "--max-router-iterations",
+                str(board.get("probe_iterations", 1)),
+                "--max-expansions",
+                "50000",
+                "--max-static-seed-workers",
+                "2",
+                "--search-diversification",
+                *router_args,
+            ],
+            timeout=180,
+            # route-kicad uses 3 for a structured invalid-input result. An
+            # unlocked tier still has to report that result so its blocker is
+            # visible; a qualified tier remains strict about exit status.
+            allowed_returncodes=(0, 3) if board["status"] == "unlocked" else (0,),
+        )
+        global_qualified = (
+            routed.get("complete") is True
+            and routed.get("unrouted_nets") == 0
+            and routed.get("total_overflow") == 0
+            and routed.get("static_seed_terminals_without_seed") == 0
+        )
+        qualification = board.get("qualification")
+        require(
+            qualification in {"global_complete", "detailed_complete"},
+            f"{board_id}: unsupported qualification {qualification}",
+        )
+        planning_ready = global_qualified
+        if qualification == "detailed_complete":
+            planning_ready = (
+                routed.get("routing_plan_complete") is True
+                and routed.get("unrouted_nets") == 0
+                and routed.get("static_seed_terminals_without_seed") == 0
+            )
+        if board["status"] == "qualified":
+            require(planning_ready, f"{board_id}: qualified routing plan regressed")
+            require(
+                routed.get("paths") == expected["global_paths"],
+                f"{board_id}: expected {expected['global_paths']} paths, "
+                f"got {routed.get('paths')}",
+            )
+
+        # A global checkpoint is not renderable copper. When a manifest tier advances to exact
+        # detailed completion, require its accepted board and publish every enabled copper layer
+        # as a PNG. Failed/incomplete transactions never produce misleading "final" images.
+        detailed_qualified = False
+        if qualification == "detailed_complete" and planning_ready:
+            tier_dir = artifacts / f"tier-{board['level']}-{board_id}"
+            final_board = tier_dir / f"{board_id}.kicad_pcb"
+            tier_dir.mkdir(parents=True, exist_ok=True)
+            # Flux deliberately refuses to overwrite output boards. Route into a fresh temporary
+            # path, validate that exact artifact, and publish it only after every acceptance gate
+            # passes. This keeps repeated corpus runs deterministic without deleting prior output
+            # before a replacement has been certified.
+            with tempfile.TemporaryDirectory(prefix=".flux-candidate-", dir=tier_dir) as temporary:
+                candidate_board = Path(temporary) / f"{board_id}.kicad_pcb"
+                detailed = run_json(
+                    [
+                        str(flux_cli),
+                        "detail-kicad",
+                        str(source),
+                        "--max-router-iterations",
+                        str(board.get("detail_iterations", board.get("probe_iterations", 30))),
+                        "--max-expansions",
+                        "50000",
+                        "--max-static-seed-workers",
+                        "2",
+                        "--search-diversification",
+                        *router_args,
+                        "--arcs",
+                        str(candidate_board),
+                    ],
+                    timeout=2400,
+                    allowed_returncodes=(0, 3, 5) if board["status"] == "unlocked" else (0,),
+                )
+                detailed_qualified = (
+                    detailed.get("complete") is True
+                    and detailed.get("validation_errors") == 0
+                    and detailed.get("open_connections") == 0
+                    and detailed.get("copper_violations") == 0
+                    and detailed.get("added_track_arcs", 0)
+                    >= expected.get("min_track_arcs", 0)
+                    and detailed.get("unrounded_non_junction_bends", sys.maxsize)
+                    <= expected.get("max_unrounded_non_junction_bends", sys.maxsize)
+                    and detailed.get("artifact_written") is True
+                    and candidate_board.is_file()
+                )
+                if detailed_qualified:
+                    require_kicad_drc(candidate_board, tier_dir / "kicad-drc.json", kicad_cli)
+                    shutil.copy2(candidate_board, final_board)
+                    render_copper_layers(final_board, tier_dir / "copper", kicad_cli, inkscape)
+                    print(f"RENDER {board_id}: final copper PNGs in {tier_dir / 'copper'}")
+
+        qualified = global_qualified if qualification == "global_complete" else detailed_qualified
+        if board["status"] == "qualified":
+            require(qualified, f"{board_id}: qualified {qualification} route regressed")
+            suffix = "zero-overflow global plan"
+            if qualification == "detailed_complete":
+                suffix = "exact copper and external KiCad DRC"
+            print(f"PASS {board_id}: {routed['paths']} paths, {suffix}")
+        else:
+            require(
+                not qualified,
+                f"{board_id}: unlocked tier now qualifies; permanently promote it to qualified "
+                "and activate the next locked tier in manifest.json",
+            )
+            require(routed.get("diagnostic"), f"{board_id}: incomplete probe has no diagnosis")
+            print(
+                f"PROBE {board_id}: incomplete as expected; "
+                f"stop={routed.get('stop_reason')}, paths={routed.get('paths')}, "
+                f"unrouted={routed.get('unrouted_nets')}, overflow={routed.get('total_overflow')}"
+            )
+    else:
+        print(
+            f"PASS {board_id}: strict import gate "
+            f"({inspected['core_validation_errors']} current structural blockers)"
+        )
+
+    require(sha256(source) == before, f"{board_id}: source board was modified")
+    require(sha256(reference) == reference_before, f"{board_id}: routed reference was modified")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--flux-cli", required=True, type=Path)
+    parser.add_argument("--corpus", required=True, type=Path)
+    parser.add_argument(
+        "--level", default="unlocked", help="maximum inspection level, 'all', or 'unlocked'"
+    )
+    parser.add_argument("--board", action="append", default=[])
+    parser.add_argument("--artifacts", type=Path, default=Path("build/routing-corpus-artifacts"))
+    parser.add_argument("--kicad-cli", type=Path)
+    parser.add_argument("--inkscape", type=Path)
+    args = parser.parse_args()
+
+    flux_cli = args.flux_cli.resolve()
+    corpus = args.corpus.resolve()
+    artifacts = args.artifacts.resolve()
+    kicad_cli = args.kicad_cli or Path(shutil.which("kicad-cli") or "")
+    inkscape = args.inkscape or Path(shutil.which("inkscape") or "")
+    require(flux_cli.is_file(), f"missing flux-cli: {flux_cli}")
+    require(kicad_cli.is_file(), f"missing kicad-cli: {kicad_cli}")
+    require(inkscape.is_file(), f"missing Inkscape: {inkscape}")
+    manifest_path = corpus / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    require(manifest.get("schema") == 1, "unsupported routing corpus manifest schema")
+    boards = manifest["boards"]
+    require(len({board["id"] for board in boards}) == len(boards), "duplicate board ID")
+    require(
+        [board["level"] for board in boards] == sorted(board["level"] for board in boards),
+        "boards must remain ordered by progressive level",
+    )
+    statuses = [board["status"] for board in boards]
+    require(set(statuses) <= {"qualified", "unlocked", "locked"}, "invalid tier status")
+    require(statuses.count("unlocked") <= 1, "at most one routing tier may be unlocked")
+    if "unlocked" in statuses:
+        unlocked_index = statuses.index("unlocked")
+        require(
+            all(status == "qualified" for status in statuses[:unlocked_index]),
+            "every tier preceding the unlocked tier must be qualified",
+        )
+        require(
+            all(status == "locked" for status in statuses[unlocked_index + 1 :]),
+            "every tier after the unlocked tier must remain locked",
+        )
+
+    selected_ids = set(args.board)
+    if selected_ids:
+        known = {board["id"] for board in boards}
+        require(selected_ids <= known, f"unknown board IDs: {sorted(selected_ids - known)}")
+        selected = [board for board in boards if board["id"] in selected_ids]
+    else:
+        if args.level == "unlocked":
+            maximum = max(board["level"] for board in boards if board["status"] != "locked")
+        else:
+            maximum = (
+                max(board["level"] for board in boards)
+                if args.level == "all"
+                else int(args.level)
+            )
+        selected = [board for board in boards if board["level"] <= maximum]
+    require(selected, "no corpus boards selected")
+
+    for board in selected:
+        verify_board(flux_cli, corpus, artifacts, kicad_cli, inkscape, board)
+    print(f"{len(selected)}/{len(selected)} selected corpus boards passed")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except (RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
+        print(f"FAIL {error}", file=sys.stderr)
+        raise SystemExit(1)

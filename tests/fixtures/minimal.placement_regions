@@ -1,0 +1,20 @@
+(flux_placement_region_constraints
+  (version 1)
+  (source_revision "kicad-20241229:flux_capacitor_test:8a64e30f406e8e99")
+  (region
+    (id "left-connector-bank")
+    (name "Left connector bank")
+    (polygon
+      (xy 10000000 30000000)
+      (xy 30000000 30000000)
+      (xy 30000000 50000000)
+      (xy 10000000 50000000)
+    )
+    (members
+      (footprint
+        (id "11111111-1111-4111-8111-111111111111")
+        (reference "J1")
+      )
+    )
+  )
+)

@@ -1,0 +1,13 @@
+if(NOT DEFINED INPUT)
+  message(FATAL_ERROR "INPUT is required")
+endif()
+if(NOT EXISTS "${INPUT}")
+  message(FATAL_ERROR "candidate board does not exist: ${INPUT}")
+endif()
+
+file(READ "${INPUT}" contents)
+string(FIND "${contents}" "\n  (arc\n" arc_offset)
+string(FIND "${contents}" "\n    (mid " middle_offset)
+if(arc_offset EQUAL -1 OR middle_offset EQUAL -1)
+  message(FATAL_ERROR "candidate board does not contain a native three-point track arc")
+endif()

@@ -1,0 +1,32 @@
+(session "specctra-open.ses"
+  (base_design "specctra-open.dsn")
+  (placement
+    (resolution um 10)
+    (component "flux-image-a1111111-1111-4111-8111-111111111111"
+      (place "J1" 200000 -400000 front 0)
+    )
+    (component "flux-image-a2222222-2222-4222-8222-222222222221"
+      (place "J2" 800000 -400000 front 180)
+    )
+  )
+  (was_is)
+  (routes
+    (resolution um 10)
+    (parser
+      (host_cad "freerouting")
+      (host_version "fixture")
+    )
+    (library_out)
+    (network_out
+      (net "SIGNAL"
+        (wire
+          (path "F.Cu" 2500
+            200000 -400000
+            800000 -400000
+          )
+          (type route)
+        )
+      )
+    )
+  )
+)

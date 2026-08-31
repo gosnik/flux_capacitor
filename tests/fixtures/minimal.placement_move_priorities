@@ -1,0 +1,13 @@
+(flux_placement_move_priorities
+  (version 1)
+  (source_revision "kicad-20241229:flux_capacitor_test:8a64e30f406e8e99")
+  (tiers resistor capacitor transistor other misc_ic mcu soc connector)
+  (footprint
+    (id "11111111-1111-4111-8111-111111111111")
+    (reference "J1")
+    (class connector))
+  (footprint
+    (id "22222222-2222-4222-8222-222222222221")
+    (reference "J2")
+    (class connector))
+)

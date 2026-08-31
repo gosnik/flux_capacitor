@@ -1,0 +1,5766 @@
+#include "flux/core/detailed_router.hpp"
+
+#include "flux/core/board_free_space.hpp"
+#include "flux/core/free_space_offset.hpp"
+#include "flux/core/geometry.hpp"
+#include "flux/core/navmesh_route.hpp"
+#include "flux/core/pns_router.hpp"
+#include "flux/core/routing_rules.hpp"
+#include "flux/core/spline_route.hpp"
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <limits>
+#include <map>
+#include <numeric>
+#include <optional>
+#include <set>
+#include <stop_token>
+#include <string>
+#include <string_view>
+#include <tuple>
+#include <utility>
+#include <vector>
+
+namespace flux {
+namespace {
+
+[[nodiscard]] bool collinear(Point first, Point middle, Point last) {
+  const auto first_x = middle.x.value() - first.x.value();
+  const auto first_y = middle.y.value() - first.y.value();
+  const auto second_x = last.x.value() - middle.x.value();
+  const auto second_y = last.y.value() - middle.y.value();
+  const bool forward_x = first_x == 0 || second_x == 0 || (first_x < 0) == (second_x < 0);
+  const bool forward_y = first_y == 0 || second_y == 0 || (first_y < 0) == (second_y < 0);
+  return first_x * second_y == first_y * second_x && forward_x && forward_y;
+}
+
+[[nodiscard]] std::vector<GlobalRoutePoint>
+simplify_path(const std::vector<GlobalRoutePoint>& input) {
+  std::vector<GlobalRoutePoint> result;
+  result.reserve(input.size());
+  for (const auto& point : input) {
+    if (!result.empty() && result.back() == point) {
+      continue;
+    }
+    if (result.size() >= 2U && result[result.size() - 2U].layer == result.back().layer &&
+        result.back().layer == point.layer &&
+        collinear(result[result.size() - 2U].position, result.back().position, point.position)) {
+      result.back() = point;
+    } else {
+      result.push_back(point);
+    }
+  }
+  return result;
+}
+
+struct WidthAwarePath {
+  std::vector<GlobalRoutePoint> points;
+  std::vector<Nanometres> widths;
+};
+
+// Width changes are physical vertices. Collapse only forward-collinear edges with the same
+// resolved width; layer transitions and every nominal/neck-down boundary are retained.
+[[nodiscard]] std::optional<WidthAwarePath>
+simplify_width_aware_points(const WidthAwarePath& input, std::size_t& removed_points) {
+  if (input.points.empty() || input.widths.size() + 1U != input.points.size()) {
+    return std::nullopt;
+  }
+  WidthAwarePath result;
+  result.points.reserve(input.points.size());
+  result.widths.reserve(input.widths.size());
+  result.points.push_back(input.points.front());
+  for (std::size_t index = 0U; index < input.widths.size(); ++index) {
+    const auto width = input.widths[index];
+    if (width.value() <= 0) {
+      return std::nullopt;
+    }
+    const auto& point = input.points[index + 1U];
+    if (result.points.back() == point) {
+      ++removed_points;
+      continue;
+    }
+    if (result.points.size() >= 2U && !result.widths.empty() && result.widths.back() == width &&
+        result.points[result.points.size() - 2U].layer == result.points.back().layer &&
+        result.points.back().layer == point.layer &&
+        collinear(result.points[result.points.size() - 2U].position, result.points.back().position,
+                  point.position)) {
+      result.points.back() = point;
+      ++removed_points;
+      continue;
+    }
+    result.widths.push_back(width);
+    result.points.push_back(point);
+  }
+  if (result.widths.size() + 1U != result.points.size()) {
+    return std::nullopt;
+  }
+  return result;
+}
+
+[[nodiscard]] std::optional<WidthAwarePath> simplify_width_aware_path(const GlobalRoutePath& path,
+                                                                      Nanometres nominal_width,
+                                                                      std::size_t& removed_points) {
+  if (path.points.empty() || path.segment_widths.size() + 1U != path.points.size()) {
+    return std::nullopt;
+  }
+  WidthAwarePath resolved;
+  resolved.points = path.points;
+  resolved.widths.reserve(path.segment_widths.size());
+  for (const auto selected : path.segment_widths) {
+    const auto width = selected.value() > 0 ? selected : nominal_width;
+    if (width.value() <= 0) {
+      return std::nullopt;
+    }
+    resolved.widths.push_back(width);
+  }
+  return simplify_width_aware_points(resolved, removed_points);
+}
+
+[[nodiscard]] std::int64_t magnitude(std::int64_t value) { return value < 0 ? -value : value; }
+
+[[nodiscard]] std::int64_t direction(std::int64_t value) {
+  return value < 0 ? -1 : value > 0 ? 1 : 0;
+}
+
+[[nodiscard]] std::vector<GlobalRoutePoint>
+pull_tight_45_degrees(const std::vector<GlobalRoutePoint>& input, std::size_t& corner_count) {
+  const auto points = simplify_path(input);
+  if (points.size() < 3U) {
+    return points;
+  }
+  std::vector<GlobalRoutePoint> result;
+  result.reserve(points.size() * 2U);
+  result.push_back(points.front());
+  for (std::size_t index = 1; index + 1U < points.size(); ++index) {
+    const auto& previous = points[index - 1U];
+    const auto& corner = points[index];
+    const auto& next = points[index + 1U];
+    if (previous.layer != corner.layer || corner.layer != next.layer) {
+      result.push_back(corner);
+      continue;
+    }
+    const auto incoming_x = corner.position.x.value() - previous.position.x.value();
+    const auto incoming_y = corner.position.y.value() - previous.position.y.value();
+    const auto outgoing_x = next.position.x.value() - corner.position.x.value();
+    const auto outgoing_y = next.position.y.value() - corner.position.y.value();
+    const bool incoming_orthogonal = (incoming_x == 0) != (incoming_y == 0);
+    const bool outgoing_orthogonal = (outgoing_x == 0) != (outgoing_y == 0);
+    const bool perpendicular =
+        static_cast<long double>(incoming_x) * static_cast<long double>(outgoing_x) +
+            static_cast<long double>(incoming_y) * static_cast<long double>(outgoing_y) ==
+        0.0L;
+    const auto incoming_length = std::max(magnitude(incoming_x), magnitude(incoming_y));
+    const auto outgoing_length = std::max(magnitude(outgoing_x), magnitude(outgoing_y));
+    const auto inset = std::min(incoming_length, outgoing_length) / 2;
+    if (!incoming_orthogonal || !outgoing_orthogonal || !perpendicular || inset == 0) {
+      result.push_back(corner);
+      continue;
+    }
+    const Point entry{Nanometres{corner.position.x.value() - direction(incoming_x) * inset},
+                      Nanometres{corner.position.y.value() - direction(incoming_y) * inset}};
+    const Point exit{Nanometres{corner.position.x.value() + direction(outgoing_x) * inset},
+                     Nanometres{corner.position.y.value() + direction(outgoing_y) * inset}};
+    result.push_back(GlobalRoutePoint{entry, corner.layer});
+    result.push_back(GlobalRoutePoint{exit, corner.layer});
+    ++corner_count;
+  }
+  result.push_back(points.back());
+  return simplify_path(result);
+}
+
+// Apply the same bounded 45-degree shortcut only within equal-width runs. The edge-aligned width
+// vector is transformed alongside the points so a width transition can never move implicitly.
+[[nodiscard]] std::optional<WidthAwarePath>
+pull_tight_width_aware_45_degrees(const WidthAwarePath& input, std::size_t& corner_count,
+                                  std::size_t& removed_points) {
+  const auto simplified = simplify_width_aware_points(input, removed_points);
+  if (!simplified) {
+    return std::nullopt;
+  }
+  const auto& points = simplified->points;
+  const auto& widths = simplified->widths;
+  if (points.size() < 3U) {
+    return simplified;
+  }
+  WidthAwarePath pulled;
+  pulled.points.reserve(points.size() * 2U);
+  pulled.widths.reserve(widths.size() * 2U);
+  pulled.points.push_back(points.front());
+  const auto append = [&pulled](GlobalRoutePoint point, Nanometres width) {
+    pulled.widths.push_back(width);
+    pulled.points.push_back(point);
+  };
+  for (std::size_t index = 1U; index + 1U < points.size(); ++index) {
+    const auto& previous = points[index - 1U];
+    const auto& corner = points[index];
+    const auto& next = points[index + 1U];
+    const auto incoming_width = widths[index - 1U];
+    const auto outgoing_width = widths[index];
+    if (incoming_width != outgoing_width || previous.layer != corner.layer ||
+        corner.layer != next.layer) {
+      append(corner, incoming_width);
+      continue;
+    }
+    const auto incoming_x = corner.position.x.value() - previous.position.x.value();
+    const auto incoming_y = corner.position.y.value() - previous.position.y.value();
+    const auto outgoing_x = next.position.x.value() - corner.position.x.value();
+    const auto outgoing_y = next.position.y.value() - corner.position.y.value();
+    const bool incoming_orthogonal = (incoming_x == 0) != (incoming_y == 0);
+    const bool outgoing_orthogonal = (outgoing_x == 0) != (outgoing_y == 0);
+    const bool perpendicular =
+        static_cast<long double>(incoming_x) * static_cast<long double>(outgoing_x) +
+            static_cast<long double>(incoming_y) * static_cast<long double>(outgoing_y) ==
+        0.0L;
+    const auto incoming_length = std::max(magnitude(incoming_x), magnitude(incoming_y));
+    const auto outgoing_length = std::max(magnitude(outgoing_x), magnitude(outgoing_y));
+    const auto inset = std::min(incoming_length, outgoing_length) / 2;
+    if (!incoming_orthogonal || !outgoing_orthogonal || !perpendicular || inset == 0) {
+      append(corner, incoming_width);
+      continue;
+    }
+    const Point entry{Nanometres{corner.position.x.value() - direction(incoming_x) * inset},
+                      Nanometres{corner.position.y.value() - direction(incoming_y) * inset}};
+    const Point exit{Nanometres{corner.position.x.value() + direction(outgoing_x) * inset},
+                     Nanometres{corner.position.y.value() + direction(outgoing_y) * inset}};
+    append(GlobalRoutePoint{entry, corner.layer}, incoming_width);
+    append(GlobalRoutePoint{exit, corner.layer}, incoming_width);
+    ++corner_count;
+  }
+  append(points.back(), widths.back());
+  return simplify_width_aware_points(pulled, removed_points);
+}
+
+[[nodiscard]] long double local_refinement_objective(Point previous, Point point, Point next,
+                                                     Point anchor, long double trust_nm) {
+  const auto displacement = geometry::point_distance_nm(point, anchor);
+  return geometry::point_distance_nm(previous, point) + geometry::point_distance_nm(point, next) +
+         displacement * displacement / (2.0L * trust_nm);
+}
+
+[[nodiscard]] Point project_into_trust_region(Point point, Point start, Point end, Point anchor,
+                                              long double trust_nm) {
+  const auto segment_x = static_cast<long double>(end.x.value() - start.x.value());
+  const auto segment_y = static_cast<long double>(end.y.value() - start.y.value());
+  const auto length_squared = segment_x * segment_x + segment_y * segment_y;
+  if (length_squared == 0.0L) {
+    return point;
+  }
+  const auto point_x = static_cast<long double>(point.x.value() - start.x.value());
+  const auto point_y = static_cast<long double>(point.y.value() - start.y.value());
+  const auto projection =
+      std::clamp((point_x * segment_x + point_y * segment_y) / length_squared, 0.0L, 1.0L);
+  auto candidate_x = static_cast<long double>(start.x.value()) + projection * segment_x;
+  auto candidate_y = static_cast<long double>(start.y.value()) + projection * segment_y;
+  const auto anchor_dx = candidate_x - static_cast<long double>(anchor.x.value());
+  const auto anchor_dy = candidate_y - static_cast<long double>(anchor.y.value());
+  const auto displacement = std::hypot(anchor_dx, anchor_dy);
+  if (displacement > trust_nm) {
+    candidate_x = static_cast<long double>(anchor.x.value()) + anchor_dx * trust_nm / displacement;
+    candidate_y = static_cast<long double>(anchor.y.value()) + anchor_dy * trust_nm / displacement;
+  }
+  return Point{Nanometres{static_cast<std::int64_t>(std::llround(candidate_x))},
+               Nanometres{static_cast<std::int64_t>(std::llround(candidate_y))}};
+}
+
+[[nodiscard]] bool continuous_candidate_clear(const Board& board, const NetId& net,
+                                              const LayerId& layer, Point previous, Point candidate,
+                                              Point next, Nanometres width, std::size_t serial) {
+  Board probe = board;
+  const auto first_id = "flux-continuous-probe-a-" + std::to_string(serial);
+  const auto second_id = "flux-continuous-probe-b-" + std::to_string(serial);
+  probe.tracks.push_back(
+      TrackSegment{ObjectId{first_id}, net, layer, previous, candidate, width, false});
+  probe.tracks.push_back(
+      TrackSegment{ObjectId{second_id}, net, layer, candidate, next, width, false});
+  const auto report = check_copper_rules(probe);
+  return std::none_of(
+      report.violations.begin(), report.violations.end(), [&](const auto& violation) {
+        if (violation.kind == CopperViolationKind::differential_pair_skew) {
+          return false;
+        }
+        return std::find(violation.object_ids.begin(), violation.object_ids.end(), first_id) !=
+                   violation.object_ids.end() ||
+               std::find(violation.object_ids.begin(), violation.object_ids.end(), second_id) !=
+                   violation.object_ids.end();
+      });
+}
+
+[[nodiscard]] Point interpolate_backtracking_candidate(Point current, Point projected,
+                                                       long double scale) {
+  return Point{
+      Nanometres{current.x.value() +
+                 static_cast<std::int64_t>(std::llround(
+                     static_cast<long double>(projected.x.value() - current.x.value()) * scale))},
+      Nanometres{current.y.value() +
+                 static_cast<std::int64_t>(std::llround(
+                     static_cast<long double>(projected.y.value() - current.y.value()) * scale))}};
+}
+
+// Slicer-style centerline relaxation: alternate projections of each free vertex onto its
+// neighbouring chord, constrained by a source-lane trust region. Floating point is proposal-only;
+// quantized candidates undergo bounded exact-clearance line search before whole-board acceptance.
+[[nodiscard]] std::vector<GlobalRoutePoint>
+refine_path_continuously(const Board& board, const NetId& net, Nanometres track_width,
+                         const std::vector<GlobalRoutePoint>& input,
+                         const DetailedRouterConfig& config, DetailedRouteResult& route_result,
+                         std::size_t& completed_iterations,
+                         const std::vector<Nanometres>* segment_widths = nullptr) {
+  auto result = segment_widths == nullptr ? simplify_path(input) : input;
+  if (segment_widths != nullptr && segment_widths->size() + 1U != result.size()) {
+    return {};
+  }
+  if (!config.continuous_refinement || config.continuous_refinement_iterations == 0U ||
+      result.size() < 3U) {
+    return result;
+  }
+  const auto anchors = result;
+  std::vector<bool> moved(result.size(), false);
+  bool budget_exhausted = false;
+  for (std::size_t iteration = 0; iteration < config.continuous_refinement_iterations;
+       ++iteration) {
+    bool improved = false;
+    for (std::size_t index = 1; index + 1U < result.size(); ++index) {
+      if (result[index - 1U].layer != result[index].layer ||
+          result[index].layer != result[index + 1U].layer ||
+          (segment_widths != nullptr &&
+           (*segment_widths)[index - 1U] != (*segment_widths)[index])) {
+        continue;
+      }
+      auto trust_nm = static_cast<long double>(config.continuous_trust_region.value());
+      if (trust_nm == 0.0L) {
+        trust_nm =
+            static_cast<long double>(std::min(
+                geometry::segment_length_nm(anchors[index - 1U].position, anchors[index].position),
+                geometry::segment_length_nm(anchors[index].position,
+                                            anchors[index + 1U].position))) /
+            2.0L;
+      }
+      if (trust_nm < 1.0L) {
+        continue;
+      }
+      const auto projected =
+          project_into_trust_region(result[index].position, result[index - 1U].position,
+                                    result[index + 1U].position, anchors[index].position, trust_nm);
+      if (projected == result[index].position) {
+        continue;
+      }
+      const auto current = result[index].position;
+      const auto before = local_refinement_objective(result[index - 1U].position, current,
+                                                     result[index + 1U].position,
+                                                     anchors[index].position, trust_nm);
+      Point previous_trial = current;
+      auto scale = 1.0L;
+      for (std::size_t step = 0; step <= config.continuous_backtracking_steps; ++step) {
+        const auto candidate = interpolate_backtracking_candidate(current, projected, scale);
+        scale *= 0.5L;
+        if (candidate == current) {
+          break;
+        }
+        if (candidate == previous_trial) {
+          continue;
+        }
+        previous_trial = candidate;
+        const auto after = local_refinement_objective(result[index - 1U].position, candidate,
+                                                      result[index + 1U].position,
+                                                      anchors[index].position, trust_nm);
+        if (after + 0.5L >= before) {
+          continue;
+        }
+        if (route_result.attempted_continuous_refinement_candidates >=
+            config.max_continuous_exact_candidate_checks) {
+          ++route_result.withheld_continuous_refinement_candidates;
+          route_result.continuous_refinement_budget_exhausted = true;
+          budget_exhausted = true;
+          break;
+        }
+        ++route_result.attempted_continuous_refinement_candidates;
+        const auto local_width = segment_widths == nullptr ? track_width : (*segment_widths)[index];
+        if (!continuous_candidate_clear(board, net, result[index].layer,
+                                        result[index - 1U].position, candidate,
+                                        result[index + 1U].position, local_width,
+                                        route_result.attempted_continuous_refinement_candidates)) {
+          ++route_result.rejected_continuous_refinement_candidates;
+          continue;
+        }
+        ++route_result.accepted_continuous_refinement_candidates;
+        result[index].position = candidate;
+        moved[index] = true;
+        improved = true;
+        break;
+      }
+      if (budget_exhausted) {
+        break;
+      }
+    }
+    ++completed_iterations;
+    if (!improved || budget_exhausted) {
+      break;
+    }
+  }
+  route_result.continuously_refined_points +=
+      static_cast<std::size_t>(std::count(moved.begin(), moved.end(), true));
+  return segment_widths == nullptr ? simplify_path(result) : result;
+}
+
+[[nodiscard]] ObjectId unique_id(std::string base, std::set<std::string>& used_ids) {
+  if (used_ids.insert(base).second) {
+    return ObjectId{std::move(base)};
+  }
+  for (std::size_t suffix = 1;; ++suffix) {
+    auto candidate = base + "-" + std::to_string(suffix);
+    if (used_ids.insert(candidate).second) {
+      return ObjectId{std::move(candidate)};
+    }
+  }
+}
+
+[[nodiscard]] std::set<std::string> object_ids(const Board& board) {
+  std::set<std::string> result;
+  for (const auto& footprint : board.footprints) {
+    result.insert(footprint.id.value());
+    for (const auto& pad : footprint.pads) {
+      result.insert(pad.id.value());
+    }
+    for (const auto& keepout : footprint.keepouts) {
+      result.insert(keepout.id.value());
+    }
+  }
+  for (const auto& track : board.tracks) {
+    result.insert(track.id.value());
+  }
+  for (const auto& arc : board.track_arcs) {
+    result.insert(arc.id.value());
+  }
+  for (const auto& via : board.vias) {
+    result.insert(via.id.value());
+  }
+  for (const auto& zone : board.zones) {
+    result.insert(zone.id.value());
+  }
+  for (const auto& keepout : board.keepouts) {
+    result.insert(keepout.id.value());
+  }
+  return result;
+}
+
+[[nodiscard]] std::vector<LayerId> via_span(const Board& board, const LayerId& first,
+                                            const LayerId& last) {
+  std::map<LayerId, std::uint32_t> order;
+  for (const auto& layer : board.layers) {
+    if (layer.kind == LayerKind::copper) {
+      order.emplace(layer.id, layer.stack_order);
+    }
+  }
+  if (!order.contains(first) || !order.contains(last)) {
+    return {};
+  }
+  const auto low = std::min(order.at(first), order.at(last));
+  const auto high = std::max(order.at(first), order.at(last));
+  std::vector<std::pair<std::uint32_t, LayerId>> selected;
+  for (const auto& [layer, stack_order] : order) {
+    if (stack_order >= low && stack_order <= high) {
+      selected.emplace_back(stack_order, layer);
+    }
+  }
+  std::sort(selected.begin(), selected.end());
+  std::vector<LayerId> result;
+  result.reserve(selected.size());
+  for (auto& [stack_order, layer] : selected) {
+    static_cast<void>(stack_order);
+    result.push_back(std::move(layer));
+  }
+  return result;
+}
+
+[[nodiscard]] ResolvedNetRoutingRules materialization_rules(const Board& board, const NetId& net,
+                                                            const DetailedRouterConfig& config) {
+  auto result = resolve_net_routing_rules(board, net);
+  if (config.track_width.value() > 0) {
+    result.track_width = config.track_width;
+  }
+  if (config.via_diameter.value() > 0) {
+    result.via_diameter = config.via_diameter;
+  }
+  if (config.via_drill.value() > 0) {
+    result.via_drill = config.via_drill;
+  }
+  return result;
+}
+
+void remove_unlocked_routing(Board& board, const std::set<NetId>& routed_nets,
+                             DetailedRouteResult& result) {
+  const auto old_track_count = board.tracks.size();
+  std::erase_if(board.tracks, [&routed_nets](const auto& track) {
+    return !track.locked && routed_nets.contains(track.net);
+  });
+  result.removed_tracks = old_track_count - board.tracks.size();
+  const auto old_arc_count = board.track_arcs.size();
+  std::erase_if(board.track_arcs, [&routed_nets](const auto& arc) {
+    return !arc.locked && routed_nets.contains(arc.net);
+  });
+  result.removed_track_arcs = old_arc_count - board.track_arcs.size();
+  const auto old_via_count = board.vias.size();
+  std::erase_if(board.vias, [&routed_nets](const auto& via) {
+    return !via.locked && routed_nets.contains(via.net);
+  });
+  result.removed_vias = old_via_count - board.vias.size();
+}
+
+[[nodiscard]] const RoutingVoronoiLaneAssignment*
+find_lane_assignment(const GlobalRouteResult& global, std::size_t resource_id, const NetId& net) {
+  const auto found =
+      std::find_if(global.voronoi_lane_assignments.begin(), global.voronoi_lane_assignments.end(),
+                   [resource_id, &net](const auto& lane) {
+                     return lane.resource_id == resource_id && lane.net == net;
+                   });
+  return found == global.voronoi_lane_assignments.end() ? nullptr : &*found;
+}
+
+[[nodiscard]] const RoutingVoronoiResourceUsage*
+find_resource_usage(const GlobalRouteResult& global, std::size_t resource_id) {
+  const auto found =
+      std::find_if(global.voronoi_resource_usage.begin(), global.voronoi_resource_usage.end(),
+                   [resource_id](const auto& usage) { return usage.id == resource_id; });
+  return found == global.voronoi_resource_usage.end() ? nullptr : &*found;
+}
+
+[[nodiscard]] const RoutingVoronoiLaneTransition*
+find_lane_transition(const GlobalRouteResult& global, std::size_t first_resource,
+                     std::size_t second_resource, const NetId& net,
+                     const std::optional<Point>& direct_portal) {
+  const auto found = std::find_if(
+      global.voronoi_lane_transitions.begin(), global.voronoi_lane_transitions.end(),
+      [first_resource, second_resource, &net, &direct_portal](const auto& transition) {
+        const auto resources_match = (transition.first_resource_id == first_resource &&
+                                      transition.second_resource_id == second_resource) ||
+                                     (transition.first_resource_id == second_resource &&
+                                      transition.second_resource_id == first_resource);
+        const auto portal_matches = direct_portal ? transition.direct_portal_bridge &&
+                                                        transition.medial_junction == *direct_portal
+                                                  : !transition.direct_portal_bridge;
+        return transition.net == net && resources_match && portal_matches;
+      });
+  return found == global.voronoi_lane_transitions.end() ? nullptr : &*found;
+}
+
+[[nodiscard]] std::optional<Point>
+transition_endpoint(const RoutingVoronoiLaneTransition& transition, std::size_t resource_id) {
+  if (transition.first_resource_id == resource_id) {
+    return transition.first_lane_endpoint;
+  }
+  if (transition.second_resource_id == resource_id) {
+    return transition.second_lane_endpoint;
+  }
+  return std::nullopt;
+}
+
+[[nodiscard]] std::optional<Point> other_lane_endpoint(const RoutingVoronoiLaneAssignment& lane,
+                                                       Point endpoint) {
+  if (lane.shifted_start == endpoint) {
+    return lane.shifted_end;
+  }
+  if (lane.shifted_end == endpoint) {
+    return lane.shifted_start;
+  }
+  return std::nullopt;
+}
+
+struct TopologyLockedLanePath {
+  struct PackedRun {
+    std::size_t first_index{0};
+    std::size_t last_index{0};
+    LayerId layer;
+    std::vector<std::size_t> resource_ids;
+  };
+  std::vector<GlobalRoutePoint> points;
+  std::vector<PackedRun> packed_runs;
+  bool multilayer{false};
+  bool coupled_member{false};
+  bool preserved_terminal_access{false};
+  std::size_t first_packed_index{0};
+  std::size_t last_packed_index{0};
+};
+
+[[nodiscard]] std::optional<Point>
+find_layer_transition_anchor(const std::vector<GlobalRoutePoint>& points, const LayerId& from,
+                             const LayerId& to, std::size_t& cursor) {
+  for (std::size_t index = cursor; index + 1U < points.size(); ++index) {
+    if (points[index].layer != from) {
+      continue;
+    }
+    const auto position = points[index].position;
+    auto transition = index;
+    while (transition + 1U < points.size() && points[transition + 1U].position == position) {
+      ++transition;
+      if (points[transition].layer == to) {
+        cursor = transition;
+        return position;
+      }
+    }
+  }
+  return std::nullopt;
+}
+
+[[nodiscard]] std::optional<TopologyLockedLanePath>
+topology_locked_lane_points(const GlobalRouteResult& global, const GlobalRoutePath& path,
+                            Nanometres track_width, std::size_t max_terminal_access_points) {
+  if (!path.medial_topology_complete() || path.points.size() < 2U ||
+      path.medial_resource_sequence.empty()) {
+    return std::nullopt;
+  }
+  std::vector<const RoutingVoronoiLaneAssignment*> lanes;
+  std::vector<const RoutingVoronoiResourceUsage*> resources;
+  lanes.reserve(path.medial_resource_sequence.size());
+  resources.reserve(path.medial_resource_sequence.size());
+  for (const auto resource_id : path.medial_resource_sequence) {
+    const auto* lane = find_lane_assignment(global, resource_id, path.net);
+    const auto* resource = find_resource_usage(global, resource_id);
+    if (lane == nullptr || resource == nullptr || !lane->static_clearance_checked ||
+        lane->track_width != track_width) {
+      return std::nullopt;
+    }
+    lanes.push_back(lane);
+    resources.push_back(resource);
+  }
+
+  struct LaneRun {
+    std::size_t begin{0};
+    std::size_t end{0};
+    LayerId layer;
+  };
+  std::vector<LaneRun> runs;
+  for (std::size_t begin = 0U; begin < resources.size();) {
+    auto end = begin + 1U;
+    while (end < resources.size() && resources[end]->layer == resources[begin]->layer) {
+      ++end;
+    }
+    runs.push_back(LaneRun{begin, end, resources[begin]->layer});
+    begin = end;
+  }
+  const bool coupled_member = std::any_of(lanes.begin(), lanes.end(), [](const auto* lane) {
+    return lane->differential_pair_member || lane->routing_bus.has_value();
+  });
+
+  std::vector<Point> anchors(runs.size() + 1U);
+  std::vector<std::size_t> path_run_boundaries(runs.size() + 1U, 0U);
+  path_run_boundaries.back() = path.points.size() - 1U;
+  std::size_t transition_cursor = 0U;
+  for (std::size_t index = 0U; index + 1U < runs.size(); ++index) {
+    const auto anchor = find_layer_transition_anchor(path.points, runs[index].layer,
+                                                     runs[index + 1U].layer, transition_cursor);
+    if (!anchor) {
+      return std::nullopt;
+    }
+    anchors[index + 1U] = *anchor;
+    path_run_boundaries[index + 1U] = transition_cursor;
+  }
+
+  const auto closest_lane_path_point =
+      [&path](const RoutingVoronoiLaneAssignment& lane, const LayerId& layer, std::size_t begin,
+              std::size_t end, bool prefer_last) -> std::optional<std::size_t> {
+    std::optional<std::size_t> selected;
+    auto selected_distance = std::numeric_limits<long double>::infinity();
+    for (auto index = begin; index <= end && index < path.points.size(); ++index) {
+      if (path.points[index].layer != layer) {
+        continue;
+      }
+      const auto distance =
+          std::min(geometry::point_distance_nm(path.points[index].position, lane.shifted_start),
+                   geometry::point_distance_nm(path.points[index].position, lane.shifted_end));
+      if (!selected || distance < selected_distance ||
+          (distance == selected_distance &&
+           ((prefer_last && index > *selected) || (!prefer_last && index < *selected)))) {
+        selected = index;
+        selected_distance = distance;
+      }
+    }
+    return selected;
+  };
+  const auto first_splice = closest_lane_path_point(
+      *lanes.front(), runs.front().layer, 0U,
+      runs.size() > 1U ? path_run_boundaries[1U] : path.points.size() - 1U, false);
+  const auto last_splice = closest_lane_path_point(
+      *lanes.back(), runs.back().layer,
+      runs.size() > 1U ? path_run_boundaries[runs.size() - 1U] : 0U, path.points.size() - 1U, true);
+  if (!first_splice || !last_splice || *first_splice > *last_splice) {
+    return std::nullopt;
+  }
+  const auto retained_points = *first_splice + 1U + path.points.size() - *last_splice;
+  if (retained_points > max_terminal_access_points) {
+    return std::nullopt;
+  }
+  anchors.front() = path.points[*first_splice].position;
+  anchors.back() = path.points[*last_splice].position;
+
+  TopologyLockedLanePath result;
+  const auto project_to_segment = [](Point point, Point start, Point end) {
+    const auto segment_x = static_cast<long double>(end.x.value() - start.x.value());
+    const auto segment_y = static_cast<long double>(end.y.value() - start.y.value());
+    const auto length_squared = segment_x * segment_x + segment_y * segment_y;
+    if (length_squared == 0.0L) {
+      return start;
+    }
+    const auto point_x = static_cast<long double>(point.x.value() - start.x.value());
+    const auto point_y = static_cast<long double>(point.y.value() - start.y.value());
+    const auto projection =
+        std::clamp((point_x * segment_x + point_y * segment_y) / length_squared, 0.0L, 1.0L);
+    return Point{Nanometres{static_cast<std::int64_t>(std::llround(
+                     static_cast<long double>(start.x.value()) + projection * segment_x))},
+                 Nanometres{static_cast<std::int64_t>(std::llround(
+                     static_cast<long double>(start.y.value()) + projection * segment_y))}};
+  };
+  const auto append = [&result](Point point, const LayerId& point_layer) {
+    if (result.points.empty() || result.points.back().position != point ||
+        result.points.back().layer != point_layer) {
+      result.points.push_back(GlobalRoutePoint{point, point_layer});
+    }
+    return result.points.size() - 1U;
+  };
+  for (std::size_t index = 0U; index <= *first_splice; ++index) {
+    append(path.points[index].position, path.points[index].layer);
+  }
+  for (std::size_t run_index = 0U; run_index < runs.size(); ++run_index) {
+    const auto& run = runs[run_index];
+    const auto count = run.end - run.begin;
+    std::vector<const RoutingVoronoiLaneTransition*> transitions;
+    transitions.reserve(count - 1U);
+    for (std::size_t index = run.begin + 1U; index < run.end; ++index) {
+      const auto* transition = find_lane_transition(
+          global, path.medial_resource_sequence[index - 1U], path.medial_resource_sequence[index],
+          path.net,
+          path.medial_transition_portals.size() + 1U == path.medial_resource_sequence.size()
+              ? path.medial_transition_portals[index - 1U]
+              : std::nullopt);
+      if (transition == nullptr || transition->layer != run.layer ||
+          !transition->static_clearance_checked || !transition->mutual_clearance_checked) {
+        return std::nullopt;
+      }
+      transitions.push_back(transition);
+    }
+
+    std::vector<Point> entries(count);
+    std::vector<Point> exits(count);
+    if (count == 1U) {
+      const auto* lane = lanes[run.begin];
+      entries.front() =
+          project_to_segment(anchors[run_index], lane->shifted_start, lane->shifted_end);
+      exits.front() =
+          project_to_segment(anchors[run_index + 1U], lane->shifted_start, lane->shifted_end);
+    } else {
+      for (std::size_t index = 0U; index < transitions.size(); ++index) {
+        const auto sequence_index = run.begin + index;
+        const auto current =
+            transition_endpoint(*transitions[index], path.medial_resource_sequence[sequence_index]);
+        const auto next = transition_endpoint(*transitions[index],
+                                              path.medial_resource_sequence[sequence_index + 1U]);
+        if (!current || !next) {
+          return std::nullopt;
+        }
+        exits[index] = *current;
+        entries[index + 1U] = *next;
+      }
+      const auto first_entry = other_lane_endpoint(*lanes[run.begin], exits.front());
+      const auto last_exit = other_lane_endpoint(*lanes[run.end - 1U], entries.back());
+      if (!first_entry || !last_exit) {
+        return std::nullopt;
+      }
+      entries.front() = *first_entry;
+      exits.back() = *last_exit;
+      for (std::size_t index = 1U; index + 1U < count; ++index) {
+        const auto opposite = other_lane_endpoint(*lanes[run.begin + index], entries[index]);
+        if (entries[index] == exits[index] || !opposite || *opposite != exits[index]) {
+          return std::nullopt;
+        }
+      }
+      entries.front() = project_to_segment(anchors[run_index], entries.front(), exits.front());
+      exits.back() = project_to_segment(anchors[run_index + 1U], entries.back(), exits.back());
+    }
+
+    append(anchors[run_index], run.layer);
+    std::optional<std::size_t> packed_run_first;
+    std::size_t packed_run_last = 0U;
+    const auto record_packed = [&](std::size_t packed_index) {
+      if (!packed_run_first) {
+        packed_run_first = packed_index;
+      }
+      packed_run_last = packed_index;
+      if (result.first_packed_index == 0U) {
+        result.first_packed_index = packed_index;
+      }
+      result.last_packed_index = packed_index;
+    };
+    for (std::size_t index = 0U; index < count; ++index) {
+      const bool entered_through_miter = index > 0U && transitions[index - 1U]->miter.has_value();
+      if (!entered_through_miter) {
+        record_packed(append(entries[index], run.layer));
+      }
+      if (index < transitions.size() && transitions[index]->miter) {
+        record_packed(append(*transitions[index]->miter, run.layer));
+      } else {
+        record_packed(append(exits[index], run.layer));
+      }
+    }
+    if (!packed_run_first) {
+      return std::nullopt;
+    }
+    result.packed_runs.push_back(TopologyLockedLanePath::PackedRun{
+        *packed_run_first, packed_run_last, run.layer,
+        std::vector<std::size_t>(
+            path.medial_resource_sequence.begin() + static_cast<std::ptrdiff_t>(run.begin),
+            path.medial_resource_sequence.begin() + static_cast<std::ptrdiff_t>(run.end))});
+    append(anchors[run_index + 1U], run.layer);
+  }
+  for (auto index = *last_splice; index < path.points.size(); ++index) {
+    append(path.points[index].position, path.points[index].layer);
+  }
+  result.multilayer = std::adjacent_find(result.points.begin(), result.points.end(),
+                                         [](const auto& lhs, const auto& rhs) {
+                                           return lhs.layer != rhs.layer;
+                                         }) != result.points.end();
+  result.coupled_member = coupled_member;
+  result.preserved_terminal_access = true;
+  return result.points.size() >= 2U && !result.packed_runs.empty() &&
+                 result.first_packed_index > 0U &&
+                 result.last_packed_index >= result.first_packed_index
+             ? std::optional<TopologyLockedLanePath>{std::move(result)}
+             : std::nullopt;
+}
+
+struct CoupledRoutingGroup {
+  std::vector<NetId> members;
+  Nanometres minimum_adjacent_track_gap;
+  Nanometres minimum_adjacent_via_gap;
+  bool ordered{false};
+};
+
+[[nodiscard]] std::vector<CoupledRoutingGroup>
+coupled_routing_groups(const Board& board, const std::set<NetId>& routed_nets) {
+  std::vector<CoupledRoutingGroup> result;
+  for (const auto& pair : board.differential_pairs) {
+    if (!routed_nets.contains(pair.positive_net) || !routed_nets.contains(pair.negative_net)) {
+      continue;
+    }
+    const auto positive = resolve_net_routing_rules(board, pair.positive_net);
+    const auto negative = resolve_net_routing_rules(board, pair.negative_net);
+    result.push_back(CoupledRoutingGroup{
+        {pair.positive_net, pair.negative_net},
+        std::max({positive.differential_pair_gap, negative.differential_pair_gap,
+                  pair.minimum_gap.value_or(Nanometres{})}),
+        std::max(positive.differential_pair_via_gap, negative.differential_pair_via_gap),
+        false});
+  }
+  for (const auto& bus : board.routing_buses) {
+    if (!std::all_of(bus.ordered_nets.begin(), bus.ordered_nets.end(),
+                     [&routed_nets](const auto& net) { return routed_nets.contains(net); })) {
+      continue;
+    }
+    result.push_back(CoupledRoutingGroup{bus.ordered_nets, bus.minimum_gap.value_or(Nanometres{}),
+                                         bus.minimum_gap.value_or(Nanometres{}), true});
+  }
+  return result;
+}
+
+struct CoupledTerminalFanoutSide {
+  std::vector<std::vector<GlobalRoutePoint>> polylines;
+  std::vector<std::size_t> packed_indices;
+  std::vector<std::size_t> anchor_indices;
+};
+
+[[nodiscard]] std::optional<std::size_t>
+packed_run_anchor_index(const TopologyLockedLanePath& path, std::size_t run_index, bool at_start) {
+  if (run_index >= path.packed_runs.size()) {
+    return std::nullopt;
+  }
+  const auto& run = path.packed_runs[run_index];
+  auto index = at_start ? run.first_index : run.last_index;
+  if (index >= path.points.size() || path.points[index].layer != run.layer) {
+    return std::nullopt;
+  }
+  if (at_start) {
+    while (index > 0U && path.points[index - 1U].layer == run.layer) {
+      --index;
+    }
+  } else {
+    while (index + 1U < path.points.size() && path.points[index + 1U].layer == run.layer) {
+      ++index;
+    }
+  }
+  return index;
+}
+
+[[nodiscard]] std::optional<CoupledTerminalFanoutSide>
+coupled_terminal_fanout_side_for_runs(const std::vector<TopologyLockedLanePath*>& paths,
+                                      bool at_start, bool trim_dead_tail, bool reverse_staircase,
+                                      const std::vector<std::size_t>& run_indices) {
+  if (paths.size() < 2U || run_indices.size() != paths.size()) {
+    return std::nullopt;
+  }
+  struct Endpoint {
+    Point terminal;
+    Point lane;
+    Point inside;
+    LayerId layer;
+    bool horizontal{false};
+    std::int64_t outward_direction{0};
+    std::size_t packed_index{0};
+  };
+  std::vector<Endpoint> endpoints;
+  endpoints.reserve(paths.size());
+  for (std::size_t member = 0U; member < paths.size(); ++member) {
+    const auto* path = paths[member];
+    const auto run_index = run_indices[member];
+    if (path == nullptr || path->points.size() < 3U || run_index >= path->packed_runs.size()) {
+      return std::nullopt;
+    }
+    const auto& packed_run = path->packed_runs[run_index];
+    auto packed_index = at_start ? packed_run.first_index : packed_run.last_index;
+    const auto terminal_index = packed_run_anchor_index(*path, run_index, at_start);
+    if (!terminal_index) {
+      return std::nullopt;
+    }
+    const auto step = at_start ? 1 : -1;
+    const auto& terminal = path->points[*terminal_index];
+    bool found_terminal_facing_tangent = false;
+    while (!found_terminal_facing_tangent) {
+      const auto append_terminal_axis_endpoint = [&](const GlobalRoutePoint& lane) {
+        if (terminal.layer != lane.layer) {
+          return false;
+        }
+        const auto terminal_x = terminal.position.x.value() - lane.position.x.value();
+        const auto terminal_y = terminal.position.y.value() - lane.position.y.value();
+        const bool horizontal = magnitude(terminal_x) >= magnitude(terminal_y);
+        const auto outward = direction(horizontal ? terminal_x : terminal_y);
+        if (outward == 0) {
+          return false;
+        }
+        endpoints.push_back(Endpoint{terminal.position, lane.position, lane.position, lane.layer,
+                                     horizontal, outward, packed_index});
+        return true;
+      };
+      if (!trim_dead_tail) {
+        if (!append_terminal_axis_endpoint(path->points[packed_index])) {
+          return std::nullopt;
+        }
+        found_terminal_facing_tangent = true;
+        continue;
+      }
+      auto inside_index = static_cast<std::int64_t>(packed_index) + step;
+      while (inside_index >= 0 && inside_index < static_cast<std::int64_t>(path->points.size()) &&
+             path->points[static_cast<std::size_t>(inside_index)].position ==
+                 path->points[packed_index].position) {
+        inside_index += step;
+      }
+      if (inside_index < static_cast<std::int64_t>(packed_run.first_index) ||
+          inside_index > static_cast<std::int64_t>(packed_run.last_index)) {
+        if (!append_terminal_axis_endpoint(path->points[packed_index])) {
+          return std::nullopt;
+        }
+        found_terminal_facing_tangent = true;
+        continue;
+      }
+      const auto& lane = path->points[packed_index];
+      const auto& inside = path->points[static_cast<std::size_t>(inside_index)];
+      if (terminal.layer != lane.layer) {
+        return std::nullopt;
+      }
+      if (inside.layer != lane.layer) {
+        if (!append_terminal_axis_endpoint(lane)) {
+          return std::nullopt;
+        }
+        found_terminal_facing_tangent = true;
+        continue;
+      }
+      const auto tangent_x = lane.position.x.value() - inside.position.x.value();
+      const auto tangent_y = lane.position.y.value() - inside.position.y.value();
+      const bool horizontal = magnitude(tangent_x) >= magnitude(tangent_y);
+      const auto outward = direction(horizontal ? tangent_x : tangent_y);
+      const auto terminal_direction =
+          direction(horizontal ? terminal.position.x.value() - lane.position.x.value()
+                               : terminal.position.y.value() - lane.position.y.value());
+      if (outward != 0 && terminal_direction == outward) {
+        endpoints.push_back(Endpoint{terminal.position, lane.position, inside.position, lane.layer,
+                                     horizontal, outward, packed_index});
+        found_terminal_facing_tangent = true;
+      } else {
+        packed_index = static_cast<std::size_t>(inside_index);
+      }
+    }
+  }
+  auto horizontal = endpoints.front().horizontal;
+  auto outward = endpoints.front().outward_direction;
+  bool extended_staircase = false;
+  if (!std::all_of(endpoints.begin(), endpoints.end(), [horizontal, outward](const auto& endpoint) {
+        return endpoint.horizontal == horizontal && endpoint.outward_direction == outward;
+      })) {
+    const auto common_direction = [&endpoints](bool use_x) -> std::optional<std::int64_t> {
+      std::optional<std::int64_t> selected;
+      for (const auto& endpoint : endpoints) {
+        const auto delta = use_x ? endpoint.terminal.x.value() - endpoint.lane.x.value()
+                                 : endpoint.terminal.y.value() - endpoint.lane.y.value();
+        const auto candidate = direction(delta);
+        if (candidate == 0 || (selected && *selected != candidate)) {
+          return std::nullopt;
+        }
+        selected = candidate;
+      }
+      return selected;
+    };
+    const auto horizontal_direction = common_direction(true);
+    const auto vertical_direction = common_direction(false);
+    if (horizontal_direction) {
+      horizontal = true;
+      outward = *horizontal_direction;
+    } else if (vertical_direction) {
+      horizontal = false;
+      outward = *vertical_direction;
+    } else {
+      return std::nullopt;
+    }
+    extended_staircase = true;
+  }
+
+  const auto major = [horizontal](Point point) {
+    return horizontal ? point.x.value() : point.y.value();
+  };
+  const auto cross = [horizontal](Point point) {
+    return horizontal ? point.y.value() : point.x.value();
+  };
+  std::vector<std::pair<std::int64_t, std::size_t>> lane_order;
+  std::vector<std::pair<std::int64_t, std::size_t>> terminal_order;
+  auto available = std::numeric_limits<std::int64_t>::max();
+  std::int64_t cross_excursion = 0;
+  for (std::size_t member = 0U; member < endpoints.size(); ++member) {
+    lane_order.emplace_back(cross(endpoints[member].lane), member);
+    terminal_order.emplace_back(cross(endpoints[member].terminal), member);
+    const auto distance =
+        (major(endpoints[member].terminal) - major(endpoints[member].lane)) * outward;
+    if (distance <= 0) {
+      return std::nullopt;
+    }
+    available = std::min(available, distance);
+    cross_excursion = std::max(cross_excursion, magnitude(cross(endpoints[member].terminal) -
+                                                          cross(endpoints[member].lane)));
+  }
+  std::sort(lane_order.begin(), lane_order.end());
+  std::sort(terminal_order.begin(), terminal_order.end());
+  for (std::size_t rank = 0U; rank < lane_order.size(); ++rank) {
+    if ((rank > 0U && lane_order[rank].first == lane_order[rank - 1U].first) ||
+        (rank > 0U && terminal_order[rank].first == terminal_order[rank - 1U].first) ||
+        lane_order[rank].second != terminal_order[rank].second) {
+      return std::nullopt;
+    }
+  }
+  if (available <= static_cast<std::int64_t>(endpoints.size())) {
+    return std::nullopt;
+  }
+  if (extended_staircase) {
+    if (cross_excursion > std::numeric_limits<std::int64_t>::max() - available) {
+      return std::nullopt;
+    }
+    available += cross_excursion;
+  }
+  std::vector<std::size_t> rank_by_member(endpoints.size(), 0U);
+  for (std::size_t rank = 0U; rank < lane_order.size(); ++rank) {
+    rank_by_member[lane_order[rank].second] = rank;
+  }
+  const auto terminal_span = terminal_order.back().first - terminal_order.front().first;
+  const auto lane_span = lane_order.back().first - lane_order.front().first;
+  std::optional<std::int64_t> common_cross_direction;
+  bool common_cross_motion = true;
+  for (const auto& endpoint : endpoints) {
+    const auto candidate = direction(cross(endpoint.lane) - cross(endpoint.terminal));
+    if (candidate == 0 || (common_cross_direction && *common_cross_direction != candidate)) {
+      common_cross_motion = false;
+      break;
+    }
+    common_cross_direction = candidate;
+  }
+  std::optional<std::size_t> cross_first_member;
+  if (common_cross_motion && common_cross_direction && terminal_span > lane_span) {
+    const auto rank = *common_cross_direction < 0 ? 0U : lane_order.size() - 1U;
+    cross_first_member = lane_order[rank].second;
+  }
+
+  CoupledTerminalFanoutSide result;
+  result.polylines.resize(paths.size());
+  result.packed_indices.resize(paths.size());
+  result.anchor_indices.resize(paths.size());
+  for (std::size_t member = 0U; member < endpoints.size(); ++member) {
+    const auto rank =
+        reverse_staircase ? endpoints.size() - rank_by_member[member] : rank_by_member[member] + 1U;
+    const auto distance = static_cast<long double>(available) * static_cast<long double>(rank) /
+                          static_cast<long double>(endpoints.size() + 1U);
+    const auto station = static_cast<long double>(major(endpoints[member].lane)) +
+                         static_cast<long double>(outward) * distance;
+    constexpr auto low = static_cast<long double>(std::numeric_limits<std::int64_t>::min());
+    constexpr auto high = static_cast<long double>(std::numeric_limits<std::int64_t>::max());
+    if (!std::isfinite(station) || station < low || station > high) {
+      return std::nullopt;
+    }
+    const auto station_nm = static_cast<std::int64_t>(std::llround(station));
+    const auto make_point = [horizontal](std::int64_t major_value, std::int64_t cross_value) {
+      return horizontal ? Point{Nanometres{major_value}, Nanometres{cross_value}}
+                        : Point{Nanometres{cross_value}, Nanometres{major_value}};
+    };
+    auto& polyline = result.polylines[member];
+    result.packed_indices[member] = endpoints[member].packed_index;
+    result.anchor_indices[member] =
+        *packed_run_anchor_index(*paths[member], run_indices[member], at_start);
+    const auto append = [&polyline, &endpoints, member](Point point) {
+      if (polyline.empty() || polyline.back().position != point) {
+        polyline.push_back(GlobalRoutePoint{point, endpoints[member].layer});
+      }
+    };
+    append(endpoints[member].terminal);
+    if (cross_first_member == member) {
+      append(make_point(major(endpoints[member].terminal), cross(endpoints[member].lane)));
+    } else {
+      append(make_point(station_nm, cross(endpoints[member].terminal)));
+    }
+    append(make_point(station_nm, cross(endpoints[member].lane)));
+    append(endpoints[member].lane);
+  }
+  return result;
+}
+
+[[nodiscard]] std::optional<CoupledTerminalFanoutSide>
+coupled_terminal_fanout_side(const std::vector<TopologyLockedLanePath*>& paths, bool at_start,
+                             bool trim_dead_tail, bool reverse_staircase, std::size_t run_index) {
+  return coupled_terminal_fanout_side_for_runs(paths, at_start, trim_dead_tail, reverse_staircase,
+                                               std::vector<std::size_t>(paths.size(), run_index));
+}
+
+[[nodiscard]] std::optional<CoupledTerminalFanoutSide>
+existing_terminal_fanout_side_for_runs(const std::vector<TopologyLockedLanePath*>& paths,
+                                       bool at_start, const std::vector<std::size_t>& run_indices) {
+  if (run_indices.size() != paths.size()) {
+    return std::nullopt;
+  }
+  CoupledTerminalFanoutSide result;
+  result.polylines.reserve(paths.size());
+  result.packed_indices.reserve(paths.size());
+  result.anchor_indices.reserve(paths.size());
+  for (std::size_t member = 0U; member < paths.size(); ++member) {
+    const auto* path = paths[member];
+    const auto run_index = run_indices[member];
+    if (path == nullptr || run_index >= path->packed_runs.size()) {
+      return std::nullopt;
+    }
+    const auto& run = path->packed_runs[run_index];
+    const auto anchor = packed_run_anchor_index(*path, run_index, at_start);
+    if (!anchor) {
+      return std::nullopt;
+    }
+    std::vector<GlobalRoutePoint> polyline;
+    if (at_start) {
+      polyline.assign(path->points.begin() + static_cast<std::ptrdiff_t>(*anchor),
+                      path->points.begin() + static_cast<std::ptrdiff_t>(run.first_index + 1U));
+    } else {
+      for (auto index = *anchor + 1U; index > run.last_index; --index) {
+        polyline.push_back(path->points[index - 1U]);
+      }
+    }
+    if (polyline.empty()) {
+      return std::nullopt;
+    }
+    result.polylines.push_back(std::move(polyline));
+    result.packed_indices.push_back(at_start ? run.first_index : run.last_index);
+    result.anchor_indices.push_back(*anchor);
+  }
+  return result;
+}
+
+[[nodiscard]] std::optional<CoupledTerminalFanoutSide>
+existing_terminal_fanout_side(const std::vector<TopologyLockedLanePath*>& paths, bool at_start,
+                              std::size_t run_index) {
+  return existing_terminal_fanout_side_for_runs(paths, at_start,
+                                                std::vector<std::size_t>(paths.size(), run_index));
+}
+
+[[nodiscard]] bool
+coupled_path_geometry_clear(const Board& board, const CoupledRoutingGroup& group,
+                            const std::vector<TopologyLockedLanePath>& paths,
+                            const std::map<NetId, ResolvedNetRoutingRules>& dimensions,
+                            bool enforce_pair_skew = true) {
+  if (paths.size() != group.members.size()) {
+    return false;
+  }
+  struct Segment {
+    Point start;
+    Point end;
+    LayerId layer;
+    Nanometres width;
+  };
+  std::vector<std::vector<Segment>> segments(paths.size());
+  Board probe = board;
+  for (std::size_t member = 0U; member < paths.size(); ++member) {
+    const auto width = dimensions.at(group.members[member]).track_width;
+    for (std::size_t index = 1U; index < paths[member].points.size(); ++index) {
+      const auto& first = paths[member].points[index - 1U];
+      const auto& second = paths[member].points[index];
+      if (first.layer != second.layer || first.position == second.position) {
+        continue;
+      }
+      segments[member].push_back(Segment{first.position, second.position, first.layer, width});
+      probe.tracks.push_back(TrackSegment{
+          ObjectId{"flux-coupled-fanout-probe-" + std::to_string(member) + "-" +
+                   std::to_string(index)},
+          group.members[member], first.layer, first.position, second.position, width, false});
+    }
+  }
+  for (std::size_t first = 0U; first < segments.size(); ++first) {
+    for (std::size_t second = first + 1U; second < segments.size(); ++second) {
+      auto gap = resolve_pairwise_clearance(board, group.members[first], group.members[second]);
+      if (second == first + 1U) {
+        gap = std::max(gap, group.minimum_adjacent_track_gap);
+      }
+      const auto required =
+          static_cast<long double>(
+              segments[first].empty() ? 0 : segments[first].front().width.value()) /
+              2.0L +
+          static_cast<long double>(gap.value()) +
+          static_cast<long double>(
+              segments[second].empty() ? 0 : segments[second].front().width.value()) /
+              2.0L;
+      for (const auto& lhs : segments[first]) {
+        for (const auto& rhs : segments[second]) {
+          if (lhs.layer == rhs.layer &&
+              geometry::segment_distance_nm(lhs.start, lhs.end, rhs.start, rhs.end) < required) {
+            return false;
+          }
+        }
+      }
+    }
+  }
+  const auto report = check_copper_rules(probe);
+  return std::all_of(report.violations.begin(), report.violations.end(),
+                     [enforce_pair_skew](const auto& violation) {
+                       return !enforce_pair_skew &&
+                              violation.kind == CopperViolationKind::differential_pair_skew;
+                     });
+}
+
+[[nodiscard]] bool
+synchronize_coupled_terminal_fanouts(const Board& board, const CoupledRoutingGroup& group,
+                                     std::vector<TopologyLockedLanePath*>& paths,
+                                     const std::map<NetId, ResolvedNetRoutingRules>& dimensions,
+                                     std::size_t max_candidates, std::size_t& attempted_candidates,
+                                     std::size_t& synchronized_fanouts) {
+  if (paths.size() != group.members.size() || paths.empty()) {
+    return false;
+  }
+  if (attempted_candidates >= max_candidates) {
+    return false;
+  }
+  ++attempted_candidates;
+  std::vector<TopologyLockedLanePath> direct;
+  direct.reserve(paths.size());
+  for (const auto* path : paths) {
+    direct.push_back(*path);
+  }
+  if (coupled_path_geometry_clear(board, group, direct, dimensions)) {
+    return true;
+  }
+  const auto run_count = paths.front()->packed_runs.size();
+  if (run_count == 0U || !std::all_of(paths.begin(), paths.end(), [run_count](const auto* path) {
+        return path != nullptr && path->packed_runs.size() == run_count;
+      })) {
+    return false;
+  }
+  const auto boundary_needs_fanout = [&](bool at_start, std::size_t run) {
+    const auto side = existing_terminal_fanout_side(paths, at_start, run);
+    if (!side) {
+      return true;
+    }
+    std::vector<TopologyLockedLanePath> local;
+    local.reserve(paths.size());
+    for (std::size_t member = 0U; member < paths.size(); ++member) {
+      TopologyLockedLanePath candidate;
+      candidate.points = side->polylines[member];
+      const auto& source = *paths[member];
+      const auto& packed_run = source.packed_runs[run];
+      const auto packed_index = side->packed_indices[member];
+      const auto inside_index = at_start ? packed_index + 1U : packed_index - 1U;
+      if (inside_index >= packed_run.first_index && inside_index <= packed_run.last_index) {
+        const auto& inside = source.points[inside_index];
+        if (candidate.points.empty() || candidate.points.back() != inside) {
+          candidate.points.push_back(inside);
+        }
+      }
+      local.push_back(std::move(candidate));
+    }
+    return !coupled_path_geometry_clear(board, group, local, dimensions, false);
+  };
+  std::vector<bool> needs_start_fanout;
+  std::vector<bool> needs_end_fanout;
+  needs_start_fanout.reserve(run_count);
+  needs_end_fanout.reserve(run_count);
+  for (std::size_t run = 0U; run < run_count; ++run) {
+    needs_start_fanout.push_back(boundary_needs_fanout(true, run));
+    needs_end_fanout.push_back(boundary_needs_fanout(false, run));
+  }
+  for (std::size_t start_variant = 0U; start_variant < 3U; ++start_variant) {
+    std::vector<CoupledTerminalFanoutSide> starts;
+    std::vector<bool> synthesized_starts;
+    starts.reserve(run_count);
+    synthesized_starts.reserve(run_count);
+    for (std::size_t run = 0U; run < run_count; ++run) {
+      auto start = start_variant == 0U || !needs_start_fanout[run]
+                       ? existing_terminal_fanout_side(paths, true, run)
+                       : coupled_terminal_fanout_side(paths, true, start_variant == 2U,
+                                                      start_variant == 1U, run);
+      bool synthesized = start_variant != 0U && needs_start_fanout[run] && start.has_value();
+      if (!start && start_variant != 0U && needs_start_fanout[run]) {
+        start = existing_terminal_fanout_side(paths, true, run);
+        synthesized = false;
+      }
+      if (!start) {
+        starts.clear();
+        break;
+      }
+      starts.push_back(std::move(*start));
+      synthesized_starts.push_back(synthesized);
+    }
+    if (starts.size() != run_count) {
+      continue;
+    }
+    for (std::size_t end_variant = 0U; end_variant < 3U; ++end_variant) {
+      if (start_variant == 0U && end_variant == 0U) {
+        continue;
+      }
+      if (attempted_candidates >= max_candidates) {
+        return false;
+      }
+      ++attempted_candidates;
+      std::vector<CoupledTerminalFanoutSide> ends;
+      std::vector<bool> synthesized_ends;
+      ends.reserve(run_count);
+      synthesized_ends.reserve(run_count);
+      for (std::size_t run = 0U; run < run_count; ++run) {
+        auto end = end_variant == 0U || !needs_end_fanout[run]
+                       ? existing_terminal_fanout_side(paths, false, run)
+                       : coupled_terminal_fanout_side(paths, false, end_variant == 2U,
+                                                      end_variant == 1U, run);
+        bool synthesized = end_variant != 0U && needs_end_fanout[run] && end.has_value();
+        if (!end && end_variant != 0U && needs_end_fanout[run]) {
+          end = existing_terminal_fanout_side(paths, false, run);
+          synthesized = false;
+        }
+        if (!end) {
+          ends.clear();
+          break;
+        }
+        ends.push_back(std::move(*end));
+        synthesized_ends.push_back(synthesized);
+      }
+      if (ends.size() != run_count) {
+        continue;
+      }
+      std::vector<TopologyLockedLanePath> working;
+      working.reserve(paths.size());
+      for (std::size_t member = 0U; member < paths.size(); ++member) {
+        const auto& source = *paths[member];
+        auto candidate = source;
+        candidate.points.clear();
+        candidate.packed_runs.clear();
+        const auto append = [&candidate](const GlobalRoutePoint& point) {
+          if (candidate.points.empty() || candidate.points.back() != point) {
+            candidate.points.push_back(point);
+          }
+          return candidate.points.size() - 1U;
+        };
+        std::optional<std::size_t> previous_end_anchor;
+        bool valid = true;
+        for (std::size_t run = 0U; run < run_count; ++run) {
+          const auto& start = starts[run];
+          const auto& end = ends[run];
+          if (start.packed_indices[member] > end.packed_indices[member] ||
+              start.anchor_indices[member] > start.packed_indices[member] ||
+              end.packed_indices[member] > end.anchor_indices[member] ||
+              (previous_end_anchor && *previous_end_anchor >= start.anchor_indices[member])) {
+            valid = false;
+            break;
+          }
+          if (previous_end_anchor) {
+            for (auto index = *previous_end_anchor + 1U; index <= start.anchor_indices[member];
+                 ++index) {
+              append(source.points[index]);
+            }
+          }
+          for (const auto& point : start.polylines[member]) {
+            append(point);
+          }
+          const auto run_first = candidate.points.size() - 1U;
+          for (auto index = start.packed_indices[member] + 1U; index < end.packed_indices[member];
+               ++index) {
+            append(source.points[index]);
+          }
+          auto run_last = candidate.points.size() - 1U;
+          for (auto point = end.polylines[member].rbegin(); point != end.polylines[member].rend();
+               ++point) {
+            const auto appended = append(*point);
+            if (point == end.polylines[member].rbegin()) {
+              run_last = appended;
+            }
+          }
+          candidate.packed_runs.push_back(
+              TopologyLockedLanePath::PackedRun{run_first, run_last, source.packed_runs[run].layer,
+                                                source.packed_runs[run].resource_ids});
+          previous_end_anchor = end.anchor_indices[member];
+        }
+        if (!valid || candidate.packed_runs.size() != run_count) {
+          working.clear();
+          break;
+        }
+        candidate.first_packed_index = candidate.packed_runs.front().first_index;
+        candidate.last_packed_index = candidate.packed_runs.back().last_index;
+        candidate.multilayer = std::adjacent_find(candidate.points.begin(), candidate.points.end(),
+                                                  [](const auto& lhs, const auto& rhs) {
+                                                    return lhs.layer != rhs.layer;
+                                                  }) != candidate.points.end();
+        working.push_back(std::move(candidate));
+      }
+      if (working.size() != paths.size()) {
+        continue;
+      }
+      if (!coupled_path_geometry_clear(board, group, working, dimensions)) {
+        continue;
+      }
+      for (std::size_t member = 0U; member < paths.size(); ++member) {
+        *paths[member] = std::move(working[member]);
+      }
+      synchronized_fanouts += static_cast<std::size_t>(
+          std::count(synthesized_starts.begin(), synthesized_starts.end(), true));
+      synchronized_fanouts += static_cast<std::size_t>(
+          std::count(synthesized_ends.begin(), synthesized_ends.end(), true));
+      return true;
+    }
+  }
+  return false;
+}
+
+struct ViaSpanProposal {
+  std::vector<LayerId> layers;
+  std::size_t begin_index{0};
+  std::size_t end_index{0};
+  Point current;
+  std::optional<Point> before;
+  std::optional<Point> after;
+};
+
+[[nodiscard]] std::optional<std::vector<ViaSpanProposal>>
+via_span_proposals(const TopologyLockedLanePath& path) {
+  std::vector<ViaSpanProposal> result;
+  for (std::size_t index = 0U; index + 1U < path.points.size();) {
+    if (path.points[index].layer == path.points[index + 1U].layer) {
+      ++index;
+      continue;
+    }
+    const auto begin = index;
+    const auto position = path.points[index].position;
+    ViaSpanProposal proposal;
+    proposal.begin_index = begin;
+    proposal.current = position;
+    proposal.layers.push_back(path.points[index].layer);
+    while (index + 1U < path.points.size() &&
+           path.points[index].layer != path.points[index + 1U].layer) {
+      if (path.points[index + 1U].position != position) {
+        return std::nullopt;
+      }
+      ++index;
+      proposal.layers.push_back(path.points[index].layer);
+    }
+    proposal.end_index = index;
+    for (auto cursor = begin; cursor > 0U; --cursor) {
+      if (path.points[cursor - 1U].position != position) {
+        proposal.before = path.points[cursor - 1U].position;
+        break;
+      }
+    }
+    for (auto cursor = index + 1U; cursor < path.points.size(); ++cursor) {
+      if (path.points[cursor].position != position) {
+        proposal.after = path.points[cursor].position;
+        break;
+      }
+    }
+    result.push_back(std::move(proposal));
+  }
+  return result;
+}
+
+[[nodiscard]] bool synchronize_shared_resource_fanouts(
+    const Board& board, const CoupledRoutingGroup& group,
+    std::vector<TopologyLockedLanePath*>& paths, const std::vector<std::size_t>& run_indices,
+    const std::map<NetId, ResolvedNetRoutingRules>& dimensions, std::size_t max_candidates,
+    std::size_t& attempted_candidates, std::size_t& synchronized_fanouts) {
+  if (paths.size() != group.members.size() || paths.size() < 2U ||
+      run_indices.size() != paths.size()) {
+    return false;
+  }
+  std::vector<TopologyLockedLanePath> direct;
+  direct.reserve(paths.size());
+  for (const auto* path : paths) {
+    if (path == nullptr) {
+      return false;
+    }
+    direct.push_back(*path);
+  }
+  if (coupled_path_geometry_clear(board, group, direct, dimensions, false)) {
+    return true;
+  }
+
+  for (std::size_t start_variant = 0U; start_variant < 3U; ++start_variant) {
+    auto start = start_variant == 0U
+                     ? existing_terminal_fanout_side_for_runs(paths, true, run_indices)
+                     : coupled_terminal_fanout_side_for_runs(paths, true, start_variant == 2U,
+                                                             start_variant == 1U, run_indices);
+    if (!start) {
+      continue;
+    }
+    for (std::size_t end_variant = 0U; end_variant < 3U; ++end_variant) {
+      if (start_variant == 0U && end_variant == 0U) {
+        continue;
+      }
+      if (attempted_candidates >= max_candidates) {
+        return false;
+      }
+      ++attempted_candidates;
+      auto end = end_variant == 0U
+                     ? existing_terminal_fanout_side_for_runs(paths, false, run_indices)
+                     : coupled_terminal_fanout_side_for_runs(paths, false, end_variant == 2U,
+                                                             end_variant == 1U, run_indices);
+      if (!end) {
+        continue;
+      }
+
+      std::vector<TopologyLockedLanePath> working;
+      working.reserve(paths.size());
+      for (std::size_t member = 0U; member < paths.size(); ++member) {
+        const auto& source = *paths[member];
+        const auto selected_run = run_indices[member];
+        if (selected_run >= source.packed_runs.size() ||
+            start->anchor_indices[member] > start->packed_indices[member] ||
+            start->packed_indices[member] > end->packed_indices[member] ||
+            end->packed_indices[member] > end->anchor_indices[member]) {
+          working.clear();
+          break;
+        }
+
+        auto candidate = source;
+        candidate.points.clear();
+        candidate.packed_runs.clear();
+        std::vector<std::optional<std::size_t>> mapped_indices(source.points.size());
+        const auto append = [&candidate](const GlobalRoutePoint& point) {
+          if (candidate.points.empty() || candidate.points.back() != point) {
+            candidate.points.push_back(point);
+          }
+          return candidate.points.size() - 1U;
+        };
+        const auto append_source = [&](std::size_t index) {
+          const auto mapped = append(source.points[index]);
+          mapped_indices[index] = mapped;
+          return mapped;
+        };
+
+        for (std::size_t index = 0U; index < start->anchor_indices[member]; ++index) {
+          append_source(index);
+        }
+        std::optional<std::size_t> start_anchor;
+        std::optional<std::size_t> run_first;
+        for (const auto& point : start->polylines[member]) {
+          const auto appended = append(point);
+          if (!start_anchor) {
+            start_anchor = appended;
+          }
+          run_first = appended;
+        }
+        if (!start_anchor || !run_first) {
+          working.clear();
+          break;
+        }
+        mapped_indices[start->anchor_indices[member]] = *start_anchor;
+        mapped_indices[start->packed_indices[member]] = *run_first;
+        for (auto index = start->packed_indices[member] + 1U; index < end->packed_indices[member];
+             ++index) {
+          append_source(index);
+        }
+        std::optional<std::size_t> run_last;
+        for (auto point = end->polylines[member].rbegin(); point != end->polylines[member].rend();
+             ++point) {
+          const auto appended = append(*point);
+          if (!run_last) {
+            run_last = appended;
+          }
+        }
+        if (!run_last) {
+          working.clear();
+          break;
+        }
+        mapped_indices[end->packed_indices[member]] = *run_last;
+        mapped_indices[end->anchor_indices[member]] = candidate.points.size() - 1U;
+        for (auto index = end->anchor_indices[member] + 1U; index < source.points.size(); ++index) {
+          append_source(index);
+        }
+
+        bool valid = true;
+        for (std::size_t run = 0U; run < source.packed_runs.size(); ++run) {
+          if (run == selected_run) {
+            candidate.packed_runs.push_back(TopologyLockedLanePath::PackedRun{
+                *run_first, *run_last, source.packed_runs[run].layer,
+                source.packed_runs[run].resource_ids});
+            continue;
+          }
+          const auto& source_run = source.packed_runs[run];
+          if (source_run.first_index >= mapped_indices.size() ||
+              source_run.last_index >= mapped_indices.size() ||
+              !mapped_indices[source_run.first_index] || !mapped_indices[source_run.last_index]) {
+            valid = false;
+            break;
+          }
+          candidate.packed_runs.push_back(TopologyLockedLanePath::PackedRun{
+              *mapped_indices[source_run.first_index], *mapped_indices[source_run.last_index],
+              source_run.layer, source_run.resource_ids});
+        }
+        if (!valid || candidate.packed_runs.size() != source.packed_runs.size()) {
+          working.clear();
+          break;
+        }
+        candidate.first_packed_index = candidate.packed_runs.front().first_index;
+        candidate.last_packed_index = candidate.packed_runs.back().last_index;
+        candidate.multilayer = std::adjacent_find(candidate.points.begin(), candidate.points.end(),
+                                                  [](const auto& lhs, const auto& rhs) {
+                                                    return lhs.layer != rhs.layer;
+                                                  }) != candidate.points.end();
+        working.push_back(std::move(candidate));
+      }
+      if (working.size() != paths.size() ||
+          !coupled_path_geometry_clear(board, group, working, dimensions, false)) {
+        continue;
+      }
+      for (std::size_t member = 0U; member < paths.size(); ++member) {
+        *paths[member] = std::move(working[member]);
+      }
+      synchronized_fanouts += (start_variant == 0U ? 0U : 1U) + (end_variant == 0U ? 0U : 1U);
+      return true;
+    }
+  }
+  return false;
+}
+
+[[nodiscard]] bool
+via_array_has_coupled_geometry(const Board& board, const CoupledRoutingGroup& group,
+                               const std::vector<Point>& positions,
+                               const std::map<NetId, ResolvedNetRoutingRules>& dimensions) {
+  if (positions.size() != group.members.size() || positions.size() < 2U) {
+    return false;
+  }
+  for (std::size_t first = 0U; first < positions.size(); ++first) {
+    if (!geometry::coordinate_in_range(positions[first])) {
+      return false;
+    }
+    for (std::size_t second = first + 1U; second < positions.size(); ++second) {
+      const auto distance = geometry::point_distance_nm(positions[first], positions[second]);
+      const auto first_radius =
+          static_cast<long double>(dimensions.at(group.members[first]).via_diameter.value()) / 2.0L;
+      const auto second_radius =
+          static_cast<long double>(dimensions.at(group.members[second]).via_diameter.value()) /
+          2.0L;
+      auto required =
+          resolve_pairwise_clearance(board, group.members[first], group.members[second]);
+      if (second == first + 1U) {
+        required = std::max(required, group.minimum_adjacent_via_gap);
+      }
+      if (distance + 0.5L <
+          first_radius + second_radius + static_cast<long double>(required.value())) {
+        return false;
+      }
+    }
+  }
+  if (!group.ordered || positions.size() < 3U) {
+    return true;
+  }
+  const auto axis_x =
+      static_cast<long double>(positions.back().x.value() - positions.front().x.value());
+  const auto axis_y =
+      static_cast<long double>(positions.back().y.value() - positions.front().y.value());
+  const auto axis_length = std::hypotl(axis_x, axis_y);
+  if (!(axis_length > 0.0L)) {
+    return false;
+  }
+  auto prior_projection = -std::numeric_limits<long double>::infinity();
+  for (const auto position : positions) {
+    const auto relative_x =
+        static_cast<long double>(position.x.value() - positions.front().x.value());
+    const auto relative_y =
+        static_cast<long double>(position.y.value() - positions.front().y.value());
+    const auto projection = (relative_x * axis_x + relative_y * axis_y) / axis_length;
+    const auto perpendicular = std::abs(relative_x * axis_y - relative_y * axis_x) / axis_length;
+    if (projection <= prior_projection || perpendicular > 2.0L) {
+      return false;
+    }
+    prior_projection = projection;
+  }
+  return true;
+}
+
+[[nodiscard]] bool via_array_has_coupled_escape_geometry(
+    const Board& board, const CoupledRoutingGroup& group, const std::vector<Point>& positions,
+    const std::vector<TopologyLockedLanePath>& paths,
+    const std::vector<std::vector<ViaSpanProposal>>& proposals, std::size_t transition,
+    const std::map<NetId, ResolvedNetRoutingRules>& dimensions) {
+  if (positions.size() != paths.size() || positions.size() != group.members.size()) {
+    return false;
+  }
+  for (std::size_t via_member = 0U; via_member < positions.size(); ++via_member) {
+    const auto via_radius =
+        static_cast<long double>(dimensions.at(group.members[via_member]).via_diameter.value()) /
+        2.0L;
+    const std::set<LayerId> via_layers(proposals[via_member][transition].layers.begin(),
+                                       proposals[via_member][transition].layers.end());
+    for (std::size_t track_member = 0U; track_member < paths.size(); ++track_member) {
+      if (track_member == via_member) {
+        continue;
+      }
+      const auto required =
+          via_radius +
+          static_cast<long double>(dimensions.at(group.members[track_member]).track_width.value()) /
+              2.0L +
+          static_cast<long double>(resolve_pairwise_clearance(board, group.members[via_member],
+                                                              group.members[track_member])
+                                       .value());
+      for (std::size_t index = 1U; index < paths[track_member].points.size(); ++index) {
+        const auto& first = paths[track_member].points[index - 1U];
+        const auto& second = paths[track_member].points[index];
+        if (first.layer != second.layer || first.position == second.position ||
+            !via_layers.contains(first.layer)) {
+          continue;
+        }
+        if (geometry::point_segment_distance_nm(positions[via_member], first.position,
+                                                second.position) < required) {
+          return false;
+        }
+      }
+    }
+  }
+  return true;
+}
+
+[[nodiscard]] std::optional<std::vector<Point>>
+staggered_via_array(const CoupledRoutingGroup& group,
+                    const std::vector<std::vector<ViaSpanProposal>>& proposals,
+                    std::size_t transition,
+                    const std::map<NetId, ResolvedNetRoutingRules>& dimensions, bool reverse) {
+  if (proposals.size() < 2U) {
+    return std::nullopt;
+  }
+  const auto first = proposals.front()[transition].current;
+  const auto last = proposals.back()[transition].current;
+  const auto axis_x = static_cast<long double>(last.x.value() - first.x.value());
+  const auto axis_y = static_cast<long double>(last.y.value() - first.y.value());
+  const auto length = std::hypotl(axis_x, axis_y);
+  if (!(length > 0.0L)) {
+    return std::nullopt;
+  }
+  auto pitch = group.minimum_adjacent_via_gap.value();
+  for (const auto& member : group.members) {
+    pitch = std::max(pitch, dimensions.at(member).via_diameter.value() +
+                                group.minimum_adjacent_via_gap.value());
+  }
+  if (pitch > std::numeric_limits<std::int64_t>::max() / 3) {
+    return std::nullopt;
+  }
+  pitch *= 3;
+  std::vector<Point> result;
+  result.reserve(proposals.size());
+  for (std::size_t member = 0U; member < proposals.size(); ++member) {
+    const auto offset = static_cast<long double>(pitch) * (reverse ? -1.0L : 1.0L);
+    const auto x = static_cast<long double>(proposals[member][transition].current.x.value()) -
+                   axis_y / length * offset;
+    const auto y = static_cast<long double>(proposals[member][transition].current.y.value()) +
+                   axis_x / length * offset;
+    constexpr auto low = static_cast<long double>(std::numeric_limits<std::int64_t>::min());
+    constexpr auto high = static_cast<long double>(std::numeric_limits<std::int64_t>::max());
+    if (!std::isfinite(x) || !std::isfinite(y) || x < low || x > high || y < low || y > high) {
+      return std::nullopt;
+    }
+    result.push_back(Point{Nanometres{static_cast<std::int64_t>(std::llround(x))},
+                           Nanometres{static_cast<std::int64_t>(std::llround(y))}});
+  }
+  return result;
+}
+
+[[nodiscard]] bool
+synchronize_coupled_via_arrays(const Board& board, const CoupledRoutingGroup& group,
+                               std::vector<TopologyLockedLanePath*>& paths,
+                               const std::map<NetId, ResolvedNetRoutingRules>& dimensions,
+                               std::size_t& array_count) {
+  if (paths.size() != group.members.size() || paths.empty()) {
+    return false;
+  }
+  std::vector<TopologyLockedLanePath> working;
+  working.reserve(paths.size());
+  for (const auto* path : paths) {
+    working.push_back(*path);
+  }
+  std::vector<std::vector<ViaSpanProposal>> proposals;
+  proposals.reserve(working.size());
+  for (const auto& path : working) {
+    const auto extracted = via_span_proposals(path);
+    if (!extracted || extracted->empty()) {
+      return false;
+    }
+    proposals.push_back(*extracted);
+  }
+  if (!std::all_of(proposals.begin(), proposals.end(), [&proposals](const auto& candidate) {
+        return candidate.size() == proposals.front().size();
+      })) {
+    return false;
+  }
+  for (std::size_t transition = 0U; transition < proposals.front().size(); ++transition) {
+    const auto& expected_layers = proposals.front()[transition].layers;
+    if (!std::all_of(proposals.begin(), proposals.end(), [&](const auto& candidate) {
+          return candidate[transition].layers == expected_layers;
+        })) {
+      return false;
+    }
+    std::vector<Point> selected;
+    selected.reserve(paths.size());
+    bool found = false;
+    for (std::size_t choice = 0U; choice < 5U && !found; ++choice) {
+      selected.clear();
+      bool available = true;
+      if (choice >= 3U) {
+        const auto staggered =
+            staggered_via_array(group, proposals, transition, dimensions, choice == 4U);
+        if (staggered) {
+          selected = *staggered;
+        } else {
+          available = false;
+        }
+      } else {
+        for (const auto& candidate : proposals) {
+          const auto& proposal = candidate[transition];
+          const std::optional<Point> position = choice == 0U
+                                                    ? std::optional<Point>{proposal.current}
+                                                : choice == 1U ? proposal.before
+                                                               : proposal.after;
+          if (!position) {
+            available = false;
+            break;
+          }
+          selected.push_back(*position);
+        }
+      }
+      if (available && via_array_has_coupled_geometry(board, group, selected, dimensions)) {
+        auto escape_paths = working;
+        for (std::size_t member = 0U; member < escape_paths.size(); ++member) {
+          const auto& proposal = proposals[member][transition];
+          for (auto index = proposal.begin_index; index <= proposal.end_index; ++index) {
+            escape_paths[member].points[index].position = selected[member];
+          }
+        }
+        found = via_array_has_coupled_escape_geometry(board, group, selected, escape_paths,
+                                                      proposals, transition, dimensions);
+      }
+    }
+    if (!found) {
+      return false;
+    }
+    for (std::size_t member = 0U; member < working.size(); ++member) {
+      const auto& proposal = proposals[member][transition];
+      for (auto index = proposal.begin_index; index <= proposal.end_index; ++index) {
+        working[member].points[index].position = selected[member];
+      }
+    }
+  }
+  for (std::size_t member = 0U; member < paths.size(); ++member) {
+    *paths[member] = std::move(working[member]);
+  }
+  array_count += proposals.front().size();
+  return true;
+}
+
+[[nodiscard]] bool path_crosses_layers(const GlobalRoutePath& path) {
+  return std::adjacent_find(path.points.begin(), path.points.end(),
+                            [](const auto& lhs, const auto& rhs) {
+                              return lhs.layer != rhs.layer;
+                            }) != path.points.end();
+}
+
+struct SplineRun {
+  LayerId layer;
+  Nanometres width;
+  std::vector<Point> points;
+  std::vector<std::string> original_track_ids;
+};
+
+struct PendingSplineRun {
+  NetId net;
+  std::string base;
+  SplineRun run;
+};
+
+struct CopperEndpointIncidence {
+  bool straight_track{false};
+  Point direction;
+  std::size_t track_index{std::numeric_limits<std::size_t>::max()};
+};
+
+using CopperEndpointKey = std::tuple<NetId, LayerId, Point>;
+using CopperEndpointMap = std::map<CopperEndpointKey, std::vector<CopperEndpointIncidence>>;
+
+[[nodiscard]] CopperEndpointMap copper_endpoint_incidences(const Board& board) {
+  CopperEndpointMap incidences;
+  for (std::size_t index = 0U; index < board.tracks.size(); ++index) {
+    const auto& track = board.tracks[index];
+    if (track.start == track.end) {
+      continue;
+    }
+    incidences[{track.net, track.layer, track.start}].push_back(
+        CopperEndpointIncidence{true,
+                                Point{Nanometres{track.end.x.value() - track.start.x.value()},
+                                      Nanometres{track.end.y.value() - track.start.y.value()}},
+                                index});
+    incidences[{track.net, track.layer, track.end}].push_back(
+        CopperEndpointIncidence{true,
+                                Point{Nanometres{track.start.x.value() - track.end.x.value()},
+                                      Nanometres{track.start.y.value() - track.end.y.value()}},
+                                index});
+  }
+  for (const auto& arc : board.track_arcs) {
+    if (arc.start == arc.end) {
+      continue;
+    }
+    incidences[{arc.net, arc.layer, arc.start}].push_back(CopperEndpointIncidence{});
+    incidences[{arc.net, arc.layer, arc.end}].push_back(CopperEndpointIncidence{});
+  }
+  return incidences;
+}
+
+struct UnroundedTrackBend {
+  NetId net;
+  LayerId layer;
+  Point corner;
+  std::size_t first_track{0U};
+  std::size_t second_track{0U};
+};
+
+[[nodiscard]] std::vector<UnroundedTrackBend>
+find_unrounded_non_junction_bends(const Board& board) {
+  const auto incidences = copper_endpoint_incidences(board);
+  std::vector<UnroundedTrackBend> bends;
+  for (const auto& [key, at_endpoint] : incidences) {
+    if (at_endpoint.size() != 2U || !at_endpoint[0].straight_track ||
+        !at_endpoint[1].straight_track) {
+      continue;
+    }
+    const auto cross = static_cast<long double>(at_endpoint[0].direction.x.value()) *
+                           static_cast<long double>(at_endpoint[1].direction.y.value()) -
+                       static_cast<long double>(at_endpoint[0].direction.y.value()) *
+                           static_cast<long double>(at_endpoint[1].direction.x.value());
+    if (cross != 0.0L) {
+      bends.push_back(UnroundedTrackBend{std::get<0>(key), std::get<1>(key), std::get<2>(key),
+                                         at_endpoint[0].track_index, at_endpoint[1].track_index});
+    }
+  }
+  return bends;
+}
+
+[[nodiscard]] std::size_t count_unrounded_non_junction_bends(const Board& board) {
+  const auto incidences = copper_endpoint_incidences(board);
+
+  std::size_t bends = 0U;
+  for (const auto& [key, at_endpoint] : incidences) {
+    (void)key;
+    // A true branch is permitted to retain an angular junction. Every degree-two change of
+    // direction between straight primitives is unfinished spline geometry, irrespective of its
+    // angle. Collinear subdivision is harmless and does not count as a bend.
+    if (at_endpoint.size() != 2U || !at_endpoint[0].straight_track ||
+        !at_endpoint[1].straight_track) {
+      continue;
+    }
+    const auto cross = static_cast<long double>(at_endpoint[0].direction.x.value()) *
+                           static_cast<long double>(at_endpoint[1].direction.y.value()) -
+                       static_cast<long double>(at_endpoint[0].direction.y.value()) *
+                           static_cast<long double>(at_endpoint[1].direction.x.value());
+    bends += cross == 0.0L ? 0U : 1U;
+  }
+  return bends;
+}
+
+[[nodiscard]] std::vector<PendingSplineRun> collect_unrounded_spline_chains(const Board& board) {
+  using EndpointKey = std::tuple<NetId, LayerId, Point>;
+  struct EndpointNode {
+    std::size_t total_incidences{0U};
+    std::vector<std::size_t> eligible_tracks;
+  };
+  std::map<EndpointKey, EndpointNode> nodes;
+  for (std::size_t index = 0U; index < board.tracks.size(); ++index) {
+    const auto& track = board.tracks[index];
+    if (track.start == track.end) {
+      continue;
+    }
+    for (const auto point : {track.start, track.end}) {
+      auto& node = nodes[{track.net, track.layer, point}];
+      ++node.total_incidences;
+      if (!track.locked) {
+        node.eligible_tracks.push_back(index);
+      }
+    }
+  }
+  for (const auto& arc : board.track_arcs) {
+    if (arc.start == arc.end) {
+      continue;
+    }
+    ++nodes[{arc.net, arc.layer, arc.start}].total_incidences;
+    ++nodes[{arc.net, arc.layer, arc.end}].total_incidences;
+  }
+
+  const auto continuation = [&](const TrackSegment& track, Point endpoint,
+                                std::size_t current) -> std::optional<std::size_t> {
+    const auto found = nodes.find({track.net, track.layer, endpoint});
+    if (found == nodes.end() || found->second.total_incidences != 2U ||
+        found->second.eligible_tracks.size() != 2U) {
+      return std::nullopt;
+    }
+    for (const auto candidate : found->second.eligible_tracks) {
+      if (candidate != current && candidate < board.tracks.size() &&
+          board.tracks[candidate].width == track.width) {
+        return candidate;
+      }
+    }
+    return std::nullopt;
+  };
+  const auto boundary = [&](std::size_t track, Point endpoint) {
+    return !continuation(board.tracks[track], endpoint, track).has_value();
+  };
+
+  std::vector<PendingSplineRun> result;
+  std::vector<std::uint8_t> visited(board.tracks.size(), 0U);
+  std::size_t serial = 0U;
+  const auto append_chain = [&](std::size_t first, Point start,
+                                std::vector<PendingSplineRun>& output) {
+    if (first >= board.tracks.size() || visited[first] != 0U || board.tracks[first].locked) {
+      return;
+    }
+    const auto& first_track = board.tracks[first];
+    SplineRun run{first_track.layer, first_track.width, {start}, {}};
+    auto current = first;
+    auto endpoint = start;
+    while (current < board.tracks.size() && visited[current] == 0U) {
+      const auto& track = board.tracks[current];
+      if (track.locked || track.net != first_track.net || track.layer != first_track.layer ||
+          track.width != first_track.width || (track.start != endpoint && track.end != endpoint)) {
+        break;
+      }
+      visited[current] = 1U;
+      run.original_track_ids.push_back(track.id.value());
+      endpoint = track.start == endpoint ? track.end : track.start;
+      run.points.push_back(endpoint);
+      const auto next = continuation(track, endpoint, current);
+      if (!next || visited[*next] != 0U) {
+        break;
+      }
+      current = *next;
+    }
+    const bool has_bend =
+        run.points.size() >= 3U &&
+        std::any_of(run.points.begin() + 1, run.points.end() - 1, [&](const auto& point) {
+          const auto index = static_cast<std::size_t>(&point - run.points.data());
+          const auto& before = run.points[index - 1U];
+          const auto& after = run.points[index + 1U];
+          const auto first_x = point.x.value() - before.x.value();
+          const auto first_y = point.y.value() - before.y.value();
+          const auto second_x = after.x.value() - point.x.value();
+          const auto second_y = after.y.value() - point.y.value();
+          return static_cast<long double>(first_x) * second_y !=
+                 static_cast<long double>(first_y) * second_x;
+        });
+    if (has_bend) {
+      output.push_back(PendingSplineRun{
+          first_track.net, "flux-board-spline-" + std::to_string(serial++), std::move(run)});
+    }
+  };
+
+  // Begin at physical or policy boundaries first so each open chain is ordered end-to-end.
+  for (std::size_t track = 0U; track < board.tracks.size(); ++track) {
+    if (visited[track] != 0U || board.tracks[track].locked) {
+      continue;
+    }
+    if (boundary(track, board.tracks[track].start)) {
+      append_chain(track, board.tracks[track].start, result);
+    } else if (boundary(track, board.tracks[track].end)) {
+      append_chain(track, board.tracks[track].end, result);
+    }
+  }
+  // Closed degree-two components have no boundary. They are uncommon in routed copper but remain
+  // bounded and deterministic rather than being silently skipped.
+  for (std::size_t track = 0U; track < board.tracks.size(); ++track) {
+    if (visited[track] == 0U && !board.tracks[track].locked) {
+      append_chain(track, board.tracks[track].start, result);
+    }
+  }
+  return result;
+}
+
+[[nodiscard]] bool navmesh_chord_stays_in_selected_corridor(const NavMeshRouteResult& navigation,
+                                                            Point start, Point end,
+                                                            Nanometres sample_spacing) {
+  const auto length = geometry::segment_length_nm(start, end);
+  if (!(length > 0.0L) || sample_spacing.value() <= 0) {
+    return start == end;
+  }
+  const auto steps = static_cast<std::size_t>(std::max<long double>(
+      1.0L, std::ceil(length / static_cast<long double>(sample_spacing.value()))));
+  constexpr std::size_t maximum_samples_per_chord = 4096U;
+  if (steps > maximum_samples_per_chord) {
+    return false;
+  }
+  const auto dx = static_cast<long double>(end.x.value() - start.x.value());
+  const auto dy = static_cast<long double>(end.y.value() - start.y.value());
+  for (std::size_t sample = 0U; sample <= steps; ++sample) {
+    const auto parameter = static_cast<long double>(sample) / static_cast<long double>(steps);
+    const auto point =
+        Point{Nanometres{static_cast<std::int64_t>(
+                  std::llround(static_cast<long double>(start.x.value()) + parameter * dx))},
+              Nanometres{static_cast<std::int64_t>(
+                  std::llround(static_cast<long double>(start.y.value()) + parameter * dy))}};
+    if (!navmesh_corridor_contains(navigation, point)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+[[nodiscard]] std::vector<Point>
+string_pull_detailed_spline_seed(const NavMeshRouteResult& navigation, Nanometres sample_spacing) {
+  const auto& source = navigation.centerline;
+  if (source.size() <= 2U) {
+    return source;
+  }
+  std::vector<Point> result{source.front()};
+  std::size_t anchor = 0U;
+  while (anchor + 1U < source.size()) {
+    auto farthest = anchor + 1U;
+    for (auto candidate = farthest + 1U;
+         candidate < source.size() &&
+         navmesh_chord_stays_in_selected_corridor(navigation, source[anchor], source[candidate],
+                                                  sample_spacing);
+         ++candidate) {
+      farthest = candidate;
+    }
+    if (result.back() != source[farthest]) {
+      result.push_back(source[farthest]);
+    }
+    anchor = farthest;
+  }
+  return result;
+}
+
+// A normal cubic B-spline is intentionally allowed to round a funnel corner.  When that rounding
+// would skip a selected directed NavMesh gate, retain a small number of coincident controls at the
+// meaningful corner.  This is a topology realization fallback, not a grid-step reconstruction:
+// it preserves the same centreline turns while preventing a continuous curve from changing its
+// obstacle side before elastic optimization begins.
+[[nodiscard]] std::optional<CubicBSplineRoute>
+make_topology_tight_detailed_spline(const std::vector<Point>& points,
+                                    std::size_t corner_multiplicity) {
+  if (corner_multiplicity <= 1U) {
+    return make_cubic_bspline_route(points);
+  }
+  std::vector<Point> canonical;
+  canonical.reserve(points.size());
+  for (const auto point : points) {
+    if (canonical.empty() || canonical.back() != point) {
+      canonical.push_back(point);
+    }
+  }
+  if (canonical.size() < 3U) {
+    return make_cubic_bspline_route(canonical);
+  }
+  const auto vector = [](Point point) {
+    return SplineVector{static_cast<long double>(point.x.value()),
+                        static_cast<long double>(point.y.value())};
+  };
+  CubicBSplineRoute result;
+  result.control_points.reserve(2U + (canonical.size() - 2U) * corner_multiplicity + 2U);
+  const auto first = vector(canonical.front());
+  const auto second = vector(canonical[1U]);
+  result.control_points.push_back(first);
+  result.control_points.push_back(
+      SplineVector{std::midpoint(first.x, second.x), std::midpoint(first.y, second.y)});
+  for (std::size_t index = 1U; index + 1U < canonical.size(); ++index) {
+    result.control_points.insert(result.control_points.end(), corner_multiplicity,
+                                 vector(canonical[index]));
+  }
+  const auto previous = vector(canonical[canonical.size() - 2U]);
+  const auto last = vector(canonical.back());
+  result.control_points.push_back(
+      SplineVector{std::midpoint(last.x, previous.x), std::midpoint(last.y, previous.y)});
+  result.control_points.push_back(last);
+  result.corridor_anchors = result.control_points;
+  return result;
+}
+
+[[nodiscard]] std::optional<Point> obstacle_reference_point(const Board& board, std::string_view id,
+                                                            Point collision) {
+  const auto track = std::find_if(board.tracks.begin(), board.tracks.end(),
+                                  [&](const auto& item) { return item.id.value() == id; });
+  if (track != board.tracks.end()) {
+    const auto dx = static_cast<long double>(track->end.x.value() - track->start.x.value());
+    const auto dy = static_cast<long double>(track->end.y.value() - track->start.y.value());
+    const auto length_squared = dx * dx + dy * dy;
+    const auto parameter =
+        length_squared > 0.0L
+            ? std::clamp(
+                  (static_cast<long double>(collision.x.value() - track->start.x.value()) * dx +
+                   static_cast<long double>(collision.y.value() - track->start.y.value()) * dy) /
+                      length_squared,
+                  0.0L, 1.0L)
+            : 0.0L;
+    return Point{Nanometres{static_cast<std::int64_t>(std::llround(
+                     static_cast<long double>(track->start.x.value()) + parameter * dx))},
+                 Nanometres{static_cast<std::int64_t>(std::llround(
+                     static_cast<long double>(track->start.y.value()) + parameter * dy))}};
+  }
+  const auto arc = std::find_if(board.track_arcs.begin(), board.track_arcs.end(),
+                                [&](const auto& item) { return item.id.value() == id; });
+  if (arc != board.track_arcs.end()) {
+    return arc->middle;
+  }
+  const auto via = std::find_if(board.vias.begin(), board.vias.end(),
+                                [&](const auto& item) { return item.id.value() == id; });
+  if (via != board.vias.end()) {
+    return via->position;
+  }
+  for (const auto& footprint : board.footprints) {
+    for (const auto& pad : footprint.pads) {
+      if (pad.id.value() == id) {
+        return geometry::transform_point(pad.local_position, footprint.position, footprint.rotation,
+                                         footprint.side);
+      }
+    }
+  }
+  return std::nullopt;
+}
+
+struct SplineProbe {
+  Board board;
+  std::vector<std::string> generated_ids;
+  std::map<std::string, long double> parameter_by_id;
+  std::size_t tracks{0};
+  std::size_t arcs{0};
+};
+
+[[nodiscard]] std::optional<SplineProbe>
+materialize_spline_probe(const Board& source, const SplineRun& run,
+                         const std::vector<SplineFittedPiece>& pieces, const std::string& base,
+                         std::size_t serial, std::set<std::string>& used_ids) {
+  if (pieces.empty()) {
+    return std::nullopt;
+  }
+  SplineProbe result;
+  result.board = source;
+  for (std::size_t index = 0U; index < pieces.size(); ++index) {
+    const auto& piece = pieces[index];
+    if (piece.start == piece.end) {
+      return std::nullopt;
+    }
+    const auto id = unique_id(
+        base + "-spline-" + std::to_string(serial) + "-" + std::to_string(index), used_ids);
+    result.generated_ids.push_back(id.value());
+    result.parameter_by_id.emplace(id.value(),
+                                   (piece.first_parameter + piece.last_parameter) / 2.0L);
+    if (piece.kind == SplineFittedPieceKind::circular_arc) {
+      result.board.track_arcs.push_back(
+          TrackArc{id, NetId{}, run.layer, piece.start, piece.middle, piece.end, run.width, false});
+      ++result.arcs;
+    } else {
+      result.board.tracks.push_back(
+          TrackSegment{id, NetId{}, run.layer, piece.start, piece.end, run.width, false});
+      ++result.tracks;
+    }
+  }
+  return result;
+}
+
+void assign_spline_net(SplineProbe& probe, const NetId& net) {
+  const std::set<std::string> ids(probe.generated_ids.begin(), probe.generated_ids.end());
+  for (auto& track : probe.board.tracks) {
+    if (ids.contains(track.id.value())) {
+      track.net = net;
+    }
+  }
+  for (auto& arc : probe.board.track_arcs) {
+    if (ids.contains(arc.id.value())) {
+      arc.net = net;
+    }
+  }
+}
+
+[[nodiscard]] const CopperViolation*
+first_spline_collision(const CopperDrcReport& report,
+                       const std::vector<std::string>& generated_ids) {
+  return [&]() -> const CopperViolation* {
+    for (const auto& violation : report.violations) {
+      if (violation.kind == CopperViolationKind::differential_pair_skew) {
+        continue;
+      }
+      if (std::any_of(generated_ids.begin(), generated_ids.end(), [&](const auto& id) {
+            return std::find(violation.object_ids.begin(), violation.object_ids.end(), id) !=
+                   violation.object_ids.end();
+          })) {
+        return &violation;
+      }
+    }
+    return nullptr;
+  }();
+}
+
+[[nodiscard]] bool refine_spline_run(Board& board, const Board& navigation_board, const NetId& net,
+                                     const SplineRun& run, const std::string& base,
+                                     std::set<std::string>& used_ids, DetailedRouteResult& result,
+                                     const DetailedRouterConfig& config,
+                                     std::stop_token stop_token) {
+  const auto extracted = extract_polygonal_board_free_space(
+      navigation_board,
+      BoardFreeSpaceExtractionConfig{run.layer, net, true, true,
+                                     !config.defer_saved_zone_fill_clearance_to_refill});
+  if (!extracted.complete()) {
+    ++result.spline_navmesh_failures;
+    result.spline_navmesh_last_diagnostic = extracted.diagnostic.empty()
+                                                ? "unrepresented detailed routing obstacle"
+                                                : extracted.diagnostic;
+    return false;
+  }
+  auto maximum_clearance = navigation_board.rules.copper_to_edge_clearance;
+  for (const auto& foreign : navigation_board.nets) {
+    if (foreign.id != net) {
+      maximum_clearance = std::max(maximum_clearance,
+                                   resolve_pairwise_clearance(navigation_board, net, foreign.id));
+    }
+  }
+  const auto center_clearance = Nanometres{(run.width.value() + 1) / 2 + maximum_clearance.value()};
+  const auto offset = offset_polygonal_free_space(
+      extracted.domain, FreeSpaceOffsetConfig{center_clearance, 1'000'000U});
+  std::vector<OffsetFreeSpaceRegion> navigation_regions;
+  bool navigation_regions_are_offset = offset.ok();
+  if (offset.ok()) {
+    navigation_regions = offset.regions;
+  } else {
+    const auto unioned = offset_polygonal_free_space(
+        extracted.domain, FreeSpaceOffsetConfig{Nanometres{0}, 1'000'000U});
+    if (!unioned.ok()) {
+      ++result.spline_navmesh_failures;
+      result.spline_navmesh_last_diagnostic = offset.diagnostic + "; " + unioned.diagnostic;
+      return false;
+    }
+    navigation_regions = unioned.regions;
+    ++result.spline_navmesh_certificate_fallbacks;
+    result.spline_navmesh_last_diagnostic = offset.diagnostic;
+  }
+  std::optional<NavMeshRouteResult> navigation;
+  std::optional<PreparedNavMeshDomain> prepared_navigation;
+  const OffsetFreeSpaceRegion* selected_region = nullptr;
+  for (const auto& region : navigation_regions) {
+    const NavMeshConfig navmesh_config{
+        config.spline_navmesh_cell_pitch,
+        config.max_spline_navmesh_cells_per_run,
+        config.max_spline_navmesh_search_expansions_per_run,
+        run.points,
+        Nanometres{config.spline_control_corridor.value() +
+                   config.spline_navmesh_cell_pitch.value()},
+        static_cast<std::size_t>(
+            std::max<std::int64_t>(1, (config.spline_control_corridor.value() +
+                                       config.spline_navmesh_cell_pitch.value() - 1) /
+                                          config.spline_navmesh_cell_pitch.value())),
+        navigation_regions_are_offset ? Nanometres{0} : center_clearance,
+        std::nullopt};
+    auto prepared = prepare_navmesh_domain(region, navmesh_config);
+    auto routed =
+        route_prepared_navmesh(prepared, run.points.front(), run.points.back(), navmesh_config);
+    result.spline_navmesh_last_diagnostic = routed.diagnostic;
+    if (routed.ok()) {
+      navigation = std::move(routed);
+      prepared_navigation = std::move(prepared);
+      selected_region = &region;
+      break;
+    }
+  }
+  if (!navigation || !prepared_navigation || selected_region == nullptr) {
+    ++result.spline_navmesh_failures;
+    return false;
+  }
+  ++result.spline_navmesh_routes;
+  result.spline_funnel_points += navigation->centerline.size();
+  if (!navigation->topology_signature.valid) {
+    ++result.spline_navmesh_failures;
+    result.spline_navmesh_last_topology_diagnostic = "selected NavMesh route has no valid topology signature";
+    return false;
+  }
+  ++result.spline_navmesh_topology_signatures;
+  result.spline_navmesh_topology_gates += navigation->topology_signature.gates.size();
+  auto spline_points = string_pull_detailed_spline_seed(
+      *navigation,
+      Nanometres{std::max<std::int64_t>(1, config.spline_navmesh_cell_pitch.value() / 4)});
+  if (spline_points.size() == 2U) {
+    spline_points.insert(
+        spline_points.begin() + 1,
+        Point{Nanometres{spline_points.front().x.value() +
+                         (spline_points.back().x.value() - spline_points.front().x.value()) / 2},
+              Nanometres{spline_points.front().y.value() +
+                         (spline_points.back().y.value() - spline_points.front().y.value()) / 2}});
+  }
+  auto spline = make_cubic_bspline_route(spline_points);
+  if (!spline) {
+    return false;
+  }
+  const auto topology_preserved = [&](const std::vector<SplineSample>& samples) {
+    std::vector<Point> polyline;
+    polyline.reserve(samples.size());
+    for (const auto& sample : samples) {
+      const auto point = Point{Nanometres{static_cast<std::int64_t>(std::llround(sample.position.x))},
+                               Nanometres{static_cast<std::int64_t>(std::llround(sample.position.y))}};
+      if (polyline.empty() || polyline.back() != point) {
+        polyline.push_back(point);
+      }
+    }
+    const auto topology =
+        validate_navmesh_topology_signature(navigation->topology_signature, polyline);
+    if (!topology.preserved) {
+      ++result.spline_navmesh_topology_rejections;
+      result.spline_navmesh_last_topology_diagnostic = topology.diagnostic;
+    }
+    return topology.preserved;
+  };
+  const auto initial_topology_samples = adaptive_tessellate_cubic_bspline(
+      *spline, config.spline_tessellation_tolerance, config.spline_max_tessellation_depth,
+      config.max_spline_samples_per_run);
+  if (!topology_preserved(initial_topology_samples)) {
+    bool recovered = false;
+    for (const auto corner_multiplicity : {2U, 4U, 8U}) {
+      auto tightened = make_topology_tight_detailed_spline(spline_points, corner_multiplicity);
+      if (!tightened) {
+        continue;
+      }
+      const auto tightened_samples = adaptive_tessellate_cubic_bspline(
+          *tightened, config.spline_tessellation_tolerance, config.spline_max_tessellation_depth,
+          config.max_spline_samples_per_run);
+      if (!topology_preserved(tightened_samples)) {
+        continue;
+      }
+      *spline = std::move(*tightened);
+      recovered = true;
+      break;
+    }
+    if (!recovered) {
+      return false;
+    }
+  }
+  ++result.attempted_cubic_bspline_runs;
+  const auto quantize = [](SplineVector point) {
+    return Point{Nanometres{static_cast<std::int64_t>(std::llround(point.x))},
+                 Nanometres{static_cast<std::int64_t>(std::llround(point.y))}};
+  };
+  const auto boundary_distance = [&](Point point) {
+    auto distance =
+        geometry::point_polygon_boundary_distance_nm(point, prepared_navigation->prepared_outline);
+    for (const auto& hole : prepared_navigation->prepared_cutouts) {
+      distance = std::min(distance, geometry::point_polygon_boundary_distance_nm(point, hole));
+    }
+    return distance;
+  };
+  const auto clearance_evaluator = [&](SplineVector position) {
+    const auto point = quantize(position);
+    const auto in_region =
+        geometry::locate_point(prepared_navigation->prepared_outline, point) !=
+            geometry::PointLocation::outside &&
+        std::none_of(prepared_navigation->prepared_cutouts.begin(),
+                     prepared_navigation->prepared_cutouts.end(), [&](const auto& hole) {
+                       return geometry::locate_point(hole, point) !=
+                              geometry::PointLocation::outside;
+                     });
+    const auto distance = boundary_distance(point);
+    const auto probe = std::max<std::int64_t>(1, config.spline_navmesh_cell_pitch.value() / 100);
+    const auto dx = boundary_distance(Point{Nanometres{point.x.value() + probe}, point.y}) -
+                    boundary_distance(Point{Nanometres{point.x.value() - probe}, point.y});
+    const auto dy = boundary_distance(Point{point.x, Nanometres{point.y.value() + probe}}) -
+                    boundary_distance(Point{point.x, Nanometres{point.y.value() - probe}});
+    const auto length = std::hypot(dx, dy);
+    return SplineClearanceProbe{
+        (navigation_regions_are_offset ? static_cast<long double>(center_clearance.value())
+                                       : 0.0L) +
+            (in_region ? distance : -distance),
+        length > 0.0L ? SplineVector{dx / length, dy / length} : SplineVector{},
+        // The detailed NavMesh itself is restricted to the allocated polyline's topology tube.
+        // Continuous accepted iterates remain in represented free space; that legal homotopy,
+        // together with corridor-anchored controls, preserves obstacle side without treating an
+        // arbitrary cell boundary as a physical obstacle.
+        in_region};
+  };
+  SplineTrajectoryOptimizationConfig trajectory_config;
+  trajectory_config.minimum_clearance = center_clearance;
+  trajectory_config.minimum_bend_radius = config.spline_minimum_bend_radius;
+  trajectory_config.control_step = config.spline_shove_step;
+  trajectory_config.gradient_probe_step = Nanometres{
+      std::max<std::int64_t>(1, config.spline_shove_step.value() / static_cast<std::int64_t>(5))};
+  trajectory_config.maximum_corridor_displacement = config.spline_control_corridor;
+  trajectory_config.samples = config.spline_trajectory_samples;
+  trajectory_config.maximum_iterations = config.max_spline_trajectory_iterations;
+  trajectory_config.maximum_candidate_checks = config.max_spline_trajectory_candidate_checks;
+  trajectory_config.preferred_start_tangent = SplineVector{
+      static_cast<long double>(spline_points[1U].x.value() - spline_points[0U].x.value()),
+      static_cast<long double>(spline_points[1U].y.value() - spline_points[0U].y.value())};
+  trajectory_config.preferred_end_tangent =
+      SplineVector{static_cast<long double>(spline_points.back().x.value() -
+                                            spline_points[spline_points.size() - 2U].x.value()),
+                   static_cast<long double>(spline_points.back().y.value() -
+                                            spline_points[spline_points.size() - 2U].y.value())};
+  ++result.spline_trajectory_attempts;
+  const auto spline_before_optimization = *spline;
+  const auto optimized =
+      optimize_cubic_bspline_trajectory(*spline, trajectory_config, clearance_evaluator);
+  result.spline_trajectory_control_moves += optimized.accepted_control_moves;
+  result.spline_trajectory_candidate_checks += optimized.candidate_checks;
+  result.spline_trajectory_initial_violations += optimized.initial_violations;
+  result.spline_trajectory_final_violations += optimized.final_violations;
+  if (!optimized.accepted) {
+    return false;
+  }
+  const auto optimized_topology_samples = adaptive_tessellate_cubic_bspline(
+      *spline, config.spline_tessellation_tolerance, config.spline_max_tessellation_depth,
+      config.max_spline_samples_per_run);
+  if (!topology_preserved(optimized_topology_samples)) {
+    *spline = spline_before_optimization;
+    return false;
+  }
+  ++result.spline_trajectory_accepted;
+  Board corridor_board = board;
+  const auto baseline_connectivity = analyze_connectivity(board);
+  std::size_t pending_pns_shoves = 0U;
+  std::size_t pending_pns_tracks = 0U;
+  std::size_t pending_pns_vias = 0U;
+  std::size_t pending_pns_doglegs = 0U;
+  for (std::size_t iteration = 0U; iteration <= config.max_spline_shove_iterations; ++iteration) {
+    if (stop_token.stop_requested()) {
+      return false;
+    }
+    if (result.attempted_circular_arc_candidates >= config.max_spline_candidate_checks) {
+      result.spline_candidate_budget_exhausted = true;
+      result.circular_arc_candidate_budget_exhausted = true;
+      return false;
+    }
+    const auto samples = adaptive_tessellate_cubic_bspline(
+        *spline, config.spline_tessellation_tolerance, config.spline_max_tessellation_depth,
+        config.max_spline_samples_per_run);
+    result.adaptive_spline_tessellation_samples += samples.size();
+    if (samples.size() < 3U || samples.size() >= config.max_spline_samples_per_run) {
+      return false;
+    }
+    if (!topology_preserved(samples)) {
+      return false;
+    }
+    const auto pieces = fit_spline_samples_to_lines_and_arcs(
+        samples, config.spline_arc_fit_tolerance, config.max_spline_arc_samples,
+        config.max_spline_fitted_pieces_per_run);
+    const auto arc_count =
+        static_cast<std::size_t>(std::count_if(pieces.begin(), pieces.end(), [](const auto& piece) {
+          return piece.kind == SplineFittedPieceKind::circular_arc;
+        }));
+    if (pieces.empty() || arc_count == 0U ||
+        arc_count > config.max_circular_arcs -
+                        std::min(config.max_circular_arcs, result.fitted_circular_arcs)) {
+      return false;
+    }
+    ++result.attempted_circular_arc_candidates;
+    auto probe = materialize_spline_probe(corridor_board, run, pieces, base, iteration, used_ids);
+    if (!probe) {
+      return false;
+    }
+    assign_spline_net(*probe, net);
+    Board checked = probe->board;
+    if (config.defer_saved_zone_fill_clearance_to_refill) {
+      for (auto& zone : checked.zones) {
+        zone.fills.clear();
+      }
+    }
+    const auto validation = validate_board(checked);
+    const auto copper = check_copper_rules(checked);
+    const auto* collision = first_spline_collision(copper, probe->generated_ids);
+    if (validation.ok() && collision == nullptr) {
+      const std::set<std::string> original_ids(run.original_track_ids.begin(),
+                                               run.original_track_ids.end());
+      std::erase_if(probe->board.tracks,
+                    [&](const auto& track) { return original_ids.contains(track.id.value()); });
+      Board final_checked = probe->board;
+      if (config.defer_saved_zone_fill_clearance_to_refill) {
+        for (auto& zone : final_checked.zones) {
+          zone.fills.clear();
+        }
+      }
+      const auto final_validation = validate_board(final_checked);
+      const auto final_copper = check_copper_rules(final_checked);
+      const auto final_connectivity = analyze_connectivity(final_checked);
+      if (!final_validation.ok() || first_spline_collision(final_copper, probe->generated_ids) ||
+          final_connectivity.open_connections > baseline_connectivity.open_connections ||
+          final_connectivity.unrouted_nets > baseline_connectivity.unrouted_nets) {
+        ++result.rejected_circular_arc_candidates;
+        return false;
+      }
+      // Commit the exact-checked replacement transaction, not the probe board.  The probe still
+      // contains the superseded source segments so it can be validated as an additive candidate;
+      // retaining it here would leave duplicate same-net bends for later local curve passes.
+      board = std::move(final_checked);
+      result.added_tracks -= std::min(result.added_tracks, run.original_track_ids.size());
+      result.added_tracks += probe->tracks;
+      result.added_track_arcs += probe->arcs;
+      result.fitted_circular_arcs += probe->arcs;
+      result.spline_fitted_track_segments += probe->tracks;
+      ++result.fitted_cubic_bspline_runs;
+      result.accepted_pns_shoves += pending_pns_shoves;
+      result.pns_moved_tracks += pending_pns_tracks;
+      result.pns_moved_vias += pending_pns_vias;
+      result.pns_added_dogleg_tracks += pending_pns_doglegs;
+      return true;
+    }
+    ++result.rejected_circular_arc_candidates;
+    ++result.spline_collision_envelopes;
+    if (collision == nullptr) {
+      return false;
+    }
+    const auto generated =
+        std::find_if(collision->object_ids.begin(), collision->object_ids.end(),
+                     [&](const auto& id) { return probe->parameter_by_id.contains(id); });
+    if (generated == collision->object_ids.end()) {
+      return false;
+    }
+    const auto parameter = probe->parameter_by_id.at(*generated);
+    const auto position = evaluate_cubic_bspline(*spline, parameter);
+    const auto before = evaluate_cubic_bspline(*spline, std::max(0.0L, parameter - 1.0e-4L));
+    const auto after = evaluate_cubic_bspline(*spline, std::min(1.0L, parameter + 1.0e-4L));
+    SplineVector normal{-(after.y - before.y), after.x - before.x};
+    std::vector<std::string> obstacles;
+    for (const auto& id : collision->object_ids) {
+      if (!probe->parameter_by_id.contains(id)) {
+        obstacles.push_back(id);
+      }
+    }
+    const auto collision_point =
+        Point{Nanometres{static_cast<std::int64_t>(std::llround(position.x))},
+              Nanometres{static_cast<std::int64_t>(std::llround(position.y))}};
+    for (const auto& id : obstacles) {
+      if (const auto reference = obstacle_reference_point(corridor_board, id, collision_point)) {
+        const auto away_x = position.x - static_cast<long double>(reference->x.value());
+        const auto away_y = position.y - static_cast<long double>(reference->y.value());
+        if (std::hypot(away_x, away_y) > 1.0L) {
+          normal = {away_x, away_y};
+          break;
+        }
+      }
+    }
+    const auto deficit =
+        std::max(config.spline_shove_step.value(),
+                 static_cast<std::int64_t>(std::ceil(std::max(
+                     0.0L, static_cast<long double>(collision->required_clearance.value()) -
+                               collision->actual_distance_nm + 2.0L))));
+    ++result.pns_shove_attempts;
+    const PnsShoveConfig pns_config{config.max_pns_propagation_depth,
+                                    config.max_pns_candidate_checks, config.spline_shove_step,
+                                    config.maximum_pns_displacement};
+    const PnsShoveRequest request{probe->generated_ids, obstacles, run.original_track_ids,
+                                  collision_point,      -normal.x, -normal.y,
+                                  Nanometres{deficit},  {}};
+    auto pns = pns_push_and_shove(probe->board, request, pns_config);
+    result.pns_shove_candidates += pns.candidate_checks;
+    result.pns_candidate_budget_exhausted =
+        result.pns_candidate_budget_exhausted || pns.budget_exhausted;
+    if (pns.accepted()) {
+      const std::set<std::string> generated_ids(probe->generated_ids.begin(),
+                                                probe->generated_ids.end());
+      std::erase_if(pns.candidate->tracks,
+                    [&](const auto& track) { return generated_ids.contains(track.id.value()); });
+      std::erase_if(pns.candidate->track_arcs,
+                    [&](const auto& arc) { return generated_ids.contains(arc.id.value()); });
+      corridor_board = std::move(*pns.candidate);
+      for (const auto& track : corridor_board.tracks) {
+        used_ids.insert(track.id.value());
+      }
+      for (const auto& arc : corridor_board.track_arcs) {
+        used_ids.insert(arc.id.value());
+      }
+      for (const auto& via : corridor_board.vias) {
+        used_ids.insert(via.id.value());
+      }
+      ++pending_pns_shoves;
+      pending_pns_tracks += pns.moved_tracks;
+      pending_pns_vias += pns.moved_vias;
+      pending_pns_doglegs += pns.added_dogleg_tracks;
+      ++result.spline_refits;
+      continue;
+    }
+    const auto spline_before_shove = *spline;
+    const auto moved = shove_cubic_bspline_control_corridor(
+        *spline, parameter, normal, Nanometres{deficit}, config.spline_control_corridor);
+    if (moved == 0U) {
+      return false;
+    }
+    const auto shoved_topology_samples = adaptive_tessellate_cubic_bspline(
+        *spline, config.spline_tessellation_tolerance, config.spline_max_tessellation_depth,
+        config.max_spline_samples_per_run);
+    if (!topology_preserved(shoved_topology_samples)) {
+      *spline = spline_before_shove;
+      return false;
+    }
+    result.spline_control_point_shoves += moved;
+    ++result.spline_refits;
+  }
+  return false;
+}
+
+[[nodiscard]] Point trim_from_corner(Point corner, Point endpoint, long double distance) {
+  const auto dx = static_cast<long double>(endpoint.x.value() - corner.x.value());
+  const auto dy = static_cast<long double>(endpoint.y.value() - corner.y.value());
+  const auto length = std::hypot(dx, dy);
+  if (!(length > 0.0L) || !(distance > 0.0L)) {
+    return corner;
+  }
+  const auto scale = std::min(1.0L, distance / length);
+  return Point{Nanometres{static_cast<std::int64_t>(
+                   std::llround(static_cast<long double>(corner.x.value()) + dx * scale))},
+               Nanometres{static_cast<std::int64_t>(
+                   std::llround(static_cast<long double>(corner.y.value()) + dy * scale))}};
+}
+
+[[nodiscard]] bool realize_local_bend_spline(Board& board, const UnroundedTrackBend& bend,
+                                             std::set<std::string>& used_ids,
+                                             DetailedRouteResult& result,
+                                             const DetailedRouterConfig& config,
+                                             std::size_t serial) {
+  if (bend.first_track >= board.tracks.size() || bend.second_track >= board.tracks.size() ||
+      bend.first_track == bend.second_track) {
+    return false;
+  }
+  const auto& first = board.tracks[bend.first_track];
+  const auto& second = board.tracks[bend.second_track];
+  if (first.locked || second.locked || first.net != bend.net || second.net != bend.net ||
+      first.layer != bend.layer || second.layer != bend.layer || first.width != second.width ||
+      (first.start != bend.corner && first.end != bend.corner) ||
+      (second.start != bend.corner && second.end != bend.corner)) {
+    return false;
+  }
+  const auto first_endpoint = first.start == bend.corner ? first.end : first.start;
+  const auto second_endpoint = second.start == bend.corner ? second.end : second.start;
+  const auto first_length = geometry::segment_length_nm(bend.corner, first_endpoint);
+  const auto second_length = geometry::segment_length_nm(bend.corner, second_endpoint);
+  auto trim = std::min({static_cast<long double>(config.maximum_circular_arc_radius.value()),
+                        first_length * 0.45L, second_length * 0.45L});
+  if (!(trim > 1.0L)) {
+    return false;
+  }
+  std::optional<std::tuple<Point, Point, Point>> prior_seed;
+  for (std::size_t backtrack = 0U; backtrack <= config.circular_arc_backtracking_steps;
+       ++backtrack) {
+    if (!(trim > 1.0L) ||
+        result.attempted_circular_arc_candidates >= config.max_circular_arc_candidate_checks ||
+        result.fitted_circular_arcs >= config.max_circular_arcs) {
+      result.circular_arc_candidate_budget_exhausted =
+          result.attempted_circular_arc_candidates >= config.max_circular_arc_candidate_checks;
+      break;
+    }
+    const auto start = trim_from_corner(bend.corner, first_endpoint, trim);
+    const auto end = trim_from_corner(bend.corner, second_endpoint, trim);
+    const auto seed = std::tuple{start, bend.corner, end};
+    if (start == bend.corner || end == bend.corner || start == end ||
+        (prior_seed && *prior_seed == seed)) {
+      trim *= 0.5L;
+      continue;
+    }
+    prior_seed = seed;
+    auto spline = make_cubic_bspline_route({start, bend.corner, end});
+    if (!spline) {
+      trim *= 0.5L;
+      continue;
+    }
+    ++result.attempted_cubic_bspline_runs;
+    const auto samples = adaptive_tessellate_cubic_bspline(
+        *spline, config.spline_tessellation_tolerance, config.spline_max_tessellation_depth,
+        config.max_spline_samples_per_run);
+    result.adaptive_spline_tessellation_samples += samples.size();
+    if (samples.size() < 3U || samples.size() >= config.max_spline_samples_per_run) {
+      trim *= 0.5L;
+      continue;
+    }
+    const auto pieces = fit_spline_samples_to_lines_and_arcs(
+        samples, config.spline_arc_fit_tolerance, config.max_spline_arc_samples,
+        config.max_spline_fitted_pieces_per_run);
+    const auto arc_count =
+        static_cast<std::size_t>(std::count_if(pieces.begin(), pieces.end(), [](const auto& piece) {
+          return piece.kind == SplineFittedPieceKind::circular_arc;
+        }));
+    if (pieces.empty() || arc_count == 0U ||
+        arc_count > config.max_circular_arcs - result.fitted_circular_arcs) {
+      trim *= 0.5L;
+      continue;
+    }
+    ++result.attempted_circular_arc_candidates;
+    Board trimmed = board;
+    auto shorten = [&](std::size_t index, Point replacement) {
+      auto& track = trimmed.tracks[index];
+      if (track.start == bend.corner) {
+        track.start = replacement;
+      } else {
+        track.end = replacement;
+      }
+    };
+    shorten(bend.first_track, start);
+    shorten(bend.second_track, end);
+    const SplineRun local_run{bend.layer, first.width, {start, bend.corner, end}, {}};
+    auto probe = materialize_spline_probe(trimmed, local_run, pieces,
+                                          "flux-local-bend-spline-" + std::to_string(serial) + "-" +
+                                              std::to_string(backtrack),
+                                          backtrack, used_ids);
+    if (!probe) {
+      trim *= 0.5L;
+      continue;
+    }
+    assign_spline_net(*probe, bend.net);
+    Board checked = probe->board;
+    if (config.defer_saved_zone_fill_clearance_to_refill) {
+      for (auto& zone : checked.zones) {
+        zone.fills.clear();
+      }
+    }
+    std::vector<ObjectId> dynamic_ids;
+    dynamic_ids.reserve(probe->generated_ids.size());
+    for (const auto& id : probe->generated_ids) {
+      dynamic_ids.push_back(ObjectId{id});
+    }
+    const auto validation = validate_board(checked);
+    const auto copper = check_dynamic_copper_rules(checked, dynamic_ids);
+    // The trimmed source segments and the quantized fitted pieces share their exact endpoints,
+    // so this local operation preserves the existing connection topology.  Full connectivity and
+    // whole-board DRC remain the atomic commit gate after every curved candidate has been applied.
+    if (validation.ok() && first_spline_collision(copper, probe->generated_ids) == nullptr) {
+      board = std::move(probe->board);
+      result.added_tracks += probe->tracks;
+      result.added_track_arcs += probe->arcs;
+      result.fitted_circular_arcs += probe->arcs;
+      result.spline_fitted_track_segments += probe->tracks;
+      // This is a post-route single-corner cleanup, not one of the source/path-level B-spline
+      // trajectories counted by fitted_cubic_bspline_runs.  Keeping the metrics separate avoids
+      // a later cosmetic pass looking like additional topology selections.
+      if (backtrack > 0U) {
+        result.radius_reduced_circular_arcs += probe->arcs;
+      }
+      return true;
+    }
+    ++result.rejected_circular_arc_candidates;
+    trim *= 0.5L;
+  }
+  return false;
+}
+
+void realize_residual_non_junction_bends(Board& board, std::set<std::string>& used_ids,
+                                         DetailedRouteResult& result,
+                                         const DetailedRouterConfig& config,
+                                         std::stop_token stop_token) {
+  constexpr std::size_t maximum_passes = 4U;
+  std::size_t serial = 0U;
+  for (std::size_t pass = 0U; pass < maximum_passes && !stop_token.stop_requested(); ++pass) {
+    const auto bends = find_unrounded_non_junction_bends(board);
+    if (bends.empty()) {
+      return;
+    }
+    result.attempted_circular_arc_corners += bends.size();
+    std::size_t accepted = 0U;
+    for (const auto& bend : bends) {
+      accepted +=
+          realize_local_bend_spline(board, bend, used_ids, result, config, serial++) ? 1U : 0U;
+    }
+    if (accepted == 0U) {
+      return;
+    }
+  }
+}
+
+[[nodiscard]] bool materialize_path(Board& board, const GlobalRoutePath& path,
+                                    Nanometres track_width, Nanometres via_diameter,
+                                    Nanometres via_drill, std::set<std::string>& used_ids,
+                                    DetailedRouteResult& result, const DetailedRouterConfig& config,
+                                    bool use_pull_tight, bool use_continuous_refinement,
+                                    bool use_circular_arc_refinement, std::stop_token stop_token,
+                                    const std::vector<GlobalRoutePoint>* topology_locked_points,
+                                    std::vector<PendingSplineRun>* pending_spline_runs) {
+  if ((!path.segment_widths.empty() && path.segment_widths.size() + 1U != path.points.size()) ||
+      path.segment_width_kinds.size() != path.segment_widths.size() ||
+      std::any_of(path.segment_widths.begin(), path.segment_widths.end(),
+                  [](Nanometres width) { return width.value() < 0; })) {
+    return false;
+  }
+  const bool width_aware = std::any_of(path.segment_widths.begin(), path.segment_widths.end(),
+                                       [](Nanometres width) { return width.value() > 0; });
+  const auto explicit_width_segments = static_cast<std::size_t>(std::count_if(
+      path.segment_widths.begin(), path.segment_widths.end(),
+      [track_width](Nanometres width) { return width.value() > 0 && width < track_width; }));
+  if (width_aware && (explicit_width_segments != path.terminal_neck_down_segments +
+                                                     path.medial_neck_down_segments +
+                                                     path.corridor_neck_down_segments ||
+                      explicit_width_segments == 0U)) {
+    return false;
+  }
+  if (width_aware && topology_locked_points != nullptr) {
+    return false;
+  }
+  std::vector<GlobalRoutePoint> points;
+  std::vector<Nanometres> segment_widths;
+  std::size_t width_aware_removed_points = 0U;
+  if (width_aware) {
+    const auto simplified =
+        simplify_width_aware_path(path, track_width, width_aware_removed_points);
+    if (!simplified) {
+      return false;
+    }
+    points = simplified->points;
+    segment_widths = simplified->widths;
+    if (use_pull_tight) {
+      const auto corners_before = result.pulled_tight_corners;
+      const auto pulled = pull_tight_width_aware_45_degrees(WidthAwarePath{points, segment_widths},
+                                                            result.pulled_tight_corners,
+                                                            width_aware_removed_points);
+      if (!pulled) {
+        return false;
+      }
+      points = pulled->points;
+      segment_widths = pulled->widths;
+      const auto pulled_corners = result.pulled_tight_corners - corners_before;
+      result.width_aware_pulled_tight_corners += pulled_corners;
+      if (pulled_corners > 0U) {
+        ++result.width_aware_pulled_tight_paths;
+      }
+    }
+  } else {
+    points = topology_locked_points != nullptr ? simplify_path(*topology_locked_points)
+             : use_pull_tight ? pull_tight_45_degrees(path.points, result.pulled_tight_corners)
+                              : simplify_path(path.points);
+  }
+  if (use_continuous_refinement && topology_locked_points == nullptr) {
+    std::size_t iterations = 0;
+    const auto refined_before = result.continuously_refined_points;
+    points = refine_path_continuously(board, path.net, track_width, points, config, result,
+                                      iterations, width_aware ? &segment_widths : nullptr);
+    if (width_aware) {
+      const auto refined = result.continuously_refined_points - refined_before;
+      result.width_aware_continuously_refined_points += refined;
+      if (refined > 0U) {
+        ++result.width_aware_continuously_refined_paths;
+      }
+    }
+    result.continuous_refinement_iterations =
+        std::max(result.continuous_refinement_iterations, iterations);
+  }
+  if (points.empty()) {
+    return false;
+  }
+  const auto base = "flux-route-" + path.net.value() + "-" + std::to_string(path.connection_index);
+  std::size_t track_index = 0;
+  std::size_t via_index = 0;
+  std::map<std::size_t, std::size_t> planar_track_by_edge;
+  for (std::size_t i = 0; i + 1U < points.size();) {
+    if (stop_token.stop_requested()) {
+      return false;
+    }
+    const auto& current = points[i];
+    const auto& next = points[i + 1U];
+    if (current.layer == next.layer) {
+      if (current.position != next.position) {
+        const auto width = width_aware ? segment_widths[i] : track_width;
+        if (width.value() <= 0 || (width_aware && width > track_width)) {
+          return false;
+        }
+        const auto board_track_index = board.tracks.size();
+        board.tracks.push_back(
+            TrackSegment{unique_id(base + "-track-" + std::to_string(track_index++), used_ids),
+                         path.net, current.layer, current.position, next.position, width, false});
+        planar_track_by_edge.emplace(i, board_track_index);
+        ++result.added_tracks;
+      }
+      ++i;
+      continue;
+    }
+    if (current.position != next.position) {
+      return false;
+    }
+    if (width_aware && segment_widths[i] != track_width) {
+      return false;
+    }
+    auto last_transition = i + 1U;
+    while (last_transition + 1U < points.size() &&
+           points[last_transition + 1U].position == current.position &&
+           points[last_transition + 1U].layer != points[last_transition].layer) {
+      ++last_transition;
+    }
+    auto layers = via_span(board, current.layer, points[last_transition].layer);
+    if (layers.size() < 2U) {
+      return false;
+    }
+    const bool duplicate = std::any_of(board.vias.begin(), board.vias.end(), [&](const auto& via) {
+      return via.net == path.net && via.position == current.position && via.layers == layers;
+    });
+    if (!duplicate) {
+      board.vias.push_back(Via{unique_id(base + "-via-" + std::to_string(via_index++), used_ids),
+                               path.net, current.position, via_diameter, via_drill,
+                               std::move(layers), false});
+      ++result.added_vias;
+    }
+    i = last_transition;
+  }
+  if (use_circular_arc_refinement) {
+    std::vector<SplineRun> spline_runs;
+    for (std::size_t edge = 0U; edge + 1U < points.size();) {
+      const auto first_track = planar_track_by_edge.find(edge);
+      if (first_track == planar_track_by_edge.end()) {
+        ++edge;
+        continue;
+      }
+      const auto layer = points[edge].layer;
+      const auto width = board.tracks[first_track->second].width;
+      const auto first_edge = edge;
+      while (edge + 1U < points.size()) {
+        const auto found = planar_track_by_edge.find(edge);
+        if (found == planar_track_by_edge.end() || points[edge].layer != layer ||
+            points[edge + 1U].layer != layer || board.tracks[found->second].width != width) {
+          break;
+        }
+        ++edge;
+      }
+      if (edge - first_edge < 2U) {
+        continue;
+      }
+      SplineRun run{layer, width, {}, {}};
+      for (auto point = first_edge; point <= edge; ++point) {
+        run.points.push_back(points[point].position);
+      }
+      for (auto run_edge = first_edge; run_edge < edge; ++run_edge) {
+        run.original_track_ids.push_back(
+            board.tracks[planar_track_by_edge.at(run_edge)].id.value());
+      }
+      bool bends = false;
+      for (std::size_t point = 1U; point + 1U < run.points.size(); ++point) {
+        bends =
+            bends || !collinear(run.points[point - 1U], run.points[point], run.points[point + 1U]);
+      }
+      if (bends) {
+        spline_runs.push_back(std::move(run));
+      }
+    }
+    for (const auto& run : spline_runs) {
+      result.attempted_circular_arc_corners += run.points.size() - 2U;
+      if (pending_spline_runs != nullptr) {
+        pending_spline_runs->push_back(PendingSplineRun{path.net, base, run});
+      } else if (!refine_spline_run(board, board, path.net, run, base, used_ids, result, config,
+                                    stop_token)) {
+        result.withheld_circular_arc_corners += run.points.size() - 2U;
+      }
+    }
+  }
+  // The v0.104 independent-corner implementation remains source history only. A positive spline
+  // candidate budget is mandatory, so every enabled curved transaction uses the B-spline/PNS
+  // pipeline above rather than running a second unrelated fillet pass.
+  if (use_circular_arc_refinement && config.max_spline_candidate_checks == 0U) {
+    const auto fitted_before = result.fitted_circular_arcs;
+    const auto make_fillet = [](Point previous, Point corner, Point next,
+                                Nanometres maximum_radius) -> std::optional<TrackArc> {
+      const auto first_x = static_cast<long double>(previous.x.value() - corner.x.value());
+      const auto first_y = static_cast<long double>(previous.y.value() - corner.y.value());
+      const auto second_x = static_cast<long double>(next.x.value() - corner.x.value());
+      const auto second_y = static_cast<long double>(next.y.value() - corner.y.value());
+      const auto first_length = std::hypot(first_x, first_y);
+      const auto second_length = std::hypot(second_x, second_y);
+      const auto determinant = first_x * second_y - first_y * second_x;
+      if (first_length <= 1.0L || second_length <= 1.0L || determinant == 0.0L) {
+        return std::nullopt;
+      }
+      const auto first_unit_x = first_x / first_length;
+      const auto first_unit_y = first_y / first_length;
+      const auto second_unit_x = second_x / second_length;
+      const auto second_unit_y = second_y / second_length;
+      const auto cosine =
+          std::clamp(first_unit_x * second_unit_x + first_unit_y * second_unit_y, -1.0L, 1.0L);
+      const auto half_angle = std::acos(cosine) / 2.0L;
+      const auto tangent = std::tan(half_angle);
+      const auto sine = std::sin(half_angle);
+      if (tangent <= 1.0e-12L || sine <= 1.0e-12L) {
+        return std::nullopt;
+      }
+      const auto requested_radius = static_cast<long double>(maximum_radius.value());
+      auto trim = requested_radius / tangent;
+      trim = std::min({trim, first_length * 0.45L, second_length * 0.45L});
+      const auto radius = trim * tangent;
+      if (trim <= 1.0L || radius <= 1.0L) {
+        return std::nullopt;
+      }
+      const auto bisector_x = first_unit_x + second_unit_x;
+      const auto bisector_y = first_unit_y + second_unit_y;
+      const auto bisector_length = std::hypot(bisector_x, bisector_y);
+      if (bisector_length <= 1.0e-12L) {
+        return std::nullopt;
+      }
+      const auto corner_x = static_cast<long double>(corner.x.value());
+      const auto corner_y = static_cast<long double>(corner.y.value());
+      const auto center_distance = radius / sine;
+      const auto center_x = corner_x + bisector_x / bisector_length * center_distance;
+      const auto center_y = corner_y + bisector_y / bisector_length * center_distance;
+      const auto quantize = [](long double x, long double y) {
+        return Point{Nanometres{static_cast<std::int64_t>(std::llround(x))},
+                     Nanometres{static_cast<std::int64_t>(std::llround(y))}};
+      };
+      const auto arc_start =
+          quantize(corner_x + first_unit_x * trim, corner_y + first_unit_y * trim);
+      const auto arc_end =
+          quantize(corner_x + second_unit_x * trim, corner_y + second_unit_y * trim);
+      const auto toward_corner_x = corner_x - center_x;
+      const auto toward_corner_y = corner_y - center_y;
+      const auto toward_corner_length = std::hypot(toward_corner_x, toward_corner_y);
+      const auto arc_middle = quantize(center_x + toward_corner_x / toward_corner_length * radius,
+                                       center_y + toward_corner_y / toward_corner_length * radius);
+      if (!geometry::circular_arc_parameters(arc_start, arc_middle, arc_end)) {
+        return std::nullopt;
+      }
+      return TrackArc{ObjectId{}, NetId{}, LayerId{},    arc_start,
+                      arc_middle, arc_end, Nanometres{}, false};
+    };
+
+    std::size_t arc_index = 0;
+    for (std::size_t corner_index = 1U; corner_index + 1U < points.size(); ++corner_index) {
+      if (stop_token.stop_requested()) {
+        return false;
+      }
+      if (points[corner_index - 1U].layer != points[corner_index].layer ||
+          points[corner_index].layer != points[corner_index + 1U].layer) {
+        continue;
+      }
+      const auto incoming = planar_track_by_edge.find(corner_index - 1U);
+      const auto outgoing = planar_track_by_edge.find(corner_index);
+      if (incoming == planar_track_by_edge.end() || outgoing == planar_track_by_edge.end()) {
+        continue;
+      }
+      if (width_aware && segment_widths[corner_index - 1U] != segment_widths[corner_index]) {
+        continue;
+      }
+      ++result.attempted_circular_arc_corners;
+      if (result.fitted_circular_arcs >= config.max_circular_arcs ||
+          result.attempted_circular_arc_candidates >= config.max_circular_arc_candidate_checks) {
+        result.circular_arc_candidate_budget_exhausted =
+            result.attempted_circular_arc_candidates >= config.max_circular_arc_candidate_checks;
+        ++result.withheld_circular_arc_corners;
+        continue;
+      }
+      auto& incoming_track = board.tracks[incoming->second];
+      auto& outgoing_track = board.tracks[outgoing->second];
+      const auto original_incoming_end = incoming_track.end;
+      const auto original_outgoing_start = outgoing_track.start;
+      const auto arc_id = unique_id(base + "-arc-" + std::to_string(arc_index++), used_ids);
+      const auto local_width = width_aware ? segment_widths[corner_index] : track_width;
+      std::optional<std::tuple<Point, Point, Point>> previous_geometry;
+      auto radius = config.maximum_circular_arc_radius;
+      bool accepted = false;
+      for (std::size_t backtrack = 0U; backtrack <= config.circular_arc_backtracking_steps;
+           ++backtrack) {
+        if (radius.value() <= 1 ||
+            result.attempted_circular_arc_candidates >= config.max_circular_arc_candidate_checks) {
+          result.circular_arc_candidate_budget_exhausted =
+              result.attempted_circular_arc_candidates >= config.max_circular_arc_candidate_checks;
+          break;
+        }
+        auto fillet = make_fillet(points[corner_index - 1U].position, points[corner_index].position,
+                                  points[corner_index + 1U].position, radius);
+        if (!fillet) {
+          break;
+        }
+        const auto geometry = std::tuple{fillet->start, fillet->middle, fillet->end};
+        if (previous_geometry && *previous_geometry == geometry) {
+          radius = Nanometres{radius.value() / 2};
+          continue;
+        }
+        previous_geometry = geometry;
+        ++result.attempted_circular_arc_candidates;
+        fillet->id = arc_id;
+        fillet->net = path.net;
+        fillet->layer = points[corner_index].layer;
+        fillet->width = local_width;
+        incoming_track.end = fillet->start;
+        outgoing_track.start = fillet->end;
+        board.track_arcs.push_back(*fillet);
+
+        Board probe = board;
+        if (config.defer_saved_zone_fill_clearance_to_refill) {
+          for (auto& zone : probe.zones) {
+            zone.fills.clear();
+          }
+        }
+        const auto validation = validate_board(probe);
+        const auto copper = check_copper_rules(probe);
+        const std::array changed_ids{arc_id.value(), incoming_track.id.value(),
+                                     outgoing_track.id.value()};
+        const auto changed_copper_violation = std::any_of(
+            copper.violations.begin(), copper.violations.end(),
+            [&changed_ids](const auto& violation) {
+              if (violation.kind == CopperViolationKind::differential_pair_skew) {
+                return false;
+              }
+              return std::any_of(changed_ids.begin(), changed_ids.end(), [&](const auto& id) {
+                return std::find(violation.object_ids.begin(), violation.object_ids.end(), id) !=
+                       violation.object_ids.end();
+              });
+            });
+        if (validation.ok() && !changed_copper_violation) {
+          accepted = true;
+          ++result.added_track_arcs;
+          ++result.fitted_circular_arcs;
+          if (backtrack > 0U) {
+            ++result.radius_reduced_circular_arcs;
+          }
+          break;
+        }
+
+        board.track_arcs.pop_back();
+        incoming_track.end = original_incoming_end;
+        outgoing_track.start = original_outgoing_start;
+        ++result.rejected_circular_arc_candidates;
+        radius = Nanometres{radius.value() / 2};
+      }
+      if (!accepted) {
+        incoming_track.end = original_incoming_end;
+        outgoing_track.start = original_outgoing_start;
+        ++result.withheld_circular_arc_corners;
+      }
+    }
+    if (width_aware) {
+      const auto fitted = result.fitted_circular_arcs - fitted_before;
+      result.width_aware_fitted_circular_arcs += fitted;
+      if (fitted > 0U) {
+        ++result.width_aware_circular_arc_paths;
+      }
+    }
+  }
+  if (width_aware) {
+    result.width_aware_simplified_points += width_aware_removed_points;
+    if (path.terminal_neck_down_segments > 0U) {
+      ++result.materialized_terminal_neck_down_paths;
+    }
+    result.materialized_terminal_neck_down_segments += path.terminal_neck_down_segments;
+    if (path.medial_neck_down_segments > 0U) {
+      ++result.materialized_medial_neck_down_paths;
+    }
+    result.materialized_medial_neck_down_segments += path.medial_neck_down_segments;
+    if (path.corridor_neck_down_segments > 0U) {
+      ++result.materialized_corridor_neck_down_paths;
+    }
+    result.materialized_corridor_neck_down_segments += path.corridor_neck_down_segments;
+  }
+  return true;
+}
+
+struct SkewTuningTrackCandidate {
+  std::size_t index{0};
+  std::uint64_t length_nm{0};
+  std::string id;
+};
+
+[[nodiscard]] std::uint64_t absolute_difference(std::uint64_t lhs, std::uint64_t rhs) {
+  return lhs > rhs ? lhs - rhs : rhs - lhs;
+}
+
+[[nodiscard]] std::vector<std::uint64_t>
+skew_tuning_total_amplitudes(std::uint64_t difference_nm, std::uint64_t maximum_skew_nm,
+                             const DetailedRouterConfig& config) {
+  if (difference_nm <= maximum_skew_nm) {
+    return {};
+  }
+  const auto excess = difference_nm - maximum_skew_nm;
+  const auto minimum_total_amplitude = excess / 2U + excess % 2U;
+  const auto sum = difference_nm > std::numeric_limits<std::uint64_t>::max() - maximum_skew_nm
+                       ? std::numeric_limits<std::uint64_t>::max()
+                       : difference_nm + maximum_skew_nm;
+  const auto period_amplitude =
+      static_cast<std::uint64_t>(config.maximum_differential_pair_skew_tuning_amplitude.value());
+  const auto period_count =
+      static_cast<std::uint64_t>(config.max_differential_pair_skew_tuning_periods);
+  const auto bounded_total =
+      period_amplitude > std::numeric_limits<std::uint64_t>::max() / period_count
+          ? std::numeric_limits<std::uint64_t>::max()
+          : period_amplitude * period_count;
+  const auto maximum_total_amplitude = std::min(sum / 2U, bounded_total);
+  if (minimum_total_amplitude > maximum_total_amplitude) {
+    return {};
+  }
+
+  std::vector<std::uint64_t> result;
+  const auto append = [&](std::uint64_t total_amplitude) {
+    if (total_amplitude < minimum_total_amplitude || total_amplitude > maximum_total_amplitude ||
+        total_amplitude == 0U ||
+        std::find(result.begin(), result.end(), total_amplitude) != result.end()) {
+      return;
+    }
+    result.push_back(total_amplitude);
+  };
+  const auto lower_midpoint = difference_nm / 2U;
+  const auto upper_midpoint = lower_midpoint + difference_nm % 2U;
+  append(lower_midpoint);
+  append(upper_midpoint);
+  append(minimum_total_amplitude);
+  append(maximum_total_amplitude);
+
+  const auto step = static_cast<std::uint64_t>(config.differential_pair_skew_tuning_step.value());
+  const auto cap = config.max_differential_pair_skew_tuning_candidates;
+  for (std::uint64_t offset = step; result.size() < cap;) {
+    bool in_range = false;
+    if (lower_midpoint >= offset) {
+      const auto below = lower_midpoint - offset;
+      if (below >= minimum_total_amplitude) {
+        append(below);
+        in_range = true;
+      }
+    }
+    if (lower_midpoint <= std::numeric_limits<std::uint64_t>::max() - offset) {
+      const auto above = lower_midpoint + offset;
+      if (above <= maximum_total_amplitude) {
+        append(above);
+        in_range = true;
+      }
+    }
+    if (!in_range || offset > std::numeric_limits<std::uint64_t>::max() - step) {
+      break;
+    }
+    offset += step;
+  }
+  return result;
+}
+
+struct SkewTuningFrame {
+  enum class Axis { none, horizontal, vertical };
+
+  Point origin;
+  long double tangent_x{0.0L};
+  long double tangent_y{0.0L};
+  long double normal_x{0.0L};
+  long double normal_y{0.0L};
+  std::uint64_t baseline_length_nm{0};
+  Axis axis{Axis::none};
+  std::int64_t along_sign{0};
+};
+
+[[nodiscard]] std::optional<SkewTuningFrame> make_skew_tuning_frame(const TrackSegment& original) {
+  const auto dx = static_cast<long double>(original.end.x.value()) -
+                  static_cast<long double>(original.start.x.value());
+  const auto dy = static_cast<long double>(original.end.y.value()) -
+                  static_cast<long double>(original.start.y.value());
+  const auto length = std::hypot(dx, dy);
+  if (!std::isfinite(length) || length <= 0.0L) {
+    return std::nullopt;
+  }
+  const auto tangent_x = dx / length;
+  const auto tangent_y = dy / length;
+  auto normal_x = -tangent_y;
+  auto normal_y = tangent_x;
+  if (normal_y < 0.0L || (normal_y == 0.0L && normal_x < 0.0L)) {
+    normal_x = -normal_x;
+    normal_y = -normal_y;
+  }
+  auto axis = SkewTuningFrame::Axis::none;
+  std::int64_t along_sign = 0;
+  if (original.start.y == original.end.y) {
+    axis = SkewTuningFrame::Axis::horizontal;
+    along_sign = original.end.x > original.start.x ? 1 : -1;
+  } else if (original.start.x == original.end.x) {
+    axis = SkewTuningFrame::Axis::vertical;
+    along_sign = original.end.y > original.start.y ? 1 : -1;
+  }
+  return SkewTuningFrame{original.start, tangent_x,
+                         tangent_y,      normal_x,
+                         normal_y,       geometry::segment_length_nm(original.start, original.end),
+                         axis,           along_sign};
+}
+
+[[nodiscard]] std::optional<Point> quantize_tuning_point(const SkewTuningFrame& frame,
+                                                         std::uint64_t along_nm,
+                                                         std::int64_t offset_nm) {
+  if (frame.axis != SkewTuningFrame::Axis::none) {
+    if (along_nm > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
+      return std::nullopt;
+    }
+    const auto checked_add = [](std::int64_t value,
+                                std::int64_t delta) -> std::optional<std::int64_t> {
+      if ((delta > 0 && value > std::numeric_limits<std::int64_t>::max() - delta) ||
+          (delta < 0 && value < std::numeric_limits<std::int64_t>::min() - delta)) {
+        return std::nullopt;
+      }
+      return value + delta;
+    };
+    const auto along_delta = static_cast<std::int64_t>(along_nm) * frame.along_sign;
+    const auto x_delta = frame.axis == SkewTuningFrame::Axis::horizontal ? along_delta : offset_nm;
+    const auto y_delta = frame.axis == SkewTuningFrame::Axis::horizontal ? offset_nm : along_delta;
+    const auto x = checked_add(frame.origin.x.value(), x_delta);
+    const auto y = checked_add(frame.origin.y.value(), y_delta);
+    if (!x || !y) {
+      return std::nullopt;
+    }
+    return Point{Nanometres{*x}, Nanometres{*y}};
+  }
+  const auto along = static_cast<long double>(along_nm);
+  const auto offset = static_cast<long double>(offset_nm);
+  const auto x = static_cast<long double>(frame.origin.x.value()) + frame.tangent_x * along +
+                 frame.normal_x * offset;
+  const auto y = static_cast<long double>(frame.origin.y.value()) + frame.tangent_y * along +
+                 frame.normal_y * offset;
+  constexpr auto minimum = static_cast<long double>(std::numeric_limits<std::int64_t>::min());
+  constexpr auto maximum = static_cast<long double>(std::numeric_limits<std::int64_t>::max());
+  if (!std::isfinite(x) || !std::isfinite(y) || x < minimum || x > maximum || y < minimum ||
+      y > maximum) {
+    return std::nullopt;
+  }
+  return Point{Nanometres{static_cast<std::int64_t>(std::llround(x))},
+               Nanometres{static_cast<std::int64_t>(std::llround(y))}};
+}
+
+[[nodiscard]] std::vector<std::uint64_t>
+distribute_tuning_amplitude(std::uint64_t total_amplitude, std::size_t periods,
+                            std::uint64_t maximum_period_amplitude) {
+  if (periods == 0U || total_amplitude < periods) {
+    return {};
+  }
+  const auto period_count = static_cast<std::uint64_t>(periods);
+  const auto base = total_amplitude / period_count;
+  const auto remainder = total_amplitude % period_count;
+  if (base == 0U || base > maximum_period_amplitude ||
+      (remainder > 0U && base == maximum_period_amplitude)) {
+    return {};
+  }
+  std::vector<std::uint64_t> amplitudes(periods, base);
+  for (std::size_t index = 0U; index < static_cast<std::size_t>(remainder); ++index) {
+    ++amplitudes[index];
+  }
+  return amplitudes;
+}
+
+[[nodiscard]] std::vector<std::pair<Point, Point>>
+make_skew_tuning_pattern(const TrackSegment& original, std::uint64_t lead_nm,
+                         std::uint64_t spacing_nm, const std::vector<std::uint64_t>& amplitudes,
+                         std::size_t layout) {
+  if (amplitudes.empty()) {
+    return {};
+  }
+  const auto frame = make_skew_tuning_frame(original);
+  if (!frame) {
+    return {};
+  }
+  const auto periods = static_cast<std::uint64_t>(amplitudes.size());
+  if (periods > std::numeric_limits<std::uint64_t>::max() / 2U) {
+    return {};
+  }
+  const auto occupied_periods = periods * 2U - 1U;
+  if (spacing_nm > std::numeric_limits<std::uint64_t>::max() / occupied_periods) {
+    return {};
+  }
+  const auto occupied = occupied_periods * spacing_nm;
+  if (frame->baseline_length_nm <= lead_nm * 2U ||
+      occupied > frame->baseline_length_nm - lead_nm * 2U) {
+    return {};
+  }
+  const auto slack = frame->baseline_length_nm - lead_nm * 2U - occupied;
+  auto along = lead_nm + slack / 2U;
+  auto current = quantize_tuning_point(*frame, along, 0);
+  if (!current) {
+    return {};
+  }
+  std::vector<std::pair<Point, Point>> segments;
+  segments.reserve(amplitudes.size() * 4U + 1U);
+  const auto append = [&segments](Point start, Point end) {
+    if (start == end) {
+      return false;
+    }
+    segments.emplace_back(start, end);
+    return true;
+  };
+  if (!append(original.start, *current)) {
+    return {};
+  }
+  for (std::size_t period = 0U; period < amplitudes.size(); ++period) {
+    int side = layout == 0U ? -1 : 1;
+    if (layout >= 2U) {
+      const auto first_side = layout == 2U ? -1 : 1;
+      side = period % 2U == 0U ? first_side : -first_side;
+    }
+    if (amplitudes[period] > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
+      return {};
+    }
+    const auto signed_amplitude = static_cast<std::int64_t>(amplitudes[period]) * side;
+    const auto offset = quantize_tuning_point(*frame, along, signed_amplitude);
+    along += spacing_nm;
+    const auto offset_end = quantize_tuning_point(*frame, along, signed_amplitude);
+    const auto baseline_end = quantize_tuning_point(*frame, along, 0);
+    if (!offset || !offset_end || !baseline_end || !append(*current, *offset) ||
+        !append(*offset, *offset_end) || !append(*offset_end, *baseline_end)) {
+      return {};
+    }
+    current = baseline_end;
+    if (period + 1U < amplitudes.size()) {
+      along += spacing_nm;
+      const auto next = quantize_tuning_point(*frame, along, 0);
+      if (!next || !append(*current, *next)) {
+        return {};
+      }
+      current = next;
+    }
+  }
+  if (!append(*current, original.end)) {
+    return {};
+  }
+  return segments;
+}
+
+[[nodiscard]] bool skew_tuning_candidate_is_legal(const Board& board,
+                                                  const DifferentialPair& pair) {
+  if (!validate_board(board).ok() || analyze_connectivity(board).open_connections != 0U) {
+    return false;
+  }
+  const auto drc = check_copper_rules(board);
+  return std::all_of(drc.violations.begin(), drc.violations.end(), [&](const auto& violation) {
+    return violation.kind == CopperViolationKind::differential_pair_skew &&
+           !violation.object_ids.empty() && violation.object_ids.front() != pair.id.value();
+  });
+}
+
+[[nodiscard]] bool skew_tuning_selection_is_legal(const Board& board,
+                                                  const std::set<std::string>& selected_pair_ids) {
+  if (!validate_board(board).ok() || analyze_connectivity(board).open_connections != 0U) {
+    return false;
+  }
+  const auto drc = check_copper_rules(board);
+  return std::all_of(drc.violations.begin(), drc.violations.end(), [&](const auto& violation) {
+    return violation.kind == CopperViolationKind::differential_pair_skew &&
+           !violation.object_ids.empty() &&
+           !selected_pair_ids.contains(violation.object_ids.front());
+  });
+}
+
+enum class SkewTuningStatus { completed, cancelled };
+
+[[nodiscard]] SkewTuningStatus tune_differential_pair_skew(
+    Board& board, const GlobalRouteResult& global, const std::set<ObjectId>& protected_track_ids,
+    const std::set<NetId>& protected_routing_nets, std::set<std::string>& used_ids,
+    const DetailedRouterConfig& config, DetailedRouteResult& result, std::stop_token stop_token) {
+  std::vector<DifferentialPair> pairs;
+  for (const auto& pair : board.differential_pairs) {
+    if (pair.maximum_skew) {
+      pairs.push_back(pair);
+    }
+  }
+  std::sort(pairs.begin(), pairs.end(),
+            [](const auto& lhs, const auto& rhs) { return lhs.id < rhs.id; });
+
+  for (const auto& pair_snapshot : pairs) {
+    const auto* pair = &pair_snapshot;
+    if (stop_token.stop_requested()) {
+      return SkewTuningStatus::cancelled;
+    }
+    const auto positive_length = routed_net_centerline_length_nm(board, pair->positive_net);
+    const auto negative_length = routed_net_centerline_length_nm(board, pair->negative_net);
+    const auto difference = absolute_difference(positive_length, negative_length);
+    const auto maximum_skew = static_cast<std::uint64_t>(pair->maximum_skew->value());
+    if (difference <= maximum_skew) {
+      continue;
+    }
+    ++result.attempted_differential_pair_skew_tuning_pairs;
+    const auto pad_count = [&board](const NetId& net) {
+      std::size_t count = 0U;
+      for (const auto& footprint : board.footprints) {
+        count += static_cast<std::size_t>(
+            std::count_if(footprint.pads.begin(), footprint.pads.end(),
+                          [&net](const auto& pad) { return pad.net == net; }));
+      }
+      return count;
+    };
+    const auto path_count = [&global](const NetId& net) {
+      return static_cast<std::size_t>(
+          std::count_if(global.paths.begin(), global.paths.end(),
+                        [&net](const auto& path) { return path.net == net; }));
+    };
+    const bool physical_zone =
+        std::any_of(board.zones.begin(), board.zones.end(), [&](const auto& zone) {
+          return (zone.net == pair->positive_net || zone.net == pair->negative_net) &&
+                 !zone.fills.empty();
+        });
+    if (pad_count(pair->positive_net) != 2U || pad_count(pair->negative_net) != 2U ||
+        path_count(pair->positive_net) != 1U || path_count(pair->negative_net) != 1U ||
+        protected_routing_nets.contains(pair->positive_net) ||
+        protected_routing_nets.contains(pair->negative_net) || physical_zone) {
+      ++result.withheld_differential_pair_skew_tuning_pairs;
+      continue;
+    }
+    const auto& shorter_net =
+        positive_length < negative_length ? pair->positive_net : pair->negative_net;
+    const auto shorter_length = std::min(positive_length, negative_length);
+    const auto total_amplitudes = skew_tuning_total_amplitudes(difference, maximum_skew, config);
+    std::vector<SkewTuningTrackCandidate> tracks;
+    const auto lead =
+        static_cast<std::uint64_t>(config.minimum_differential_pair_skew_tuning_lead.value());
+    for (std::size_t index = 0U; index < board.tracks.size(); ++index) {
+      const auto& track = board.tracks[index];
+      if (track.net != shorter_net || track.locked || protected_track_ids.contains(track.id)) {
+        continue;
+      }
+      const auto length = geometry::segment_length_nm(track.start, track.end);
+      if (length <= lead * 2U) {
+        continue;
+      }
+      tracks.push_back({index, length, track.id.value()});
+    }
+    std::sort(tracks.begin(), tracks.end(), [](const auto& lhs, const auto& rhs) {
+      if (lhs.length_nm != rhs.length_nm) {
+        return lhs.length_nm > rhs.length_nm;
+      }
+      return lhs.id < rhs.id;
+    });
+
+    bool accepted = false;
+    for (const auto& selected : tracks) {
+      const auto original = board.tracks[selected.index];
+      const auto routing_rules = resolve_net_routing_rules(board, shorter_net);
+      const auto configured_spacing =
+          static_cast<std::uint64_t>(config.minimum_differential_pair_skew_tuning_spacing.value());
+      const auto physical_spacing =
+          static_cast<std::uint64_t>(original.width.value() + routing_rules.clearance.value());
+      const auto spacing = std::max(configured_spacing, physical_spacing);
+      const auto central_length = selected.length_nm - lead * 2U;
+      const auto period_capacity =
+          static_cast<std::size_t>((central_length + spacing) / (spacing * 2U));
+      result.maximum_differential_pair_skew_tuning_period_capacity =
+          std::max(result.maximum_differential_pair_skew_tuning_period_capacity, period_capacity);
+      const auto maximum_periods =
+          std::min(period_capacity, config.max_differential_pair_skew_tuning_periods);
+      if (maximum_periods == 0U) {
+        continue;
+      }
+
+      ++result.assessed_differential_pair_skew_tuning_regions;
+      const bool any_direction =
+          original.start.x != original.end.x && original.start.y != original.end.y;
+      if (any_direction) {
+        ++result.assessed_any_direction_differential_pair_skew_tuning_regions;
+      }
+      const auto free_space = extract_polygonal_board_free_space(
+          board, BoardFreeSpaceExtractionConfig{original.layer, shorter_net, true, true});
+      if (!free_space.complete()) {
+        ++result.withheld_differential_pair_skew_tuning_regions;
+        continue;
+      }
+      auto obstacle_clearance = board.rules.copper_to_edge_clearance;
+      for (const auto& net : board.nets) {
+        if (net.id != shorter_net) {
+          obstacle_clearance =
+              std::max(obstacle_clearance, resolve_pairwise_clearance(board, shorter_net, net.id));
+        }
+      }
+      if (pair->minimum_gap) {
+        obstacle_clearance = std::max(obstacle_clearance, *pair->minimum_gap);
+      }
+      const auto required_free_space =
+          Nanometres{(original.width.value() + 1) / 2 + obstacle_clearance.value()};
+      const auto maximum_period_amplitude = static_cast<std::uint64_t>(
+          config.maximum_differential_pair_skew_tuning_amplitude.value());
+
+      for (const auto total_amplitude : total_amplitudes) {
+        const auto minimum_periods =
+            static_cast<std::size_t>(total_amplitude / maximum_period_amplitude +
+                                     (total_amplitude % maximum_period_amplitude == 0U ? 0U : 1U));
+        if (minimum_periods == 0U || minimum_periods > maximum_periods) {
+          continue;
+        }
+        for (auto periods = minimum_periods; periods <= maximum_periods; ++periods) {
+          const auto amplitudes =
+              distribute_tuning_amplitude(total_amplitude, periods, maximum_period_amplitude);
+          if (amplitudes.empty()) {
+            continue;
+          }
+          const auto layout_count = periods == 1U ? 2U : 4U;
+          for (std::size_t layout = 0U; layout < layout_count; ++layout) {
+            if (stop_token.stop_requested()) {
+              return SkewTuningStatus::cancelled;
+            }
+            if (result.attempted_differential_pair_skew_tuning_candidates >=
+                config.max_differential_pair_skew_tuning_candidates) {
+              result.differential_pair_skew_tuning_budget_exhausted = true;
+              break;
+            }
+            ++result.attempted_differential_pair_skew_tuning_candidates;
+            const auto segments =
+                make_skew_tuning_pattern(original, lead, spacing, amplitudes, layout);
+            if (segments.empty()) {
+              if (any_direction) {
+                ++result.withheld_differential_pair_skew_tuning_quantization_candidates;
+              }
+              continue;
+            }
+            const auto certificates = assess_free_space_chords(free_space.domain, segments);
+            if (certificates.size() != segments.size() ||
+                std::any_of(certificates.begin(), certificates.end(),
+                            [required_free_space](const auto& certificate) {
+                              return !certificate || *certificate < required_free_space;
+                            })) {
+              ++result.withheld_differential_pair_skew_tuning_free_space_candidates;
+              continue;
+            }
+
+            Board proposal = board;
+            auto proposal_ids = used_ids;
+            proposal.tracks.erase(proposal.tracks.begin() +
+                                  static_cast<std::ptrdiff_t>(selected.index));
+            std::vector<TrackSegment> replacements;
+            replacements.reserve(segments.size());
+            for (std::size_t segment = 0U; segment < segments.size(); ++segment) {
+              replacements.push_back(TrackSegment{
+                  unique_id(original.id.value() + "-skew-" + std::to_string(segment), proposal_ids),
+                  original.net, original.layer, segments[segment].first, segments[segment].second,
+                  original.width, false});
+            }
+            proposal.tracks.insert(proposal.tracks.begin() +
+                                       static_cast<std::ptrdiff_t>(selected.index),
+                                   replacements.begin(), replacements.end());
+            const auto tuned_positive =
+                routed_net_centerline_length_nm(proposal, pair->positive_net);
+            const auto tuned_negative =
+                routed_net_centerline_length_nm(proposal, pair->negative_net);
+            const auto tuned_shorter =
+                shorter_net == pair->positive_net ? tuned_positive : tuned_negative;
+            if (tuned_shorter <= shorter_length ||
+                absolute_difference(tuned_positive, tuned_negative) > maximum_skew ||
+                !skew_tuning_candidate_is_legal(proposal, *pair)) {
+              continue;
+            }
+            board = std::move(proposal);
+            used_ids = std::move(proposal_ids);
+            result.added_tracks += replacements.size() - 1U;
+            result.added_differential_pair_skew_tuning_length_nm += tuned_shorter - shorter_length;
+            result.materialized_differential_pair_skew_tuning_periods += periods;
+            if (any_direction) {
+              ++result.materialized_any_direction_differential_pair_skew_tuning_patterns;
+            }
+            ++result.tuned_differential_pairs;
+            accepted = true;
+            break;
+          }
+          if (accepted || result.differential_pair_skew_tuning_budget_exhausted) {
+            break;
+          }
+        }
+        if (accepted || result.differential_pair_skew_tuning_budget_exhausted) {
+          break;
+        }
+      }
+      if (accepted || result.differential_pair_skew_tuning_budget_exhausted) {
+        break;
+      }
+    }
+    if (!accepted) {
+      ++result.withheld_differential_pair_skew_tuning_pairs;
+    }
+    if (result.differential_pair_skew_tuning_budget_exhausted) {
+      break;
+    }
+  }
+  return SkewTuningStatus::completed;
+}
+
+struct SkewTuningAssignmentCandidate {
+  DifferentialPairId pair;
+  ObjectId original_track;
+  std::vector<TrackSegment> replacements;
+  std::uint64_t added_length_nm{0};
+  std::size_t periods{0};
+  bool any_direction{false};
+};
+
+struct SkewTuningAssignmentPair {
+  const DifferentialPair* pair{nullptr};
+  std::vector<SkewTuningAssignmentCandidate> candidates;
+};
+
+[[nodiscard]] bool
+apply_skew_tuning_assignment_candidate(Board& board, std::set<std::string>& used_ids,
+                                       const SkewTuningAssignmentCandidate& candidate) {
+  const auto original =
+      std::find_if(board.tracks.begin(), board.tracks.end(),
+                   [&](const auto& track) { return track.id == candidate.original_track; });
+  if (original == board.tracks.end()) {
+    return false;
+  }
+  for (const auto& replacement : candidate.replacements) {
+    if (!used_ids.insert(replacement.id.value()).second) {
+      return false;
+    }
+  }
+  const auto index = static_cast<std::size_t>(std::distance(board.tracks.begin(), original));
+  board.tracks.erase(original);
+  board.tracks.insert(board.tracks.begin() + static_cast<std::ptrdiff_t>(index),
+                      candidate.replacements.begin(), candidate.replacements.end());
+  return true;
+}
+
+[[nodiscard]] SkewTuningStatus tune_differential_pair_skew_batch(
+    Board& board, const GlobalRouteResult& global, const std::set<ObjectId>& protected_track_ids,
+    const std::set<NetId>& protected_routing_nets, std::set<std::string>& used_ids,
+    const DetailedRouterConfig& config, DetailedRouteResult& result, std::stop_token stop_token) {
+  std::vector<const DifferentialPair*> pairs;
+  for (const auto& pair : board.differential_pairs) {
+    if (pair.maximum_skew) {
+      pairs.push_back(&pair);
+    }
+  }
+  std::sort(pairs.begin(), pairs.end(),
+            [](const auto* lhs, const auto* rhs) { return lhs->id < rhs->id; });
+
+  std::vector<SkewTuningAssignmentPair> pair_candidates;
+  for (const auto* pair : pairs) {
+    if (stop_token.stop_requested()) {
+      return SkewTuningStatus::cancelled;
+    }
+    const auto positive_length = routed_net_centerline_length_nm(board, pair->positive_net);
+    const auto negative_length = routed_net_centerline_length_nm(board, pair->negative_net);
+    const auto difference = absolute_difference(positive_length, negative_length);
+    const auto maximum_skew = static_cast<std::uint64_t>(pair->maximum_skew->value());
+    if (difference <= maximum_skew) {
+      continue;
+    }
+    ++result.attempted_differential_pair_skew_tuning_pairs;
+    SkewTuningAssignmentPair generated{pair, {}};
+    if (result.differential_pair_skew_tuning_budget_exhausted) {
+      pair_candidates.push_back(std::move(generated));
+      continue;
+    }
+
+    const auto pad_count = [&board](const NetId& net) {
+      std::size_t count = 0U;
+      for (const auto& footprint : board.footprints) {
+        count += static_cast<std::size_t>(
+            std::count_if(footprint.pads.begin(), footprint.pads.end(),
+                          [&net](const auto& pad) { return pad.net == net; }));
+      }
+      return count;
+    };
+    const auto path_count = [&global](const NetId& net) {
+      return static_cast<std::size_t>(
+          std::count_if(global.paths.begin(), global.paths.end(),
+                        [&net](const auto& path) { return path.net == net; }));
+    };
+    const bool physical_zone =
+        std::any_of(board.zones.begin(), board.zones.end(), [&](const auto& zone) {
+          return (zone.net == pair->positive_net || zone.net == pair->negative_net) &&
+                 !zone.fills.empty();
+        });
+    if (pad_count(pair->positive_net) != 2U || pad_count(pair->negative_net) != 2U ||
+        path_count(pair->positive_net) != 1U || path_count(pair->negative_net) != 1U ||
+        protected_routing_nets.contains(pair->positive_net) ||
+        protected_routing_nets.contains(pair->negative_net) || physical_zone) {
+      pair_candidates.push_back(std::move(generated));
+      continue;
+    }
+
+    const auto& shorter_net =
+        positive_length < negative_length ? pair->positive_net : pair->negative_net;
+    const auto shorter_length = std::min(positive_length, negative_length);
+    const auto total_amplitudes = skew_tuning_total_amplitudes(difference, maximum_skew, config);
+    std::vector<SkewTuningTrackCandidate> tracks;
+    const auto lead =
+        static_cast<std::uint64_t>(config.minimum_differential_pair_skew_tuning_lead.value());
+    for (std::size_t index = 0U; index < board.tracks.size(); ++index) {
+      const auto& track = board.tracks[index];
+      if (track.net != shorter_net || track.locked || protected_track_ids.contains(track.id)) {
+        continue;
+      }
+      const auto length = geometry::segment_length_nm(track.start, track.end);
+      if (length > lead * 2U) {
+        tracks.push_back({index, length, track.id.value()});
+      }
+    }
+    std::sort(tracks.begin(), tracks.end(), [](const auto& lhs, const auto& rhs) {
+      if (lhs.length_nm != rhs.length_nm) {
+        return lhs.length_nm > rhs.length_nm;
+      }
+      return lhs.id < rhs.id;
+    });
+
+    for (const auto& selected : tracks) {
+      if (generated.candidates.size() >=
+              config.max_differential_pair_skew_tuning_assignment_candidates_per_pair ||
+          result.differential_pair_skew_tuning_budget_exhausted) {
+        break;
+      }
+      const auto original = board.tracks[selected.index];
+      const auto routing_rules = resolve_net_routing_rules(board, shorter_net);
+      const auto configured_spacing =
+          static_cast<std::uint64_t>(config.minimum_differential_pair_skew_tuning_spacing.value());
+      const auto physical_spacing =
+          static_cast<std::uint64_t>(original.width.value() + routing_rules.clearance.value());
+      const auto spacing = std::max(configured_spacing, physical_spacing);
+      const auto central_length = selected.length_nm - lead * 2U;
+      const auto period_capacity =
+          static_cast<std::size_t>((central_length + spacing) / (spacing * 2U));
+      result.maximum_differential_pair_skew_tuning_period_capacity =
+          std::max(result.maximum_differential_pair_skew_tuning_period_capacity, period_capacity);
+      const auto maximum_periods =
+          std::min(period_capacity, config.max_differential_pair_skew_tuning_periods);
+      if (maximum_periods == 0U) {
+        continue;
+      }
+
+      ++result.assessed_differential_pair_skew_tuning_regions;
+      const bool any_direction =
+          original.start.x != original.end.x && original.start.y != original.end.y;
+      if (any_direction) {
+        ++result.assessed_any_direction_differential_pair_skew_tuning_regions;
+      }
+      const auto free_space = extract_polygonal_board_free_space(
+          board, BoardFreeSpaceExtractionConfig{original.layer, shorter_net, true, true});
+      if (!free_space.complete()) {
+        ++result.withheld_differential_pair_skew_tuning_regions;
+        continue;
+      }
+      auto obstacle_clearance = board.rules.copper_to_edge_clearance;
+      for (const auto& net : board.nets) {
+        if (net.id != shorter_net) {
+          obstacle_clearance =
+              std::max(obstacle_clearance, resolve_pairwise_clearance(board, shorter_net, net.id));
+        }
+      }
+      if (pair->minimum_gap) {
+        obstacle_clearance = std::max(obstacle_clearance, *pair->minimum_gap);
+      }
+      const auto required_free_space =
+          Nanometres{(original.width.value() + 1) / 2 + obstacle_clearance.value()};
+      const auto maximum_period_amplitude = static_cast<std::uint64_t>(
+          config.maximum_differential_pair_skew_tuning_amplitude.value());
+
+      for (const auto total_amplitude : total_amplitudes) {
+        if (generated.candidates.size() >=
+                config.max_differential_pair_skew_tuning_assignment_candidates_per_pair ||
+            result.differential_pair_skew_tuning_budget_exhausted) {
+          break;
+        }
+        const auto minimum_periods =
+            static_cast<std::size_t>(total_amplitude / maximum_period_amplitude +
+                                     (total_amplitude % maximum_period_amplitude == 0U ? 0U : 1U));
+        if (minimum_periods == 0U || minimum_periods > maximum_periods) {
+          continue;
+        }
+        for (auto periods = minimum_periods; periods <= maximum_periods; ++periods) {
+          if (generated.candidates.size() >=
+                  config.max_differential_pair_skew_tuning_assignment_candidates_per_pair ||
+              result.differential_pair_skew_tuning_budget_exhausted) {
+            break;
+          }
+          const auto amplitudes =
+              distribute_tuning_amplitude(total_amplitude, periods, maximum_period_amplitude);
+          if (amplitudes.empty()) {
+            continue;
+          }
+          const auto layout_count = periods == 1U ? 2U : 4U;
+          for (std::size_t layout = 0U; layout < layout_count; ++layout) {
+            if (stop_token.stop_requested()) {
+              return SkewTuningStatus::cancelled;
+            }
+            if (generated.candidates.size() >=
+                config.max_differential_pair_skew_tuning_assignment_candidates_per_pair) {
+              break;
+            }
+            if (result.attempted_differential_pair_skew_tuning_candidates >=
+                config.max_differential_pair_skew_tuning_candidates) {
+              result.differential_pair_skew_tuning_budget_exhausted = true;
+              break;
+            }
+            ++result.attempted_differential_pair_skew_tuning_candidates;
+            const auto segments =
+                make_skew_tuning_pattern(original, lead, spacing, amplitudes, layout);
+            if (segments.empty()) {
+              if (any_direction) {
+                ++result.withheld_differential_pair_skew_tuning_quantization_candidates;
+              }
+              continue;
+            }
+            const auto certificates = assess_free_space_chords(free_space.domain, segments);
+            if (certificates.size() != segments.size() ||
+                std::any_of(certificates.begin(), certificates.end(),
+                            [required_free_space](const auto& certificate) {
+                              return !certificate || *certificate < required_free_space;
+                            })) {
+              ++result.withheld_differential_pair_skew_tuning_free_space_candidates;
+              continue;
+            }
+
+            Board proposal = board;
+            auto proposal_ids = used_ids;
+            proposal.tracks.erase(proposal.tracks.begin() +
+                                  static_cast<std::ptrdiff_t>(selected.index));
+            std::vector<TrackSegment> replacements;
+            replacements.reserve(segments.size());
+            for (std::size_t segment = 0U; segment < segments.size(); ++segment) {
+              replacements.push_back(TrackSegment{
+                  unique_id(original.id.value() + "-skew-" + std::to_string(segment), proposal_ids),
+                  original.net, original.layer, segments[segment].first, segments[segment].second,
+                  original.width, false});
+            }
+            proposal.tracks.insert(proposal.tracks.begin() +
+                                       static_cast<std::ptrdiff_t>(selected.index),
+                                   replacements.begin(), replacements.end());
+            const auto tuned_positive =
+                routed_net_centerline_length_nm(proposal, pair->positive_net);
+            const auto tuned_negative =
+                routed_net_centerline_length_nm(proposal, pair->negative_net);
+            const auto tuned_shorter =
+                shorter_net == pair->positive_net ? tuned_positive : tuned_negative;
+            if (tuned_shorter <= shorter_length ||
+                absolute_difference(tuned_positive, tuned_negative) > maximum_skew ||
+                !skew_tuning_candidate_is_legal(proposal, *pair)) {
+              continue;
+            }
+            generated.candidates.push_back(SkewTuningAssignmentCandidate{
+                pair->id, original.id, std::move(replacements), tuned_shorter - shorter_length,
+                periods, any_direction});
+            ++result.legal_differential_pair_skew_tuning_candidates;
+          }
+        }
+      }
+    }
+    pair_candidates.push_back(std::move(generated));
+  }
+
+  std::vector<const SkewTuningAssignmentPair*> assignable;
+  for (const auto& generated : pair_candidates) {
+    if (!generated.candidates.empty()) {
+      assignable.push_back(&generated);
+    }
+  }
+  result.differential_pair_skew_tuning_assignment_attempted =
+      result.attempted_differential_pair_skew_tuning_pairs > 0U;
+
+  Board best_board = board;
+  auto best_ids = used_ids;
+  std::vector<const SkewTuningAssignmentCandidate*> best_selection;
+  std::vector<const SkewTuningAssignmentCandidate*> selection;
+  std::set<std::string> selected_pair_ids;
+  bool cancelled = false;
+
+  const auto search = [&](const auto& self, std::size_t pair_index, const Board& partial,
+                          const std::set<std::string>& partial_ids) -> void {
+    if (cancelled || result.differential_pair_skew_tuning_assignment_budget_exhausted) {
+      return;
+    }
+    if (stop_token.stop_requested()) {
+      cancelled = true;
+      return;
+    }
+    if (selection.size() + assignable.size() - pair_index <= best_selection.size()) {
+      return;
+    }
+    if (pair_index >= assignable.size()) {
+      return;
+    }
+
+    const auto* generated = assignable[pair_index];
+    for (const auto& candidate : generated->candidates) {
+      if (result.differential_pair_skew_tuning_assignment_states >=
+          config.max_differential_pair_skew_tuning_assignment_states) {
+        result.differential_pair_skew_tuning_assignment_budget_exhausted = true;
+        return;
+      }
+      ++result.differential_pair_skew_tuning_assignment_states;
+      Board branch = partial;
+      auto branch_ids = partial_ids;
+      if (!apply_skew_tuning_assignment_candidate(branch, branch_ids, candidate)) {
+        ++result.rejected_differential_pair_skew_tuning_assignment_conflicts;
+        continue;
+      }
+      selection.push_back(&candidate);
+      selected_pair_ids.insert(candidate.pair.value());
+      if (!skew_tuning_selection_is_legal(branch, selected_pair_ids)) {
+        ++result.rejected_differential_pair_skew_tuning_assignment_conflicts;
+        selected_pair_ids.erase(candidate.pair.value());
+        selection.pop_back();
+        continue;
+      }
+      if (selection.size() > best_selection.size()) {
+        best_board = branch;
+        best_ids = branch_ids;
+        best_selection = selection;
+      }
+      self(self, pair_index + 1U, branch, branch_ids);
+      selected_pair_ids.erase(candidate.pair.value());
+      selection.pop_back();
+      if (cancelled || result.differential_pair_skew_tuning_assignment_budget_exhausted) {
+        return;
+      }
+    }
+
+    if (result.differential_pair_skew_tuning_assignment_states >=
+        config.max_differential_pair_skew_tuning_assignment_states) {
+      result.differential_pair_skew_tuning_assignment_budget_exhausted = true;
+      return;
+    }
+    ++result.differential_pair_skew_tuning_assignment_states;
+    self(self, pair_index + 1U, partial, partial_ids);
+  };
+  search(search, 0U, board, used_ids);
+  if (cancelled) {
+    return SkewTuningStatus::cancelled;
+  }
+
+  board = std::move(best_board);
+  used_ids = std::move(best_ids);
+  for (const auto* candidate : best_selection) {
+    result.added_tracks += candidate->replacements.size() - 1U;
+    result.added_differential_pair_skew_tuning_length_nm += candidate->added_length_nm;
+    result.materialized_differential_pair_skew_tuning_periods += candidate->periods;
+    if (candidate->any_direction) {
+      ++result.materialized_any_direction_differential_pair_skew_tuning_patterns;
+    }
+  }
+  result.tuned_differential_pairs += best_selection.size();
+  result.withheld_differential_pair_skew_tuning_pairs +=
+      result.attempted_differential_pair_skew_tuning_pairs - best_selection.size();
+  return SkewTuningStatus::completed;
+}
+
+DetailedRouteResult materialize_impl(const Board& source, const GlobalRouteResult& global,
+                                     const DetailedRouterConfig& config,
+                                     const DetailedRouteResult* checkpoint,
+                                     std::stop_token stop_token, bool use_topology_locked,
+                                     bool use_circular_arc_refinement, bool use_pull_tight,
+                                     bool use_continuous_refinement,
+                                     const std::set<NetId>& topology_excluded_nets = {}) {
+  DetailedRouteResult result;
+  if (stop_token.stop_requested()) {
+    result.stop_reason = DetailedRouterStopReason::cancelled;
+    result.diagnostic = "detailed routing cancelled before materialization";
+    return result;
+  }
+  const auto source_validation = validate_board(source);
+  if (!source_validation.ok()) {
+    result.validation = source_validation;
+    result.diagnostic = "source board failed structural validation";
+    return result;
+  }
+  std::size_t residual_nets = 0U;
+  const auto bounded_conflict_handoff =
+      config.bounded_residual_conflict_refinement && global.total_overflow > 0U &&
+      global.unrouted_nets.empty() && !global.paths.empty() &&
+      !global.residual_conflict_groups.empty() &&
+      global.residual_conflict_groups.size() <= config.max_residual_conflict_groups &&
+      global.sampled_overflow <= config.max_residual_sampled_overflow &&
+      global.clearance_shadow_overflow <= config.max_residual_clearance_shadow_overflow &&
+      std::all_of(global.residual_conflict_groups.begin(), global.residual_conflict_groups.end(),
+                  [&](const auto& group) {
+                    residual_nets += group.nets.size();
+                    return !group.nets.empty() &&
+                           group.nets.size() <= config.max_residual_conflict_nets_per_group &&
+                           group.all_nets_have_preserved_geometric_corridors;
+                  });
+  if ((!global.complete() || global.total_overflow != 0U) && !bounded_conflict_handoff) {
+    result.stop_reason = DetailedRouterStopReason::incomplete_global_route;
+    result.diagnostic =
+        "global route must be overflow-free or expose only bounded topology-preserved residual "
+        "conflict groups";
+    return result;
+  }
+
+  if (config.track_width.value() < 0 || config.via_diameter.value() < 0 ||
+      config.via_drill.value() < 0 || config.continuous_trust_region.value() < 0 ||
+      config.maximum_circular_arc_radius.value() < 0 ||
+      (config.circular_arc_refinement &&
+       (config.maximum_circular_arc_radius.value() == 0 || config.max_circular_arcs == 0U ||
+        config.max_circular_arc_candidate_checks == 0U ||
+        config.spline_tessellation_tolerance.value() <= 0 ||
+        config.spline_arc_fit_tolerance.value() < 0 ||
+        config.spline_control_corridor.value() <= 0 || config.spline_shove_step.value() <= 0 ||
+        config.spline_navmesh_cell_pitch.value() <= 0 ||
+        config.spline_minimum_bend_radius.value() < 0 ||
+        config.max_spline_navmesh_cells_per_run == 0U ||
+        config.max_spline_navmesh_search_expansions_per_run == 0U ||
+        config.spline_trajectory_samples < 3U || config.max_spline_trajectory_iterations == 0U ||
+        config.max_spline_trajectory_candidate_checks < 4U ||
+        config.spline_max_tessellation_depth == 0U || config.max_spline_samples_per_run < 3U ||
+        config.max_spline_fitted_pieces_per_run == 0U || config.max_spline_arc_samples < 3U ||
+        config.max_spline_shove_iterations == 0U || config.max_spline_candidate_checks == 0U ||
+        config.max_pns_propagation_depth == 0U || config.max_pns_candidate_checks == 0U ||
+        config.maximum_pns_displacement < config.spline_shove_step)) ||
+      (config.differential_pair_skew_tuning_batch_assignment &&
+       !config.differential_pair_skew_tuning) ||
+      (config.bounded_residual_conflict_refinement &&
+       (config.max_residual_conflict_groups == 0U ||
+        config.max_residual_conflict_nets_per_group == 0U ||
+        config.max_residual_sampled_overflow == 0U ||
+        config.max_residual_clearance_shadow_overflow == 0U ||
+        config.max_residual_joint_candidate_states == 0U ||
+        config.max_residual_joint_optimization_sweeps == 0U)) ||
+      (config.differential_pair_skew_tuning &&
+       (config.differential_pair_skew_tuning_step.value() <= 0 ||
+        config.differential_pair_skew_tuning_step.value() > max_abs_coordinate_nm ||
+        config.maximum_differential_pair_skew_tuning_amplitude.value() <= 0 ||
+        config.minimum_differential_pair_skew_tuning_lead.value() <= 0 ||
+        config.minimum_differential_pair_skew_tuning_spacing.value() <= 0 ||
+        config.maximum_differential_pair_skew_tuning_amplitude.value() > max_abs_coordinate_nm ||
+        config.minimum_differential_pair_skew_tuning_lead.value() > max_abs_coordinate_nm ||
+        config.minimum_differential_pair_skew_tuning_spacing.value() > max_abs_coordinate_nm ||
+        config.max_differential_pair_skew_tuning_candidates == 0U ||
+        config.max_differential_pair_skew_tuning_periods == 0U ||
+        (config.differential_pair_skew_tuning_batch_assignment &&
+         (config.max_differential_pair_skew_tuning_assignment_candidates_per_pair == 0U ||
+          config.max_differential_pair_skew_tuning_assignment_states == 0U)))) ||
+      (config.topology_locked_medial_materialization &&
+       (config.max_topology_locked_terminal_access_points == 0U ||
+        config.max_coupled_terminal_fanout_candidates == 0U ||
+        config.max_shared_resource_fanout_candidates == 0U ||
+        config.max_topology_locked_subset_repair_candidates == 0U)) ||
+      (config.defer_saved_zone_fill_clearance_to_refill &&
+       (config.continuous_refinement || config.topology_locked_medial_materialization ||
+        config.differential_pair_skew_tuning))) {
+    result.diagnostic = "detailed routing dimensions are invalid";
+    return result;
+  }
+  result.materialized_config = config;
+  result.residual_conflict_handoff_attempted = bounded_conflict_handoff;
+  if (bounded_conflict_handoff) {
+    result.residual_conflict_groups_attempted = global.residual_conflict_groups.size();
+    result.residual_conflict_nets_attempted = residual_nets;
+    result.residual_sampled_overflow_attempted = global.sampled_overflow;
+    result.residual_clearance_shadow_overflow_attempted = global.clearance_shadow_overflow;
+  }
+
+  std::set<NetId> routed_nets;
+  for (const auto& path : global.paths) {
+    routed_nets.insert(path.net);
+  }
+  const auto coupled_groups = coupled_routing_groups(source, routed_nets);
+  std::map<NetId, ResolvedNetRoutingRules> dimensions;
+  for (const auto& net : routed_nets) {
+    const auto resolved = materialization_rules(source, net, config);
+    if (resolved.track_width.value() <= 0 || resolved.via_diameter.value() <= 0 ||
+        resolved.via_drill.value() < 0 || resolved.via_drill > resolved.via_diameter) {
+      result.diagnostic = "resolved detailed routing dimensions are invalid";
+      return result;
+    }
+    dimensions.emplace(net, resolved);
+  }
+  std::map<NetId, std::set<Nanometres>> allowed_track_widths;
+  for (const auto& net : routed_nets) {
+    allowed_track_widths[net].insert(dimensions.at(net).track_width);
+  }
+  for (const auto& path : global.paths) {
+    for (const auto width : path.segment_widths) {
+      if (width.value() > 0 && width < dimensions.at(path.net).track_width) {
+        allowed_track_widths[path.net].insert(width);
+      }
+    }
+  }
+  std::set<NetId> reusable_nets;
+  std::set<NetId> invalidated_reuse_nets;
+  if (checkpoint != nullptr) {
+    reusable_nets.insert(global.reused_nets.begin(), global.reused_nets.end());
+    if (!checkpoint->candidate || !checkpoint->validation.ok() ||
+        checkpoint->materialized_config != result.materialized_config) {
+      invalidated_reuse_nets = reusable_nets;
+      reusable_nets.clear();
+    } else {
+      std::map<std::string, NetId> object_nets;
+      for (const auto& footprint : checkpoint->candidate->footprints) {
+        for (const auto& pad : footprint.pads) {
+          object_nets.emplace(pad.id.value(), pad.net);
+        }
+      }
+      for (const auto& track : checkpoint->candidate->tracks) {
+        object_nets.emplace(track.id.value(), track.net);
+      }
+      for (const auto& arc : checkpoint->candidate->track_arcs) {
+        object_nets.emplace(arc.id.value(), arc.net);
+      }
+      for (const auto& via : checkpoint->candidate->vias) {
+        object_nets.emplace(via.id.value(), via.net);
+      }
+      for (const auto& zone : checkpoint->candidate->zones) {
+        object_nets.emplace(zone.id.value(), zone.net);
+      }
+      for (const auto& connectivity : checkpoint->connectivity.nets) {
+        if (connectivity.open_connections != 0U && reusable_nets.contains(connectivity.net)) {
+          invalidated_reuse_nets.insert(connectivity.net);
+        }
+      }
+      for (const auto& violation : checkpoint->copper_drc.violations) {
+        for (const auto& object_id : violation.object_ids) {
+          if (const auto found = object_nets.find(object_id);
+              found != object_nets.end() && reusable_nets.contains(found->second)) {
+            invalidated_reuse_nets.insert(found->second);
+          }
+        }
+      }
+      std::map<ObjectId, const TrackSegment*> source_tracks;
+      std::map<ObjectId, const TrackArc*> source_arcs;
+      std::map<ObjectId, const Via*> source_vias;
+      for (const auto& track : source.tracks) {
+        source_tracks.emplace(track.id, &track);
+      }
+      for (const auto& via : source.vias) {
+        source_vias.emplace(via.id, &via);
+      }
+      for (const auto& arc : source.track_arcs) {
+        source_arcs.emplace(arc.id, &arc);
+      }
+      for (const auto& track : checkpoint->candidate->tracks) {
+        if (!reusable_nets.contains(track.net)) {
+          continue;
+        }
+        const auto source_track = source_tracks.find(track.id);
+        if ((source_track == source_tracks.end() &&
+             !allowed_track_widths.at(track.net).contains(track.width)) ||
+            (source_track != source_tracks.end() && *source_track->second != track)) {
+          invalidated_reuse_nets.insert(track.net);
+        }
+      }
+      for (const auto& via : checkpoint->candidate->vias) {
+        if (!reusable_nets.contains(via.net)) {
+          continue;
+        }
+        const auto source_via = source_vias.find(via.id);
+        if ((source_via == source_vias.end() &&
+             (via.diameter != dimensions.at(via.net).via_diameter ||
+              via.drill != dimensions.at(via.net).via_drill)) ||
+            (source_via != source_vias.end() && *source_via->second != via)) {
+          invalidated_reuse_nets.insert(via.net);
+        }
+      }
+      for (const auto& arc : checkpoint->candidate->track_arcs) {
+        if (!reusable_nets.contains(arc.net)) {
+          continue;
+        }
+        const auto source_arc = source_arcs.find(arc.id);
+        if ((source_arc == source_arcs.end() &&
+             !allowed_track_widths.at(arc.net).contains(arc.width)) ||
+            (source_arc != source_arcs.end() && *source_arc->second != arc)) {
+          invalidated_reuse_nets.insert(arc.net);
+        }
+      }
+      for (const auto& net : invalidated_reuse_nets) {
+        reusable_nets.erase(net);
+      }
+    }
+  }
+  for (const auto& group : coupled_groups) {
+    const auto reusable_members = static_cast<std::size_t>(
+        std::count_if(group.members.begin(), group.members.end(),
+                      [&reusable_nets](const auto& net) { return reusable_nets.contains(net); }));
+    if (reusable_members == 0U || reusable_members == group.members.size()) {
+      continue;
+    }
+    for (const auto& net : group.members) {
+      if (reusable_nets.erase(net) > 0U) {
+        invalidated_reuse_nets.insert(net);
+      }
+    }
+  }
+  result.reused_nets.assign(reusable_nets.begin(), reusable_nets.end());
+  result.invalidated_reuse_nets.assign(invalidated_reuse_nets.begin(),
+                                       invalidated_reuse_nets.end());
+  for (const auto& net : routed_nets) {
+    if (!reusable_nets.contains(net)) {
+      result.rematerialized_nets.push_back(net);
+    }
+  }
+
+  Board candidate = source;
+  for (const auto& proposal : global.selected_shove_proposals) {
+    std::set<ObjectId> replaced(proposal.replaced_tracks.begin(), proposal.replaced_tracks.end());
+    const auto found = static_cast<std::size_t>(
+        std::count_if(candidate.tracks.begin(), candidate.tracks.end(),
+                      [&](const auto& track) { return replaced.contains(track.id); }));
+    if (found != replaced.size()) {
+      result.diagnostic = "global PNS proposal no longer binds every replaced source track";
+      return result;
+    }
+    std::erase_if(candidate.tracks, [&](const auto& track) { return replaced.contains(track.id); });
+    candidate.tracks.insert(candidate.tracks.end(), proposal.replacement_tracks.begin(),
+                            proposal.replacement_tracks.end());
+    const std::set<ObjectId> replaced_vias(proposal.replaced_vias.begin(),
+                                           proposal.replaced_vias.end());
+    const auto found_vias = static_cast<std::size_t>(
+        std::count_if(candidate.vias.begin(), candidate.vias.end(),
+                      [&](const auto& via) { return replaced_vias.contains(via.id); }));
+    if (found_vias != replaced_vias.size()) {
+      result.diagnostic = "global PNS proposal no longer binds every replaced source via";
+      return result;
+    }
+    std::erase_if(candidate.vias, [&](const auto& via) { return replaced_vias.contains(via.id); });
+    candidate.vias.insert(candidate.vias.end(), proposal.replacement_vias.begin(),
+                          proposal.replacement_vias.end());
+  }
+  if (!global.selected_shove_proposals.empty() &&
+      (!validate_board(candidate).ok() || !check_copper_rules(candidate).ok())) {
+    result.diagnostic = "global PNS proposal failed detailed structural or copper acceptance";
+    return result;
+  }
+  if (config.existing_routing == ExistingRoutingPolicy::replace_unlocked_for_routed_nets) {
+    remove_unlocked_routing(candidate, routed_nets, result);
+  }
+  auto used_ids = object_ids(candidate);
+  if (checkpoint != nullptr && checkpoint->candidate) {
+    for (const auto& track : checkpoint->candidate->tracks) {
+      if (reusable_nets.contains(track.net) && used_ids.insert(track.id.value()).second) {
+        candidate.tracks.push_back(track);
+        ++result.reused_tracks;
+      }
+    }
+    for (const auto& arc : checkpoint->candidate->track_arcs) {
+      if (reusable_nets.contains(arc.net) && used_ids.insert(arc.id.value()).second) {
+        candidate.track_arcs.push_back(arc);
+        ++result.reused_track_arcs;
+      }
+    }
+    for (const auto& via : checkpoint->candidate->vias) {
+      if (reusable_nets.contains(via.net) && used_ids.insert(via.id.value()).second) {
+        candidate.vias.push_back(via);
+        ++result.reused_vias;
+      }
+    }
+  }
+  std::set<ObjectId> protected_track_ids;
+  std::set<NetId> protected_routing_nets;
+  for (const auto& track : candidate.tracks) {
+    protected_track_ids.insert(track.id);
+    protected_routing_nets.insert(track.net);
+  }
+  for (const auto& arc : candidate.track_arcs) {
+    protected_routing_nets.insert(arc.net);
+  }
+  for (const auto& via : candidate.vias) {
+    protected_routing_nets.insert(via.net);
+  }
+  using PathKey = std::pair<NetId, std::size_t>;
+  std::map<PathKey, const GlobalRoutePath*> paths_by_key;
+  std::map<PathKey, TopologyLockedLanePath> prepared_topology_paths;
+  for (const auto& path : global.paths) {
+    const PathKey key{path.net, path.connection_index};
+    paths_by_key.emplace(key, &path);
+    if (!use_topology_locked || reusable_nets.contains(path.net) ||
+        topology_excluded_nets.contains(path.net) || path.terminal_neck_down_segments > 0U ||
+        path.medial_neck_down_segments > 0U || path.corridor_neck_down_segments > 0U) {
+      continue;
+    }
+    const auto prepared =
+        topology_locked_lane_points(global, path, dimensions.at(path.net).track_width,
+                                    config.max_topology_locked_terminal_access_points);
+    if (prepared) {
+      prepared_topology_paths.emplace(key, *prepared);
+    }
+  }
+  std::set<PathKey> governed_coupled_paths;
+  std::set<PathKey> accepted_coupled_paths;
+  std::set<PathKey> governed_coupled_fanout_paths;
+  std::set<PathKey> accepted_coupled_fanout_paths;
+  std::set<PathKey> governed_shared_resource_fanout_paths;
+  std::set<PathKey> rejected_shared_resource_fanout_paths;
+  std::set<NetId> materialized_topology_nets;
+  if (use_topology_locked) {
+    struct SharedRunOccurrence {
+      PathKey key;
+      TopologyLockedLanePath* path{nullptr};
+      std::size_t run_index{0};
+      std::int64_t signed_offset_nm{0};
+    };
+    std::map<std::pair<std::size_t, NetId>, std::int64_t> lane_offsets;
+    for (const auto& lane : global.voronoi_lane_assignments) {
+      lane_offsets.emplace(std::pair{lane.resource_id, lane.net}, lane.signed_offset_nm);
+    }
+    std::map<std::size_t, std::vector<SharedRunOccurrence>> shared_runs_by_resource;
+    for (auto& [key, path] : prepared_topology_paths) {
+      if (path.coupled_member) {
+        continue;
+      }
+      for (std::size_t run_index = 0U; run_index < path.packed_runs.size(); ++run_index) {
+        std::set<std::size_t> distinct_resources(path.packed_runs[run_index].resource_ids.begin(),
+                                                 path.packed_runs[run_index].resource_ids.end());
+        for (const auto resource_id : distinct_resources) {
+          const auto offset = lane_offsets.find(std::pair{resource_id, key.first});
+          if (offset == lane_offsets.end()) {
+            continue;
+          }
+          shared_runs_by_resource[resource_id].push_back(
+              SharedRunOccurrence{key, &path, run_index, offset->second});
+        }
+      }
+    }
+    std::set<std::vector<std::pair<PathKey, std::size_t>>> attempted_run_groups;
+    for (auto& [resource_id, occurrences] : shared_runs_by_resource) {
+      std::map<NetId, std::vector<SharedRunOccurrence*>> occurrences_by_net;
+      for (auto& occurrence : occurrences) {
+        occurrences_by_net[occurrence.key.first].push_back(&occurrence);
+      }
+      std::vector<SharedRunOccurrence*> selected;
+      for (auto& [net, net_occurrences] : occurrences_by_net) {
+        static_cast<void>(net);
+        if (net_occurrences.size() == 1U) {
+          selected.push_back(net_occurrences.front());
+        }
+      }
+      if (selected.size() < 2U) {
+        continue;
+      }
+      std::sort(selected.begin(), selected.end(), [](const auto* lhs, const auto* rhs) {
+        return std::tie(lhs->signed_offset_nm, lhs->key, lhs->run_index) <
+               std::tie(rhs->signed_offset_nm, rhs->key, rhs->run_index);
+      });
+      std::vector<std::pair<PathKey, std::size_t>> signature;
+      signature.reserve(selected.size());
+      for (const auto* occurrence : selected) {
+        signature.emplace_back(occurrence->key, occurrence->run_index);
+      }
+      auto canonical_signature = signature;
+      std::sort(canonical_signature.begin(), canonical_signature.end());
+      if (!attempted_run_groups.insert(std::move(canonical_signature)).second) {
+        continue;
+      }
+
+      CoupledRoutingGroup group;
+      std::vector<TopologyLockedLanePath*> group_paths;
+      std::vector<std::size_t> run_indices;
+      group.members.reserve(selected.size());
+      group_paths.reserve(selected.size());
+      run_indices.reserve(selected.size());
+      for (const auto* occurrence : selected) {
+        group.members.push_back(occurrence->key.first);
+        group_paths.push_back(occurrence->path);
+        run_indices.push_back(occurrence->run_index);
+        governed_shared_resource_fanout_paths.insert(occurrence->key);
+      }
+      ++result.attempted_shared_resource_fanout_groups;
+      const auto* shared_resource = find_resource_usage(global, resource_id);
+      if (shared_resource != nullptr &&
+          synchronize_shared_resource_fanouts(source, group, group_paths, run_indices, dimensions,
+                                              config.max_shared_resource_fanout_candidates,
+                                              result.attempted_shared_resource_fanout_candidates,
+                                              result.synchronized_shared_resource_fanouts)) {
+        ++result.materialized_shared_resource_fanout_groups;
+      } else {
+        ++result.shared_resource_fanout_fallbacks;
+        std::vector<NetId> selected_fallback_nets;
+        if (shared_resource != nullptr) {
+          SharedResourceFanoutFailure failure{resource_id,
+                                              shared_resource->layer,
+                                              shared_resource->start,
+                                              shared_resource->end,
+                                              {},
+                                              {},
+                                              {},
+                                              {}};
+          failure.nets.reserve(selected.size());
+          for (const auto* occurrence : selected) {
+            failure.nets.push_back(occurrence->key.first);
+            const auto& run = occurrence->path->packed_runs[occurrence->run_index];
+            const auto start_anchor =
+                packed_run_anchor_index(*occurrence->path, occurrence->run_index, true);
+            const auto end_anchor =
+                packed_run_anchor_index(*occurrence->path, occurrence->run_index, false);
+            if (start_anchor && end_anchor) {
+              failure.members.push_back(SharedResourceFanoutFailureMember{
+                  occurrence->key.first, occurrence->path->points[*start_anchor].position,
+                  occurrence->path->points[run.first_index].position,
+                  occurrence->path->points[run.last_index].position,
+                  occurrence->path->points[*end_anchor].position});
+            }
+          }
+          std::sort(failure.nets.begin(), failure.nets.end());
+          failure.nets.erase(std::unique(failure.nets.begin(), failure.nets.end()),
+                             failure.nets.end());
+          std::sort(failure.members.begin(), failure.members.end(),
+                    [](const auto& lhs, const auto& rhs) { return lhs.net < rhs.net; });
+          struct EndpointOrderEvidence {
+            NetId net;
+            Point anchor;
+            Point lane;
+            long double outward_distance{0.0L};
+          };
+          std::array<std::vector<EndpointOrderEvidence>, 2U> endpoint_members;
+          const auto resource_dx = static_cast<long double>(failure.end.x.value()) -
+                                   static_cast<long double>(failure.start.x.value());
+          const auto resource_dy = static_cast<long double>(failure.end.y.value()) -
+                                   static_cast<long double>(failure.start.y.value());
+          const auto resource_length_squared =
+              resource_dx * resource_dx + resource_dy * resource_dy;
+          const auto endpoint = [&failure, resource_dx, resource_dy,
+                                 resource_length_squared](Point lane) {
+            const auto projection = (static_cast<long double>(lane.x.value()) -
+                                     static_cast<long double>(failure.start.x.value())) *
+                                        resource_dx +
+                                    (static_cast<long double>(lane.y.value()) -
+                                     static_cast<long double>(failure.start.y.value())) *
+                                        resource_dy;
+            return std::abs(projection) <= std::abs(projection - resource_length_squared) ? 0U : 1U;
+          };
+          const auto longitudinal_projection = [&failure, resource_dx, resource_dy](Point point) {
+            return (static_cast<long double>(point.x.value()) -
+                    static_cast<long double>(failure.start.x.value())) *
+                       resource_dx +
+                   (static_cast<long double>(point.y.value()) -
+                    static_cast<long double>(failure.start.y.value())) *
+                       resource_dy;
+          };
+          for (const auto& member : failure.members) {
+            const auto start_endpoint = endpoint(member.start_lane);
+            const auto end_endpoint = endpoint(member.end_lane);
+            const auto start_projection = longitudinal_projection(member.start_anchor);
+            const auto end_projection = longitudinal_projection(member.end_anchor);
+            endpoint_members[start_endpoint].push_back(EndpointOrderEvidence{
+                member.net, member.start_anchor, member.start_lane,
+                start_endpoint == 0U ? -start_projection
+                                     : start_projection - resource_length_squared});
+            endpoint_members[end_endpoint].push_back(EndpointOrderEvidence{
+                member.net, member.end_anchor, member.end_lane,
+                end_endpoint == 0U ? -end_projection : end_projection - resource_length_squared});
+          }
+          const auto cross = [resource_dx, resource_dy](Point point) {
+            return -resource_dy * static_cast<long double>(point.x.value()) +
+                   resource_dx * static_cast<long double>(point.y.value());
+          };
+          const auto cross_direction = [](long double value) {
+            return value < 0.0L ? -1 : value > 0.0L ? 1 : 0;
+          };
+          std::set<NetId> conflicting_nets;
+          for (const auto& side_members : endpoint_members) {
+            std::map<NetId, EndpointOrderEvidence> best_by_net;
+            for (const auto& member : side_members) {
+              const auto found = best_by_net.find(member.net);
+              if (found == best_by_net.end() ||
+                  member.outward_distance > found->second.outward_distance) {
+                best_by_net.insert_or_assign(member.net, member);
+              }
+            }
+            std::vector<EndpointOrderEvidence> side;
+            side.reserve(best_by_net.size());
+            for (const auto& [net, member] : best_by_net) {
+              static_cast<void>(net);
+              side.push_back(member);
+            }
+            for (std::size_t first = 0U; first < side.size(); ++first) {
+              for (std::size_t second = first + 1U; second < side.size(); ++second) {
+                const auto lane_order =
+                    cross_direction(cross(side[first].lane) - cross(side[second].lane));
+                const auto anchor_order =
+                    cross_direction(cross(side[first].anchor) - cross(side[second].anchor));
+                if (lane_order == 0 || anchor_order == 0 || lane_order != anchor_order) {
+                  conflicting_nets.insert(side[first].net);
+                  conflicting_nets.insert(side[second].net);
+                }
+              }
+            }
+          }
+          failure.conflicting_nets.assign(conflicting_nets.begin(), conflicting_nets.end());
+          std::size_t survivor_mask = 0U;
+          std::size_t survivor_count = 0U;
+          if (selected.size() < std::numeric_limits<std::size_t>::digits) {
+            const auto state_count = std::size_t{1U} << selected.size();
+            for (auto mask = state_count - 1U;
+                 mask > 0U && result.attempted_shared_resource_fanout_candidates <
+                                  config.max_shared_resource_fanout_candidates;
+                 --mask) {
+              std::size_t member_count = 0U;
+              for (std::size_t member = 0U; member < selected.size(); ++member) {
+                member_count += (mask & (std::size_t{1U} << member)) != 0U ? 1U : 0U;
+              }
+              if (member_count <= survivor_count) {
+                continue;
+              }
+              CoupledRoutingGroup survivor_group;
+              std::vector<TopologyLockedLanePath> survivor_paths;
+              survivor_group.members.reserve(member_count);
+              survivor_paths.reserve(member_count);
+              for (std::size_t member = 0U; member < selected.size(); ++member) {
+                if ((mask & (std::size_t{1U} << member)) == 0U) {
+                  continue;
+                }
+                survivor_group.members.push_back(selected[member]->key.first);
+                survivor_paths.push_back(*selected[member]->path);
+              }
+              ++result.attempted_shared_resource_fanout_candidates;
+              if (coupled_path_geometry_clear(source, survivor_group, survivor_paths, dimensions,
+                                              false)) {
+                survivor_mask = mask;
+                survivor_count = member_count;
+              }
+            }
+          }
+          if (selected.size() >= std::numeric_limits<std::size_t>::digits) {
+            failure.fallback_nets = failure.nets;
+          } else {
+            for (std::size_t member = 0U; member < selected.size(); ++member) {
+              if ((survivor_mask & (std::size_t{1U} << member)) == 0U) {
+                failure.fallback_nets.push_back(selected[member]->key.first);
+              }
+            }
+          }
+          std::sort(failure.fallback_nets.begin(), failure.fallback_nets.end());
+          selected_fallback_nets = failure.fallback_nets;
+          result.shared_resource_fanout_failures.push_back(std::move(failure));
+        }
+        for (const auto* occurrence : selected) {
+          if (selected_fallback_nets.empty() ||
+              std::binary_search(selected_fallback_nets.begin(), selected_fallback_nets.end(),
+                                 occurrence->key.first)) {
+            rejected_shared_resource_fanout_paths.insert(occurrence->key);
+          }
+        }
+      }
+    }
+    for (const auto& group : coupled_groups) {
+      std::set<std::size_t> multilayer_connections;
+      for (const auto& member : group.members) {
+        for (const auto& [key, path] : paths_by_key) {
+          if (key.first == member && !reusable_nets.contains(member) &&
+              path_crosses_layers(*path)) {
+            multilayer_connections.insert(key.second);
+          }
+        }
+      }
+      for (const auto connection : multilayer_connections) {
+        ++result.attempted_coupled_multilayer_groups;
+        std::vector<PathKey> keys;
+        std::vector<TopologyLockedLanePath*> group_paths;
+        keys.reserve(group.members.size());
+        group_paths.reserve(group.members.size());
+        bool complete_group = true;
+        for (const auto& member : group.members) {
+          const PathKey key{member, connection};
+          keys.push_back(key);
+          governed_coupled_paths.insert(key);
+          const auto source_path = paths_by_key.find(key);
+          const auto prepared = prepared_topology_paths.find(key);
+          if (source_path == paths_by_key.end() || prepared == prepared_topology_paths.end() ||
+              !prepared->second.multilayer || !prepared->second.coupled_member) {
+            complete_group = false;
+            continue;
+          }
+          group_paths.push_back(&prepared->second);
+        }
+        std::size_t arrays = 0U;
+        if (complete_group &&
+            synchronize_coupled_via_arrays(source, group, group_paths, dimensions, arrays)) {
+          accepted_coupled_paths.insert(keys.begin(), keys.end());
+          ++result.materialized_coupled_multilayer_groups;
+          result.synchronized_coupled_via_arrays += arrays;
+        } else {
+          ++result.coupled_multilayer_group_fallbacks;
+        }
+      }
+    }
+    for (const auto& group : coupled_groups) {
+      std::set<std::size_t> connections;
+      for (const auto& member : group.members) {
+        for (const auto& [key, path] : paths_by_key) {
+          static_cast<void>(path);
+          if (key.first == member && !reusable_nets.contains(member)) {
+            connections.insert(key.second);
+          }
+        }
+      }
+      for (const auto connection : connections) {
+        ++result.attempted_coupled_terminal_fanout_groups;
+        std::vector<PathKey> keys;
+        std::vector<TopologyLockedLanePath*> group_paths;
+        keys.reserve(group.members.size());
+        group_paths.reserve(group.members.size());
+        bool complete_group = true;
+        bool requires_multilayer_group = false;
+        for (const auto& member : group.members) {
+          const PathKey key{member, connection};
+          keys.push_back(key);
+          governed_coupled_fanout_paths.insert(key);
+          const auto source_path = paths_by_key.find(key);
+          const auto prepared = prepared_topology_paths.find(key);
+          if (source_path == paths_by_key.end() || prepared == prepared_topology_paths.end() ||
+              !prepared->second.coupled_member) {
+            complete_group = false;
+            continue;
+          }
+          requires_multilayer_group = requires_multilayer_group || prepared->second.multilayer;
+          group_paths.push_back(&prepared->second);
+        }
+        if (requires_multilayer_group &&
+            !std::all_of(keys.begin(), keys.end(), [&accepted_coupled_paths](const auto& key) {
+              return accepted_coupled_paths.contains(key);
+            })) {
+          complete_group = false;
+        }
+        if (complete_group && synchronize_coupled_terminal_fanouts(
+                                  source, group, group_paths, dimensions,
+                                  config.max_coupled_terminal_fanout_candidates,
+                                  result.attempted_coupled_terminal_fanout_candidates,
+                                  result.synchronized_coupled_terminal_fanouts)) {
+          accepted_coupled_fanout_paths.insert(keys.begin(), keys.end());
+          ++result.materialized_coupled_terminal_fanout_groups;
+        } else {
+          ++result.coupled_terminal_fanout_fallbacks;
+        }
+      }
+    }
+  }
+  std::vector<PendingSplineRun> pending_spline_runs;
+  for (const auto& path : global.paths) {
+    if (reusable_nets.contains(path.net)) {
+      continue;
+    }
+    const auto& resolved = dimensions.at(path.net);
+    const TopologyLockedLanePath* topology_locked_path = nullptr;
+    if (use_topology_locked) {
+      ++result.attempted_topology_locked_paths;
+      const PathKey key{path.net, path.connection_index};
+      const auto prepared = prepared_topology_paths.find(key);
+      const bool requires_coupled_group =
+          governed_coupled_paths.contains(key) || governed_coupled_fanout_paths.contains(key) ||
+          (prepared != prepared_topology_paths.end() && prepared->second.coupled_member &&
+           prepared->second.multilayer);
+      const bool coupled_group_accepted =
+          (!requires_coupled_group ||
+           ((!governed_coupled_paths.contains(key) || accepted_coupled_paths.contains(key)) &&
+            (!governed_coupled_fanout_paths.contains(key) ||
+             accepted_coupled_fanout_paths.contains(key)))) &&
+          (!governed_shared_resource_fanout_paths.contains(key) ||
+           !rejected_shared_resource_fanout_paths.contains(key));
+      if (prepared != prepared_topology_paths.end() && coupled_group_accepted) {
+        topology_locked_path = &prepared->second;
+        materialized_topology_nets.insert(path.net);
+        ++result.materialized_topology_locked_paths;
+        if (topology_locked_path->preserved_terminal_access) {
+          ++result.preserved_topology_locked_terminal_access_paths;
+        }
+        if (topology_locked_path->multilayer) {
+          ++result.materialized_multilayer_topology_locked_paths;
+        }
+      } else {
+        ++result.topology_locked_path_fallbacks;
+      }
+    }
+    if (!materialize_path(candidate, path, resolved.track_width, resolved.via_diameter,
+                          resolved.via_drill, used_ids, result, config, use_pull_tight,
+                          use_continuous_refinement, use_circular_arc_refinement, stop_token,
+                          topology_locked_path != nullptr ? &topology_locked_path->points : nullptr,
+                          &pending_spline_runs)) {
+      result.candidate = std::move(candidate);
+      if (stop_token.stop_requested()) {
+        result.stop_reason = DetailedRouterStopReason::cancelled;
+        result.diagnostic = "detailed routing cancelled during materialization";
+      } else {
+        result.stop_reason = DetailedRouterStopReason::invalid_path;
+        result.diagnostic = "global path contains an invalid layer transition";
+      }
+      return result;
+    }
+  }
+
+  // Realize curves only after every polyline and via exists. A per-path curved probe against a
+  // partially materialized board can accept geometry which a later route makes illegal, forcing
+  // an otherwise avoidable whole-transaction fallback. Keeping the global polyline plan intact
+  // until this phase lets every B-spline/arc candidate see the complete copper environment.
+  const Board spline_navigation_board = candidate;
+  for (const auto& pending : pending_spline_runs) {
+    if (stop_token.stop_requested()) {
+      result.candidate = std::move(candidate);
+      result.stop_reason = DetailedRouterStopReason::cancelled;
+      result.diagnostic = "detailed routing cancelled during board-complete spline realization";
+      return result;
+    }
+    const auto fitted_before = result.fitted_circular_arcs;
+    if (!refine_spline_run(candidate, spline_navigation_board, pending.net, pending.run,
+                           pending.base, used_ids, result, config, stop_token)) {
+      result.withheld_circular_arc_corners += pending.run.points.size() - 2U;
+    }
+    const auto nominal_width = dimensions.at(pending.net).track_width;
+    const bool width_aware =
+        std::any_of(pending.run.original_track_ids.begin(), pending.run.original_track_ids.end(),
+                    [&](const auto& id) {
+                      const auto found =
+                          std::find_if(candidate.tracks.begin(), candidate.tracks.end(),
+                                       [&](const auto& track) { return track.id.value() == id; });
+                      return found != candidate.tracks.end() && found->width != nominal_width;
+                    });
+    if (width_aware) {
+      const auto fitted = result.fitted_circular_arcs - fitted_before;
+      result.width_aware_fitted_circular_arcs += fitted;
+      if (fitted > 0U) {
+        ++result.width_aware_circular_arc_paths;
+      }
+    }
+  }
+
+  if (use_circular_arc_refinement) {
+    const auto board_level_spline_runs = collect_unrounded_spline_chains(candidate);
+    for (const auto& pending : board_level_spline_runs) {
+      if (stop_token.stop_requested()) {
+        result.candidate = std::move(candidate);
+        result.stop_reason = DetailedRouterStopReason::cancelled;
+        result.diagnostic = "detailed routing cancelled during board-level spline realization";
+        return result;
+      }
+      result.attempted_circular_arc_corners += pending.run.points.size() - 2U;
+      if (!refine_spline_run(candidate, spline_navigation_board, pending.net, pending.run,
+                             pending.base, used_ids, result, config, stop_token)) {
+        result.withheld_circular_arc_corners += pending.run.points.size() - 2U;
+      }
+    }
+    realize_residual_non_junction_bends(candidate, used_ids, result, config, stop_token);
+  }
+
+  const auto skew_tuning_status = [&]() {
+    if (!config.differential_pair_skew_tuning) {
+      return SkewTuningStatus::completed;
+    }
+    if (config.differential_pair_skew_tuning_batch_assignment) {
+      return tune_differential_pair_skew_batch(candidate, global, protected_track_ids,
+                                               protected_routing_nets, used_ids, config, result,
+                                               stop_token);
+    }
+    return tune_differential_pair_skew(candidate, global, protected_track_ids,
+                                       protected_routing_nets, used_ids, config, result,
+                                       stop_token);
+  }();
+  if (skew_tuning_status == SkewTuningStatus::cancelled) {
+    result.candidate = std::move(candidate);
+    result.stop_reason = DetailedRouterStopReason::cancelled;
+    result.diagnostic = "detailed routing cancelled during differential-pair skew tuning";
+    return result;
+  }
+
+  result.validation = validate_board(candidate);
+  result.connectivity = analyze_connectivity(candidate);
+  if (!global.configured_selected_nets.empty()) {
+    const std::set<NetId> accepted_nets(global.configured_selected_nets.begin(),
+                                        global.configured_selected_nets.end());
+    std::erase_if(result.connectivity.nets,
+                  [&accepted_nets](const auto& net) { return !accepted_nets.contains(net.net); });
+    result.connectivity.open_connections = 0U;
+    result.connectivity.unrouted_nets = 0U;
+    for (const auto& net : result.connectivity.nets) {
+      result.connectivity.open_connections += net.open_connections;
+      result.connectivity.unrouted_nets += net.open_connections == 0U ? 0U : 1U;
+    }
+  }
+  if (config.defer_saved_zone_fill_clearance_to_refill) {
+    auto refill_planning_candidate = candidate;
+    for (auto& zone : refill_planning_candidate.zones) {
+      zone.fills.clear();
+    }
+    result.copper_drc = check_copper_rules(refill_planning_candidate);
+    std::set<std::string> source_copper_ids;
+    for (const auto& track : source.tracks) {
+      source_copper_ids.insert(track.id.value());
+    }
+    for (const auto& arc : source.track_arcs) {
+      source_copper_ids.insert(arc.id.value());
+    }
+    for (const auto& via : source.vias) {
+      source_copper_ids.insert(via.id.value());
+    }
+    for (const auto& footprint : source.footprints) {
+      for (const auto& pad : footprint.pads) {
+        source_copper_ids.insert(pad.id.value());
+      }
+    }
+    std::erase_if(result.copper_drc.violations, [&source_copper_ids](const auto& violation) {
+      return std::all_of(
+          violation.object_ids.begin(), violation.object_ids.end(),
+          [&source_copper_ids](const auto& id) { return source_copper_ids.contains(id); });
+    });
+  } else {
+    result.copper_drc = check_copper_rules(candidate);
+  }
+  result.unrounded_non_junction_bends = count_unrounded_non_junction_bends(candidate);
+  result.candidate = std::move(candidate);
+  if (!result.validation.ok()) {
+    result.stop_reason = DetailedRouterStopReason::structural_violations;
+    result.diagnostic = "materialized route failed structural validation";
+  } else if (result.connectivity.open_connections != 0U) {
+    result.stop_reason = DetailedRouterStopReason::connectivity_incomplete;
+    result.diagnostic = "materialized route did not connect every multi-pad net";
+  } else if (!result.copper_drc.ok()) {
+    result.stop_reason = DetailedRouterStopReason::copper_violations;
+    result.diagnostic = bounded_conflict_handoff
+                            ? "bounded residual spline/PNS repair did not clear every represented "
+                              "copper conflict"
+                            : "materialized route violates represented copper rules";
+  } else if (config.circular_arc_refinement && result.unrounded_non_junction_bends > 0U) {
+    result.stop_reason = DetailedRouterStopReason::invalid_path;
+    result.diagnostic = "materialized curved route retains " +
+                        std::to_string(result.unrounded_non_junction_bends) +
+                        " non-junction direction changes without B-spline realization";
+  } else if (config.defer_saved_zone_fill_clearance_to_refill) {
+    result.stop_reason = DetailedRouterStopReason::zone_refill_required;
+    result.diagnostic =
+        "provisional copper is legal without saved zone fills; KiCad zone refill, strict "
+        "re-import, connectivity, and DRC are required before acceptance";
+  } else {
+    result.stop_reason = DetailedRouterStopReason::complete;
+    if (result.tuned_differential_pairs > 0U) {
+      result.diagnostic = "differential-pair skew tuned as connected DRC-clean polyline copper";
+    } else if (result.fitted_circular_arcs > 0U && result.materialized_topology_locked_paths > 0U) {
+      result.diagnostic =
+          "topology-locked medial lanes and cubic B-spline fitted arcs materialized as DRC-clean "
+          "copper";
+    } else if (result.fitted_circular_arcs > 0U) {
+      result.diagnostic =
+          "cubic B-spline routes materialized as connected DRC-clean native line/arc copper";
+    } else if (result.materialized_topology_locked_paths > 0U) {
+      result.diagnostic = "topology-locked medial lanes materialized as connected DRC-clean copper";
+    } else {
+      result.diagnostic = checkpoint == nullptr
+                              ? "global paths materialized as legal simplified copper"
+                              : "affected paths materialized with validated detailed copper reused";
+    }
+  }
+  const bool higher_order_fallback_available =
+      (use_topology_locked && result.materialized_topology_locked_paths > 0U) ||
+      (use_continuous_refinement && result.continuously_refined_points > 0U) ||
+      (use_pull_tight && result.pulled_tight_corners > 0U) ||
+      (checkpoint != nullptr && !reusable_nets.empty());
+  if (!result.complete() && !result.provisional_zone_refill_candidate() &&
+      use_circular_arc_refinement && result.fitted_circular_arcs > 0U &&
+      !higher_order_fallback_available && !stop_token.stop_requested()) {
+    auto curved_rejection = result.diagnostic;
+    if (!result.copper_drc.violations.empty()) {
+      curved_rejection += "; first copper violation " + result.copper_drc.violations.front().code;
+    }
+    auto fallback =
+        materialize_impl(source, global, config, checkpoint, stop_token, use_topology_locked, false,
+                         use_pull_tight, use_continuous_refinement, topology_excluded_nets);
+    fallback.fallback_polyline_materialization = true;
+    fallback.attempted_circular_arc_corners = result.attempted_circular_arc_corners;
+    fallback.attempted_circular_arc_candidates = result.attempted_circular_arc_candidates;
+    fallback.rejected_circular_arc_candidates = result.rejected_circular_arc_candidates;
+    fallback.fitted_circular_arcs = result.fitted_circular_arcs;
+    fallback.radius_reduced_circular_arcs = result.radius_reduced_circular_arcs;
+    fallback.withheld_circular_arc_corners = result.withheld_circular_arc_corners;
+    fallback.circular_arc_candidate_budget_exhausted =
+        result.circular_arc_candidate_budget_exhausted;
+    fallback.width_aware_circular_arc_paths = result.width_aware_circular_arc_paths;
+    fallback.width_aware_fitted_circular_arcs = result.width_aware_fitted_circular_arcs;
+    fallback.attempted_cubic_bspline_runs = result.attempted_cubic_bspline_runs;
+    fallback.fitted_cubic_bspline_runs = result.fitted_cubic_bspline_runs;
+    fallback.adaptive_spline_tessellation_samples = result.adaptive_spline_tessellation_samples;
+    fallback.spline_fitted_track_segments = result.spline_fitted_track_segments;
+    fallback.spline_collision_envelopes = result.spline_collision_envelopes;
+    fallback.spline_control_point_shoves = result.spline_control_point_shoves;
+    fallback.spline_refits = result.spline_refits;
+    fallback.spline_navmesh_routes = result.spline_navmesh_routes;
+    fallback.spline_navmesh_failures = result.spline_navmesh_failures;
+    fallback.spline_navmesh_certificate_fallbacks = result.spline_navmesh_certificate_fallbacks;
+    fallback.spline_navmesh_topology_signatures = result.spline_navmesh_topology_signatures;
+    fallback.spline_navmesh_topology_gates = result.spline_navmesh_topology_gates;
+    fallback.spline_navmesh_topology_rejections = result.spline_navmesh_topology_rejections;
+    fallback.spline_funnel_points = result.spline_funnel_points;
+    fallback.spline_trajectory_attempts = result.spline_trajectory_attempts;
+    fallback.spline_trajectory_accepted = result.spline_trajectory_accepted;
+    fallback.spline_trajectory_control_moves = result.spline_trajectory_control_moves;
+    fallback.spline_trajectory_candidate_checks = result.spline_trajectory_candidate_checks;
+    fallback.spline_trajectory_initial_violations = result.spline_trajectory_initial_violations;
+    fallback.spline_trajectory_final_violations = result.spline_trajectory_final_violations;
+    fallback.spline_navmesh_last_diagnostic = result.spline_navmesh_last_diagnostic;
+    fallback.spline_navmesh_last_topology_diagnostic =
+        result.spline_navmesh_last_topology_diagnostic;
+    fallback.pns_shove_attempts = result.pns_shove_attempts;
+    fallback.pns_shove_candidates = result.pns_shove_candidates;
+    fallback.accepted_pns_shoves = result.accepted_pns_shoves;
+    fallback.pns_moved_tracks = result.pns_moved_tracks;
+    fallback.pns_moved_vias = result.pns_moved_vias;
+    fallback.pns_added_dogleg_tracks = result.pns_added_dogleg_tracks;
+    fallback.spline_candidate_budget_exhausted = result.spline_candidate_budget_exhausted;
+    fallback.pns_candidate_budget_exhausted = result.pns_candidate_budget_exhausted;
+    if (fallback.complete()) {
+      fallback.diagnostic = "cubic B-spline/PNS geometry was rejected (" + curved_rejection +
+                            "); conventional polyline materialization completed legally";
+    }
+    return fallback;
+  }
+  if (!result.complete() && use_topology_locked && result.materialized_topology_locked_paths > 0U &&
+      !stop_token.stop_requested()) {
+    const auto first_copper_rejection = [&result] {
+      if (result.copper_drc.ok()) {
+        return std::string{};
+      }
+      const auto& violation = result.copper_drc.violations.front();
+      auto description = violation.code + " required " +
+                         std::to_string(violation.required_clearance.value()) + " actual " +
+                         std::to_string(static_cast<double>(violation.actual_distance_nm));
+      for (const auto& object : violation.object_ids) {
+        description += " " + object;
+        if (result.candidate) {
+          const auto track = std::find_if(
+              result.candidate->tracks.begin(), result.candidate->tracks.end(),
+              [&object](const auto& candidate) { return candidate.id.value() == object; });
+          if (track != result.candidate->tracks.end()) {
+            description += "[" + std::to_string(track->start.x.value()) + "," +
+                           std::to_string(track->start.y.value()) + "->" +
+                           std::to_string(track->end.x.value()) + "," +
+                           std::to_string(track->end.y.value()) + "]";
+          }
+        }
+      }
+      return description;
+    }();
+    const auto rejection =
+        !result.validation.ok() ? std::string{"structural validation"}
+        : result.connectivity.open_connections != 0U
+            ? "connectivity (" + std::to_string(result.connectivity.open_connections) + " open)"
+        : !result.copper_drc.ok() ? "copper DRC (" + first_copper_rejection + ")"
+                                  : "detailed acceptance";
+    std::size_t attempted_topology_subset_nets = 0U;
+    std::size_t attempted_topology_subset_candidates = 0U;
+    if (topology_excluded_nets.empty() && result.candidate && !result.copper_drc.ok()) {
+      std::map<std::string, NetId> candidate_object_nets;
+      for (const auto& track : result.candidate->tracks) {
+        candidate_object_nets.emplace(track.id.value(), track.net);
+      }
+      for (const auto& arc : result.candidate->track_arcs) {
+        candidate_object_nets.emplace(arc.id.value(), arc.net);
+      }
+      for (const auto& via : result.candidate->vias) {
+        candidate_object_nets.emplace(via.id.value(), via.net);
+      }
+      std::set<NetId> rejected_topology_nets;
+      for (const auto& violation : result.copper_drc.violations) {
+        for (const auto& object : violation.object_ids) {
+          const auto found = candidate_object_nets.find(object);
+          if (found != candidate_object_nets.end() &&
+              materialized_topology_nets.contains(found->second)) {
+            rejected_topology_nets.insert(found->second);
+          }
+        }
+      }
+      std::vector<NetId> repair_nets(rejected_topology_nets.begin(), rejected_topology_nets.end());
+      attempted_topology_subset_nets = repair_nets.size();
+      if (!rejected_topology_nets.empty() &&
+          repair_nets.size() < std::numeric_limits<std::size_t>::digits) {
+        const auto state_count = std::size_t{1U} << repair_nets.size();
+        for (std::size_t excluded_count = 1U;
+             excluded_count < repair_nets.size() &&
+             attempted_topology_subset_candidates <
+                 config.max_topology_locked_subset_repair_candidates;
+             ++excluded_count) {
+          for (std::size_t mask = 1U;
+               mask < state_count && attempted_topology_subset_candidates <
+                                         config.max_topology_locked_subset_repair_candidates;
+               ++mask) {
+            std::set<NetId> excluded;
+            for (std::size_t net = 0U; net < repair_nets.size(); ++net) {
+              if ((mask & (std::size_t{1U} << net)) != 0U) {
+                excluded.insert(repair_nets[net]);
+              }
+            }
+            if (excluded.size() != excluded_count || excluded.size() >= repair_nets.size()) {
+              continue;
+            }
+            ++attempted_topology_subset_candidates;
+            auto subset = materialize_impl(source, global, config, checkpoint, stop_token, true,
+                                           use_circular_arc_refinement, use_pull_tight,
+                                           use_continuous_refinement, excluded);
+            if (!subset.complete() || subset.fallback_topology_locked_materialization ||
+                subset.materialized_topology_locked_paths == 0U) {
+              continue;
+            }
+            subset.fallback_topology_locked_subset_materialization = true;
+            subset.attempted_topology_locked_subset_repair_nets = attempted_topology_subset_nets;
+            subset.attempted_topology_locked_subset_repair_candidates =
+                attempted_topology_subset_candidates;
+            subset.retained_topology_locked_subset_paths =
+                subset.materialized_topology_locked_paths;
+            subset.topology_locked_rejection_copper_violations =
+                result.copper_drc.violation_count();
+            subset.topology_locked_rejection_first_violation = first_copper_rejection;
+            subset.shared_resource_fanout_failures = result.shared_resource_fanout_failures;
+            subset.attempted_shared_resource_fanout_groups =
+                result.attempted_shared_resource_fanout_groups;
+            subset.attempted_shared_resource_fanout_candidates =
+                result.attempted_shared_resource_fanout_candidates;
+            subset.shared_resource_fanout_fallbacks = result.shared_resource_fanout_fallbacks;
+            subset.diagnostic = "illegal topology-locked paths were removed as a bounded exact "
+                                "subset; retained medial copper completed legally";
+            return subset;
+          }
+        }
+      }
+    }
+    auto fallback = materialize_impl(source, global, config, checkpoint, stop_token, false,
+                                     use_circular_arc_refinement, use_pull_tight,
+                                     use_continuous_refinement, topology_excluded_nets);
+    fallback.fallback_topology_locked_materialization = true;
+    fallback.attempted_topology_locked_subset_repair_nets = attempted_topology_subset_nets;
+    fallback.attempted_topology_locked_subset_repair_candidates =
+        attempted_topology_subset_candidates;
+    fallback.attempted_topology_locked_paths = result.attempted_topology_locked_paths;
+    fallback.materialized_topology_locked_paths = result.materialized_topology_locked_paths;
+    fallback.materialized_multilayer_topology_locked_paths =
+        result.materialized_multilayer_topology_locked_paths;
+    fallback.topology_locked_path_fallbacks = result.topology_locked_path_fallbacks;
+    fallback.topology_locked_rejection_copper_violations = result.copper_drc.violation_count();
+    fallback.topology_locked_rejection_first_violation = first_copper_rejection;
+    fallback.preserved_topology_locked_terminal_access_paths =
+        result.preserved_topology_locked_terminal_access_paths;
+    fallback.attempted_coupled_terminal_fanout_groups =
+        result.attempted_coupled_terminal_fanout_groups;
+    fallback.attempted_coupled_terminal_fanout_candidates =
+        result.attempted_coupled_terminal_fanout_candidates;
+    fallback.materialized_coupled_terminal_fanout_groups =
+        result.materialized_coupled_terminal_fanout_groups;
+    fallback.synchronized_coupled_terminal_fanouts = result.synchronized_coupled_terminal_fanouts;
+    fallback.coupled_terminal_fanout_fallbacks = result.coupled_terminal_fanout_fallbacks;
+    fallback.attempted_shared_resource_fanout_groups =
+        result.attempted_shared_resource_fanout_groups;
+    fallback.attempted_shared_resource_fanout_candidates =
+        result.attempted_shared_resource_fanout_candidates;
+    fallback.materialized_shared_resource_fanout_groups =
+        result.materialized_shared_resource_fanout_groups;
+    fallback.synchronized_shared_resource_fanouts = result.synchronized_shared_resource_fanouts;
+    fallback.shared_resource_fanout_fallbacks = result.shared_resource_fanout_fallbacks;
+    fallback.shared_resource_fanout_failures = result.shared_resource_fanout_failures;
+    fallback.attempted_coupled_multilayer_groups = result.attempted_coupled_multilayer_groups;
+    fallback.materialized_coupled_multilayer_groups = result.materialized_coupled_multilayer_groups;
+    fallback.synchronized_coupled_via_arrays = result.synchronized_coupled_via_arrays;
+    fallback.coupled_multilayer_group_fallbacks = result.coupled_multilayer_group_fallbacks;
+    if (fallback.complete()) {
+      fallback.diagnostic = "topology-locked medial copper was rejected by " + rejection +
+                            "; conventional materialization completed legally";
+    }
+    return fallback;
+  }
+  if (!result.complete() && use_continuous_refinement && result.continuously_refined_points > 0U &&
+      !stop_token.stop_requested()) {
+    auto fallback = materialize_impl(source, global, config, checkpoint, stop_token,
+                                     use_topology_locked, use_circular_arc_refinement,
+                                     use_pull_tight, false, topology_excluded_nets);
+    fallback.fallback_discrete_materialization = true;
+    fallback.continuously_refined_points = result.continuously_refined_points;
+    fallback.width_aware_continuously_refined_paths = result.width_aware_continuously_refined_paths;
+    fallback.width_aware_continuously_refined_points =
+        result.width_aware_continuously_refined_points;
+    fallback.continuous_refinement_iterations = result.continuous_refinement_iterations;
+    fallback.attempted_continuous_refinement_candidates =
+        result.attempted_continuous_refinement_candidates;
+    fallback.accepted_continuous_refinement_candidates =
+        result.accepted_continuous_refinement_candidates;
+    fallback.rejected_continuous_refinement_candidates =
+        result.rejected_continuous_refinement_candidates;
+    fallback.withheld_continuous_refinement_candidates =
+        result.withheld_continuous_refinement_candidates;
+    fallback.continuous_refinement_budget_exhausted = result.continuous_refinement_budget_exhausted;
+    if (fallback.complete()) {
+      fallback.diagnostic =
+          "continuous trace refinement was illegal; discrete materialization completed legally";
+    }
+    return fallback;
+  }
+  if (!result.complete() && use_pull_tight && result.pulled_tight_corners > 0U &&
+      !stop_token.stop_requested()) {
+    auto fallback =
+        materialize_impl(source, global, config, checkpoint, stop_token, use_topology_locked,
+                         use_circular_arc_refinement, false, false, topology_excluded_nets);
+    fallback.fallback_orthogonal_materialization = true;
+    if (fallback.complete()) {
+      fallback.diagnostic =
+          "45-degree pull-tight was illegal; orthogonal materialization completed legally";
+    }
+    return fallback;
+  }
+  if (checkpoint != nullptr && !result.complete() && !stop_token.stop_requested() &&
+      !reusable_nets.empty()) {
+    auto invalidated = invalidated_reuse_nets;
+    invalidated.insert(reusable_nets.begin(), reusable_nets.end());
+    auto fallback =
+        materialize_impl(source, global, config, nullptr, stop_token, use_topology_locked,
+                         use_circular_arc_refinement, use_pull_tight, use_continuous_refinement,
+                         topology_excluded_nets);
+    fallback.fallback_full_materialization = true;
+    fallback.invalidated_reuse_nets.assign(invalidated.begin(), invalidated.end());
+    if (fallback.complete()) {
+      fallback.diagnostic =
+          "detailed checkpoint reuse was invalidated; full materialization completed legally";
+    }
+    return fallback;
+  }
+  return result;
+}
+
+struct ResidualJointSplineRoute {
+  std::size_t path_index{0};
+  NetId net;
+  LayerId layer;
+  CubicBSplineRoute spline;
+  std::vector<Polygon> topology_cells;
+  Nanometres track_width;
+  Nanometres clearance;
+};
+
+[[nodiscard]] Point quantize_joint_spline(SplineVector point) {
+  return Point{Nanometres{static_cast<std::int64_t>(std::llround(point.x))},
+               Nanometres{static_cast<std::int64_t>(std::llround(point.y))}};
+}
+
+struct JointNearestPoint {
+  long double distance{std::numeric_limits<long double>::infinity()};
+  SplineVector away;
+};
+
+[[nodiscard]] JointNearestPoint nearest_joint_segment(SplineVector point, SplineVector first,
+                                                      SplineVector second) {
+  const auto dx = second.x - first.x;
+  const auto dy = second.y - first.y;
+  const auto length_squared = dx * dx + dy * dy;
+  const auto parameter =
+      length_squared > 0.0L
+          ? std::clamp(((point.x - first.x) * dx + (point.y - first.y) * dy) / length_squared, 0.0L,
+                       1.0L)
+          : 0.0L;
+  const auto closest = SplineVector{first.x + parameter * dx, first.y + parameter * dy};
+  const auto away = SplineVector{point.x - closest.x, point.y - closest.y};
+  const auto distance = std::hypot(away.x, away.y);
+  return JointNearestPoint{distance, distance > 0.0L
+                                         ? SplineVector{away.x / distance, away.y / distance}
+                                         : SplineVector{}};
+}
+
+[[nodiscard]] bool in_joint_topology(const ResidualJointSplineRoute& route, Point point) {
+  return std::any_of(
+      route.topology_cells.begin(), route.topology_cells.end(), [&](const auto& cell) {
+        return geometry::locate_point(cell, point) != geometry::PointLocation::outside;
+      });
+}
+
+[[nodiscard]] std::optional<GlobalRouteResult>
+make_joint_spline_candidate(const Board& source, const GlobalRouteResult& global,
+                            const DetailedRouterConfig& config, std::size_t state,
+                            std::size_t& optimized_groups, std::size_t& optimized_routes,
+                            std::size_t& sweeps, std::size_t& control_moves) {
+  auto candidate = global;
+  std::vector<ResidualJointSplineRoute> routes;
+  std::set<std::size_t> governed_paths;
+  for (const auto& group : global.residual_conflict_groups) {
+    std::vector<std::size_t> group_paths;
+    for (std::size_t path_index = 0U; path_index < global.paths.size(); ++path_index) {
+      const auto& path = global.paths[path_index];
+      if (std::find(group.nets.begin(), group.nets.end(), path.net) == group.nets.end()) {
+        continue;
+      }
+      group_paths.push_back(path_index);
+    }
+    if (group_paths.size() < 2U) {
+      return std::nullopt;
+    }
+    std::vector<NetId> ordered_nets = group.nets;
+    std::sort(ordered_nets.begin(), ordered_nets.end());
+    if ((state & 1U) != 0U) {
+      std::reverse(ordered_nets.begin(), ordered_nets.end());
+    }
+    const auto scale = 1.0L + static_cast<long double>(state / 2U) * 0.125L;
+    for (const auto path_index : group_paths) {
+      const auto& path = global.paths[path_index];
+      if (path.points.size() < 3U ||
+          !std::all_of(path.points.begin(), path.points.end(), [&](const auto& point) {
+            return point.layer == path.points.front().layer;
+          })) {
+        return std::nullopt;
+      }
+      std::vector<Point> points;
+      points.reserve(path.points.size());
+      for (const auto& point : path.points) {
+        if (points.empty() || points.back() != point.position) {
+          points.push_back(point.position);
+        }
+      }
+      auto spline = make_cubic_bspline_route(points);
+      if (!spline) {
+        return std::nullopt;
+      }
+      std::vector<Polygon> cells;
+      for (const auto& corridor : path.geometric_corridors) {
+        if (corridor.layer == path.points.front().layer &&
+            corridor.selected_path_preserves_topology) {
+          cells.insert(cells.end(), corridor.topology_cells.begin(), corridor.topology_cells.end());
+        }
+      }
+      if (cells.empty()) {
+        return std::nullopt;
+      }
+      const auto rules = materialization_rules(source, path.net, config);
+      const auto rank = static_cast<long double>(
+          std::find(ordered_nets.begin(), ordered_nets.end(), path.net) - ordered_nets.begin());
+      const auto centered_rank = rank - static_cast<long double>(ordered_nets.size() - 1U) / 2.0L;
+      const auto dx = static_cast<long double>(points.back().x.value() - points.front().x.value());
+      const auto dy = static_cast<long double>(points.back().y.value() - points.front().y.value());
+      const auto chord = std::hypot(dx, dy);
+      if (!(chord > 0.0L)) {
+        return std::nullopt;
+      }
+      const auto envelope =
+          static_cast<long double>(rules.track_width.value() + 2 * rules.clearance.value());
+      const auto offset = centered_rank * envelope * scale;
+      const auto normal = SplineVector{-dy / chord, dx / chord};
+      for (std::size_t control = 2U; control + 2U < spline->control_points.size(); ++control) {
+        spline->control_points[control].x += normal.x * offset;
+        spline->control_points[control].y += normal.y * offset;
+      }
+      routes.push_back(ResidualJointSplineRoute{path_index, path.net, path.points.front().layer,
+                                                std::move(*spline), std::move(cells),
+                                                rules.track_width, rules.clearance});
+      governed_paths.insert(path_index);
+    }
+    ++optimized_groups;
+  }
+  if (routes.size() < 2U || governed_paths.size() != routes.size()) {
+    return std::nullopt;
+  }
+  optimized_routes += routes.size();
+
+  for (std::size_t sweep = 0U; sweep < config.max_residual_joint_optimization_sweeps; ++sweep) {
+    bool moved = false;
+    for (std::size_t route_index = 0U; route_index < routes.size(); ++route_index) {
+      auto& route = routes[route_index];
+      std::vector<std::vector<SplineSample>> other_samples(routes.size());
+      for (std::size_t other = 0U; other < routes.size(); ++other) {
+        if (other == route_index || routes[other].net == route.net ||
+            routes[other].layer != route.layer) {
+          continue;
+        }
+        other_samples[other] = adaptive_tessellate_cubic_bspline(
+            routes[other].spline, config.spline_tessellation_tolerance,
+            config.spline_max_tessellation_depth, config.max_spline_samples_per_run);
+      }
+      const auto evaluator = [&](SplineVector position) {
+        const auto point = quantize_joint_spline(position);
+        auto legal = in_joint_topology(route, point);
+        long double margin = std::numeric_limits<long double>::infinity();
+        SplineVector away;
+        for (std::size_t other = 0U; other < routes.size(); ++other) {
+          const auto& samples = other_samples[other];
+          if (samples.size() < 2U) {
+            continue;
+          }
+          const auto required =
+              static_cast<long double>(route.track_width.value() +
+                                       routes[other].track_width.value()) /
+                  2.0L +
+              static_cast<long double>(std::max(route.clearance, routes[other].clearance).value());
+          for (std::size_t sample = 1U; sample < samples.size(); ++sample) {
+            const auto nearest = nearest_joint_segment(position, samples[sample - 1U].position,
+                                                       samples[sample].position);
+            const auto candidate_margin = nearest.distance - required;
+            if (candidate_margin < margin) {
+              margin = candidate_margin;
+              away = nearest.away;
+            }
+          }
+        }
+        if (!std::isfinite(margin)) {
+          margin = 1.0e12L;
+        }
+        legal = legal && margin >= 0.0L;
+        return SplineClearanceProbe{margin, away, legal};
+      };
+      SplineTrajectoryOptimizationConfig trajectory;
+      trajectory.minimum_clearance = Nanometres{0};
+      trajectory.minimum_bend_radius = config.spline_minimum_bend_radius;
+      trajectory.control_step = config.spline_shove_step;
+      trajectory.gradient_probe_step =
+          Nanometres{std::max<std::int64_t>(1, config.spline_shove_step.value() / 5)};
+      trajectory.maximum_corridor_displacement = config.spline_control_corridor;
+      trajectory.samples = config.spline_trajectory_samples;
+      trajectory.maximum_iterations = config.max_spline_trajectory_iterations;
+      trajectory.maximum_candidate_checks = config.max_spline_trajectory_candidate_checks;
+      const auto optimized = optimize_cubic_bspline_trajectory(route.spline, trajectory, evaluator);
+      control_moves += optimized.accepted_control_moves;
+      moved = moved || optimized.accepted_control_moves > 0U;
+    }
+    ++sweeps;
+    if (!moved) {
+      break;
+    }
+  }
+
+  std::vector<std::vector<SplineSample>> final_samples(routes.size());
+  for (std::size_t route_index = 0U; route_index < routes.size(); ++route_index) {
+    auto& route = routes[route_index];
+    auto& samples = final_samples[route_index];
+    samples = adaptive_tessellate_cubic_bspline(route.spline, config.spline_tessellation_tolerance,
+                                                config.spline_max_tessellation_depth,
+                                                config.max_spline_samples_per_run);
+    if (samples.size() < 3U || samples.size() >= config.max_spline_samples_per_run) {
+      return std::nullopt;
+    }
+    if (std::any_of(samples.begin(), samples.end(), [&](const auto& sample) {
+          return !in_joint_topology(route, quantize_joint_spline(sample.position));
+        })) {
+      return std::nullopt;
+    }
+  }
+  for (std::size_t first_route = 0U; first_route < routes.size(); ++first_route) {
+    for (std::size_t second_route = first_route + 1U; second_route < routes.size();
+         ++second_route) {
+      if (routes[first_route].net == routes[second_route].net ||
+          routes[first_route].layer != routes[second_route].layer) {
+        continue;
+      }
+      const auto required =
+          static_cast<long double>(routes[first_route].track_width.value() +
+                                   routes[second_route].track_width.value()) /
+              2.0L +
+          static_cast<long double>(
+              std::max(routes[first_route].clearance, routes[second_route].clearance).value());
+      for (std::size_t first = 1U; first < final_samples[first_route].size(); ++first) {
+        for (std::size_t second = 1U; second < final_samples[second_route].size(); ++second) {
+          if (geometry::segment_distance_nm(
+                  quantize_joint_spline(final_samples[first_route][first - 1U].position),
+                  quantize_joint_spline(final_samples[first_route][first].position),
+                  quantize_joint_spline(final_samples[second_route][second - 1U].position),
+                  quantize_joint_spline(final_samples[second_route][second].position)) < required) {
+            return std::nullopt;
+          }
+        }
+      }
+    }
+  }
+  for (std::size_t route_index = 0U; route_index < routes.size(); ++route_index) {
+    auto& route = routes[route_index];
+    const auto& samples = final_samples[route_index];
+    auto& path = candidate.paths[route.path_index];
+    const auto first = path.points.front();
+    const auto last = path.points.back();
+    path.points.clear();
+    path.points.reserve(samples.size());
+    for (const auto& sample : samples) {
+      const auto point = quantize_joint_spline(sample.position);
+      if (path.points.empty() || path.points.back().position != point) {
+        path.points.push_back(GlobalRoutePoint{point, route.layer});
+      }
+    }
+    if (path.points.size() < 3U) {
+      return std::nullopt;
+    }
+    path.points.front() = first;
+    path.points.back() = last;
+    path.segment_widths.assign(path.points.size() - 1U, Nanometres{0});
+    path.segment_width_kinds.assign(path.points.size() - 1U, GlobalRouteSegmentWidthKind::nominal);
+  }
+  candidate.total_overflow = 0U;
+  candidate.sampled_overflow = 0U;
+  candidate.corridor_overflow = 0U;
+  candidate.clearance_shadow_overflow = 0U;
+  candidate.total_voronoi_overflow_nm = 0U;
+  candidate.peak_voronoi_overflow_nm = 0U;
+  candidate.clearance_shadow_conflicts.clear();
+  candidate.residual_conflict_groups.clear();
+  candidate.stop_reason = GlobalRouterStopReason::complete;
+  candidate.diagnostic = "bounded joint B-spline residual-conflict candidate";
+  return candidate;
+}
+
+[[nodiscard]] DetailedRouteResult
+attempt_residual_joint_transaction(const Board& source, const GlobalRouteResult& global,
+                                   const DetailedRouterConfig& config, DetailedRouteResult baseline,
+                                   std::stop_token stop_token) {
+  if (!baseline.residual_conflict_handoff_attempted || stop_token.stop_requested()) {
+    return baseline;
+  }
+  for (std::size_t state = 0U; state < config.max_residual_joint_candidate_states; ++state) {
+    ++baseline.residual_joint_candidate_states;
+    std::size_t groups = 0U;
+    std::size_t routes = 0U;
+    std::size_t sweeps = 0U;
+    std::size_t moves = 0U;
+    const auto candidate =
+        make_joint_spline_candidate(source, global, config, state, groups, routes, sweeps, moves);
+    baseline.residual_joint_groups_optimized += groups;
+    baseline.residual_joint_spline_routes += routes;
+    baseline.residual_joint_optimization_sweeps += sweeps;
+    baseline.residual_joint_control_moves += moves;
+    if (!candidate) {
+      continue;
+    }
+    auto curved_config = config;
+    curved_config.circular_arc_refinement = true;
+    auto exact =
+        materialize_impl(source, *candidate, curved_config, nullptr, stop_token,
+                         curved_config.topology_locked_medial_materialization, true,
+                         curved_config.pull_tight_45_degrees, curved_config.continuous_refinement);
+    if (exact.complete()) {
+      exact.residual_conflict_handoff_attempted = true;
+      exact.residual_conflict_groups_attempted = baseline.residual_conflict_groups_attempted;
+      exact.residual_conflict_nets_attempted = baseline.residual_conflict_nets_attempted;
+      exact.residual_sampled_overflow_attempted = baseline.residual_sampled_overflow_attempted;
+      exact.residual_clearance_shadow_overflow_attempted =
+          baseline.residual_clearance_shadow_overflow_attempted;
+      exact.residual_joint_candidate_states = baseline.residual_joint_candidate_states;
+      exact.residual_joint_groups_optimized = baseline.residual_joint_groups_optimized;
+      exact.residual_joint_spline_routes = baseline.residual_joint_spline_routes;
+      exact.residual_joint_optimization_sweeps = baseline.residual_joint_optimization_sweeps;
+      exact.residual_joint_control_moves = baseline.residual_joint_control_moves;
+      exact.residual_joint_exact_transactions_rejected =
+          baseline.residual_joint_exact_transactions_rejected;
+      exact.residual_joint_transaction_accepted = true;
+      exact.diagnostic = "bounded joint B-spline/PNS conflict transaction completed legally";
+      return exact;
+    }
+    ++baseline.residual_joint_exact_transactions_rejected;
+    if (stop_token.stop_requested()) {
+      break;
+    }
+  }
+  return baseline;
+}
+
+} // namespace
+
+DetailedRouteResult materialize_detailed_route(const Board& source, const GlobalRouteResult& global,
+                                               const DetailedRouterConfig& config,
+                                               std::stop_token stop_token) {
+  auto result = materialize_impl(
+      source, global, config, nullptr, stop_token, config.topology_locked_medial_materialization,
+      config.circular_arc_refinement, config.pull_tight_45_degrees, config.continuous_refinement);
+  // A bounded residual checkpoint is deliberately allowed through materialize_impl so its
+  // ordinary polyline realization can serve as the exact baseline.  If that baseline remains
+  // illegal, hand the complete attributed conflict set to the joint B-spline/PNS transaction.
+  // The joint candidate clears planning overflow only inside its private copy and is committed
+  // solely when whole-board validation, connectivity, and copper DRC all pass.
+  if (!result.complete() && result.residual_conflict_handoff_attempted &&
+      !stop_token.stop_requested()) {
+    result =
+        attempt_residual_joint_transaction(source, global, config, std::move(result), stop_token);
+  }
+  result.routability_diagnoses = diagnose_detailed_routability(result);
+  return result;
+}
+
+DetailedRouteResult materialize_detailed_route(const Board& source, const RoutingPlanResult& plan,
+                                               const DetailedRouterConfig& config,
+                                               std::stop_token stop_token) {
+  if (plan.complete() && !plan.regional.spline_candidate_available) {
+    auto selected = plan.coarse_global;
+    selected.paths = plan.paths;
+    return materialize_detailed_route(source, selected, config, stop_token);
+  }
+  const auto coarse_topology_complete =
+      plan.coarse_global.unrouted_nets.empty() &&
+      plan.coarse_global.unaccepted_selected_voronoi_lane_transitions == 0U;
+  const auto bundles_complete =
+      !plan.regional.bundle_assignments.empty() &&
+      std::all_of(plan.regional.bundle_assignments.begin(), plan.regional.bundle_assignments.end(),
+                  [](const auto& assignment) { return assignment.complete(); });
+  std::vector<RegionalMultilayerRoutePlan> verified_multilayer_plans;
+  std::size_t verified_layer_runs = 0U;
+  std::size_t verified_via_transitions = 0U;
+  bool multilayer_plans_complete = true;
+  for (const auto& path : plan.regional.spline_candidate_paths) {
+    const auto crosses_layers = std::adjacent_find(
+        path.points.begin(), path.points.end(),
+        [](const auto& first, const auto& second) { return first.layer != second.layer; });
+    if (crosses_layers == path.points.end()) {
+      continue;
+    }
+    auto verified = plan_multilayer_route(source, path);
+    if (!verified) {
+      multilayer_plans_complete = false;
+      break;
+    }
+    verified_layer_runs += verified->layer_runs.size();
+    verified_via_transitions += verified->via_transitions.size();
+    verified_multilayer_plans.push_back(std::move(*verified));
+  }
+  multilayer_plans_complete =
+      multilayer_plans_complete &&
+      verified_multilayer_plans == plan.regional.multilayer_route_plans &&
+      verified_multilayer_plans.size() == plan.regional.complete_via_dependent_routes &&
+      verified_layer_runs == plan.regional.planned_layer_runs &&
+      verified_via_transitions == plan.regional.planned_via_transitions;
+  if (!coarse_topology_complete || !bundles_complete || !plan.regional.spline_candidate_available ||
+      !multilayer_plans_complete || plan.regional.unmapped_clearance_shadow_conflicts != 0U ||
+      plan.regional.unmapped_capacity_conflicts != 0U || stop_token.stop_requested()) {
+    DetailedRouteResult rejected;
+    rejected.stop_reason = stop_token.stop_requested()
+                               ? DetailedRouterStopReason::cancelled
+                               : DetailedRouterStopReason::incomplete_global_route;
+    rejected.diagnostic =
+        "regional materialization requires complete coarse topology, fully attributed bounded "
+        "conflicts, a complete spline bundle candidate, and exact ordered multilayer run/via "
+        "planning evidence";
+    rejected.routability_diagnoses = diagnose_detailed_routability(rejected);
+    return rejected;
+  }
+  auto candidate = plan.coarse_global;
+  candidate.paths = plan.regional.spline_candidate_paths;
+  candidate.total_overflow = 0U;
+  candidate.sampled_overflow = 0U;
+  candidate.corridor_overflow = 0U;
+  candidate.clearance_shadow_overflow = 0U;
+  candidate.total_voronoi_overflow_nm = 0U;
+  candidate.peak_voronoi_overflow_nm = 0U;
+  candidate.clearance_shadow_conflicts.clear();
+  candidate.residual_conflict_groups.clear();
+  candidate.stop_reason = GlobalRouterStopReason::complete;
+  candidate.diagnostic = "bounded regional B-spline candidate awaiting exact materialization";
+  auto exact = materialize_detailed_route(source, candidate, config, stop_token);
+  // Preserve the regional handoff as observable transaction evidence.  The candidate passed to
+  // the ordinary detailed router is intentionally overflow-free, so these facts must be copied
+  // from the authoritative coarse/regional plan rather than inferred from that private candidate.
+  exact.residual_conflict_handoff_attempted = true;
+  exact.residual_conflict_groups_attempted =
+      !plan.coarse_global.residual_conflict_groups.empty()
+          ? plan.coarse_global.residual_conflict_groups.size()
+          : plan.regional.components.size();
+  std::set<NetId> handed_off_nets;
+  for (const auto& component : plan.regional.components) {
+    handed_off_nets.insert(component.nets.begin(), component.nets.end());
+  }
+  exact.residual_conflict_nets_attempted = handed_off_nets.size();
+  exact.residual_sampled_overflow_attempted = plan.coarse_global.sampled_overflow;
+  exact.residual_clearance_shadow_overflow_attempted = plan.coarse_global.clearance_shadow_overflow;
+  exact.residual_joint_candidate_states = plan.regional.joint_spline_candidates_evaluated;
+  exact.residual_joint_groups_optimized = plan.regional.bundle_assignments.size();
+  exact.residual_joint_spline_routes = std::accumulate(
+      plan.regional.bundle_assignments.begin(), plan.regional.bundle_assignments.end(),
+      std::size_t{0U}, [](const auto total, const auto& assignment) {
+        return total + assignment.spline_realizations.size();
+      });
+  exact.residual_joint_optimization_sweeps =
+      plan.regional.spline_joint_shove_attempts + plan.regional.spline_adaptive_pair_shove_attempts;
+  exact.residual_joint_control_moves =
+      plan.regional.spline_joint_shove_accepted + plan.regional.spline_adaptive_pair_shove_accepted;
+  exact.residual_joint_exact_transactions_rejected = exact.complete() ? 0U : 1U;
+  exact.residual_joint_transaction_accepted = exact.complete();
+  if (exact.complete()) {
+    exact.diagnostic =
+        "bounded regional B-spline transaction completed connectivity and copper DRC";
+  } else if (!stop_token.stop_requested()) {
+    exact.diagnostic =
+        "bounded regional B-spline transaction was discarded by exact materialization: " +
+        exact.diagnostic;
+  }
+  return exact;
+}
+
+DetailedRouteResult materialize_detailed_route_incremental(const Board& source,
+                                                           const GlobalRouteResult& global,
+                                                           const DetailedRouteResult& checkpoint,
+                                                           const DetailedRouterConfig& config,
+                                                           std::stop_token stop_token) {
+  auto result = materialize_impl(source, global, config, &checkpoint, stop_token,
+                                 config.topology_locked_medial_materialization,
+                                 config.circular_arc_refinement, config.pull_tight_45_degrees,
+                                 config.continuous_refinement);
+  result.routability_diagnoses = diagnose_detailed_routability(result);
+  return result;
+}
+
+} // namespace flux

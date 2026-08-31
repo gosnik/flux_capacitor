@@ -1,0 +1,26 @@
+(flux_kicad_netclass_snapshot
+  (version 2)
+  (source_revision "kicad-20241229:flux_capacitor_test:8a64e30f406e8e99")
+  (api_version "10.0.1-test")
+  (class
+    (name "Wide signal")
+    (source_priority 0)
+    (clearance_nm 300000)
+    (track_width_nm 400000)
+  )
+  (class
+    (name "Default")
+    (source_priority 2147483647)
+    (clearance_nm 200000)
+    (track_width_nm 250000)
+    (via_diameter_nm 600000)
+    (via_drill_nm 300000)
+    (diff_pair_track_width_nm 250000)
+    (diff_pair_gap_nm 200000)
+    (diff_pair_via_gap_nm 250000)
+  )
+  (net
+    (name "SIGNAL")
+    (classes "Wide signal")
+  )
+)

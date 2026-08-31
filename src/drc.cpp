@@ -1,0 +1,945 @@
+#include "flux/core/drc.hpp"
+
+#include "flux/core/copper_geometry.hpp"
+#include "flux/core/geometry.hpp"
+#include "flux/core/keepout_geometry.hpp"
+#include "flux/core/routing_rules.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <limits>
+#include <set>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace flux {
+namespace {
+
+[[nodiscard]] bool contains_layer(const std::vector<LayerId>& layers, const LayerId& layer) {
+  return std::find(layers.begin(), layers.end(), layer) != layers.end();
+}
+
+[[nodiscard]] bool share_layer(const std::vector<LayerId>& lhs, const std::vector<LayerId>& rhs) {
+  return std::any_of(lhs.begin(), lhs.end(),
+                     [&rhs](const auto& layer) { return contains_layer(rhs, layer); });
+}
+
+struct TrackCenterline {
+  ObjectId id;
+  NetId net;
+  LayerId layer;
+  Point start;
+  Point middle;
+  Point end;
+  Nanometres width;
+  bool circular{false};
+};
+
+[[nodiscard]] std::vector<TrackCenterline> track_centerlines(const Board& board) {
+  std::vector<TrackCenterline> result;
+  result.reserve(board.tracks.size() + board.track_arcs.size());
+  for (const auto& track : board.tracks) {
+    result.push_back({track.id, track.net, track.layer, track.start, track.start, track.end,
+                      track.width, false});
+  }
+  for (const auto& arc : board.track_arcs) {
+    result.push_back({arc.id, arc.net, arc.layer, arc.start, arc.middle, arc.end, arc.width, true});
+  }
+  return result;
+}
+
+[[nodiscard]] long double centerline_distance(const TrackCenterline& lhs,
+                                              const TrackCenterline& rhs) {
+  if (lhs.circular && rhs.circular) {
+    return geometry::circular_arcs_distance_nm(lhs.start, lhs.middle, lhs.end, rhs.start,
+                                               rhs.middle, rhs.end);
+  }
+  if (lhs.circular) {
+    return geometry::segment_circular_arc_distance_nm(rhs.start, rhs.end, lhs.start, lhs.middle,
+                                                      lhs.end);
+  }
+  if (rhs.circular) {
+    return geometry::segment_circular_arc_distance_nm(lhs.start, lhs.end, rhs.start, rhs.middle,
+                                                      rhs.end);
+  }
+  return geometry::segment_distance_nm(lhs.start, lhs.end, rhs.start, rhs.end);
+}
+
+void add_violation(CopperDrcReport& report, CopperViolationKind kind, std::string code,
+                   std::vector<std::string> object_ids, long double required, long double actual) {
+  const auto bounded_required = std::clamp(
+      required, 0.0L, static_cast<long double>(std::numeric_limits<std::int64_t>::max()));
+  report.violations.push_back(
+      CopperViolation{kind, std::move(code), std::move(object_ids),
+                      Nanometres{static_cast<std::int64_t>(std::ceil(bounded_required))}, actual});
+}
+
+[[nodiscard]] std::uint64_t routed_length_impl(const Board& board, const NetId& net) {
+  std::uint64_t result = 0;
+  for (const auto& track : board.tracks) {
+    if (track.net != net) {
+      continue;
+    }
+    const auto length = geometry::segment_length_nm(track.start, track.end);
+    const auto remaining = std::numeric_limits<std::uint64_t>::max() - result;
+    result += length > remaining ? remaining : length;
+  }
+  for (const auto& arc : board.track_arcs) {
+    if (arc.net != net) {
+      continue;
+    }
+    const auto length = geometry::circular_arc_length_nm(arc.start, arc.middle, arc.end);
+    const auto remaining = std::numeric_limits<std::uint64_t>::max() - result;
+    result += length > remaining ? remaining : length;
+  }
+  return result;
+}
+
+void check_board_edge(const Board& board, const std::vector<CopperPadShape>& pads,
+                      CopperDrcReport& report) {
+  const auto edge_clearance =
+      static_cast<long double>(board.rules.copper_to_edge_clearance.value());
+  for (const auto& track : board.tracks) {
+    const auto radius = static_cast<long double>(track.width.value()) / 2.0L;
+    if (!geometry::segment_inside_board_area(track.start, track.end, board)) {
+      add_violation(report, CopperViolationKind::copper_outside_board, "track_outside_copper_area",
+                    {track.id.value()}, radius + edge_clearance, 0.0L);
+      continue;
+    }
+    const auto actual = geometry::segment_board_boundary_distance_nm(track.start, track.end, board);
+    const auto required = radius + edge_clearance;
+    if (actual < required) {
+      add_violation(report, CopperViolationKind::copper_edge_clearance, "track_edge_clearance",
+                    {track.id.value()}, required, actual);
+    }
+  }
+  for (const auto& arc : board.track_arcs) {
+    const auto radius = static_cast<long double>(arc.width.value()) / 2.0L;
+    if (!geometry::circular_arc_inside_board_area(arc.start, arc.middle, arc.end, board)) {
+      add_violation(report, CopperViolationKind::copper_outside_board,
+                    "track_arc_outside_copper_area", {arc.id.value()}, radius + edge_clearance,
+                    0.0L);
+      continue;
+    }
+    const auto actual =
+        geometry::circular_arc_board_boundary_distance_nm(arc.start, arc.middle, arc.end, board);
+    const auto required = radius + edge_clearance;
+    if (actual < required) {
+      add_violation(report, CopperViolationKind::copper_edge_clearance, "track_arc_edge_clearance",
+                    {arc.id.value()}, required, actual);
+    }
+  }
+  for (const auto& via : board.vias) {
+    const auto actual = geometry::point_board_boundary_distance_nm(via.position, board);
+    const auto required = static_cast<long double>(via.diameter.value()) / 2.0L + edge_clearance;
+    if (geometry::locate_point_in_board_area(board, via.position) ==
+        geometry::PointLocation::outside) {
+      add_violation(report, CopperViolationKind::copper_outside_board, "via_outside_copper_area",
+                    {via.id.value()}, required, 0.0L);
+    } else if (actual < required) {
+      add_violation(report, CopperViolationKind::copper_edge_clearance, "via_edge_clearance",
+                    {via.id.value()}, required, actual);
+    }
+  }
+  for (const auto& pad : pads) {
+    const auto actual = pad_to_board_boundary_distance_nm(pad, board);
+    const auto required = edge_clearance;
+    if (!pad_inside_board_area(pad, board)) {
+      add_violation(report, CopperViolationKind::copper_outside_board, "pad_outside_copper_area",
+                    {pad.id.value()}, required, 0.0L);
+    } else if (actual < required) {
+      add_violation(report, CopperViolationKind::copper_edge_clearance, "pad_edge_clearance",
+                    {pad.id.value()}, required, actual);
+    }
+  }
+  for (const auto& zone : board.zones) {
+    auto actual = std::numeric_limits<long double>::infinity();
+    bool outside = false;
+    for (const auto& fill : zone.fills) {
+      outside = outside || !geometry::filled_region_inside_board_area(fill, board);
+      actual = std::min(actual, geometry::filled_region_board_boundary_distance_nm(fill, board));
+    }
+    if (outside) {
+      add_violation(report, CopperViolationKind::copper_outside_board, "zone_outside_copper_area",
+                    {zone.id.value()}, edge_clearance, 0.0L);
+    } else if (actual < edge_clearance) {
+      add_violation(report, CopperViolationKind::copper_edge_clearance, "zone_edge_clearance",
+                    {zone.id.value()}, edge_clearance, actual);
+    }
+  }
+}
+
+} // namespace
+
+CopperDrcReport check_copper_rules(const Board& board) {
+  CopperDrcReport report;
+  const auto clearance = [&board](const NetId& lhs, const NetId& rhs) {
+    return static_cast<long double>(resolve_pairwise_clearance(board, lhs, rhs).value());
+  };
+  const auto pads = copper_pad_shapes(board);
+  check_board_edge(board, pads, report);
+
+  for (std::size_t i = 0; i < board.tracks.size(); ++i) {
+    const auto& lhs = board.tracks[i];
+    for (std::size_t j = i + 1U; j < board.tracks.size(); ++j) {
+      const auto& rhs = board.tracks[j];
+      if (lhs.net == rhs.net || lhs.layer != rhs.layer) {
+        continue;
+      }
+      const auto actual = geometry::segment_distance_nm(lhs.start, lhs.end, rhs.start, rhs.end);
+      const auto required = (static_cast<long double>(lhs.width.value()) +
+                             static_cast<long double>(rhs.width.value())) /
+                                2.0L +
+                            clearance(lhs.net, rhs.net);
+      if (actual < required) {
+        add_violation(report, CopperViolationKind::track_clearance, "track_clearance",
+                      {lhs.id.value(), rhs.id.value()}, required, actual);
+      }
+    }
+    for (const auto& arc : board.track_arcs) {
+      if (lhs.net == arc.net || lhs.layer != arc.layer) {
+        continue;
+      }
+      const auto actual = geometry::segment_circular_arc_distance_nm(lhs.start, lhs.end, arc.start,
+                                                                     arc.middle, arc.end);
+      const auto required = (static_cast<long double>(lhs.width.value()) +
+                             static_cast<long double>(arc.width.value())) /
+                                2.0L +
+                            clearance(lhs.net, arc.net);
+      if (actual < required) {
+        add_violation(report, CopperViolationKind::track_clearance, "track_track_arc_clearance",
+                      {lhs.id.value(), arc.id.value()}, required, actual);
+      }
+    }
+    for (const auto& via : board.vias) {
+      if (lhs.net == via.net || !contains_layer(via.layers, lhs.layer)) {
+        continue;
+      }
+      const auto actual = geometry::point_segment_distance_nm(via.position, lhs.start, lhs.end);
+      const auto required = (static_cast<long double>(lhs.width.value()) +
+                             static_cast<long double>(via.diameter.value())) /
+                                2.0L +
+                            clearance(lhs.net, via.net);
+      if (actual < required) {
+        add_violation(report, CopperViolationKind::track_via_clearance, "track_via_clearance",
+                      {lhs.id.value(), via.id.value()}, required, actual);
+      }
+    }
+    for (const auto& pad : pads) {
+      if (lhs.net == pad.net || !contains_layer(pad.layers, lhs.layer)) {
+        continue;
+      }
+      const auto actual = segment_to_pad_copper_distance_nm(lhs.start, lhs.end, pad);
+      const auto required =
+          static_cast<long double>(lhs.width.value()) / 2.0L + clearance(lhs.net, pad.net);
+      if (actual < required) {
+        add_violation(report, CopperViolationKind::track_pad_clearance, "track_pad_clearance",
+                      {lhs.id.value(), pad.id.value()}, required, actual);
+      }
+    }
+    for (const auto& zone : board.zones) {
+      if (lhs.net == zone.net) {
+        continue;
+      }
+      auto actual = std::numeric_limits<long double>::infinity();
+      for (const auto& fill : zone.fills) {
+        if (lhs.layer == fill.layer) {
+          actual = std::min(
+              actual, geometry::segment_filled_region_copper_distance_nm(lhs.start, lhs.end, fill));
+        }
+      }
+      const auto required =
+          static_cast<long double>(lhs.width.value()) / 2.0L + clearance(lhs.net, zone.net);
+      if (actual < required) {
+        add_violation(report, CopperViolationKind::track_zone_clearance, "track_zone_clearance",
+                      {lhs.id.value(), zone.id.value()}, required, actual);
+      }
+    }
+  }
+
+  for (std::size_t i = 0; i < board.track_arcs.size(); ++i) {
+    const auto& lhs = board.track_arcs[i];
+    for (std::size_t j = i + 1U; j < board.track_arcs.size(); ++j) {
+      const auto& rhs = board.track_arcs[j];
+      if (lhs.net == rhs.net || lhs.layer != rhs.layer) {
+        continue;
+      }
+      const auto actual = geometry::circular_arcs_distance_nm(lhs.start, lhs.middle, lhs.end,
+                                                              rhs.start, rhs.middle, rhs.end);
+      const auto required = (static_cast<long double>(lhs.width.value()) +
+                             static_cast<long double>(rhs.width.value())) /
+                                2.0L +
+                            clearance(lhs.net, rhs.net);
+      if (actual < required) {
+        add_violation(report, CopperViolationKind::track_clearance, "track_arc_clearance",
+                      {lhs.id.value(), rhs.id.value()}, required, actual);
+      }
+    }
+    for (const auto& via : board.vias) {
+      if (lhs.net == via.net || !contains_layer(via.layers, lhs.layer)) {
+        continue;
+      }
+      const auto actual =
+          geometry::point_circular_arc_distance_nm(via.position, lhs.start, lhs.middle, lhs.end);
+      const auto required = (static_cast<long double>(lhs.width.value()) +
+                             static_cast<long double>(via.diameter.value())) /
+                                2.0L +
+                            clearance(lhs.net, via.net);
+      if (actual < required) {
+        add_violation(report, CopperViolationKind::track_via_clearance, "track_arc_via_clearance",
+                      {lhs.id.value(), via.id.value()}, required, actual);
+      }
+    }
+    for (const auto& pad : pads) {
+      if (lhs.net == pad.net || !contains_layer(pad.layers, lhs.layer)) {
+        continue;
+      }
+      const auto actual =
+          circular_arc_to_pad_copper_distance_nm(lhs.start, lhs.middle, lhs.end, pad);
+      const auto required =
+          static_cast<long double>(lhs.width.value()) / 2.0L + clearance(lhs.net, pad.net);
+      if (actual < required) {
+        add_violation(report, CopperViolationKind::track_pad_clearance, "track_arc_pad_clearance",
+                      {lhs.id.value(), pad.id.value()}, required, actual);
+      }
+    }
+    for (const auto& zone : board.zones) {
+      if (lhs.net == zone.net) {
+        continue;
+      }
+      auto actual = std::numeric_limits<long double>::infinity();
+      for (const auto& fill : zone.fills) {
+        if (lhs.layer == fill.layer) {
+          actual = std::min(actual, geometry::circular_arc_filled_region_copper_distance_nm(
+                                        lhs.start, lhs.middle, lhs.end, fill));
+        }
+      }
+      const auto required =
+          static_cast<long double>(lhs.width.value()) / 2.0L + clearance(lhs.net, zone.net);
+      if (actual < required) {
+        add_violation(report, CopperViolationKind::track_zone_clearance, "track_arc_zone_clearance",
+                      {lhs.id.value(), zone.id.value()}, required, actual);
+      }
+    }
+  }
+
+  for (std::size_t i = 0; i < board.vias.size(); ++i) {
+    const auto& lhs = board.vias[i];
+    for (std::size_t j = i + 1U; j < board.vias.size(); ++j) {
+      const auto& rhs = board.vias[j];
+      if (lhs.net == rhs.net || !share_layer(lhs.layers, rhs.layers)) {
+        continue;
+      }
+      const auto actual = geometry::point_distance_nm(lhs.position, rhs.position);
+      const auto required = (static_cast<long double>(lhs.diameter.value()) +
+                             static_cast<long double>(rhs.diameter.value())) /
+                                2.0L +
+                            clearance(lhs.net, rhs.net);
+      if (actual < required) {
+        add_violation(report, CopperViolationKind::via_clearance, "via_clearance",
+                      {lhs.id.value(), rhs.id.value()}, required, actual);
+      }
+    }
+    for (const auto& pad : pads) {
+      if (lhs.net == pad.net || !share_layer(lhs.layers, pad.layers)) {
+        continue;
+      }
+      const auto actual = point_to_pad_copper_distance_nm(lhs.position, pad);
+      const auto required =
+          static_cast<long double>(lhs.diameter.value()) / 2.0L + clearance(lhs.net, pad.net);
+      if (actual < required) {
+        add_violation(report, CopperViolationKind::via_pad_clearance, "via_pad_clearance",
+                      {lhs.id.value(), pad.id.value()}, required, actual);
+      }
+    }
+    for (const auto& zone : board.zones) {
+      if (lhs.net == zone.net) {
+        continue;
+      }
+      auto actual = std::numeric_limits<long double>::infinity();
+      for (const auto& fill : zone.fills) {
+        if (contains_layer(lhs.layers, fill.layer)) {
+          actual = std::min(actual,
+                            geometry::point_filled_region_copper_distance_nm(lhs.position, fill));
+        }
+      }
+      const auto required =
+          static_cast<long double>(lhs.diameter.value()) / 2.0L + clearance(lhs.net, zone.net);
+      if (actual < required) {
+        add_violation(report, CopperViolationKind::via_zone_clearance, "via_zone_clearance",
+                      {lhs.id.value(), zone.id.value()}, required, actual);
+      }
+    }
+  }
+
+  for (std::size_t i = 0; i < pads.size(); ++i) {
+    for (std::size_t j = i + 1U; j < pads.size(); ++j) {
+      if (pads[i].net == pads[j].net || !share_layer(pads[i].layers, pads[j].layers)) {
+        continue;
+      }
+      const auto actual = pad_to_pad_copper_distance_nm(pads[i], pads[j]);
+      const auto required = clearance(pads[i].net, pads[j].net);
+      if (actual < required || (required == 0.0L && pad_copper_intersects(pads[i], pads[j]))) {
+        add_violation(report, CopperViolationKind::pad_clearance, "pad_clearance",
+                      {pads[i].id.value(), pads[j].id.value()}, required, actual);
+      }
+    }
+    for (const auto& zone : board.zones) {
+      if (pads[i].net == zone.net) {
+        continue;
+      }
+      auto actual = std::numeric_limits<long double>::infinity();
+      for (const auto& fill : zone.fills) {
+        if (!contains_layer(pads[i].layers, fill.layer)) {
+          continue;
+        }
+        actual = std::min(actual, pad_to_filled_region_copper_distance_nm(pads[i], fill));
+      }
+      const auto required = clearance(pads[i].net, zone.net);
+      if (actual < required || (required == 0.0L && actual == 0.0L)) {
+        add_violation(report, CopperViolationKind::pad_zone_clearance, "pad_zone_clearance",
+                      {pads[i].id.value(), zone.id.value()}, required, actual);
+      }
+    }
+  }
+
+  for (std::size_t i = 0; i < board.zones.size(); ++i) {
+    for (std::size_t j = i + 1U; j < board.zones.size(); ++j) {
+      const auto& lhs = board.zones[i];
+      const auto& rhs = board.zones[j];
+      if (lhs.net == rhs.net) {
+        continue;
+      }
+      auto actual = std::numeric_limits<long double>::infinity();
+      for (const auto& lhs_fill : lhs.fills) {
+        for (const auto& rhs_fill : rhs.fills) {
+          if (lhs_fill.layer == rhs_fill.layer) {
+            actual =
+                std::min(actual, geometry::filled_regions_copper_distance_nm(lhs_fill, rhs_fill));
+          }
+        }
+      }
+      const auto required = clearance(lhs.net, rhs.net);
+      if (actual < required || (required == 0.0L && actual == 0.0L)) {
+        add_violation(report, CopperViolationKind::zone_clearance, "zone_clearance",
+                      {lhs.id.value(), rhs.id.value()}, required, actual);
+      }
+    }
+  }
+
+  for (const auto& pair : board.differential_pairs) {
+    if (pair.minimum_gap) {
+      auto minimum_actual = std::numeric_limits<long double>::infinity();
+      std::optional<ObjectId> closest_positive;
+      std::optional<ObjectId> closest_negative;
+      const auto centerlines = track_centerlines(board);
+      for (const auto& positive : centerlines) {
+        if (positive.net != pair.positive_net) {
+          continue;
+        }
+        for (const auto& negative : centerlines) {
+          if (negative.net != pair.negative_net || positive.layer != negative.layer) {
+            continue;
+          }
+          const auto centerline = centerline_distance(positive, negative);
+          const auto actual =
+              std::max(0.0L, centerline - (static_cast<long double>(positive.width.value()) +
+                                           static_cast<long double>(negative.width.value())) /
+                                              2.0L);
+          if (actual < minimum_actual) {
+            minimum_actual = actual;
+            closest_positive = positive.id;
+            closest_negative = negative.id;
+          }
+        }
+      }
+      const auto required = static_cast<long double>(pair.minimum_gap->value());
+      if (minimum_actual < required && closest_positive && closest_negative) {
+        add_violation(report, CopperViolationKind::differential_pair_gap, "differential_pair_gap",
+                      {pair.id.value(), closest_positive->value(), closest_negative->value()},
+                      required, minimum_actual);
+      }
+    }
+    if (pair.maximum_skew) {
+      const auto positive_length = routed_net_centerline_length_nm(board, pair.positive_net);
+      const auto negative_length = routed_net_centerline_length_nm(board, pair.negative_net);
+      const auto difference = positive_length > negative_length ? positive_length - negative_length
+                                                                : negative_length - positive_length;
+      const auto actual = static_cast<long double>(difference);
+      const auto required = static_cast<long double>(pair.maximum_skew->value());
+      if (actual > required) {
+        add_violation(report, CopperViolationKind::differential_pair_skew, "differential_pair_skew",
+                      {pair.id.value()}, required, actual);
+      }
+    }
+  }
+
+  for (const auto& keepout : world_keepouts(board)) {
+    if (keepout.prohibit.tracks) {
+      for (const auto& track : board.tracks) {
+        if (!keepout_contains_layer(keepout, track.layer)) {
+          continue;
+        }
+        const auto radius = static_cast<long double>(track.width.value()) / 2.0L;
+        if (segment_copper_overlaps_keepout(track.start, track.end, radius, keepout.area)) {
+          const auto actual = std::max(0.0L, geometry::segment_polygon_boundary_distance_nm(
+                                                 track.start, track.end, keepout.area) -
+                                                 radius);
+          add_violation(report, CopperViolationKind::keepout, "track_keepout",
+                        {track.id.value(), keepout.id.value()}, 0.0L, actual);
+        }
+      }
+      for (const auto& arc : board.track_arcs) {
+        if (!keepout_contains_layer(keepout, arc.layer)) {
+          continue;
+        }
+        const auto radius = static_cast<long double>(arc.width.value()) / 2.0L;
+        const auto centerline_distance = geometry::circular_arc_polygon_copper_distance_nm(
+            arc.start, arc.middle, arc.end, keepout.area);
+        if (centerline_distance <= radius) {
+          const auto actual = std::max(0.0L, centerline_distance - radius);
+          add_violation(report, CopperViolationKind::keepout, "track_arc_keepout",
+                        {arc.id.value(), keepout.id.value()}, 0.0L, actual);
+        }
+      }
+    }
+    if (keepout.prohibit.vias) {
+      for (const auto& via : board.vias) {
+        if (!share_layer(via.layers, keepout.layers)) {
+          continue;
+        }
+        const auto radius = static_cast<long double>(via.diameter.value()) / 2.0L;
+        if (point_copper_overlaps_keepout(via.position, radius, keepout.area)) {
+          const auto actual = std::max(
+              0.0L,
+              geometry::point_polygon_boundary_distance_nm(via.position, keepout.area) - radius);
+          add_violation(report, CopperViolationKind::keepout, "via_keepout",
+                        {via.id.value(), keepout.id.value()}, 0.0L, actual);
+        }
+      }
+    }
+    if (keepout.prohibit.pads) {
+      for (const auto& pad : pads) {
+        if (!share_layer(pad.layers, keepout.layers) ||
+            !pad_copper_overlaps_polygon(pad, keepout.area)) {
+          continue;
+        }
+        const auto actual = pad_to_polygon_boundary_distance_nm(pad, keepout.area);
+        add_violation(report, CopperViolationKind::keepout, "pad_keepout",
+                      {pad.id.value(), keepout.id.value()}, 0.0L, actual);
+      }
+    }
+    if (keepout.prohibit.copper_pours) {
+      for (const auto& zone : board.zones) {
+        bool overlaps = false;
+        for (const auto& fill : zone.fills) {
+          if (keepout_contains_layer(keepout, fill.layer) &&
+              geometry::filled_region_overlaps_polygon(fill, keepout.area)) {
+            overlaps = true;
+            break;
+          }
+        }
+        if (overlaps) {
+          add_violation(report, CopperViolationKind::keepout, "zone_keepout",
+                        {zone.id.value(), keepout.id.value()}, 0.0L, 0.0L);
+        }
+      }
+    }
+  }
+  return report;
+}
+
+CopperDrcReport check_dynamic_copper_rules(const Board& board,
+                                           const std::vector<ObjectId>& dynamic_objects) {
+  CopperDrcReport report;
+  std::set<std::string> selected;
+  for (const auto& id : dynamic_objects) {
+    selected.insert(id.value());
+  }
+  if (selected.empty()) {
+    return report;
+  }
+  const auto is_selected = [&selected](const ObjectId& id) {
+    return selected.contains(id.value());
+  };
+  const auto clearance = [&board](const NetId& lhs, const NetId& rhs) {
+    return static_cast<long double>(resolve_pairwise_clearance(board, lhs, rhs).value());
+  };
+  const auto pads = copper_pad_shapes(board);
+  const auto edge_clearance =
+      static_cast<long double>(board.rules.copper_to_edge_clearance.value());
+
+  const auto check_track_edge = [&](const TrackSegment& track) {
+    const auto required = static_cast<long double>(track.width.value()) / 2.0L + edge_clearance;
+    if (!geometry::segment_inside_board_area(track.start, track.end, board)) {
+      add_violation(report, CopperViolationKind::copper_outside_board, "track_outside_copper_area",
+                    {track.id.value()}, required, 0.0L);
+    } else {
+      const auto actual =
+          geometry::segment_board_boundary_distance_nm(track.start, track.end, board);
+      if (actual < required) {
+        add_violation(report, CopperViolationKind::copper_edge_clearance, "track_edge_clearance",
+                      {track.id.value()}, required, actual);
+      }
+    }
+  };
+  const auto check_arc_edge = [&](const TrackArc& arc) {
+    const auto required = static_cast<long double>(arc.width.value()) / 2.0L + edge_clearance;
+    if (!geometry::circular_arc_inside_board_area(arc.start, arc.middle, arc.end, board)) {
+      add_violation(report, CopperViolationKind::copper_outside_board,
+                    "track_arc_outside_copper_area", {arc.id.value()}, required, 0.0L);
+    } else {
+      const auto actual =
+          geometry::circular_arc_board_boundary_distance_nm(arc.start, arc.middle, arc.end, board);
+      if (actual < required) {
+        add_violation(report, CopperViolationKind::copper_edge_clearance,
+                      "track_arc_edge_clearance", {arc.id.value()}, required, actual);
+      }
+    }
+  };
+  const auto check_via_edge = [&](const Via& via) {
+    const auto required = static_cast<long double>(via.diameter.value()) / 2.0L + edge_clearance;
+    if (geometry::locate_point_in_board_area(board, via.position) ==
+        geometry::PointLocation::outside) {
+      add_violation(report, CopperViolationKind::copper_outside_board, "via_outside_copper_area",
+                    {via.id.value()}, required, 0.0L);
+    } else {
+      const auto actual = geometry::point_board_boundary_distance_nm(via.position, board);
+      if (actual < required) {
+        add_violation(report, CopperViolationKind::copper_edge_clearance, "via_edge_clearance",
+                      {via.id.value()}, required, actual);
+      }
+    }
+  };
+
+  for (const auto& lhs : board.tracks) {
+    if (!is_selected(lhs.id)) {
+      continue;
+    }
+    check_track_edge(lhs);
+    for (const auto& rhs : board.tracks) {
+      if (lhs.id == rhs.id || lhs.net == rhs.net || lhs.layer != rhs.layer) {
+        continue;
+      }
+      const auto actual = geometry::segment_distance_nm(lhs.start, lhs.end, rhs.start, rhs.end);
+      const auto required = (static_cast<long double>(lhs.width.value()) +
+                             static_cast<long double>(rhs.width.value())) /
+                                2.0L +
+                            clearance(lhs.net, rhs.net);
+      if (actual < required) {
+        add_violation(report, CopperViolationKind::track_clearance, "track_clearance",
+                      {lhs.id.value(), rhs.id.value()}, required, actual);
+      }
+    }
+    for (const auto& arc : board.track_arcs) {
+      if (lhs.net == arc.net || lhs.layer != arc.layer) {
+        continue;
+      }
+      const auto actual = geometry::segment_circular_arc_distance_nm(lhs.start, lhs.end, arc.start,
+                                                                     arc.middle, arc.end);
+      const auto required = (static_cast<long double>(lhs.width.value()) +
+                             static_cast<long double>(arc.width.value())) /
+                                2.0L +
+                            clearance(lhs.net, arc.net);
+      if (actual < required) {
+        add_violation(report, CopperViolationKind::track_clearance, "track_track_arc_clearance",
+                      {lhs.id.value(), arc.id.value()}, required, actual);
+      }
+    }
+    for (const auto& via : board.vias) {
+      if (lhs.net == via.net || !contains_layer(via.layers, lhs.layer)) {
+        continue;
+      }
+      const auto actual = geometry::point_segment_distance_nm(via.position, lhs.start, lhs.end);
+      const auto required = (static_cast<long double>(lhs.width.value()) +
+                             static_cast<long double>(via.diameter.value())) /
+                                2.0L +
+                            clearance(lhs.net, via.net);
+      if (actual < required) {
+        add_violation(report, CopperViolationKind::track_via_clearance, "track_via_clearance",
+                      {lhs.id.value(), via.id.value()}, required, actual);
+      }
+    }
+    for (const auto& pad : pads) {
+      if (lhs.net == pad.net || !contains_layer(pad.layers, lhs.layer)) {
+        continue;
+      }
+      const auto actual = segment_to_pad_copper_distance_nm(lhs.start, lhs.end, pad);
+      const auto required =
+          static_cast<long double>(lhs.width.value()) / 2.0L + clearance(lhs.net, pad.net);
+      if (actual < required) {
+        add_violation(report, CopperViolationKind::track_pad_clearance, "track_pad_clearance",
+                      {lhs.id.value(), pad.id.value()}, required, actual);
+      }
+    }
+    for (const auto& zone : board.zones) {
+      if (lhs.net == zone.net) {
+        continue;
+      }
+      auto actual = std::numeric_limits<long double>::infinity();
+      for (const auto& fill : zone.fills) {
+        if (lhs.layer == fill.layer) {
+          actual = std::min(
+              actual, geometry::segment_filled_region_copper_distance_nm(lhs.start, lhs.end, fill));
+        }
+      }
+      const auto required =
+          static_cast<long double>(lhs.width.value()) / 2.0L + clearance(lhs.net, zone.net);
+      if (actual < required) {
+        add_violation(report, CopperViolationKind::track_zone_clearance, "track_zone_clearance",
+                      {lhs.id.value(), zone.id.value()}, required, actual);
+      }
+    }
+  }
+
+  for (const auto& lhs : board.track_arcs) {
+    if (!is_selected(lhs.id)) {
+      continue;
+    }
+    check_arc_edge(lhs);
+    for (const auto& track : board.tracks) {
+      if (lhs.net == track.net || lhs.layer != track.layer) {
+        continue;
+      }
+      const auto actual = geometry::segment_circular_arc_distance_nm(
+          track.start, track.end, lhs.start, lhs.middle, lhs.end);
+      const auto required = (static_cast<long double>(lhs.width.value()) +
+                             static_cast<long double>(track.width.value())) /
+                                2.0L +
+                            clearance(lhs.net, track.net);
+      if (actual < required) {
+        add_violation(report, CopperViolationKind::track_clearance, "track_track_arc_clearance",
+                      {track.id.value(), lhs.id.value()}, required, actual);
+      }
+    }
+    for (const auto& rhs : board.track_arcs) {
+      if (lhs.id == rhs.id || lhs.net == rhs.net || lhs.layer != rhs.layer) {
+        continue;
+      }
+      const auto actual = geometry::circular_arcs_distance_nm(lhs.start, lhs.middle, lhs.end,
+                                                              rhs.start, rhs.middle, rhs.end);
+      const auto required = (static_cast<long double>(lhs.width.value()) +
+                             static_cast<long double>(rhs.width.value())) /
+                                2.0L +
+                            clearance(lhs.net, rhs.net);
+      if (actual < required) {
+        add_violation(report, CopperViolationKind::track_clearance, "track_arc_clearance",
+                      {lhs.id.value(), rhs.id.value()}, required, actual);
+      }
+    }
+    for (const auto& via : board.vias) {
+      if (lhs.net == via.net || !contains_layer(via.layers, lhs.layer)) {
+        continue;
+      }
+      const auto actual =
+          geometry::point_circular_arc_distance_nm(via.position, lhs.start, lhs.middle, lhs.end);
+      const auto required = (static_cast<long double>(lhs.width.value()) +
+                             static_cast<long double>(via.diameter.value())) /
+                                2.0L +
+                            clearance(lhs.net, via.net);
+      if (actual < required) {
+        add_violation(report, CopperViolationKind::track_via_clearance, "track_arc_via_clearance",
+                      {lhs.id.value(), via.id.value()}, required, actual);
+      }
+    }
+    for (const auto& pad : pads) {
+      if (lhs.net == pad.net || !contains_layer(pad.layers, lhs.layer)) {
+        continue;
+      }
+      const auto actual =
+          circular_arc_to_pad_copper_distance_nm(lhs.start, lhs.middle, lhs.end, pad);
+      const auto required =
+          static_cast<long double>(lhs.width.value()) / 2.0L + clearance(lhs.net, pad.net);
+      if (actual < required) {
+        add_violation(report, CopperViolationKind::track_pad_clearance, "track_arc_pad_clearance",
+                      {lhs.id.value(), pad.id.value()}, required, actual);
+      }
+    }
+    for (const auto& zone : board.zones) {
+      if (lhs.net == zone.net) {
+        continue;
+      }
+      auto actual = std::numeric_limits<long double>::infinity();
+      for (const auto& fill : zone.fills) {
+        if (lhs.layer == fill.layer) {
+          actual = std::min(actual, geometry::circular_arc_filled_region_copper_distance_nm(
+                                        lhs.start, lhs.middle, lhs.end, fill));
+        }
+      }
+      const auto required =
+          static_cast<long double>(lhs.width.value()) / 2.0L + clearance(lhs.net, zone.net);
+      if (actual < required) {
+        add_violation(report, CopperViolationKind::track_zone_clearance, "track_arc_zone_clearance",
+                      {lhs.id.value(), zone.id.value()}, required, actual);
+      }
+    }
+  }
+
+  for (const auto& lhs : board.vias) {
+    if (!is_selected(lhs.id)) {
+      continue;
+    }
+    check_via_edge(lhs);
+    for (const auto& rhs : board.vias) {
+      if (lhs.id == rhs.id || lhs.net == rhs.net || !share_layer(lhs.layers, rhs.layers)) {
+        continue;
+      }
+      const auto actual = geometry::point_distance_nm(lhs.position, rhs.position);
+      const auto required = (static_cast<long double>(lhs.diameter.value()) +
+                             static_cast<long double>(rhs.diameter.value())) /
+                                2.0L +
+                            clearance(lhs.net, rhs.net);
+      if (actual < required) {
+        add_violation(report, CopperViolationKind::via_clearance, "via_clearance",
+                      {lhs.id.value(), rhs.id.value()}, required, actual);
+      }
+    }
+    for (const auto& pad : pads) {
+      if (lhs.net == pad.net || !share_layer(lhs.layers, pad.layers)) {
+        continue;
+      }
+      const auto actual = point_to_pad_copper_distance_nm(lhs.position, pad);
+      const auto required =
+          static_cast<long double>(lhs.diameter.value()) / 2.0L + clearance(lhs.net, pad.net);
+      if (actual < required) {
+        add_violation(report, CopperViolationKind::via_pad_clearance, "via_pad_clearance",
+                      {lhs.id.value(), pad.id.value()}, required, actual);
+      }
+    }
+    for (const auto& zone : board.zones) {
+      if (lhs.net == zone.net) {
+        continue;
+      }
+      auto actual = std::numeric_limits<long double>::infinity();
+      for (const auto& fill : zone.fills) {
+        if (contains_layer(lhs.layers, fill.layer)) {
+          actual = std::min(actual,
+                            geometry::point_filled_region_copper_distance_nm(lhs.position, fill));
+        }
+      }
+      const auto required =
+          static_cast<long double>(lhs.diameter.value()) / 2.0L + clearance(lhs.net, zone.net);
+      if (actual < required) {
+        add_violation(report, CopperViolationKind::via_zone_clearance, "via_zone_clearance",
+                      {lhs.id.value(), zone.id.value()}, required, actual);
+      }
+    }
+  }
+
+  std::set<NetId> touched_nets;
+  for (const auto& track : board.tracks) {
+    if (is_selected(track.id)) {
+      touched_nets.insert(track.net);
+    }
+  }
+  for (const auto& arc : board.track_arcs) {
+    if (is_selected(arc.id)) {
+      touched_nets.insert(arc.net);
+    }
+  }
+  const auto centerlines = track_centerlines(board);
+  for (const auto& pair : board.differential_pairs) {
+    if (!touched_nets.contains(pair.positive_net) && !touched_nets.contains(pair.negative_net)) {
+      continue;
+    }
+    if (pair.minimum_gap) {
+      auto minimum_actual = std::numeric_limits<long double>::infinity();
+      std::optional<ObjectId> closest_positive;
+      std::optional<ObjectId> closest_negative;
+      for (const auto& positive : centerlines) {
+        if (positive.net != pair.positive_net) {
+          continue;
+        }
+        for (const auto& negative : centerlines) {
+          if (negative.net != pair.negative_net || positive.layer != negative.layer) {
+            continue;
+          }
+          const auto centerline = centerline_distance(positive, negative);
+          const auto actual =
+              std::max(0.0L, centerline - (static_cast<long double>(positive.width.value()) +
+                                           static_cast<long double>(negative.width.value())) /
+                                              2.0L);
+          if (actual < minimum_actual) {
+            minimum_actual = actual;
+            closest_positive = positive.id;
+            closest_negative = negative.id;
+          }
+        }
+      }
+      const auto required = static_cast<long double>(pair.minimum_gap->value());
+      if (minimum_actual < required && closest_positive && closest_negative) {
+        add_violation(report, CopperViolationKind::differential_pair_gap, "differential_pair_gap",
+                      {pair.id.value(), closest_positive->value(), closest_negative->value()},
+                      required, minimum_actual);
+      }
+    }
+    if (pair.maximum_skew) {
+      const auto positive_length = routed_net_centerline_length_nm(board, pair.positive_net);
+      const auto negative_length = routed_net_centerline_length_nm(board, pair.negative_net);
+      const auto difference = positive_length > negative_length ? positive_length - negative_length
+                                                                : negative_length - positive_length;
+      const auto actual = static_cast<long double>(difference);
+      const auto required = static_cast<long double>(pair.maximum_skew->value());
+      if (actual > required) {
+        add_violation(report, CopperViolationKind::differential_pair_skew, "differential_pair_skew",
+                      {pair.id.value()}, required, actual);
+      }
+    }
+  }
+
+  for (const auto& keepout : world_keepouts(board)) {
+    if (keepout.prohibit.tracks) {
+      for (const auto& track : board.tracks) {
+        if (!is_selected(track.id) || !keepout_contains_layer(keepout, track.layer)) {
+          continue;
+        }
+        const auto radius = static_cast<long double>(track.width.value()) / 2.0L;
+        if (segment_copper_overlaps_keepout(track.start, track.end, radius, keepout.area)) {
+          const auto actual = std::max(0.0L, geometry::segment_polygon_boundary_distance_nm(
+                                                 track.start, track.end, keepout.area) -
+                                                 radius);
+          add_violation(report, CopperViolationKind::keepout, "track_keepout",
+                        {track.id.value(), keepout.id.value()}, 0.0L, actual);
+        }
+      }
+      for (const auto& arc : board.track_arcs) {
+        if (!is_selected(arc.id) || !keepout_contains_layer(keepout, arc.layer)) {
+          continue;
+        }
+        const auto radius = static_cast<long double>(arc.width.value()) / 2.0L;
+        const auto distance = geometry::circular_arc_polygon_copper_distance_nm(
+            arc.start, arc.middle, arc.end, keepout.area);
+        if (distance <= radius) {
+          add_violation(report, CopperViolationKind::keepout, "track_arc_keepout",
+                        {arc.id.value(), keepout.id.value()}, 0.0L,
+                        std::max(0.0L, distance - radius));
+        }
+      }
+    }
+    if (keepout.prohibit.vias) {
+      for (const auto& via : board.vias) {
+        if (!is_selected(via.id) || !share_layer(via.layers, keepout.layers)) {
+          continue;
+        }
+        const auto radius = static_cast<long double>(via.diameter.value()) / 2.0L;
+        if (point_copper_overlaps_keepout(via.position, radius, keepout.area)) {
+          const auto actual = std::max(
+              0.0L,
+              geometry::point_polygon_boundary_distance_nm(via.position, keepout.area) - radius);
+          add_violation(report, CopperViolationKind::keepout, "via_keepout",
+                        {via.id.value(), keepout.id.value()}, 0.0L, actual);
+        }
+      }
+    }
+  }
+  return report;
+}
+
+std::uint64_t routed_net_centerline_length_nm(const Board& board, const NetId& net) {
+  return routed_length_impl(board, net);
+}
+
+} // namespace flux

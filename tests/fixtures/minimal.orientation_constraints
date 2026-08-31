@@ -1,0 +1,16 @@
+(flux_orientation_constraints
+  (version 1)
+  (source_revision "kicad-20241229:flux_capacitor_test:8a64e30f406e8e99")
+  (footprint
+    (id "11111111-1111-4111-8111-111111111111")
+    (reference "J1")
+    (allowed_rotations 0 90 180 270)
+    (allowed_sides front)
+  )
+  (footprint
+    (id "22222222-2222-4222-8222-222222222221")
+    (reference "J2")
+    (allowed_rotations 0 90 180 270)
+    (allowed_sides front)
+  )
+)

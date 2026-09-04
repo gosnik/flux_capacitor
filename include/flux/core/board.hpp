@@ -11,7 +11,7 @@
 
 namespace flux {
 
-inline constexpr std::uint32_t board_schema_version = 18;
+inline constexpr std::uint32_t board_schema_version = 19;
 inline constexpr std::int64_t max_abs_coordinate_nm = 1'000'000'000;
 
 struct Point {
@@ -170,7 +170,12 @@ struct Pad {
   // Footprint-local orientation. KiCad board files serialize an absolute pad angle, so the
   // importer must remove the placed footprint transform before populating this field.
   Microdegrees rotation;
-  Nanometres drill{Nanometres{0}};
+  // Exact pad-local drill geometry. A circular drill has equal dimensions; an oval drill is a
+  // capsule aligned with the pad-local X/Y axes before pad and footprint rotation. The offset is
+  // measured from the pad anchor in that same local drill frame.
+  Nanometres drill_width{Nanometres{0}};
+  Nanometres drill_height{Nanometres{0}};
+  Point drill_offset;
   bool plated{true};
 
   bool operator==(const Pad&) const = default;
@@ -287,6 +292,10 @@ struct CopperZone {
   NetId net;
   std::string name;
   std::vector<CopperZoneFill> fills;
+  // The source contains a zone definition but no saved physical fill. Flux preserves that
+  // immutable source fact without inventing copper. Detailed routing may proceed only through
+  // the explicitly provisional refill workflow, followed by KiCad refill and strict re-import.
+  bool requires_refill{false};
   bool locked{false};
 
   bool operator==(const CopperZone&) const = default;

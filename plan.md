@@ -224,8 +224,9 @@ Progress ledger (updated 2026-09-04):
 - Milestone 0.4 complete: `tests/fixtures/parity/manifest.json` maps every capability to the
   smallest selected Flux, licensed corpus, or pinned KiCadRoutingTools fixture. Nine upstream
   boards are preserved byte-for-byte with paths, SHA-256 identities, the pinned MIT notice, and
-  honest current gates. Eight now pass strict KiCad 10 named-net import without normalizing source
-  bytes; the LVDS fixture remains specifically blocked by an unfilled-zone semantic.
+  honest current gates. All nine now pass strict KiCad 10 import without normalizing source bytes;
+  the LVDS fixture's unfilled zone is retained as an immutable requires-refill marker rather than
+  being ignored or invented as physical copper.
 - Milestone 0.5 complete: `tests/suites.json` and `run_suite.sh` define executable per-change,
   frontier, and release boundaries. The per-change suite runs only the three retained high-risk
   routing invariants, observer/contract/GPU tests, and qualified tiers; frontier adds the unlocked
@@ -241,17 +242,24 @@ Progress ledger (updated 2026-09-04):
   represented pads/copper, new KiCad 10 tracks/arcs/vias emit quoted names, and strict round-trip
   verification covers both formats. Repeated source UUIDs on cloned synthetic footprints/pads are
   occurrence-qualified deterministically without changing unique IDs, and source syntax mapping
-  follows the same rule. Unfilled zones and the remaining geometry list are still open.
+  follows the same rule. Board schema 19 also preserves a netless or net-bound unfilled zone as an
+  immutable requires-refill marker: ordinary detailed routing rejects it, while the explicit
+  provisional workflow still requires KiCad refill, strict re-import, connectivity, and DRC. The
+  same schema retains exact circular/oval pad-drill dimensions and pad-local offsets, uses that
+  geometry for non-plated obstacles, and exposes plated-pad transitions at the physical hole
+  centre. This removes the false oval-drill structural blockers in the CH32V003 corpus board. The
+  remaining geometry/rule fidelity list is still open; see ADR 0158 and ADR 0159.
 - Milestone 1.1 complete: `FluxWorkPlan` schema 1 now carries an exact source revision, explicit
   protected-routing mode, immutable policy identities, ordered typed workflow steps and
   dependencies, selectors, typed scalar options, and default-on telemetry. Its bounded strict JSON
   loader rejects unknown fields, type confusion, invalid dependency order, stale board/policy
   revisions, unsafe rip-up modes, and malformed identities; canonical serialization round-trips
   byte-stably.
-- Milestone 1.5 partial: write-once template, inspection, and non-mutating dry-run commands expose
-  stable required capability IDs and fail capability preflight unless each selected step is marked
-  present or an intentional stronger alternative. Policy-content hashing, cancellation, execution,
-  and replay remain open.
+- Milestone 1.5 interface complete: write-once template, inspection, and non-mutating dry-run
+  commands expose stable required capability IDs and fail capability preflight unless each selected
+  step is marked present or an intentional stronger alternative. Policy hashing/application,
+  bounded route/validation execution, telemetry, and signal cancellation are implemented as
+  described below; deterministic trace replay and unsupported step adapters remain open.
 - Milestone 1.2 complete: selector expansion deterministically unions exact net names, bounded
   simple globs, net classes, footprints, and declared placement groups, applies exclusions last,
   and projects selected footprints into touching or fully internal terminal nets only when that

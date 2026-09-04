@@ -148,7 +148,7 @@
         "zones": 0,
         "max_core_validation_errors": 7
       },
-      "note": "USB development board; exposes unsupported/non-copper pad and placement-envelope boundaries."
+      "note": "USB development board; oval/offset pad drills are exact while placement-envelope and source-placement blockers remain."
     },
     {
       "id": "usbgpib",

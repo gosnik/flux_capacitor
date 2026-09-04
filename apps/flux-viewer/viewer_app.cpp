@@ -945,11 +945,33 @@ void ViewerApp::draw_board_canvas() {
       draw->AddPolyline(pixels.data(), static_cast<int>(pixels.size()), outline_color,
                         ImDrawFlags_Closed, 1.0F);
     }
-    if (primitive.drill_nm > 0U) {
-      const auto drill_radius = static_cast<float>(std::max(
-          1.0, static_cast<double>(primitive.drill_nm) / 2'000'000.0 * view_.pixels_per_mm));
-      draw->AddCircleFilled(screen(center), drill_radius, color(0.035F, 0.052F, 0.070F), 20);
-      draw->AddCircle(screen(center), drill_radius, color(0.68F, 0.72F, 0.76F), 20, 1.0F);
+    const auto drill_width =
+        primitive.drill_width_nm > 0U ? primitive.drill_width_nm : primitive.drill_nm;
+    const auto drill_height =
+        primitive.drill_height_nm > 0U ? primitive.drill_height_nm : primitive.drill_nm;
+    if (drill_width > 0U && drill_height > 0U) {
+      const auto drill_center = rotated_pad_point(
+          center, static_cast<long double>(primitive.drill_offset_x_nm),
+          static_cast<long double>(primitive.drill_offset_y_nm), primitive.rotation_microdegrees);
+      const auto horizontal = drill_width >= drill_height;
+      const auto radius_nm = static_cast<long double>(horizontal ? drill_height : drill_width) / 2.0L;
+      const auto run_nm =
+          static_cast<long double>(horizontal ? drill_width : drill_height) / 2.0L - radius_nm;
+      const auto first = rotated_pad_point(
+          drill_center, horizontal ? -run_nm : 0.0L, horizontal ? 0.0L : -run_nm,
+          primitive.rotation_microdegrees);
+      const auto second = rotated_pad_point(
+          drill_center, horizontal ? run_nm : 0.0L, horizontal ? 0.0L : run_nm,
+          primitive.rotation_microdegrees);
+      const auto thickness = static_cast<float>(std::max(
+          2.0, static_cast<double>(radius_nm * 2.0L) / 1'000'000.0 * view_.pixels_per_mm));
+      const auto hole_color = color(0.035F, 0.052F, 0.070F);
+      const auto drill_outline = color(0.68F, 0.72F, 0.76F);
+      draw->AddLine(screen(first), screen(second), hole_color, thickness);
+      draw->AddCircleFilled(screen(first), thickness / 2.0F, hole_color, 20);
+      draw->AddCircleFilled(screen(second), thickness / 2.0F, hole_color, 20);
+      draw->AddCircle(screen(first), thickness / 2.0F, drill_outline, 20, 1.0F);
+      draw->AddCircle(screen(second), thickness / 2.0F, drill_outline, 20, 1.0F);
     }
   };
 

@@ -186,7 +186,13 @@ make_source_board_scene(const Board& board, std::string source_path) {
       primitive.width_nm = static_cast<std::uint64_t>(std::max<std::int64_t>(0, pad.width.value()));
       primitive.height_nm =
           static_cast<std::uint64_t>(std::max<std::int64_t>(0, pad.height.value()));
-      primitive.drill_nm = static_cast<std::uint64_t>(std::max<std::int64_t>(0, pad.drill.value()));
+      primitive.drill_width_nm =
+          static_cast<std::uint64_t>(std::max<std::int64_t>(0, pad.drill_width.value()));
+      primitive.drill_height_nm =
+          static_cast<std::uint64_t>(std::max<std::int64_t>(0, pad.drill_height.value()));
+      primitive.drill_nm = std::max(primitive.drill_width_nm, primitive.drill_height_nm);
+      primitive.drill_offset_x_nm = pad.drill_offset.x.value();
+      primitive.drill_offset_y_nm = pad.drill_offset.y.value();
       const auto local_rotation =
           footprint.side == BoardSide::front ? pad.rotation.value() : -pad.rotation.value();
       primitive.rotation_microdegrees =
@@ -245,6 +251,16 @@ make_source_board_scene(const Board& board, std::string source_path) {
     scene->primitives.push_back(std::move(primitive));
   }
   for (const auto& zone : board.zones) {
+    if (zone.requires_refill) {
+      telemetry::SourcePrimitive primitive;
+      primitive.id = zone.id.value();
+      primitive.kind = "zone_refill_required";
+      primitive.reference = zone.name;
+      primitive.net = zone.net.value();
+      primitive.shape = "source-zone-without-saved-fill";
+      primitive.locked = zone.locked;
+      scene->primitives.push_back(std::move(primitive));
+    }
     for (std::size_t fill = 0U; fill < zone.fills.size(); ++fill) {
       const auto& source_fill = zone.fills[fill];
       add_polygon(zone.id.value() + ":fill:" + std::to_string(fill), "zone", source_fill.area,

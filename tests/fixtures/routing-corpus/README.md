@@ -15,7 +15,7 @@ because their files exist.
 | 0 | `pt2399_delay` | set13 | qualified | Exact final copper; 50 connections, KiCad DRC clean, layer PNGs |
 | 1 | `bm_svf` | set15 | unlocked | Always-run analog module probe; 78 seeded connections with residual overflow |
 | 2 | `zigbee_sensor` | set9 | locked | RF-oriented layout and circular courtyard proxies |
-| 3 | `ch32v003_usb` | set6 | locked | USB routing plus unsupported/non-copper pad geometry |
+| 3 | `ch32v003_usb` | set6 | locked | USB routing with exact oval/offset drill geometry; placement blockers remain |
 | 4 | `usbgpib` | set5 | locked | Fine-pitch VQFN and dense connector fanout |
 
 `manifest.json` is authoritative for source repository, exact commit, original path, license,

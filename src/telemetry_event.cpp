@@ -263,6 +263,10 @@ SourcePrimitive parse_source_primitive(const ptree& tree) {
   primitive.height_nm = get_or<std::uint64_t>(tree, "height_nm");
   primitive.diameter_nm = get_or<std::uint64_t>(tree, "diameter_nm");
   primitive.drill_nm = get_or<std::uint64_t>(tree, "drill_nm");
+  primitive.drill_width_nm = get_or<std::uint64_t>(tree, "drill_width_nm");
+  primitive.drill_height_nm = get_or<std::uint64_t>(tree, "drill_height_nm");
+  primitive.drill_offset_x_nm = get_or<std::int64_t>(tree, "drill_offset_x_nm");
+  primitive.drill_offset_y_nm = get_or<std::int64_t>(tree, "drill_offset_y_nm");
   primitive.rotation_microdegrees = get_or<std::int64_t>(tree, "rotation_microdegrees");
   primitive.shape = get_or<std::string>(tree, "shape");
   primitive.side = get_or<std::string>(tree, "side");
@@ -621,6 +625,10 @@ void write_source_primitive(std::ostringstream& out, const SourcePrimitive& prim
   }
   out << "],\"width_nm\":" << primitive.width_nm << ",\"height_nm\":" << primitive.height_nm
       << ",\"diameter_nm\":" << primitive.diameter_nm << ",\"drill_nm\":" << primitive.drill_nm
+      << ",\"drill_width_nm\":" << primitive.drill_width_nm
+      << ",\"drill_height_nm\":" << primitive.drill_height_nm
+      << ",\"drill_offset_x_nm\":" << primitive.drill_offset_x_nm
+      << ",\"drill_offset_y_nm\":" << primitive.drill_offset_y_nm
       << ",\"rotation_microdegrees\":" << primitive.rotation_microdegrees << ",\"shape\":\""
       << escape_json(primitive.shape) << "\",\"side\":\"" << escape_json(primitive.side)
       << "\",\"locked\":" << (primitive.locked ? "true" : "false")

@@ -2686,12 +2686,10 @@ private:
   }
   for (const auto& footprint : board.footprints) {
     for (const auto& pad : footprint.pads) {
-      if (!pad.plated || pad.drill.value() <= 0) {
+      if (!pad.plated || !pad_has_drill(pad)) {
         continue;
       }
-      register_vertical_feature(pad.id, pad.net,
-                                geometry::transform_point(pad.local_position, footprint.position,
-                                                          footprint.rotation, footprint.side),
+      register_vertical_feature(pad.id, pad.net, pad_drill_world_position(footprint, pad),
                                 pad.layers, true);
     }
   }

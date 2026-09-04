@@ -335,8 +335,8 @@ struct RoundedCore {
 } // namespace
 
 long double conservative_pad_radius_nm(const Pad& pad) {
-  if (!pad.plated && pad.drill.value() > 0) {
-    return static_cast<long double>(pad.drill.value()) / 2.0L;
+  if (!pad.plated && pad_has_drill(pad)) {
+    return static_cast<long double>(std::max(pad.drill_width, pad.drill_height).value()) / 2.0L;
   }
   const auto half_width = static_cast<long double>(pad.width.value()) / 2.0L;
   const auto half_height = static_cast<long double>(pad.height.value()) / 2.0L;
@@ -346,21 +346,37 @@ long double conservative_pad_radius_nm(const Pad& pad) {
   return std::hypot(half_width, half_height);
 }
 
+bool pad_has_drill(const Pad& pad) {
+  return pad.drill_width.value() > 0 && pad.drill_height.value() > 0;
+}
+
+Point pad_drill_world_position(const Footprint& footprint, const Pad& pad) {
+  const auto local_position = geometry::transform_point(
+      pad.drill_offset, pad.local_position, pad.rotation, BoardSide::front);
+  return geometry::transform_point(local_position, footprint.position, footprint.rotation,
+                                   footprint.side);
+}
+
 std::vector<CopperPadShape> copper_pad_shapes(const Board& board) {
   std::vector<CopperPadShape> result;
   for (const auto& footprint : board.footprints) {
     for (const auto& pad : footprint.pads) {
-      const bool drill_only = !pad.plated && pad.drill.value() > 0;
-      const auto dimension = drill_only ? pad.drill : Nanometres{0};
+      const bool drill_only = !pad.plated && pad_has_drill(pad);
       const auto rotation_value =
           footprint.rotation.value() +
           (footprint.side == BoardSide::front ? pad.rotation.value() : -pad.rotation.value());
       result.push_back(CopperPadShape{
           pad.id, pad.net,
-          geometry::transform_point(pad.local_position, footprint.position, footprint.rotation,
-                                    footprint.side),
-          pad.layers, drill_only ? PadShape::circle : pad.shape, drill_only ? dimension : pad.width,
-          drill_only ? dimension : pad.height, drill_only ? Nanometres{0} : pad.corner_radius,
+          drill_only ? pad_drill_world_position(footprint, pad)
+                     : geometry::transform_point(pad.local_position, footprint.position,
+                                                 footprint.rotation, footprint.side),
+          pad.layers,
+          drill_only && pad.drill_width != pad.drill_height ? PadShape::oval
+                                                           : drill_only ? PadShape::circle
+                                                                        : pad.shape,
+          drill_only ? pad.drill_width : pad.width,
+          drill_only ? pad.drill_height : pad.height,
+          drill_only ? Nanometres{0} : pad.corner_radius,
           Microdegrees{-rotation_value}, conservative_pad_radius_nm(pad)});
     }
   }

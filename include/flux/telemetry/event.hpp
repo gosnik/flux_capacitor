@@ -206,6 +206,10 @@ struct SourcePrimitive {
   std::uint64_t height_nm{0};
   std::uint64_t diameter_nm{0};
   std::uint64_t drill_nm{0};
+  std::uint64_t drill_width_nm{0};
+  std::uint64_t drill_height_nm{0};
+  std::int64_t drill_offset_x_nm{0};
+  std::int64_t drill_offset_y_nm{0};
   std::int64_t rotation_microdegrees{0};
   std::string shape;
   std::string side;

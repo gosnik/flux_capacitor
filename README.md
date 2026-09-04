@@ -1,5 +1,19 @@
 # flux_capacitor
 
+v0.129/schema 19 preserves a KiCad zone that has no saved fill as an immutable
+`requires_refill` marker instead of discarding it or inventing copper. Canonical validation keeps
+saved-fill and requires-refill states mutually exclusive. Ordinary detailed routing fails closed;
+only the explicit `--refillable-zones` workflow may publish provisional copper, and KiCad refill,
+strict re-import, connectivity, and external DRC remain mandatory. All nine pinned
+KiCadRoutingTools fixtures now pass strict import in their original KiCad 10 syntax. See
+[`ADR 0158`](docs/adr/0158-source-bound-unfilled-zones.md).
+
+The same schema retains circular or oval pad-drill width/height and pad-local drill offset. Exact
+non-plated circle/capsule obstacles replace the former maximum-diameter circle, and plated-hole
+transition reuse now occurs at the physical hole centre rather than the pad anchor. Telemetry and
+the viewer carry and render the same rotated drill geometry. See
+[`ADR 0159`](docs/adr/0159-exact-pad-drill-geometry.md).
+
 The native C++/Dear ImGui application for live router inspection and JSONL record/replay is
 documented in [docs/router-telemetry-viewer.md](docs/router-telemetry-viewer.md). It visualizes
 routes, rip-up activity, Pathfinder metrics, congestion and clearance conflicts, resource
@@ -1704,8 +1718,9 @@ Pinned reference-router comparisons are defined by
 `tests/python/record_reference_parity.py`; the checked summary under
 `reports/reference_comparison/` compares connectivity, DRC, route scope, and feature behavior
 rather than copper bytes. Flux now strictly imports and source-preserving round-trips KiCad 10's
-quoted name-valued net references; capability gaps on those unchanged reference fixtures remain
-frontier work rather than being hidden behind format conversion.
+quoted name-valued net references, and preserves unfilled zones as explicit provisional-refill
+markers. All nine unchanged reference fixtures cross the strict import boundary; their capability
+gaps remain frontier work rather than being hidden behind format conversion.
 
 The first versioned workflow boundary is available as `FluxWorkPlan` JSON. Create a write-once,
 source-revision-bound empty template with `flux-cli work-plan-template-kicad BOARD PLAN`, inspect it

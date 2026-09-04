@@ -23,6 +23,8 @@ struct CopperPadShape {
 };
 
 [[nodiscard]] long double conservative_pad_radius_nm(const Pad& pad);
+[[nodiscard]] bool pad_has_drill(const Pad& pad);
+[[nodiscard]] Point pad_drill_world_position(const Footprint& footprint, const Pad& pad);
 [[nodiscard]] std::vector<CopperPadShape> copper_pad_shapes(const Board& board);
 
 struct PolygonalPadOutline {

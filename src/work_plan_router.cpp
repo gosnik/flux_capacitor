@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <iterator>
+#include <limits>
 #include <set>
 #include <string_view>
 
@@ -129,16 +130,27 @@ WorkPlanRouteCompileResult compile_flux_work_plan_routes(const Board& source,
       "direct_medial_edges",
       "diversify_pin_access_rings",
       "grid_pitch_nm",
+      "hard_capacity_start_iteration",
       "interleave_routability_feedback",
       "max_expansions_per_connection",
+      "max_hard_capacity_blocker_reuse_invalidations_per_failed_net",
+      "max_hard_capacity_conflict_set_states_per_attempt",
+      "max_hard_capacity_ripup_attempts_per_pass",
+      "max_hard_capacity_ripup_nets_per_attempt",
       "max_router_iterations",
       "max_static_seed_workers",
       "multisource_steiner_growth",
       "negotiate_voronoi_lane_conflicts",
+      "former_route_memory_cost",
       "priority_nets",
       "retained_global_portfolios",
       "routability_feedback_retries",
+      "rollback_failed_hard_capacity_ripup",
+      "defer_hard_capacity_ripup_victims_to_pass_tail",
+      "protect_recovered_hard_capacity_ripup_nets",
+      "search_diversification",
       "selective_congestion_reroute",
+      "selective_full_reroute_interval",
       "spline_route_workers",
       "strict_medial_topology",
       "topology_locked_medial_materialization",
@@ -240,6 +252,34 @@ WorkPlanRouteCompileResult compile_flux_work_plan_routes(const Board& source,
     if (const auto value = unsigned_option(step, "spline_route_workers", 1U, 256U, result,
                                            option_pointer("spline_route_workers")))
       compiled.configuration.detailed.spline_route_workers = static_cast<std::size_t>(*value);
+    constexpr auto maximum_size = static_cast<std::uint64_t>(
+        std::numeric_limits<std::size_t>::max());
+    const auto set_global_size = [&](std::string_view name, std::size_t& target,
+                                     std::uint64_t minimum = 1U) {
+      if (const auto value =
+              unsigned_option(step, name, minimum, maximum_size, result, option_pointer(name))) {
+        target = static_cast<std::size_t>(*value);
+      }
+    };
+    set_global_size("hard_capacity_start_iteration",
+                    compiled.configuration.planner.global.hard_capacity_start_iteration);
+    set_global_size("max_hard_capacity_ripup_attempts_per_pass",
+                    compiled.configuration.planner.global
+                        .max_hard_capacity_ripup_attempts_per_pass);
+    set_global_size("max_hard_capacity_ripup_nets_per_attempt",
+                    compiled.configuration.planner.global.max_hard_capacity_ripup_nets_per_attempt);
+    set_global_size("max_hard_capacity_conflict_set_states_per_attempt",
+                    compiled.configuration.planner.global
+                        .max_hard_capacity_conflict_set_states_per_attempt);
+    set_global_size("max_hard_capacity_blocker_reuse_invalidations_per_failed_net",
+                    compiled.configuration.planner.global
+                        .max_hard_capacity_blocker_reuse_invalidations_per_failed_net);
+    set_global_size("selective_full_reroute_interval",
+                    compiled.configuration.planner.global.selective_full_reroute_interval);
+    if (const auto value = unsigned_option(step, "former_route_memory_cost", 0U, UINT64_MAX,
+                                           result, option_pointer("former_route_memory_cost"))) {
+      compiled.configuration.planner.global.former_route_memory_cost = *value;
+    }
 
     const auto set_bool = [&](std::string_view name, bool& target) {
       if (const auto value = boolean_option(step, name, result, option_pointer(name))) {
@@ -262,6 +302,15 @@ WorkPlanRouteCompileResult compile_flux_work_plan_routes(const Board& source,
              compiled.configuration.planner.global.atomic_complete_net_routing);
     set_bool("selective_congestion_reroute",
              compiled.configuration.planner.global.selective_congestion_reroute);
+    set_bool("rollback_failed_hard_capacity_ripup",
+             compiled.configuration.planner.global.rollback_failed_hard_capacity_ripup);
+    set_bool("defer_hard_capacity_ripup_victims_to_pass_tail",
+             compiled.configuration.planner.global
+                 .defer_hard_capacity_ripup_victims_to_pass_tail);
+    set_bool("protect_recovered_hard_capacity_ripup_nets",
+             compiled.configuration.planner.global.protect_recovered_hard_capacity_ripup_nets);
+    set_bool("search_diversification",
+             compiled.configuration.planner.global.enable_search_diversification);
     set_bool("interleave_routability_feedback",
              compiled.configuration.planner.interleave_routability_feedback);
     set_bool("xpbd_relaxation", compiled.configuration.planner.regional.enable_xpbd_relaxation);
@@ -273,6 +322,11 @@ WorkPlanRouteCompileResult compile_flux_work_plan_routes(const Board& source,
     set_bool("circular_arc_refinement", compiled.configuration.detailed.circular_arc_refinement);
     if (compiled.configuration.planner.regional.enable_xpbd_feedback) {
       compiled.configuration.planner.regional.enable_xpbd_relaxation = true;
+    }
+    if (compiled.configuration.planner.global.enable_search_diversification) {
+      // Match the direct CLI's high-level switch: large-neighborhood destruction operates on
+      // complete net trees, so enabling it also enables atomic routing.
+      compiled.configuration.planner.global.atomic_complete_net_routing = true;
     }
     if (const auto value = string_option(step, "checkpoint_objective", result,
                                          option_pointer("checkpoint_objective"))) {
@@ -293,6 +347,53 @@ WorkPlanRouteCompileResult compile_flux_work_plan_routes(const Board& source,
       compiled.priority_nets = resolve_priority_nets(source, *names, compiled.selected_nets, result,
                                                      option_pointer("priority_nets"));
       compiled.configuration.planner.global.priority_nets = compiled.priority_nets;
+    }
+    const auto& global = compiled.configuration.planner.global;
+    const auto dependency_error = [&](std::string_view name, std::string message) {
+      error(result, "invalid_work_plan_route_option_dependency", std::move(message),
+            option_pointer(name));
+    };
+    if (global.hard_capacity_start_iteration > 0U &&
+        !global.require_voronoi_topological_transitions &&
+        !global.use_direct_voronoi_resource_edges) {
+      dependency_error("hard_capacity_start_iteration",
+                       "hard-capacity routing requires strict-medial topology or direct-medial "
+                       "edges");
+    }
+    const bool has_ripup_attempts = global.max_hard_capacity_ripup_attempts_per_pass > 0U;
+    const bool has_ripup_nets = global.max_hard_capacity_ripup_nets_per_attempt > 0U;
+    if (has_ripup_attempts != has_ripup_nets) {
+      dependency_error("max_hard_capacity_ripup_attempts_per_pass",
+                       "hard-capacity rip-up attempt and net bounds must be positive together");
+    } else if (has_ripup_attempts &&
+               (global.hard_capacity_start_iteration == 0U ||
+                !global.atomic_complete_net_routing)) {
+      dependency_error("max_hard_capacity_ripup_attempts_per_pass",
+                       "hard-capacity rip-up requires a hard-capacity start and atomic complete-net "
+                       "routing");
+    }
+    if (global.max_hard_capacity_conflict_set_states_per_attempt > 0U &&
+        !has_ripup_attempts) {
+      dependency_error("max_hard_capacity_conflict_set_states_per_attempt",
+                       "joint blocker-set search requires hard-capacity rip-up");
+    }
+    if ((global.rollback_failed_hard_capacity_ripup ||
+         global.defer_hard_capacity_ripup_victims_to_pass_tail ||
+         global.protect_recovered_hard_capacity_ripup_nets) &&
+        !has_ripup_attempts) {
+      dependency_error("max_hard_capacity_ripup_attempts_per_pass",
+                       "hard-capacity transaction policies require hard-capacity rip-up");
+    }
+    if (global.selective_full_reroute_interval > 0U &&
+        !global.selective_congestion_reroute) {
+      dependency_error("selective_full_reroute_interval",
+                       "periodic full rerouting requires selective congestion rerouting");
+    }
+    if (global.max_hard_capacity_blocker_reuse_invalidations_per_failed_net > 0U &&
+        (!global.selective_congestion_reroute || global.hard_capacity_start_iteration == 0U)) {
+      dependency_error("max_hard_capacity_blocker_reuse_invalidations_per_failed_net",
+                       "blocker-driven reuse invalidation requires selective rerouting and a "
+                       "hard-capacity start");
     }
     result.route_steps.push_back(std::move(compiled));
   }

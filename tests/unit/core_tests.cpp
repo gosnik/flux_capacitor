@@ -1245,6 +1245,16 @@ void global_to_detailed_route_is_transactional_and_capacity_gated() {
   refillable_detail_config.defer_saved_zone_fill_clearance_to_refill = true;
   const auto refillable_detail =
       flux::materialize_detailed_route(refill_source, refillable_route, refillable_detail_config);
+
+  auto unfilled_source = refill_source;
+  unfilled_source.zones.front().fills.clear();
+  unfilled_source.zones.front().requires_refill = true;
+  const auto unfilled_validation = flux::validate_board(unfilled_source);
+  const auto unfilled_route = flux::route_global(unfilled_source, refillable_config);
+  const auto unfilled_default_detail =
+      flux::materialize_detailed_route(unfilled_source, unfilled_route);
+  const auto unfilled_provisional_detail = flux::materialize_detailed_route(
+      unfilled_source, unfilled_route, refillable_detail_config);
   require(!immutable_fill_route.complete() && refillable_route.complete() &&
               immutable_fill_route.bidirectional_route_growth_enabled &&
               immutable_fill_route.configured_bidirectional_route_growth_start_iteration == 1U &&
@@ -1258,6 +1268,28 @@ void global_to_detailed_route_is_transactional_and_capacity_gated() {
               refillable_detail.copper_drc.ok(),
           "saved fills must remain immutable by default while explicit refill planning can only "
           "publish a provisional externally gated candidate");
+  require(unfilled_validation.ok() && unfilled_validation.warning_count() == 1U &&
+              unfilled_route.complete() &&
+              unfilled_default_detail.stop_reason ==
+                  flux::DetailedRouterStopReason::invalid_input &&
+              !unfilled_default_detail.candidate &&
+              unfilled_provisional_detail.provisional_zone_refill_candidate() &&
+              unfilled_provisional_detail.candidate &&
+              unfilled_provisional_detail.connectivity.open_connections == 0U &&
+              unfilled_provisional_detail.copper_drc.ok(),
+          "an unfilled source zone must remain a valid immutable marker while only the explicit "
+          "refill workflow can publish provisional copper");
+
+  auto contradictory_zone_source = unfilled_source;
+  contradictory_zone_source.zones.front().fills = {
+      flux::CopperZoneFill{LayerId{"F.Cu"}, rectangle(45.0, 0.0, 55.0, 80.0), {}}};
+  const auto contradictory_validation = flux::validate_board(contradictory_zone_source);
+  require(!contradictory_validation.ok() &&
+              std::any_of(contradictory_validation.issues.begin(),
+                          contradictory_validation.issues.end(), [](const auto& issue) {
+                            return issue.code == "contradictory_zone_refill_state";
+                          }),
+          "saved physical copper and a requires-refill marker must be mutually exclusive");
 }
 
 void quintic_ph_geometry_preserves_invariants_and_exact_offsets() {
@@ -3453,6 +3485,43 @@ void cancellation_and_kicad_export_boundaries_fail_closed() {
   const auto contents = load_minimal_kicad_fixture();
   const auto imported = flux::io::import_kicad_pcb(contents);
   require(imported.strict(), "the canonical KiCad fixture must import without loss");
+  auto unfilled_zone_contents = contents;
+  const auto board_close = unfilled_zone_contents.rfind(')');
+  require(board_close != std::string::npos,
+          "unfilled-zone fixture must retain the root closing delimiter");
+  unfilled_zone_contents.insert(
+      board_close,
+      "  (zone (layer \"B.Cu\") (uuid \"unfilled-zone-test\") (hatch edge 0.5)\n"
+      "    (polygon (pts (xy 20 20) (xy 30 20) (xy 30 30) (xy 20 30))))\n");
+  const auto unfilled_zone_import = flux::io::import_kicad_pcb(unfilled_zone_contents);
+  const auto imported_unfilled_zone =
+      unfilled_zone_import.board
+          ? std::find_if(unfilled_zone_import.board->zones.begin(),
+                         unfilled_zone_import.board->zones.end(), [](const auto& zone) {
+                           return zone.id == ObjectId{"unfilled-zone-test"};
+                         })
+          : std::vector<flux::CopperZone>::const_iterator{};
+  require(unfilled_zone_import.strict() && unfilled_zone_import.board &&
+              imported_unfilled_zone != unfilled_zone_import.board->zones.end() &&
+              imported_unfilled_zone->requires_refill && imported_unfilled_zone->fills.empty() &&
+              imported_unfilled_zone->net == NetId{"kicad-net-0"},
+          "a netless KiCad zone without saved fill must retain strict source-bound refill state");
+  const auto unfilled_zone_export = flux::io::export_kicad_candidate(
+      unfilled_zone_contents, *unfilled_zone_import.board, *unfilled_zone_import.board);
+  const auto unfilled_zone_reimport =
+      unfilled_zone_export.contents
+          ? flux::io::import_kicad_pcb(*unfilled_zone_export.contents)
+          : flux::io::KicadImportResult{};
+  require(unfilled_zone_export.ok() && unfilled_zone_export.contents &&
+              unfilled_zone_export.contents->find("unfilled-zone-test") != std::string::npos &&
+              unfilled_zone_reimport.strict() && unfilled_zone_reimport.board &&
+              std::any_of(unfilled_zone_reimport.board->zones.begin(),
+                          unfilled_zone_reimport.board->zones.end(), [](const auto& zone) {
+                            return zone.id == ObjectId{"unfilled-zone-test"} &&
+                                   zone.requires_refill && zone.fills.empty();
+                          }),
+          "an unchanged unfilled zone must retain exact source syntax and canonical refill state "
+          "through source-preserving export");
   auto named_net_contents = contents;
   const auto erase_once = [&named_net_contents](std::string_view value) {
     const auto position = named_net_contents.find(value);
@@ -3528,6 +3597,38 @@ void cancellation_and_kicad_export_boundaries_fail_closed() {
                   0.0L,
           "a KiCad board-file pad angle must be converted to local orientation before the "
           "footprint transform is applied exactly once");
+  auto oval_drill_contents = contents;
+  const auto oval_pad = oval_drill_contents.rfind("(pad \"1\" smd circle");
+  require(oval_pad != std::string::npos,
+          "oval-drill fixture pad declaration must remain identifiable");
+  oval_drill_contents.replace(oval_pad + std::string{"(pad \"1\" "}.size(),
+                              std::string{"smd circle"}.size(), "np_thru_hole oval");
+  const auto oval_layers = oval_drill_contents.find(
+      "(layers \"F.Cu\" \"F.Paste\" \"F.Mask\")", oval_pad);
+  require(oval_layers != std::string::npos,
+          "oval-drill fixture pad layers must remain identifiable");
+  oval_drill_contents.replace(
+      oval_layers, std::string{"(layers \"F.Cu\" \"F.Paste\" \"F.Mask\")"}.size(),
+      "(drill oval 0.6 1.4 (offset 0.2 0))\n      (layers \"*.Cu\" \"*.Mask\")");
+  const auto oval_drill_import = flux::io::import_kicad_pcb(oval_drill_contents);
+  const auto oval_drill_shapes = oval_drill_import.board
+                                     ? flux::copper_pad_shapes(*oval_drill_import.board)
+                                     : std::vector<flux::CopperPadShape>{};
+  require(oval_drill_import.strict() && oval_drill_import.board &&
+              !oval_drill_import.board->footprints.back().pads.front().plated &&
+              oval_drill_import.board->footprints.back().pads.front().drill_width ==
+                  Nanometres::from_mm(0.6) &&
+              oval_drill_import.board->footprints.back().pads.front().drill_height ==
+                  Nanometres::from_mm(1.4) &&
+              oval_drill_import.board->footprints.back().pads.front().drill_offset ==
+                  mm(0.2, 0.0) &&
+              !oval_drill_shapes.empty() &&
+              oval_drill_shapes.back().shape == flux::PadShape::oval &&
+              oval_drill_shapes.back().width == Nanometres::from_mm(0.6) &&
+              oval_drill_shapes.back().height == Nanometres::from_mm(1.4) &&
+              oval_drill_shapes.back().position == mm(79.8, 40.0),
+          "oval and offset non-plated drill geometry must retain its exact local dimensions and "
+          "world-space routing obstacle");
   const auto priority_template = flux::io::make_placement_move_priorities_template(*imported.board);
   const auto priorities =
       flux::io::load_placement_move_priorities(*imported.board, priority_template);
@@ -4534,22 +4635,43 @@ void same_net_vertical_features_are_reused_as_transition_portals() {
   through_hole.id = ObjectId{"J1"};
   through_hole.reference = "J1";
   through_hole.position = via_position;
-  through_hole.courtyard = local_rectangle(2.0, 2.0);
+  through_hole.courtyard = local_rectangle(3.0, 2.0);
   flux::Pad plated_pad{
       ObjectId{"J1-pad"}, NetId{"net-1"}, Point{}, {LayerId{"F.Cu"}, LayerId{"B.Cu"}}};
-  plated_pad.width = Nanometres::from_mm(1.2);
+  plated_pad.width = Nanometres::from_mm(1.6);
   plated_pad.height = Nanometres::from_mm(1.2);
-  plated_pad.drill = Nanometres::from_mm(0.6);
+  plated_pad.shape = flux::PadShape::oval;
+  plated_pad.drill_width = Nanometres::from_mm(0.6);
+  plated_pad.drill_height = Nanometres::from_mm(0.6);
+  plated_pad.drill_offset = mm(0.2, 0.0);
   plated_pad.plated = true;
   through_hole.pads.push_back(std::move(plated_pad));
   pad_board.footprints.push_back(std::move(through_hole));
+  const auto pad_hole_position = mm(50.5, 40.2);
+  const auto global_pad_route = flux::route_global(pad_board, config);
+  const auto exact_pad_transition =
+      std::any_of(global_pad_route.paths.begin(), global_pad_route.paths.end(), [&](const auto& p) {
+        for (std::size_t index = 1U; index < p.points.size(); ++index) {
+          if (p.points[index - 1U].position == pad_hole_position &&
+              p.points[index].position == pad_hole_position &&
+              p.points[index - 1U].layer != p.points[index].layer) {
+            return true;
+          }
+        }
+        return false;
+      });
+  require(global_pad_route.complete() &&
+              global_pad_route.reused_component_pad_transitions > 0U && exact_pad_transition,
+          "a plated pad must expose its offset physical hole, rather than its copper anchor, as "
+          "the reusable global layer-transition portal: " +
+              global_pad_route.diagnostic);
   flux::GlobalRouteResult pad_route;
   pad_route.stop_reason = GlobalRouterStopReason::complete;
   flux::GlobalRoutePath path;
   path.net = NetId{"net-1"};
   path.points = {{mm(20.0, 40.0), LayerId{"F.Cu"}},
-                 {via_position, LayerId{"F.Cu"}},
-                 {via_position, LayerId{"B.Cu"}},
+                 {pad_hole_position, LayerId{"F.Cu"}},
+                 {pad_hole_position, LayerId{"B.Cu"}},
                  {mm(80.0, 40.0), LayerId{"B.Cu"}}};
   pad_route.paths.push_back(std::move(path));
   const auto through_hole_detailed =

@@ -424,10 +424,20 @@ ValidationReport validate_board_impl(const Board& board, bool reuse_static_zone_
         add_issue(report, IssueSeverity::error, "pad_without_layers",
                   "pad must belong to at least one layer", {pad.id.value()});
       }
-      if (pad.width.value() <= 0 || pad.height.value() <= 0 || pad.drill.value() < 0 ||
-          pad.drill > std::min(pad.width, pad.height)) {
+      const bool partial_drill = (pad.drill_width.value() == 0) != (pad.drill_height.value() == 0);
+      const bool drill_outside_pad_bounds =
+          pad.drill_width.value() > 0 && pad.drill_height.value() > 0 &&
+          (static_cast<long double>(absolute_magnitude(pad.drill_offset.x.value())) * 2.0L +
+                   static_cast<long double>(pad.drill_width.value()) >
+               static_cast<long double>(pad.width.value()) ||
+           static_cast<long double>(absolute_magnitude(pad.drill_offset.y.value())) * 2.0L +
+                   static_cast<long double>(pad.drill_height.value()) >
+               static_cast<long double>(pad.height.value()));
+      if (pad.width.value() <= 0 || pad.height.value() <= 0 ||
+          pad.drill_width.value() < 0 || pad.drill_height.value() < 0 || partial_drill ||
+          drill_outside_pad_bounds) {
         add_issue(report, IssueSeverity::error, "invalid_pad_dimensions",
-                  "pad dimensions must be positive and not smaller than the drill",
+                  "pad dimensions must be positive and contain the complete drill bounds",
                   {pad.id.value()});
       }
       if ((pad.shape == PadShape::circle && pad.width != pad.height) ||
@@ -792,9 +802,18 @@ ValidationReport validate_board_impl(const Board& board, bool reuse_static_zone_
       add_issue(report, IssueSeverity::error, "unknown_zone_net",
                 "copper zone references an undeclared net", {zone.id.value(), zone.net.value()});
     }
-    if (zone.fills.empty()) {
+    if (zone.fills.empty() && !zone.requires_refill) {
       add_issue(report, IssueSeverity::error, "zone_without_filled_copper",
-                "represented copper zones must contain at least one filled polygon",
+                "represented copper zones must contain a saved fill or explicitly require refill",
+                {zone.id.value()});
+    } else if (!zone.fills.empty() && zone.requires_refill) {
+      add_issue(report, IssueSeverity::error, "contradictory_zone_refill_state",
+                "a zone cannot contain saved physical fill while also requiring refill",
+                {zone.id.value()});
+    } else if (zone.requires_refill) {
+      add_issue(report, IssueSeverity::warning, "zone_refill_required",
+                "zone has no saved physical copper and requires KiCad refill before final routing "
+                "acceptance",
                 {zone.id.value()});
     }
     for (const auto& fill : zone.fills) {

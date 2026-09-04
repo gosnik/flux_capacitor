@@ -145,12 +145,12 @@
       "title": "Power-plane synthesis and repair",
       "status": "missing",
       "reference_evidence": ["docs/route-plane.md", "py_router/route_planes.py", "py_router/repair_planes.py"],
-      "flux_evidence": ["src/kicad_import.cpp", "src/drc.cpp"],
+      "flux_evidence": ["src/kicad_import.cpp", "src/validation.cpp", "src/detailed_router.cpp", "docs/adr/0158-source-bound-unfilled-zones.md"],
       "focused_fixture": "krt.two-islands-smd-stub-via",
       "stress_sample": "reference:kicad_files/rp2350_fpga_eensy_prePlane.kicad_pcb",
       "public_commands": [],
       "acceptance": "Proposed zones are refilled by KiCad, strictly re-imported, repaired from actual fill, and pass connectivity plus external DRC.",
-      "gap": "Existing filled zones are modeled, but Flux does not synthesize or repair planes."
+      "gap": "Saved fills and explicit unfilled-zone refill markers are modeled fail-closed, but Flux does not synthesize or repair planes."
     },
     {
       "id": "vias.return-and-stitch",
@@ -265,12 +265,12 @@
       "title": "KiCad orchestration and application",
       "status": "partial",
       "reference_evidence": ["kicad_routing_plugin/action_plugin.py", "kicad_routing_plugin/settings_persistence.py"],
-      "flux_evidence": ["plugins/kicad/route_board.py", "src/kicad_import.cpp", "src/kicad_export.cpp"],
+      "flux_evidence": ["plugins/kicad/route_board.py", "src/kicad_import.cpp", "src/kicad_export.cpp", "src/copper_geometry.cpp", "docs/adr/0158-source-bound-unfilled-zones.md", "docs/adr/0159-exact-pad-drill-geometry.md"],
       "focused_fixture": "flux.minimal",
       "stress_sample": "tests/fixtures/routing-corpus/bm_svf.kicad_pcb",
       "public_commands": ["flux-cli autoroute-kicad", "plugins/kicad/route_board.py"],
       "acceptance": "The plugin snapshots the selected board, launches the same CLI work plan, supports cancellation, and applies only exact certified copper as one unsaved transaction.",
-      "gap": "File and live route application, strict KiCad 9 ordinal nets, strict KiCad 10 named nets, and the initial work-plan boundary exist; the full thin orchestration UI does not."
+      "gap": "File and live route application, strict KiCad 9 ordinal nets, strict KiCad 10 named nets and unfilled-zone markers, exact oval/offset pad drills, and the initial work-plan boundary exist; the full thin orchestration UI does not."
     },
     {
       "id": "observability.render-replay",

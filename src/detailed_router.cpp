@@ -1,6 +1,7 @@
 #include "flux/core/detailed_router.hpp"
 
 #include "flux/core/board_free_space.hpp"
+#include "flux/core/copper_geometry.hpp"
 #include "flux/core/free_space_offset.hpp"
 #include "flux/core/geometry.hpp"
 #include "flux/core/navmesh_route.hpp"
@@ -3533,10 +3534,8 @@ void accumulate_committed_spline_route_metrics(DetailedRouteResult& target,
     const bool conductive_pad =
         std::any_of(board.footprints.begin(), board.footprints.end(), [&](const auto& footprint) {
           return std::any_of(footprint.pads.begin(), footprint.pads.end(), [&](const auto& pad) {
-            return pad.net == path.net && pad.plated && pad.drill.value() > 0 &&
-                   geometry::transform_point(pad.local_position, footprint.position,
-                                             footprint.rotation,
-                                             footprint.side) == current.position &&
+            return pad.net == path.net && pad.plated && pad_has_drill(pad) &&
+                   pad_drill_world_position(footprint, pad) == current.position &&
                    covers_layers(pad.layers);
           });
         });
@@ -4805,6 +4804,16 @@ DetailedRouteResult materialize_impl(const Board& source, const GlobalRouteResul
   if (!source_validation.ok() && !config.allow_invalid_source_for_diagnostic_preview) {
     result.validation = source_validation;
     result.diagnostic = "source board failed structural validation";
+    return result;
+  }
+  const bool source_requires_zone_refill =
+      std::any_of(source.zones.begin(), source.zones.end(),
+                  [](const CopperZone& zone) { return zone.requires_refill; });
+  if (source_requires_zone_refill && !config.defer_saved_zone_fill_clearance_to_refill) {
+    result.stop_reason = DetailedRouterStopReason::invalid_input;
+    result.validation = source_validation;
+    result.diagnostic =
+        "source contains an unfilled zone; use the explicit provisional zone-refill workflow";
     return result;
   }
   std::size_t residual_nets = 0U;

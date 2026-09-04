@@ -5463,8 +5463,10 @@ void print_import_result(const flux::io::KicadImportResult& imported) {
     auto keepout_count = imported.board->keepouts.size();
     std::size_t zone_fill_regions = 0;
     std::size_t zone_fill_holes = 0;
+    std::size_t zones_requiring_refill = 0;
     for (const auto& zone : imported.board->zones) {
       zone_fill_regions += zone.fills.size();
+      zones_requiring_refill += zone.requires_refill ? 1U : 0U;
       for (const auto& fill : zone.fills) {
         zone_fill_holes += fill.holes.size();
       }
@@ -5493,6 +5495,7 @@ void print_import_result(const flux::io::KicadImportResult& imported) {
               << "  \"track_arcs\": " << imported.board->track_arcs.size() << ",\n"
               << "  \"vias\": " << imported.board->vias.size() << ",\n"
               << "  \"zones\": " << imported.board->zones.size() << ",\n"
+              << "  \"zones_requiring_refill\": " << zones_requiring_refill << ",\n"
               << "  \"zone_fill_regions\": " << zone_fill_regions << ",\n"
               << "  \"zone_fill_holes\": " << zone_fill_holes << ",\n"
               << "  \"keepouts\": " << keepout_count << ",\n"
@@ -7647,7 +7650,7 @@ constrained_optimizer_config(const Board& board,
 }
 
 void print_help() {
-  std::cout << "flux-cli 0.128.0\n\n"
+  std::cout << "flux-cli 0.129.0\n\n"
                "Usage:\n"
                "  flux-cli version       Print the engine version\n"
                "  flux-cli capabilities --json  Print the pinned feature-parity contract\n"
@@ -7856,7 +7859,7 @@ int main(int argc, char** argv) {
   }
   const std::string_view command{argv[1]};
   if (command == "version" && argc == 2) {
-    std::cout << "flux_capacitor 0.128.0 board-schema 18\n";
+    std::cout << "flux_capacitor 0.129.0 board-schema 19\n";
     return EXIT_SUCCESS;
   }
   if (command == "capabilities" && argc == 3 && std::string_view{argv[2]} == "--json") {
@@ -7871,8 +7874,8 @@ int main(int argc, char** argv) {
     const char* override_value = std::getenv("FLUX_VULKAN_DEVICE");
     std::cout << "{\n"
               << "  \"engine\": \"flux_capacitor\",\n"
-              << "  \"version\": \"0.128.0\",\n"
-              << "  \"board_schema\": 18,\n"
+              << "  \"version\": \"0.129.0\",\n"
+              << "  \"board_schema\": 19,\n"
               << "  \"production_gpu_required\": true,\n"
               << "  \"gpu_available\": " << (device.available ? "true" : "false") << ",\n"
               << "  \"gpu_device\": " << json_quote(device.device_name) << ",\n"

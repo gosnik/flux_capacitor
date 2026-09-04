@@ -138,7 +138,7 @@
         {"path": "tests/fixtures/parity/krt/lvds_converter_dualclk.kicad_pcb", "sha256": "46f70ced3dfc43cba7e2008c9475db4670e94fbfbaf9fb893d393fc26547503a"}
       ],
       "capabilities": ["electrical.impedance", "routing.differential-pairs", "tuning.length-time"],
-      "current_gate": {"state": "import-blocked", "strict_import": false, "blockers": ["unfilled_zone_ignored"]}
+      "current_gate": {"state": "frontier", "strict_import": true, "blockers": ["impedance_and_length_time_not_qualified"]}
     },
     {
       "id": "krt.two-islands-smd-stub-via",

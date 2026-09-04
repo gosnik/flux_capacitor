@@ -783,6 +783,8 @@ void import_outline(const SExpression& root, Board& board, Importer& importer) {
 }
 
 [[nodiscard]] NetId item_net(const SExpression& item, Importer& importer);
+[[nodiscard]] NetId referenced_net(const SExpression& expression, Importer& importer,
+                                   std::string_view context, bool missing_is_no_net);
 
 [[nodiscard]] std::optional<CopperZoneFill> decode_filled_region(LayerId layer, Polygon fractured) {
   if (fractured.vertices.size() > 1U && fractured.vertices.front() == fractured.vertices.back()) {
@@ -928,17 +930,20 @@ import_copper_zone(const SExpression& zone, Importer& importer, std::string fall
     return std::nullopt;
   }
   const auto filled_polygons = find_children(zone, "filled_polygon");
-  if (filled_polygons.empty()) {
-    importer.warning("unfilled_zone_ignored",
-                     "copper zone has no saved filled polygons and cannot provide physical copper",
-                     zone.location);
-    return std::nullopt;
-  }
   CopperZone result;
   result.id = ObjectId{unique_stable_token(zone, std::move(fallback_id), importer)};
-  result.net = item_net(zone, importer);
+  result.net = referenced_net(zone, importer, "copper zone", filled_polygons.empty());
   result.name = std::string(named_atom(zone, "name").value_or(""));
   result.locked = has_atom(zone, "locked") || find_child(zone, "locked") != nullptr;
+  if (filled_polygons.empty()) {
+    result.requires_refill = true;
+    importer.warning(
+        "unfilled_zone_requires_refill",
+        "copper zone has no saved physical fill; Flux preserves the source zone identity but "
+        "requires explicit provisional routing followed by KiCad refill and strict re-import",
+        zone.location, false);
+    return result;
+  }
   bool valid = true;
   for (const auto* filled_polygon : filled_polygons) {
     const auto layer = named_atom(*filled_polygon, "layer");
@@ -1181,15 +1186,28 @@ struct ImportedPlacementEnvelope {
   return PadShape::unknown;
 }
 
-[[nodiscard]] Nanometres parse_pad_drill(const SExpression& pad, Importer& importer) {
+struct ParsedPadDrill {
+  Nanometres width;
+  Nanometres height;
+  Point offset;
+};
+
+[[nodiscard]] ParsedPadDrill parse_pad_drill(const SExpression& pad, Importer& importer) {
   const auto* drill = find_child(pad, "drill");
   if (drill == nullptr) {
-    return Nanometres{0};
+    return {};
+  }
+  Point offset;
+  if (const auto* offset_expression = find_child(*drill, "offset")) {
+    if (const auto parsed = parse_point(*offset_expression, importer, "pad drill offset")) {
+      offset = *parsed;
+    }
   }
   const auto first = atom_at(*drill, 1);
   const auto first_number = first ? parse_double(*first) : std::nullopt;
   if (first_number) {
-    return Nanometres::from_mm(*first_number);
+    const auto diameter = Nanometres::from_mm(*first_number);
+    return {diameter, diameter, offset};
   }
   if (first && *first == "oval") {
     const auto width = atom_at(*drill, 2);
@@ -1197,11 +1215,11 @@ struct ImportedPlacementEnvelope {
     const auto width_value = width ? parse_double(*width) : std::nullopt;
     const auto height_value = height ? parse_double(*height) : std::nullopt;
     if (width_value && height_value) {
-      return Nanometres::from_mm(std::max(*width_value, *height_value));
+      return {Nanometres::from_mm(*width_value), Nanometres::from_mm(*height_value), offset};
     }
   }
   importer.error("invalid_pad_drill", "pad drill dimensions are invalid", drill->location);
-  return Nanometres{0};
+  return {};
 }
 
 void import_footprints(const SExpression& root, Board& board, Importer& importer) {
@@ -1336,7 +1354,10 @@ void import_footprints(const SExpression& root, Board& board, Importer& importer
               std::llround(static_cast<long double>(minimum_dimension) * *ratio))};
         }
       }
-      pad.drill = parse_pad_drill(*pad_expression, importer);
+      const auto drill = parse_pad_drill(*pad_expression, importer);
+      pad.drill_width = drill.width;
+      pad.drill_height = drill.height;
+      pad.drill_offset = drill.offset;
       pad.plated = atom_at(*pad_expression, 2) != std::optional<std::string_view>{"np_thru_hole"};
       footprint.pads.push_back(std::move(pad));
     }

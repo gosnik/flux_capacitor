@@ -227,7 +227,11 @@ void rich_overlay_events_round_trip_and_replay() {
                                       1'200'000,
                                       800'000,
                                       0,
-                                      300'000,
+                                      500'000,
+                                      200'000,
+                                      500'000,
+                                      100'000,
+                                      -50'000,
                                       90'000'000,
                                       "oval",
                                       "front",
@@ -317,7 +321,27 @@ void rich_overlay_events_round_trip_and_replay() {
           "contested via sites must remain replayable");
   require(replay.state().source_boards().at("source-board:0")->primitives.back().kind == "pad" &&
               replay.state().source_boards().at("source-board:0")->primitives.back().drill_nm ==
-                  300'000U,
+                  500'000U &&
+              replay.state()
+                      .source_boards()
+                      .at("source-board:0")
+                      ->primitives.back()
+                      .drill_width_nm == 200'000U &&
+              replay.state()
+                      .source_boards()
+                      .at("source-board:0")
+                      ->primitives.back()
+                      .drill_height_nm == 500'000U &&
+              replay.state()
+                      .source_boards()
+                      .at("source-board:0")
+                      ->primitives.back()
+                      .drill_offset_x_nm == 100'000 &&
+              replay.state()
+                      .source_boards()
+                      .at("source-board:0")
+                      ->primitives.back()
+                      .drill_offset_y_nm == -50'000,
           "replay must retain the immutable source scene while dynamic routes change");
 
   flux::telemetry::LiveStateHistory overlay_history;

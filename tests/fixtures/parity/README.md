@@ -14,8 +14,10 @@ path and SHA-256 in `manifest.json`.
 
 The KiCad 10 fixtures deliberately remain in their original 2026 syntax. Flux derives stable net
 identity directly from their quoted name-valued references when no ordinal table exists and emits
-the same syntax for new source-preserving copper. Do not normalize, down-convert, or silently edit
-the fixtures: remaining capability blockers must stay attributable to actual routing semantics.
+the same syntax for new source-preserving copper. An unfilled source zone is retained as an
+immutable requires-refill marker rather than discarded or invented as copper, so all nine pinned
+boards now pass strict import. Do not normalize, down-convert, or silently edit the fixtures:
+remaining capability blockers must stay attributable to actual routing semantics.
 
 Run the catalog and capability-contract check through:
 

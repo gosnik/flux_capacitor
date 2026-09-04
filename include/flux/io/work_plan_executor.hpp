@@ -33,6 +33,8 @@ struct WorkPlanStepExecutionResult {
   std::size_t global_unrouted_nets{0U};
   std::size_t global_overflow{0U};
   std::uint64_t global_cost{0U};
+  bool coarse_polyline_fallback_attempted{false};
+  bool coarse_polyline_fallback_accepted{false};
   bool sampled_fallback_attempted{false};
   bool sampled_fallback_accepted{false};
   WorkPlanAcceptanceState acceptance;
@@ -49,6 +51,10 @@ struct WorkPlanExecutionResult {
   bool whole_board_accepted{false};
   bool candidate_ready_for_export{false};
   bool external_kicad_drc_run{false};
+  bool external_kicad_drc_passed{false};
+  int external_kicad_drc_exit_code{-1};
+  std::string external_kicad_drc_executable;
+  std::string external_kicad_drc_diagnostic;
   std::optional<Board> candidate;
   WorkPlanAcceptanceState final_acceptance;
   std::vector<WorkPlanStepExecutionResult> steps;
@@ -57,9 +63,10 @@ struct WorkPlanExecutionResult {
   [[nodiscard]] bool ok() const { return internally_complete; }
 };
 
-// Executes only currently supported route and validation steps on private board copies. Preview
-// never authorizes export. Every route is committed to the next step only after detailed exact
-// acceptance; a failed/cancelled step leaves the prior checkpoint intact and skips dependants.
+// Executes currently supported route, differential-pair, bus, and validation steps on private
+// board copies. Preview never authorizes export. Every route-like step is committed to the next
+// step only after detailed exact acceptance; a failed/cancelled step leaves the prior checkpoint
+// intact and skips dependants.
 [[nodiscard]] WorkPlanExecutionResult
 execute_flux_work_plan(const Board& source, const FluxWorkPlan& plan,
                        std::stop_token stop_token = {}, RouterTelemetrySink* telemetry = nullptr);

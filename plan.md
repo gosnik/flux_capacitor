@@ -273,22 +273,38 @@ Progress ledger (updated 2026-09-04):
 - Milestone 1.4 partial: direct CLI autorouting and work-plan route compilation now share one
   `autoroute_v1` preset. A strict initial option registry covers global iteration/search/grid,
   priority-net string lists, topology, regional feedback/XPBD, and detailed PH/arc controls;
-  unknown names, wrong JSON types, out-of-range values, and priorities outside the expanded scope
-  fail closed. Exact replacement scopes carry independently into detailed materialization. The
-  remaining CLI option families and non-route step adapters are still open.
+  bounded hard-capacity recovery, blocker-set search, rollback/deferred-victim/protected-recovery
+  policy, selective full reroute, former-route memory, and search diversification now compile
+  through the same typed boundary with their direct-CLI dependency matrix. The same boundary now
+  carries weighted-frontier search, congestion escalation, physical overflow/history ordering,
+  sampled clearance shadows, reserve/river/terminal-demand costs, via-lattice phases, fine pin
+  escape, and paired terminal/medial/corridor neck-down geometry. Grid divisibility, via-phase,
+  neck-down pairing, direct-medial, and pressure-cost dependencies fail before execution. Unknown
+  names, wrong JSON types, out-of-range values, invalid option combinations, and priorities outside
+  the expanded scope fail closed. Exact replacement scopes carry independently into detailed
+  materialization. XPBD step/device policy and coupled differential-pair skew/batch tuning also
+  compile through the same route step, with batch selection enabling its required tuning pass.
+  Remaining orchestration-only CLI behavior and non-route step adapters are still open.
 - Milestone 1.5 policy identity complete: loading a plan resolves relative policy paths from the
   plan directory, requires bounded regular files, reads each artifact once, verifies its SHA-256,
   and rejects missing, oversized, unreadable, stale, duplicate, or unsupported policy artifacts.
   Known net-class, pair, bus, envelope, group, region, relative-placement, orientation, and move-
   priority policies are applied in dependency-safe canonical order before selector expansion.
 - Milestone 1.5 execution partial: the core executes precompiled route and whole-board validation
-  steps on private checkpoints, commits only exact detailed acceptance, carries bounded sampled
-  fallback, halts dependants after failure, accepts a stop token, and emits a deterministic
-  source-bound summary. Preview never authorizes export; other modes reach only the ordinary
-  source-preserving exporter. The CLI refuses every plan whose manifest capabilities are partial.
-  Runtime telemetry exposes exact policy identities, selector expansion, and active step lifecycle.
-  SIGINT/SIGTERM are bridged into the executor stop token without signal-context routing work.
-  Non-route adapters, external KiCad DRC, and trace replay remain open.
+  steps plus declared differential-pair and ordered-bus route transactions on private checkpoints.
+  Coupled steps reject ordinary or partial groups, retain exact selected-copper authority, and
+  commit only exact detailed acceptance. A zero-overflow, topology-complete retained coarse
+  checkpoint may use an observable conventional-polyline fallback when its regional bundle is
+  unavailable; sampled fallback remains separately bounded. Failure halts dependants, cancellation
+  uses a stop token, and the result is a deterministic source-bound summary. Preview never
+  authorizes export; other modes reach only the ordinary source-preserving exporter. The CLI
+  refuses every plan whose manifest capabilities are partial. Runtime telemetry exposes exact
+  policy identities, selector expansion, and active step lifecycle. SIGINT/SIGTERM are bridged into
+  the executor stop token without signal-context routing work. Non-preview output is staged with
+  matching project/custom-rule context, checked by a bounded shell-free KiCad CLI JSON DRC process,
+  and atomically published only after success; unavailable tooling, violations, cancellation, and
+  malformed reports leave no requested output. Fanout, plane, tuning, cleanup, placement, and
+  trace-replay adapters remain open. See ADR 0160 and ADR 0161.
 - Remaining Milestone 1 items and Milestones 2 through 12 remain open unless their individual exit
   gates are supported
   by recorded qualification evidence; an implementation named in the capability inventory is not

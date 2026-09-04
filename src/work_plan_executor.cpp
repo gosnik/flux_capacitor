@@ -158,7 +158,9 @@ WorkPlanExecutionResult execute_impl(const Board& source, const FluxWorkPlan& pl
   }
   for (std::size_t index = 0U; index < plan.steps.size(); ++index) {
     const auto& step = plan.steps[index];
-    if (step.kind != WorkPlanStepKind::route && step.kind != WorkPlanStepKind::validation) {
+    if (step.kind != WorkPlanStepKind::route &&
+        step.kind != WorkPlanStepKind::differential_pair &&
+        step.kind != WorkPlanStepKind::bus && step.kind != WorkPlanStepKind::validation) {
       append_diagnostic(result, "unsupported_work_plan_execution_step",
                         "this step kind has no authoritative execution adapter",
                         "/steps/" + std::to_string(index) + "/kind");
@@ -295,7 +297,38 @@ WorkPlanExecutionResult execute_impl(const Board& source, const FluxWorkPlan& pl
           step_result.global_unrouted_nets = routing.coarse_global.unrouted_nets.size();
           step_result.global_overflow = routing.coarse_global.total_overflow;
           step_result.global_cost = routing.coarse_global.total_cost;
-          if (routing.coarse_global.complete() &&
+          const bool coarse_topology_complete =
+              routing.coarse_global.unrouted_nets.empty() &&
+              routing.coarse_global.unaccepted_selected_voronoi_lane_transitions == 0U;
+          if (coarse_topology_complete && routing.coarse_global.total_overflow == 0U &&
+              detailed.stop_reason == DetailedRouterStopReason::incomplete_global_route &&
+              !stop_token.stop_requested()) {
+            // Regional realization is an optimization and conflict-repair boundary, not a new
+            // legality authority. A complete zero-overflow coarse checkpoint must retain the
+            // conventional polyline transaction promised by the detailed router when regional
+            // lane/bundle evidence is unavailable. Exact whole-board gates remain unchanged.
+            step_result.coarse_polyline_fallback_attempted = true;
+            auto coarse_candidate = routing.coarse_global;
+            // A retained feedback checkpoint can satisfy the global router's exact completion
+            // tuple without carrying the terminal stop tag from the pass that first produced it.
+            // Reassert only that same tuple on the private fallback copy; no occupancy, topology,
+            // path, or physical evidence is altered.
+            coarse_candidate.stop_reason = GlobalRouterStopReason::complete;
+            coarse_candidate.diagnostic =
+                "zero-overflow coarse checkpoint awaiting conventional detailed materialization";
+            auto coarse_detailed = materialize_detailed_route(
+                current, coarse_candidate, configuration.detailed, stop_token);
+            if (coarse_detailed.complete()) {
+              detailed = std::move(coarse_detailed);
+              step_result.coarse_polyline_fallback_accepted = true;
+            } else {
+              // Preserve the physically more informative conventional rejection. Copper
+              // violations continue into the sampled-graph transaction below; other exact gate
+              // failures remain the step diagnostic.
+              detailed = std::move(coarse_detailed);
+            }
+          }
+          if (coarse_topology_complete && routing.coarse_global.total_overflow == 0U &&
               detailed.stop_reason == DetailedRouterStopReason::copper_violations &&
               !stop_token.stop_requested()) {
             step_result.sampled_fallback_attempted = true;
@@ -440,6 +473,10 @@ std::string serialize_flux_work_plan_execution_summary(const WorkPlanExecutionRe
   root["whole_board_accepted"] = result.whole_board_accepted;
   root["candidate_ready_for_export"] = result.candidate_ready_for_export;
   root["external_kicad_drc_run"] = result.external_kicad_drc_run;
+  root["external_kicad_drc_passed"] = result.external_kicad_drc_passed;
+  root["external_kicad_drc_exit_code"] = result.external_kicad_drc_exit_code;
+  root["external_kicad_drc_executable"] = result.external_kicad_drc_executable;
+  root["external_kicad_drc_diagnostic"] = result.external_kicad_drc_diagnostic;
   root["final_acceptance"] = acceptance_json(result.final_acceptance);
   json::array steps;
   steps.reserve(result.steps.size());
@@ -453,6 +490,8 @@ std::string serialize_flux_work_plan_execution_summary(const WorkPlanExecutionRe
     value["global_unrouted_nets"] = step.global_unrouted_nets;
     value["global_overflow"] = step.global_overflow;
     value["global_cost"] = step.global_cost;
+    value["coarse_polyline_fallback_attempted"] = step.coarse_polyline_fallback_attempted;
+    value["coarse_polyline_fallback_accepted"] = step.coarse_polyline_fallback_accepted;
     value["sampled_fallback_attempted"] = step.sampled_fallback_attempted;
     value["sampled_fallback_accepted"] = step.sampled_fallback_accepted;
     value["acceptance"] = acceptance_json(step.acceptance);

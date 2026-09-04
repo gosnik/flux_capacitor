@@ -10,6 +10,7 @@ namespace flux::io {
 
 struct CompiledWorkPlanRouteStep {
   std::string id;
+  WorkPlanStepKind kind{WorkPlanStepKind::route};
   AutorouteV1Configuration configuration;
   std::vector<NetId> selected_nets;
   std::vector<NetId> priority_nets;
@@ -27,8 +28,9 @@ struct WorkPlanRouteCompileResult {
   [[nodiscard]] bool ok() const { return expansion.ok() && !has_errors(); }
 };
 
-// Compiles supported route steps into the same autoroute_v1 configuration used by the direct CLI.
-// Unknown options and type/range mismatches fail closed. No search or board mutation occurs here.
+// Compiles supported route-like steps into the same autoroute_v1 configuration used by the direct
+// CLI. Differential-pair and bus steps retain their declared atomic group semantics. Unknown
+// options and type/range mismatches fail closed. No search or board mutation occurs here.
 [[nodiscard]] WorkPlanRouteCompileResult compile_flux_work_plan_routes(const Board& source,
                                                                        const FluxWorkPlan& plan);
 

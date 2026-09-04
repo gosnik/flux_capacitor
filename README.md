@@ -1735,16 +1735,29 @@ kinds are KiCad net-class snapshots, differential-pair and routing-bus constrain
 envelopes/groups/regions/relative constraints, orientation constraints, and placement move
 priorities; unknown or duplicate kinds fail closed. Route steps compile through the same
 `autoroute_v1` preset now used by the direct CLI, with unknown options and type/range errors
-rejected. Execution/replay remains
+rejected. The compiled route surface includes bounded hard-capacity rip-up, joint blocker-set
+search, transactional rollback/deferred-victim/protected-recovery policy, selective full-reroute
+cadence, former-route memory, and search diversification; invalid recovery dependencies fail
+before routing. Weighted search and congestion scaling, physical pressure/history, clearance and
+capacity costs, via phases, fine terminal escape, and paired terminal/medial/corridor neck-down
+geometry use the same typed compiler and fail invalid dimensional combinations before routing.
+The saved route step also carries XPBD step/device policy and coupled differential-pair skew/batch
+tuning. Declared differential-pair and ordered-bus step kinds now execute as atomic route
+transactions with exact selected-copper authority and an observable, exactly gated zero-overflow
+coarse-polyline fallback. See [`ADR 0160`](docs/adr/0160-atomic-coupled-work-plan-routing.md).
+Execution/replay remains
 withheld for any selected capability still marked partial. `flux-cli execute-work-plan-kicad BOARD
 PLAN [OUTPUT]` therefore executes only a fully qualified plan: preview mode forbids an output,
-whereas a non-preview mode requires one and writes it only through the ordinary source-preserving
-exporter. The current core executor supports ordered route and whole-board validation steps,
+whereas a non-preview mode requires one. It stages the source-preserving candidate with matching
+`.kicad_pro`/`.kicad_dru` context, invokes `FLUX_KICAD_CLI` or `kicad-cli` on `PATH` without a shell,
+and atomically publishes the requested path only after a bounded error-level JSON DRC pass. See
+[`ADR 0161`](docs/adr/0161-atomic-work-plan-kicad-drc-publication.md). The current core executor
+supports ordered route and whole-board validation steps,
 stop-token cancellation, exact per-step acceptance records, sampled fallback, and a deterministic
 plan/result identity. Runtime telemetry also exposes policy identities, selector expansion, and
 active step lifecycle without influencing routing. SIGINT/SIGTERM request the same transactional
 stop token used by the router and return exit status 130 after summary publication. Other step
-kinds, external KiCad DRC orchestration, and deterministic replay remain fail-closed.
+kinds and deterministic replay remain fail-closed.
 
 Inspection and dry-run expand selectors deterministically against the immutable, policy-prepared
 board.

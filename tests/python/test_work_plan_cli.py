@@ -5,13 +5,18 @@ import argparse
 import copy
 import hashlib
 import json
+import os
 import subprocess
 import tempfile
 from pathlib import Path
 
 
-def run(command: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(command, check=False, capture_output=True, text=True, timeout=60)
+def run(
+    command: list[str], environment: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        command, check=False, capture_output=True, text=True, timeout=60, env=environment
+    )
 
 
 def main() -> int:
@@ -89,6 +94,135 @@ def main() -> int:
             and execution_summary["output"] is None
         ):
             print("empty preview plan did not execute as a non-mutating deterministic no-op")
+            return 1
+
+        publish_document = copy.deepcopy(document)
+        publish_document["mode"] = "new-routing"
+        publish_document["telemetry"]["enabled"] = False
+        publish_plan = Path(temporary) / "publish.flux.json"
+        publish_plan.write_text(json.dumps(publish_document), encoding="utf-8")
+
+        passing_kicad = Path(temporary) / "fake kicad-cli pass"
+        passing_kicad.write_text(
+            """#!/bin/sh
+report=
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--output" ] && [ "$#" -gt 1 ]; then
+    report=$2
+    shift 2
+  else
+    shift
+  fi
+done
+[ -n "$report" ] || exit 90
+printf '{"violations":[]}\\n' > "$report"
+exit 0
+""",
+            encoding="utf-8",
+        )
+        passing_kicad.chmod(0o755)
+        passing_environment = os.environ.copy()
+        passing_environment["FLUX_KICAD_CLI"] = str(passing_kicad)
+        published_output = Path(temporary) / "published.kicad_pcb"
+        published = run(
+            [
+                str(args.flux_cli),
+                "execute-work-plan-kicad",
+                str(args.board),
+                str(publish_plan),
+                str(published_output),
+            ],
+            passing_environment,
+        )
+        published_summary = json.loads(published.stdout)
+        if not (
+            published.returncode == 0
+            and published_output.is_file()
+            and published_summary["internally_complete"] is True
+            and published_summary["external_kicad_drc_run"] is True
+            and published_summary["external_kicad_drc_passed"] is True
+            and published_summary["external_kicad_drc_exit_code"] == 0
+            and published_summary["candidate_ready_for_export"] is True
+            and published_summary["output_published"] is True
+        ):
+            print(published.stdout + published.stderr)
+            return 1
+
+        failing_kicad = Path(temporary) / "fake kicad-cli fail"
+        failing_kicad.write_text(
+            """#!/bin/sh
+report=
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--output" ] && [ "$#" -gt 1 ]; then
+    report=$2
+    shift 2
+  else
+    shift
+  fi
+done
+[ -n "$report" ] || exit 90
+printf '{"violations":[{}]}\\n' > "$report"
+echo 'intentional DRC violation' >&2
+exit 5
+""",
+            encoding="utf-8",
+        )
+        failing_kicad.chmod(0o755)
+        failing_environment = os.environ.copy()
+        failing_environment["FLUX_KICAD_CLI"] = str(failing_kicad)
+        rejected_output = Path(temporary) / "rejected.kicad_pcb"
+        rejected = run(
+            [
+                str(args.flux_cli),
+                "execute-work-plan-kicad",
+                str(args.board),
+                str(publish_plan),
+                str(rejected_output),
+            ],
+            failing_environment,
+        )
+        rejected_summary = json.loads(rejected.stdout)
+        if not (
+            rejected.returncode == 13
+            and not rejected_output.exists()
+            and rejected_summary["external_kicad_drc_run"] is True
+            and rejected_summary["external_kicad_drc_passed"] is False
+            and rejected_summary["external_kicad_drc_exit_code"] == 5
+            and rejected_summary["candidate_ready_for_export"] is False
+            and rejected_summary["output_published"] is False
+        ):
+            print(rejected.stdout + rejected.stderr)
+            return 1
+
+        unavailable_environment = os.environ.copy()
+        unavailable_environment["FLUX_KICAD_CLI"] = str(
+            Path(temporary) / "missing-kicad-cli"
+        )
+        unavailable_output = Path(temporary) / "unavailable.kicad_pcb"
+        unavailable = run(
+            [
+                str(args.flux_cli),
+                "execute-work-plan-kicad",
+                str(args.board),
+                str(publish_plan),
+                str(unavailable_output),
+            ],
+            unavailable_environment,
+        )
+        unavailable_summary = json.loads(unavailable.stdout)
+        if not (
+            unavailable.returncode == 13
+            and not unavailable_output.exists()
+            and unavailable_summary["external_kicad_drc_run"] is False
+            and unavailable_summary["external_kicad_drc_passed"] is False
+            and unavailable_summary["candidate_ready_for_export"] is False
+            and unavailable_summary["output_published"] is False
+        ):
+            print(unavailable.stdout + unavailable.stderr)
+            return 1
+
+        if list(Path(temporary).glob(".flux-work-plan-drc-*")):
+            print("WorkPlan DRC staging directories were not cleaned up")
             return 1
 
         policy = Path(temporary) / "reviewed.policy"

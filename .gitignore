@@ -3,3 +3,4 @@
 compile_commands.json
 __pycache__/
 *.py[cod]
+*.kicad_prl

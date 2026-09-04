@@ -4794,12 +4794,70 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
   scoped_route.selectors.net_classes = {"Power"};
   scoped_route.selectors.placement_groups = {"core"};
   scoped_route.selectors.group_scope = flux::io::WorkPlanSelectorScope::internal;
-  scoped_route.options = {{"circular_arc_refinement", true},
+  scoped_route.options = {{"atomic_complete_net_routing", true},
+                          {"capacity_reserve_cost", std::uint64_t{777U}},
+                          {"capacity_reserve_per_mille", std::uint64_t{300U}},
+                          {"circular_arc_refinement", true},
+                          {"clearance_shadow_cost_quantum_nm", std::uint64_t{10'000U}},
+                          {"corridor_neck_down_width_nm", std::uint64_t{130'000U}},
+                          {"crossing_safe_diagonal_grid_edges", false},
+                          {"defer_hard_capacity_ripup_victims_to_pass_tail", true},
+                          {"diagonal_grid_edges", true},
+                          {"differential_pair_skew_tuning_batch_assignment", true},
+                          {"expansion_retry_heuristic_weight_per_mille",
+                           std::uint64_t{2'500U}},
+                          {"former_route_memory_cost", std::uint64_t{1'777U}},
                           {"grid_pitch_nm", std::uint64_t{250'000U}},
+                          {"hard_capacity_start_iteration", std::uint64_t{3U}},
+                          {"local_pin_escape_pitch_nm", std::uint64_t{50'000U}},
+                          {"max_corridor_neck_down_length_nm", std::uint64_t{700'000U}},
+                          {"max_corridor_neck_down_states", std::uint64_t{12'345U}},
+                          {"max_hard_capacity_blocker_reuse_invalidations_per_failed_net",
+                           std::uint64_t{2U}},
+                          {"max_hard_capacity_conflict_set_states_per_attempt",
+                           std::uint64_t{64U}},
+                          {"max_hard_capacity_ripup_attempts_per_pass", std::uint64_t{2U}},
+                          {"max_hard_capacity_ripup_nets_per_attempt", std::uint64_t{3U}},
+                          {"max_local_pin_escape_expansions_per_terminal",
+                           std::uint64_t{23'456U}},
+                          {"max_medial_neck_down_length_nm", std::uint64_t{600'000U}},
+                          {"max_pin_access_nodes_per_terminal", std::uint64_t{24U}},
+                          {"max_present_congestion_scale_per_mille",
+                           std::uint64_t{4'800U}},
                           {"max_router_iterations", std::uint64_t{42U}},
+                          {"max_terminal_escape_reservation_resources",
+                           std::uint64_t{1'234U}},
+                          {"max_terminal_neck_down_length_nm", std::uint64_t{500'000U}},
+                          {"max_voronoi_resource_segment_length_nm",
+                           std::uint64_t{2'000'000U}},
+                          {"medial_neck_down_width_nm", std::uint64_t{140'000U}},
+                          {"physical_envelope_ordering", true},
+                          {"physical_overflow_history", true},
+                          {"pin_escape_grid_radius", std::uint64_t{5U}},
+                          {"present_congestion_escalation_start_iteration",
+                           std::uint64_t{3U}},
+                          {"present_congestion_multiplier_per_mille",
+                           std::uint64_t{1'200U}},
                           {"priority_nets", std::vector<std::string>{"PWR", "SIG_A"}},
+                          {"protect_recovered_hard_capacity_ripup_nets", true},
+                          {"reuse_weighted_search_frontier", true},
+                          {"river_following_cost", std::uint64_t{333U}},
+                          {"rollback_failed_hard_capacity_ripup", true},
+                          {"sampled_route_clearance_reservations", true},
+                          {"search_diversification", true},
+                          {"selective_congestion_reroute", true},
+                          {"selective_full_reroute_interval", std::uint64_t{5U}},
+                          {"terminal_escape_proximity_cost", std::uint64_t{66U}},
+                          {"terminal_escape_reservation_cost", std::uint64_t{555U}},
+                          {"terminal_neck_down_width_nm", std::uint64_t{150'000U}},
+                          {"via_site_phase_x", std::uint64_t{1U}},
+                          {"via_site_phase_y", std::uint64_t{3U}},
+                          {"via_site_pitch_nm", std::uint64_t{1'000'000U}},
+                          {"width_reduction_cost_per_grid_step", std::uint64_t{444U}},
                           {"xpbd_feedback", true},
-                          {"xpbd_iterations", std::uint64_t{17U}}};
+                          {"xpbd_iterations", std::uint64_t{17U}},
+                          {"xpbd_maximum_step_nm", std::uint64_t{80'000U}},
+                          {"xpbd_prefer_gpu", true}};
   scoped_plan.steps = {scoped_route};
   const auto expansion = flux::io::expand_flux_work_plan(scoped_board, scoped_plan);
   require(expansion.ok() && expansion.steps.size() == 1U &&
@@ -4832,17 +4890,179 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
               compiled.route_steps.front().priority_nets == std::vector<NetId>{power, signal_a} &&
               compiled.route_steps.front().configuration.planner.global.grid_pitch ==
                   Nanometres{250'000} &&
+              compiled.route_steps.front().configuration.planner.global.via_site_pitch ==
+                  Nanometres{1'000'000} &&
+              compiled.route_steps.front().configuration.planner.global.via_site_phase_x == 1U &&
+              compiled.route_steps.front().configuration.planner.global.via_site_phase_y == 3U &&
+              compiled.route_steps.front()
+                      .configuration.planner.global.max_pin_escape_grid_radius == 5U &&
+              compiled.route_steps.front()
+                      .configuration.planner.global.max_pin_access_nodes_per_terminal == 24U &&
+              compiled.route_steps.front().configuration.planner.global.local_pin_escape_pitch ==
+                  Nanometres{50'000} &&
+              compiled.route_steps.front()
+                      .configuration.planner.global
+                      .max_local_pin_escape_expansions_per_terminal == 23'456U &&
+              compiled.route_steps.front().configuration.planner.global.terminal_neck_down_width ==
+                  Nanometres{150'000} &&
+              compiled.route_steps.front()
+                      .configuration.planner.global.max_terminal_neck_down_length ==
+                  Nanometres{500'000} &&
+              compiled.route_steps.front().configuration.planner.global.medial_neck_down_width ==
+                  Nanometres{140'000} &&
+              compiled.route_steps.front()
+                      .configuration.planner.global.max_medial_neck_down_length ==
+                  Nanometres{600'000} &&
+              compiled.route_steps.front().configuration.planner.global.corridor_neck_down_width ==
+                  Nanometres{130'000} &&
+              compiled.route_steps.front()
+                      .configuration.planner.global.max_corridor_neck_down_length ==
+                  Nanometres{700'000} &&
+              compiled.route_steps.front()
+                      .configuration.planner.global.max_corridor_neck_down_states == 12'345U &&
+              compiled.route_steps.front()
+                      .configuration.planner.global.max_voronoi_resource_segment_length ==
+                  Nanometres{2'000'000} &&
               compiled.route_steps.front().configuration.planner.global.max_iterations == 42U &&
+              compiled.route_steps.front().configuration.planner.global.allow_diagonal_grid_edges &&
+              !compiled.route_steps.front()
+                   .configuration.planner.global.allow_crossing_safe_diagonal_grid_edges &&
+              compiled.route_steps.front()
+                  .configuration.planner.global.reserve_sampled_route_clearance &&
+              compiled.route_steps.front()
+                      .configuration.planner.global.expansion_retry_heuristic_weight_per_mille ==
+                  2'500U &&
+              compiled.route_steps.front()
+                  .configuration.planner.global.reuse_weighted_search_frontier &&
+              compiled.route_steps.front()
+                      .configuration.planner.global.present_congestion_multiplier_per_mille ==
+                  1'200U &&
+              compiled.route_steps.front()
+                      .configuration.planner.global.max_present_congestion_scale_per_mille ==
+                  4'800U &&
+              compiled.route_steps.front()
+                      .configuration.planner.global
+                      .present_congestion_escalation_start_iteration == 3U &&
+              compiled.route_steps.front()
+                  .configuration.planner.global.scale_voronoi_history_by_overflow &&
+              compiled.route_steps.front()
+                  .configuration.planner.global.order_routing_groups_by_physical_envelope &&
+              compiled.route_steps.front()
+                      .configuration.planner.global.clearance_shadow_cost_quantum ==
+                  Nanometres{10'000} &&
+              compiled.route_steps.front().configuration.planner.global.capacity_reserve_per_mille ==
+                  300U &&
+              compiled.route_steps.front().configuration.planner.global.capacity_reserve_cost ==
+                  777U &&
+              compiled.route_steps.front().configuration.planner.global.river_following_cost ==
+                  333U &&
+              compiled.route_steps.front()
+                      .configuration.planner.global.terminal_escape_reservation_cost == 555U &&
+              compiled.route_steps.front()
+                      .configuration.planner.global.terminal_escape_proximity_cost == 66U &&
+              compiled.route_steps.front()
+                      .configuration.planner.global
+                      .max_terminal_escape_reservation_resources == 1'234U &&
+              compiled.route_steps.front()
+                      .configuration.planner.global.width_reduction_cost_per_grid_step == 444U &&
+              compiled.route_steps.front()
+                      .configuration.planner.global.hard_capacity_start_iteration == 3U &&
+              compiled.route_steps.front()
+                      .configuration.planner.global.max_hard_capacity_ripup_attempts_per_pass ==
+                  2U &&
+              compiled.route_steps.front()
+                      .configuration.planner.global.max_hard_capacity_ripup_nets_per_attempt ==
+                  3U &&
+              compiled.route_steps.front()
+                      .configuration.planner.global
+                      .max_hard_capacity_conflict_set_states_per_attempt == 64U &&
+              compiled.route_steps.front()
+                      .configuration.planner.global
+                      .max_hard_capacity_blocker_reuse_invalidations_per_failed_net == 2U &&
+              compiled.route_steps.front()
+                      .configuration.planner.global.rollback_failed_hard_capacity_ripup &&
+              compiled.route_steps.front()
+                      .configuration.planner.global
+                      .defer_hard_capacity_ripup_victims_to_pass_tail &&
+              compiled.route_steps.front()
+                      .configuration.planner.global.protect_recovered_hard_capacity_ripup_nets &&
+              compiled.route_steps.front().configuration.planner.global
+                      .selective_full_reroute_interval == 5U &&
+              compiled.route_steps.front().configuration.planner.global.former_route_memory_cost ==
+                  1'777U &&
+              compiled.route_steps.front().configuration.planner.global
+                  .enable_search_diversification &&
+              compiled.route_steps.front().configuration.planner.global.atomic_complete_net_routing &&
+              compiled.route_steps.front().configuration.planner.global
+                  .selective_congestion_reroute &&
               compiled.route_steps.front().configuration.planner.regional.enable_xpbd_relaxation &&
               compiled.route_steps.front().configuration.planner.regional.enable_xpbd_feedback &&
               compiled.route_steps.front().configuration.planner.regional.xpbd.iterations == 17U &&
+              compiled.route_steps.front().configuration.planner.regional.xpbd.maximum_step_nm ==
+                  80'000 &&
+              compiled.route_steps.front().configuration.planner.regional.xpbd.prefer_gpu &&
               compiled.route_steps.front().configuration.detailed.circular_arc_refinement &&
+              compiled.route_steps.front().configuration.detailed.differential_pair_skew_tuning &&
+              compiled.route_steps.front()
+                  .configuration.detailed.differential_pair_skew_tuning_batch_assignment &&
               compiled.route_steps.front().configuration.detailed.existing_routing ==
                   flux::ExistingRoutingPolicy::replace_unlocked_for_routed_nets &&
               compiled.route_steps.front().configuration.detailed.existing_routing_replacement_scope ==
                   std::optional<std::vector<NetId>>{std::vector<NetId>{signal_a, power}},
           "route options must compile into the shared autoroute_v1 configuration without giving "
           "wildcard-only nets source-copper replacement authority");
+
+  auto invalid_recovery_topology_plan = scoped_plan;
+  invalid_recovery_topology_plan.steps.front().options["strict_medial_topology"] = false;
+  invalid_recovery_topology_plan.steps.front().options["direct_medial_edges"] = false;
+  const auto invalid_recovery_topology =
+      flux::io::compile_flux_work_plan_routes(scoped_board, invalid_recovery_topology_plan);
+  require(!invalid_recovery_topology.ok() &&
+              std::any_of(invalid_recovery_topology.diagnostics.begin(),
+                          invalid_recovery_topology.diagnostics.end(), [](const auto& diagnostic) {
+                            return diagnostic.code ==
+                                   "invalid_work_plan_route_option_dependency";
+                          }),
+          "hard-capacity WorkPlan recovery must fail closed without a represented medial "
+          "topology");
+
+  auto incomplete_recovery_bounds_plan = scoped_plan;
+  incomplete_recovery_bounds_plan.steps.front().options.erase(
+      "max_hard_capacity_ripup_nets_per_attempt");
+  const auto incomplete_recovery_bounds =
+      flux::io::compile_flux_work_plan_routes(scoped_board, incomplete_recovery_bounds_plan);
+  require(!incomplete_recovery_bounds.ok() &&
+              std::any_of(incomplete_recovery_bounds.diagnostics.begin(),
+                          incomplete_recovery_bounds.diagnostics.end(), [](const auto& diagnostic) {
+                            return diagnostic.code ==
+                                   "invalid_work_plan_route_option_dependency";
+                          }),
+          "hard-capacity WorkPlan recovery must require both bounded attempt and victim counts");
+
+  auto invalid_search_pressure_plan = scoped_plan;
+  invalid_search_pressure_plan.steps.front()
+      .options["expansion_retry_heuristic_weight_per_mille"] = std::uint64_t{0U};
+  const auto invalid_search_pressure =
+      flux::io::compile_flux_work_plan_routes(scoped_board, invalid_search_pressure_plan);
+  require(!invalid_search_pressure.ok() &&
+              std::any_of(invalid_search_pressure.diagnostics.begin(),
+                          invalid_search_pressure.diagnostics.end(), [](const auto& diagnostic) {
+                            return diagnostic.code ==
+                                   "invalid_work_plan_route_option_dependency";
+                          }),
+          "weighted-frontier WorkPlan search must fail closed without a retry weight");
+
+  auto incomplete_neck_down_plan = scoped_plan;
+  incomplete_neck_down_plan.steps.front().options.erase("max_terminal_neck_down_length_nm");
+  const auto incomplete_neck_down =
+      flux::io::compile_flux_work_plan_routes(scoped_board, incomplete_neck_down_plan);
+  require(!incomplete_neck_down.ok() &&
+              std::any_of(incomplete_neck_down.diagnostics.begin(),
+                          incomplete_neck_down.diagnostics.end(), [](const auto& diagnostic) {
+                            return diagnostic.code ==
+                                   "invalid_work_plan_route_option_dependency";
+                          }),
+          "terminal neck-down WorkPlan geometry must require a paired physical length bound");
 
   auto wildcard_plan = scoped_plan;
   wildcard_plan.steps.front().selectors.net_classes.clear();
@@ -4888,6 +5108,163 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
                             return diagnostic.code == "unsupported_work_plan_route_option";
                           }),
           "unknown route options must fail compilation instead of being ignored");
+
+  auto coupled_board = two_pad_board();
+  const NetId pair_positive{"net-1"};
+  const NetId pair_negative{"net-2"};
+  coupled_board.nets = {{pair_positive, "PAIR_P", 0}, {pair_negative, "PAIR_N", 0}};
+  coupled_board.footprints[0].position = mm(20.0, 38.0);
+  coupled_board.footprints[1].position = mm(80.0, 38.0);
+  coupled_board.footprints[0].courtyard = local_rectangle(0.1, 0.1);
+  coupled_board.footprints[1].courtyard = local_rectangle(0.1, 0.1);
+  auto negative_start = coupled_board.footprints[0];
+  negative_start.id = ObjectId{"U1N-work-plan"};
+  negative_start.reference = "U1N-work-plan";
+  negative_start.position = mm(20.0, 42.0);
+  negative_start.pads.front().id = ObjectId{"U1N-work-plan-pad"};
+  negative_start.pads.front().net = pair_negative;
+  auto negative_end = coupled_board.footprints[1];
+  negative_end.id = ObjectId{"U2N-work-plan"};
+  negative_end.reference = "U2N-work-plan";
+  negative_end.position = mm(80.0, 42.0);
+  negative_end.pads.front().id = ObjectId{"U2N-work-plan-pad"};
+  negative_end.pads.front().net = pair_negative;
+  coupled_board.footprints.push_back(std::move(negative_start));
+  coupled_board.footprints.push_back(std::move(negative_end));
+  coupled_board.tracks = {
+      {ObjectId{"pair-p-track"}, pair_positive, LayerId{"F.Cu"}, mm(20.0, 38.0),
+       mm(80.0, 38.0), Nanometres::from_mm(0.25), false},
+      {ObjectId{"pair-n-track"}, pair_negative, LayerId{"F.Cu"}, mm(20.0, 42.0),
+       mm(80.0, 42.0), Nanometres::from_mm(0.25), false}};
+  coupled_board.differential_pairs = {
+      {flux::DifferentialPairId{"pair-1"}, "PAIR", pair_positive, pair_negative,
+       Nanometres::from_mm(0.2), std::nullopt}};
+
+  auto pair_plan = flux::io::make_flux_work_plan_template(coupled_board, "pair.kicad_pcb");
+  pair_plan.mode = flux::io::WorkPlanMode::force_reroute_selected;
+  flux::io::WorkPlanStep pair_step;
+  pair_step.id = "route-pair";
+  pair_step.kind = flux::io::WorkPlanStepKind::differential_pair;
+  pair_step.selectors.exact_nets = {"PAIR_P", "PAIR_N"};
+  pair_step.options = {{"checkpoint_objective", std::string{"aggregate-overflow"}},
+                       {"crossing_safe_diagonal_grid_edges", false},
+                       {"direct_medial_edges", false},
+                       {"diversify_pin_access_rings", true},
+                       {"grid_pitch_nm", std::uint64_t{5'000'000U}},
+                       {"interleave_routability_feedback", false},
+                       {"max_pin_access_nodes_per_terminal", std::uint64_t{32U}},
+                       {"max_router_iterations", std::uint64_t{2U}},
+                       {"negotiate_voronoi_lane_conflicts", false},
+                       {"physical_envelope_ordering", false},
+                       {"physical_overflow_history", false},
+                       {"pin_escape_grid_radius", std::uint64_t{2U}},
+                       {"routability_feedback_retries", std::uint64_t{0U}},
+                       {"strict_medial_topology", false},
+                       {"topology_locked_medial_materialization", false}};
+  pair_plan.steps = {pair_step};
+  const auto pair_compile = flux::io::compile_flux_work_plan_routes(coupled_board, pair_plan);
+  require(pair_compile.ok() && pair_compile.route_steps.size() == 1U &&
+              pair_compile.route_steps.front().kind ==
+                  flux::io::WorkPlanStepKind::differential_pair &&
+              pair_compile.route_steps.front().selected_nets ==
+                  std::vector<NetId>{pair_positive, pair_negative} &&
+              pair_compile.expansion.copper_authority.reroutable_nets ==
+                  std::vector<NetId>{pair_positive, pair_negative} &&
+              pair_compile.expansion.copper_authority.removable_tracks ==
+                  std::vector<ObjectId>{ObjectId{"pair-n-track"}, ObjectId{"pair-p-track"}},
+          "a differential-pair step must compile as one atomic route transaction with exact "
+          "selected-copper authority");
+
+  auto connected_pair_plan = pair_plan;
+  connected_pair_plan.mode = flux::io::WorkPlanMode::new_routing;
+  const auto connected_pair_execution =
+      flux::io::execute_flux_work_plan(coupled_board, connected_pair_plan);
+  require(connected_pair_execution.ok() && connected_pair_execution.whole_board_accepted &&
+              connected_pair_execution.steps.size() == 1U &&
+              connected_pair_execution.steps.front().kind ==
+                  flux::io::WorkPlanStepKind::differential_pair &&
+              connected_pair_execution.steps.front().status ==
+                  flux::io::WorkPlanStepExecutionStatus::completed,
+          "an already-connected declared pair must execute through the coupled adapter without "
+          "mutating authoritative copper");
+  auto open_pair_board = coupled_board;
+  open_pair_board.tracks.clear();
+  const auto open_pair_execution =
+      flux::io::execute_flux_work_plan(open_pair_board, connected_pair_plan);
+  require(open_pair_execution.ok() && open_pair_execution.whole_board_accepted &&
+              open_pair_execution.candidate && open_pair_execution.steps.size() == 1U &&
+              open_pair_execution.steps.front().status ==
+                  flux::io::WorkPlanStepExecutionStatus::completed &&
+              open_pair_execution.steps.front().global_unrouted_nets == 0U &&
+              !open_pair_execution.candidate->tracks.empty(),
+          "an open declared pair must complete global, regional, detailed, connectivity, and DRC "
+          "acceptance as one coupled WorkPlan transaction: " +
+              flux::io::serialize_flux_work_plan_execution_summary(open_pair_execution));
+
+  auto invalid_pair_board = coupled_board;
+  invalid_pair_board.nets.push_back({NetId{"ordinary"}, "ORDINARY", 0});
+  auto invalid_pair_plan =
+      flux::io::make_flux_work_plan_template(invalid_pair_board, "pair.kicad_pcb");
+  flux::io::WorkPlanStep invalid_pair_step;
+  invalid_pair_step.id = "invalid-pair";
+  invalid_pair_step.kind = flux::io::WorkPlanStepKind::differential_pair;
+  invalid_pair_step.selectors.exact_nets = {"ORDINARY"};
+  invalid_pair_plan.steps = {invalid_pair_step};
+  const auto invalid_pair_compile =
+      flux::io::compile_flux_work_plan_routes(invalid_pair_board, invalid_pair_plan);
+  require(!invalid_pair_compile.ok() &&
+              std::any_of(invalid_pair_compile.diagnostics.begin(),
+                          invalid_pair_compile.diagnostics.end(), [](const auto& diagnostic) {
+                            return diagnostic.code ==
+                                   "invalid_work_plan_differential_pair_scope";
+                          }),
+          "a differential-pair step must reject ordinary nets instead of degrading to a generic "
+          "route");
+
+  auto bus_board = coupled_board;
+  bus_board.differential_pairs.clear();
+  bus_board.routing_buses = {
+      {flux::RoutingBusId{"bus-1"}, "PAIR_BUS", {pair_positive, pair_negative},
+       Nanometres::from_mm(0.5)}};
+  auto bus_plan = flux::io::make_flux_work_plan_template(bus_board, "bus.kicad_pcb");
+  bus_plan.mode = flux::io::WorkPlanMode::force_reroute_selected;
+  flux::io::WorkPlanStep bus_step;
+  bus_step.id = "route-bus";
+  bus_step.kind = flux::io::WorkPlanStepKind::bus;
+  bus_step.selectors.exact_nets = {"PAIR_P", "PAIR_N"};
+  bus_step.options = pair_step.options;
+  bus_plan.steps = {bus_step};
+  const auto bus_compile = flux::io::compile_flux_work_plan_routes(bus_board, bus_plan);
+  require(bus_compile.ok() && bus_compile.route_steps.size() == 1U &&
+              bus_compile.route_steps.front().kind == flux::io::WorkPlanStepKind::bus &&
+              bus_compile.expansion.copper_authority.reroutable_nets ==
+                  std::vector<NetId>{pair_positive, pair_negative},
+          "an ordered-bus step must compile as one atomic route transaction with exact "
+          "selected-copper authority");
+  auto connected_bus_plan = bus_plan;
+  connected_bus_plan.mode = flux::io::WorkPlanMode::new_routing;
+  const auto connected_bus_execution =
+      flux::io::execute_flux_work_plan(bus_board, connected_bus_plan);
+  require(connected_bus_execution.ok() && connected_bus_execution.whole_board_accepted &&
+              connected_bus_execution.steps.size() == 1U &&
+              connected_bus_execution.steps.front().kind == flux::io::WorkPlanStepKind::bus &&
+              connected_bus_execution.steps.front().status ==
+                  flux::io::WorkPlanStepExecutionStatus::completed,
+          "an already-connected declared bus must execute through the coupled adapter without "
+          "mutating authoritative copper");
+  auto open_bus_board = bus_board;
+  open_bus_board.tracks.clear();
+  const auto open_bus_execution =
+      flux::io::execute_flux_work_plan(open_bus_board, connected_bus_plan);
+  require(open_bus_execution.ok() && open_bus_execution.whole_board_accepted &&
+              open_bus_execution.candidate && open_bus_execution.steps.size() == 1U &&
+              open_bus_execution.steps.front().status ==
+                  flux::io::WorkPlanStepExecutionStatus::completed &&
+              open_bus_execution.steps.front().global_unrouted_nets == 0U &&
+              !open_bus_execution.candidate->tracks.empty(),
+          "an open declared bus must complete global, regional, detailed, connectivity, and DRC "
+          "acceptance as one coupled WorkPlan transaction: " +
+              flux::io::serialize_flux_work_plan_execution_summary(open_bus_execution));
 
   auto connected = two_pad_board();
   connected.tracks = {{ObjectId{"source-track"}, NetId{"net-1"}, LayerId{"F.Cu"},

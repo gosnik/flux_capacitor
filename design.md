@@ -2,7 +2,7 @@
 
 ## 1. Scope and current state
 
-This document describes the implementation present in Flux Capacitor v0.129.0, using canonical board schema 19. It is a description of the working code, its execution flow, and its current limits. The ADRs under `docs/adr/` remain the detailed decision history; `plan.md` records the completed replacement of the old optional seed-guidance path. Schema 19 preserves an unfilled KiCad zone as an immutable requires-refill marker and never treats it as physical copper; only the explicitly provisional refill workflow may route such a source before KiCad refill, strict re-import, connectivity, and DRC. It also retains exact circular/oval pad-drill dimensions and pad-local offsets, using physical hole centres for non-plated obstacles and reusable plated-pad transitions.
+This document describes the implementation present in Flux Capacitor v0.130.0, using canonical board schema 19. It is a description of the working code, its execution flow, and its current limits. The ADRs under `docs/adr/` remain the detailed decision history; `plan.md` records the completed replacement of the old optional seed-guidance path. Schema 19 preserves an unfilled KiCad zone as an immutable requires-refill marker and never treats it as physical copper; only the explicitly provisional refill workflow may route such a source before KiCad refill, strict re-import, connectivity, and DRC. It also retains exact circular/oval pad-drill dimensions and pad-local offsets, using physical hole centres for non-plated obstacles and reusable plated-pad transitions.
 
 Flux is an experimental C++20 placement-and-routing engine with KiCad as its first integration. Its defining design choice is that placement and routing operate on the same board model:
 
@@ -644,6 +644,25 @@ The shortest routing-only application flow is `plugins/kicad/route_board.py`, wh
 8. optionally apply routing-only changes to the exact matching open board as one unsaved undo transaction.
 
 The source-preserving exporter edits only supported footprint transforms and top-level track, arc, and via objects. Unknown source syntax remains verbatim. Generated object IDs map deterministically to KiCad UUIDs. Export is withheld on a stale source snapshot or semantic round-trip mismatch.
+
+### Versioned WorkPlan execution
+
+`FluxWorkPlan` compiles generic route, declared differential-pair, and declared ordered-bus steps
+through the same `autoroute_v1` configuration. Pair and bus selectors must name complete declared
+groups and may grant force-reroute authority only to exact non-wildcard members; locked, unrelated,
+and zone copper remains immutable. Every route-like step runs on a private board checkpoint and
+commits only after detailed connectivity and represented copper DRC acceptance. If a retained
+interleaved checkpoint has complete zero-overflow coarse topology but no usable regional bundle,
+the executor may try the conventional coarse polyline transaction without changing its topology or
+paths. The attempt and acceptance are recorded separately, and a failed transaction leaves the
+prior board untouched. See ADR 0160.
+
+Non-preview WorkPlan publication is a second transaction. The source-preserving candidate and
+matching source `.kicad_pro`/`.kicad_dru` rule files are staged in a private sibling directory.
+KiCad CLI is launched through a shell-free argument vector, bounded to fifteen minutes, and must
+return zero plus a bounded parseable JSON DRC report. Only then is the staged candidate atomically
+renamed to the requested output. Missing tooling, DRC violations, cancellation, malformed reports,
+or publication failure remove the staging directory and leave no final board. See ADR 0161.
 
 ### Refillable zones
 

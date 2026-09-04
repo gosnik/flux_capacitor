@@ -353,7 +353,10 @@ void validate_semantics(const FluxWorkPlan& plan, const Board* source, Loader& l
                      pointer_child(pointer, "depends_on"));
       }
     }
-    if (step.kind == WorkPlanStepKind::route && !selectors_empty(step.selectors)) {
+    if ((step.kind == WorkPlanStepKind::route ||
+         step.kind == WorkPlanStepKind::differential_pair ||
+         step.kind == WorkPlanStepKind::bus) &&
+        !selectors_empty(step.selectors)) {
       selected_routing_step = true;
     }
   }
@@ -947,7 +950,9 @@ WorkPlanExpansionResult expand_flux_work_plan(const Board& source, const FluxWor
     std::set_difference(selected_nets.begin(), selected_nets.end(), non_wildcard_nets.begin(),
                         non_wildcard_nets.end(), std::inserter(wildcard_only, wildcard_only.end()));
     expanded.wildcard_only_nets = sorted_ids(wildcard_only);
-    if (step.kind == WorkPlanStepKind::route) {
+    if (step.kind == WorkPlanStepKind::route ||
+        step.kind == WorkPlanStepKind::differential_pair ||
+        step.kind == WorkPlanStepKind::bus) {
       force_reroute_authority.insert(non_wildcard_nets.begin(), non_wildcard_nets.end());
     }
     result.steps.push_back(std::move(expanded));

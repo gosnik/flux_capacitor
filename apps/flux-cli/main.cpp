@@ -28,6 +28,7 @@
 #include "flux/generated/parity_manifest.hpp"
 
 #include <boost/json.hpp>
+#include <boost/process/v1.hpp>
 
 #include <algorithm>
 #include <array>
@@ -6017,10 +6018,222 @@ struct WorkPlanPrintOutcome {
   return {valid, capability_preflight_ok};
 }
 
+struct ExternalKicadDrcResult {
+  bool run{false};
+  bool passed{false};
+  int exit_code{-1};
+  std::string executable;
+  std::string diagnostic;
+};
+
+class WorkPlanStagingDirectory {
+public:
+  explicit WorkPlanStagingDirectory(std::filesystem::path path) : path_(std::move(path)) {}
+  WorkPlanStagingDirectory(const WorkPlanStagingDirectory&) = delete;
+  WorkPlanStagingDirectory& operator=(const WorkPlanStagingDirectory&) = delete;
+  ~WorkPlanStagingDirectory() {
+    if (!path_.empty()) {
+      std::error_code ignored;
+      std::filesystem::remove_all(path_, ignored);
+    }
+  }
+
+  [[nodiscard]] const std::filesystem::path& path() const noexcept { return path_; }
+
+private:
+  std::filesystem::path path_;
+};
+
+[[nodiscard]] std::optional<std::filesystem::path>
+make_work_plan_staging_directory(const std::filesystem::path& output) {
+  std::error_code error;
+  auto parent = output.parent_path();
+  if (parent.empty()) {
+    parent = std::filesystem::current_path(error);
+  }
+  if (error || !std::filesystem::is_directory(parent, error) || error) {
+    return std::nullopt;
+  }
+  const auto nonce = static_cast<std::uint64_t>(
+      std::chrono::steady_clock::now().time_since_epoch().count());
+  for (std::uint64_t attempt = 0U; attempt < 128U; ++attempt) {
+    const auto candidate = parent / (".flux-work-plan-drc-" + output.filename().string() + "-" +
+                                     std::to_string(nonce) + "-" +
+                                     std::to_string(attempt));
+    error.clear();
+    if (std::filesystem::create_directory(candidate, error)) {
+      return candidate;
+    }
+    if (error && error != std::errc::file_exists) {
+      return std::nullopt;
+    }
+  }
+  return std::nullopt;
+}
+
+[[nodiscard]] std::optional<std::filesystem::path> resolve_kicad_cli() {
+  if (const auto* configured = std::getenv("FLUX_KICAD_CLI"); configured != nullptr) {
+    if (*configured == '\0') {
+      return std::nullopt;
+    }
+    std::error_code error;
+    const std::filesystem::path path{configured};
+    if (std::filesystem::is_regular_file(path, error) && !error) {
+      return path;
+    }
+    // An explicit but invalid path is authoritative and must not silently fall back to another
+    // KiCad installation.
+    return std::nullopt;
+  }
+  const auto* environment_path = std::getenv("PATH");
+  if (environment_path == nullptr) {
+    return std::nullopt;
+  }
+#ifdef _WIN32
+  constexpr char separator = ';';
+  constexpr std::string_view executable_name = "kicad-cli.exe";
+#else
+  constexpr char separator = ':';
+  constexpr std::string_view executable_name = "kicad-cli";
+#endif
+  std::string_view search{environment_path};
+  while (true) {
+    const auto end = search.find(separator);
+    const auto directory = search.substr(0U, end);
+    if (!directory.empty()) {
+      std::error_code error;
+      const auto candidate = std::filesystem::path{directory} / executable_name;
+      if (std::filesystem::is_regular_file(candidate, error) && !error) {
+        return candidate;
+      }
+    }
+    if (end == std::string_view::npos) {
+      break;
+    }
+    search.remove_prefix(end + 1U);
+  }
+  return std::nullopt;
+}
+
+[[nodiscard]] std::optional<std::string>
+read_bounded_text_file(const std::filesystem::path& path, std::size_t maximum_bytes) {
+  std::error_code error;
+  const auto size = std::filesystem::file_size(path, error);
+  if (error || size > maximum_bytes) {
+    return std::nullopt;
+  }
+  std::ifstream stream(path, std::ios::binary);
+  if (!stream) {
+    return std::nullopt;
+  }
+  std::string contents(static_cast<std::size_t>(size), '\0');
+  stream.read(contents.data(), static_cast<std::streamsize>(contents.size()));
+  if (!stream && !stream.eof()) {
+    return std::nullopt;
+  }
+  return contents;
+}
+
+[[nodiscard]] bool stage_kicad_rule_context(const std::filesystem::path& source,
+                                            const std::filesystem::path& directory,
+                                            std::string& diagnostic) {
+  for (const auto extension : {".kicad_pro", ".kicad_dru"}) {
+    auto sidecar = source;
+    sidecar.replace_extension(extension);
+    std::error_code error;
+    if (!std::filesystem::exists(sidecar, error)) {
+      if (error) {
+        diagnostic = "unable to inspect source KiCad rule context";
+        return false;
+      }
+      continue;
+    }
+    if (!std::filesystem::is_regular_file(sidecar, error) || error) {
+      diagnostic = "source KiCad rule context is not a regular file";
+      return false;
+    }
+    std::filesystem::copy_file(sidecar, directory / sidecar.filename(),
+                               std::filesystem::copy_options::none, error);
+    if (error) {
+      diagnostic = "unable to stage source KiCad rule context";
+      return false;
+    }
+  }
+  return true;
+}
+
+[[nodiscard]] ExternalKicadDrcResult
+run_external_kicad_drc(const std::filesystem::path& executable,
+                       const std::filesystem::path& candidate,
+                       const std::filesystem::path& staging_directory,
+                       std::stop_token stop_token) {
+  namespace process = boost::process::v1;
+  ExternalKicadDrcResult result;
+  result.executable = executable.generic_string();
+  const auto report = staging_directory / "drc.json";
+  const auto standard_output = staging_directory / "kicad-cli.stdout";
+  const auto standard_error = staging_directory / "kicad-cli.stderr";
+  std::vector<std::string> arguments;
+  if (executable.extension() == ".AppImage") {
+    arguments = {"--appimage-extract-and-run", "kicad-cli"};
+  }
+  arguments.insert(arguments.end(),
+                   {"pcb", "drc", "--output", report.string(), "--format", "json",
+                    "--severity-error", "--exit-code-violations", candidate.string()});
+  try {
+    process::child child(executable.string(), process::args(arguments),
+                         process::std_out > standard_output.string(),
+                         process::std_err > standard_error.string());
+    result.run = true;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes{15};
+    while (child.running() && !stop_token.stop_requested() &&
+           std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::sleep_for(std::chrono::milliseconds{25});
+    }
+    if (child.running()) {
+      child.terminate();
+      child.wait();
+      result.diagnostic = stop_token.stop_requested()
+                              ? "external KiCad DRC cancelled"
+                              : "external KiCad DRC exceeded its 15 minute bound";
+      return result;
+    }
+    child.wait();
+    result.exit_code = child.exit_code();
+  } catch (const std::exception& exception) {
+    result.diagnostic = "unable to execute external KiCad DRC: " + std::string(exception.what());
+    return result;
+  }
+  constexpr std::size_t maximum_diagnostic_bytes = 64U * 1024U;
+  const auto stderr_contents = read_bounded_text_file(standard_error, maximum_diagnostic_bytes);
+  if (result.exit_code != 0) {
+    result.diagnostic = stderr_contents && !stderr_contents->empty()
+                            ? *stderr_contents
+                            : "external KiCad DRC reported violations or failed";
+    return result;
+  }
+  constexpr std::size_t maximum_report_bytes = 16U * 1024U * 1024U;
+  const auto report_contents = read_bounded_text_file(report, maximum_report_bytes);
+  boost::system::error_code parse_error;
+  if (!report_contents || report_contents->empty()) {
+    result.diagnostic = "external KiCad DRC returned success without a bounded report";
+    return result;
+  }
+  const auto parsed = boost::json::parse(*report_contents, parse_error);
+  if (parse_error || !parsed.is_object()) {
+    result.diagnostic = "external KiCad DRC returned an invalid JSON report";
+    return result;
+  }
+  result.passed = true;
+  result.diagnostic = "external KiCad DRC passed";
+  return result;
+}
+
 void print_work_plan_execution(
     const flux::io::WorkPlanExecutionResult& execution,
     const std::optional<std::filesystem::path>& output_path = std::nullopt,
-    const flux::io::KicadExportResult* export_result = nullptr) {
+    const flux::io::KicadExportResult* export_result = nullptr,
+    bool output_published = false) {
   boost::system::error_code error;
   auto value = boost::json::parse(flux::io::serialize_flux_work_plan_execution_summary(execution),
                                   error);
@@ -6034,6 +6247,7 @@ void print_work_plan_execution(
                                  : boost::json::value();
   object["export_attempted"] = export_result != nullptr;
   object["export_ok"] = export_result != nullptr && export_result->ok();
+  object["output_published"] = output_published;
   boost::json::array diagnostics;
   if (export_result != nullptr) {
     diagnostics.reserve(export_result->diagnostics.size());
@@ -7650,7 +7864,7 @@ constrained_optimizer_config(const Board& board,
 }
 
 void print_help() {
-  std::cout << "flux-cli 0.129.0\n\n"
+  std::cout << "flux-cli 0.130.0\n\n"
                "Usage:\n"
                "  flux-cli version       Print the engine version\n"
                "  flux-cli capabilities --json  Print the pinned feature-parity contract\n"
@@ -7659,6 +7873,7 @@ void print_help() {
                "  flux-cli inspect-work-plan-kicad BOARD PLAN.flux.json\n"
                "  flux-cli dry-run-work-plan-kicad BOARD PLAN.flux.json\n"
                "  flux-cli execute-work-plan-kicad BOARD PLAN.flux.json [OUTPUT.kicad_pcb]\n"
+               "      Non-preview publication requires FLUX_KICAD_CLI or kicad-cli on PATH\n"
                "  flux-cli demo          Evaluate a valid built-in board\n"
                "  flux-cli demo-invalid  Evaluate an overlapping built-in board\n"
                "  flux-cli route-demo [--strict-medial] [--direct-medial] Globally route the "
@@ -7859,7 +8074,7 @@ int main(int argc, char** argv) {
   }
   const std::string_view command{argv[1]};
   if (command == "version" && argc == 2) {
-    std::cout << "flux_capacitor 0.129.0 board-schema 19\n";
+    std::cout << "flux_capacitor 0.130.0 board-schema 19\n";
     return EXIT_SUCCESS;
   }
   if (command == "capabilities" && argc == 3 && std::string_view{argv[2]} == "--json") {
@@ -7874,7 +8089,7 @@ int main(int argc, char** argv) {
     const char* override_value = std::getenv("FLUX_VULKAN_DEVICE");
     std::cout << "{\n"
               << "  \"engine\": \"flux_capacitor\",\n"
-              << "  \"version\": \"0.129.0\",\n"
+              << "  \"version\": \"0.130.0\",\n"
               << "  \"board_schema\": 19,\n"
               << "  \"production_gpu_required\": true,\n"
               << "  \"gpu_available\": " << (device.available ? "true" : "false") << ",\n"
@@ -7980,18 +8195,73 @@ int main(int argc, char** argv) {
         flux::io::execute_loaded_flux_work_plan(loaded, stop_bridge.token(), telemetry.get());
     std::optional<std::filesystem::path> output_path;
     std::optional<flux::io::KicadExportResult> exported;
+    bool output_published = false;
     if (!preview) {
       output_path = std::filesystem::path{argv[4]};
       if (execution.candidate_ready_for_export && execution.candidate) {
-        exported = flux::io::export_kicad_candidate_file(source_path, *output_path, prepared_source,
-                                                         *execution.candidate);
+        exported.emplace();
+        const auto export_error = [&](std::string code, std::string message) {
+          exported->diagnostics.push_back({flux::io::ExportSeverity::error, std::move(code),
+                                           std::move(message), {}});
+        };
+        std::error_code file_error;
+        if (std::filesystem::exists(*output_path, file_error) || file_error) {
+          export_error("output_exists", "refusing to overwrite an existing output board");
+        } else if (const auto staging_path = make_work_plan_staging_directory(*output_path)) {
+          WorkPlanStagingDirectory staging{*staging_path};
+          std::string context_diagnostic;
+          if (!stage_kicad_rule_context(source_path, staging.path(), context_diagnostic)) {
+            export_error("kicad_rule_context_staging_failed", std::move(context_diagnostic));
+          } else {
+            const auto temporary_candidate = staging.path() / source_path.filename();
+            *exported = flux::io::export_kicad_candidate_file(
+                source_path, temporary_candidate, prepared_source, *execution.candidate);
+            if (exported->ok()) {
+              const auto kicad_cli = resolve_kicad_cli();
+              if (!kicad_cli) {
+                execution.external_kicad_drc_diagnostic =
+                    "external KiCad DRC is required but FLUX_KICAD_CLI and PATH provide no "
+                    "usable kicad-cli";
+                execution.candidate_ready_for_export = false;
+              } else {
+                const auto drc = run_external_kicad_drc(*kicad_cli, temporary_candidate,
+                                                        staging.path(), stop_bridge.token());
+                execution.external_kicad_drc_run = drc.run;
+                execution.external_kicad_drc_passed = drc.passed;
+                execution.external_kicad_drc_exit_code = drc.exit_code;
+                execution.external_kicad_drc_executable = drc.executable;
+                execution.external_kicad_drc_diagnostic = drc.diagnostic;
+                if (!drc.passed) {
+                  execution.candidate_ready_for_export = false;
+                } else {
+                  std::filesystem::rename(temporary_candidate, *output_path, file_error);
+                  if (file_error) {
+                    execution.candidate_ready_for_export = false;
+                    execution.external_kicad_drc_diagnostic +=
+                        "; candidate publication failed: " + file_error.message();
+                  } else {
+                    output_published = true;
+                  }
+                }
+              }
+            }
+          }
+        } else {
+          export_error("staging_directory_create_failed",
+                       "unable to create a private candidate staging directory");
+        }
       }
     }
-    print_work_plan_execution(execution, output_path, exported ? &*exported : nullptr);
+    print_work_plan_execution(execution, output_path, exported ? &*exported : nullptr,
+                              output_published);
     if (stop_bridge.stop_requested()) {
       return 130;
     }
-    return execution.ok() && (preview || (exported && exported->ok())) ? EXIT_SUCCESS : 13;
+    return execution.ok() &&
+                   (preview || (exported && exported->ok() &&
+                                execution.external_kicad_drc_passed && output_published))
+               ? EXIT_SUCCESS
+               : 13;
   }
   if ((command == "demo" || command == "demo-invalid") && argc == 2) {
     const auto result = flux::evaluate_board(make_demo_board(command == "demo-invalid"));

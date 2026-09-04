@@ -10,6 +10,17 @@ project(
   DESCRIPTION "Integrated PCB placement and routing engine"
   LANGUAGES CXX)
 
+set(FLUX_PARITY_MANIFEST_FILE
+    "${CMAKE_CURRENT_SOURCE_DIR}/docs/parity_manifest.json")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+             "${FLUX_PARITY_MANIFEST_FILE}")
+file(READ "${FLUX_PARITY_MANIFEST_FILE}" FLUX_PARITY_MANIFEST_JSON)
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated/flux/generated")
+configure_file(
+  "${CMAKE_CURRENT_SOURCE_DIR}/cmake/parity_manifest.hpp.in"
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/flux/generated/parity_manifest.hpp"
+  @ONLY)
+
 option(FLUX_BUILD_TESTS "Build flux_capacitor tests" ON)
 option(FLUX_BUILD_VIEWER "Build the native ImGui router telemetry viewer" OFF)
 option(FLUX_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
@@ -184,6 +195,7 @@ endif()
 add_executable(flux-cli apps/flux-cli/main.cpp)
 target_link_libraries(flux-cli PRIVATE flux::core)
 target_compile_features(flux-cli PRIVATE cxx_std_20)
+target_include_directories(flux-cli PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 
 add_executable(flux-hydraulic-demo apps/flux-hydraulic-demo/main.cpp)
 target_link_libraries(flux-hydraulic-demo PRIVATE flux::core)

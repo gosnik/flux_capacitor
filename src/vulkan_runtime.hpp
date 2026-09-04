@@ -31,6 +31,11 @@ public:
   [[nodiscard]] std::uint32_t queue_family() const { return queue_family_; }
   [[nodiscard]] VkPipelineCache pipeline_cache() const { return pipeline_cache_; }
   [[nodiscard]] const std::string& device_name() const { return device_name_; }
+  [[nodiscard]] const std::string& device_type() const { return device_type_; }
+  [[nodiscard]] std::uint32_t vendor_id() const { return vendor_id_; }
+  [[nodiscard]] std::uint32_t device_id() const { return device_id_; }
+  [[nodiscard]] std::uint32_t api_version() const { return api_version_; }
+  [[nodiscard]] std::uint32_t driver_version() const { return driver_version_; }
 
   [[nodiscard]] bool submit_and_wait(VkCommandBuffer command, std::string& error);
   [[nodiscard]] bool find_memory_type(std::uint32_t type_bits, VkMemoryPropertyFlags required,
@@ -60,6 +65,11 @@ private:
   std::mutex fence_mutex_;
   std::condition_variable fence_available_;
   std::string device_name_;
+  std::string device_type_;
+  std::uint32_t vendor_id_{0U};
+  std::uint32_t device_id_{0U};
+  std::uint32_t api_version_{0U};
+  std::uint32_t driver_version_{0U};
   std::string diagnostic_;
 };
 

@@ -1,0 +1,10 @@
+#pragma once
+
+#include <string_view>
+
+namespace flux::generated {
+
+inline constexpr std::string_view parity_manifest_json =
+    R"FLUXJSON(@FLUX_PARITY_MANIFEST_JSON@)FLUXJSON";
+
+} // namespace flux::generated

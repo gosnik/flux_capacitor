@@ -1,0 +1,37 @@
+{
+  "schema": "flux_verification_suites",
+  "schema_version": 1,
+  "suites": {
+    "per-change": {
+      "purpose": "Risk-focused invariants plus every permanently qualified routing tier.",
+      "unit_filters": [
+        "global_to_detailed_route_is_transactional_and_capacity_gated",
+        "hydraulic_polygon_discovery_projects_into_coarse_navmesh",
+        "same_net_vertical_features_are_reused_as_transition_portals"
+      ],
+      "ctest_label": "risk",
+      "routing_level": "qualified"
+    },
+    "frontier": {
+      "purpose": "Risk-focused invariants, every qualified tier, and the one permanently unlocked frontier tier.",
+      "unit_filters": [
+        "global_to_detailed_route_is_transactional_and_capacity_gated",
+        "hydraulic_polygon_discovery_projects_into_coarse_navmesh",
+        "same_net_vertical_features_are_reused_as_transition_portals"
+      ],
+      "ctest_label": "risk",
+      "routing_level": "unlocked"
+    },
+    "release": {
+      "purpose": "Risk-focused invariants, parity-fixture contract/import gates, and the complete progressive corpus inventory.",
+      "unit_filters": [
+        "global_to_detailed_route_is_transactional_and_capacity_gated",
+        "hydraulic_polygon_discovery_projects_into_coarse_navmesh",
+        "same_net_vertical_features_are_reused_as_transition_portals"
+      ],
+      "ctest_label": "risk",
+      "routing_level": "all",
+      "qualification_note": "Locked boards are strict-import gates until their predecessor is qualified; milestone promotion adds representative routed parity waves."
+    }
+  }
+}

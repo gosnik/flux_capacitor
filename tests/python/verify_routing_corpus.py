@@ -4,12 +4,16 @@
 from __future__ import annotations
 
 import argparse
+import datetime
 import hashlib
 import json
+import os
+import platform
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 
@@ -19,6 +23,43 @@ def sha256(path: Path) -> str:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def write_json_once(path: Path, value: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("x", encoding="utf-8") as stream:
+        json.dump(value, stream, indent=2, sort_keys=True)
+        stream.write("\n")
+
+
+def command_identity(command: list[str], timeout: int = 30) -> dict:
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return {"command": command, "available": False, "diagnostic": str(error)}
+    return {
+        "command": command,
+        "available": completed.returncode == 0,
+        "returncode": completed.returncode,
+        "stdout": completed.stdout.strip(),
+        "stderr": completed.stderr.strip(),
+    }
+
+
+def artifact_inventory(root: Path) -> list[dict]:
+    result = []
+    for path in sorted(candidate for candidate in root.rglob("*") if candidate.is_file()):
+        relative = path.relative_to(root).as_posix()
+        if relative == "run-result.json":
+            continue
+        result.append({"path": relative, "bytes": path.stat().st_size, "sha256": sha256(path)})
+    return result
 
 
 def run_json(
@@ -164,7 +205,8 @@ def verify_board(
     failed_route_png_dir: Path | None,
     failed_route_png_mode: str,
     max_failed_route_png_results: int,
-) -> None:
+    preflight_only: bool,
+) -> dict:
     board_id = board["id"]
     source = corpus / f"{board_id}.kicad_pcb"
     project = corpus / f"{board_id}.kicad_pro"
@@ -192,6 +234,26 @@ def verify_board(
         <= expected["max_core_validation_errors"],
         f"{board_id}: structural errors regressed from the recorded bound",
     )
+
+    board_result = {
+        "id": board_id,
+        "level": board["level"],
+        "declared_status": board["status"],
+        "qualification": board.get("qualification"),
+        "source_revision": inspected.get("source_revision"),
+        "source_sha256": before,
+        "reference_sha256": reference_before,
+        "inspection": inspected,
+        "global": None,
+        "detailed": None,
+        "qualified": None,
+    }
+
+    if preflight_only:
+        require(sha256(source) == before, f"{board_id}: source board was modified")
+        require(sha256(reference) == reference_before, f"{board_id}: routed reference was modified")
+        print(f"PREFLIGHT {board_id}: source and strict import identity verified")
+        return board_result
 
     if board["status"] in {"qualified", "unlocked"}:
         if board["status"] == "qualified":
@@ -233,6 +295,7 @@ def verify_board(
             route_telemetry_args.extend(
                 ["--telemetry-record", str(route_telemetry_record)]
             )
+        global_started = time.monotonic()
         try:
             routed = run_json(
                 [
@@ -270,6 +333,21 @@ def verify_board(
                     max_failed_route_png_results,
                 )
             raise
+        global_duration_seconds = time.monotonic() - global_started
+        global_record = {
+            "duration_seconds": global_duration_seconds,
+            "command_configuration": {
+                "max_router_iterations": board.get("probe_iterations", 1),
+                "max_expansions": 50000,
+                "max_static_seed_workers": 2,
+                "search_diversification": True,
+                "router_args": router_args,
+                "telemetry_level": effective_telemetry_level,
+            },
+            "result": routed,
+        }
+        write_json_once(tier_dir / "global-result.json", global_record)
+        board_result["global"] = global_record
         global_qualified = (
             routed.get("complete") is True
             and routed.get("unrouted_nets") == 0
@@ -335,6 +413,7 @@ def verify_board(
                             str(detail_telemetry_record),
                         ]
                     )
+                detailed_started = time.monotonic()
                 try:
                     detailed = run_json(
                         [
@@ -377,6 +456,24 @@ def verify_board(
                             max_failed_route_png_results,
                         )
                     raise
+                detailed_duration_seconds = time.monotonic() - detailed_started
+                detailed_record = {
+                    "duration_seconds": detailed_duration_seconds,
+                    "command_configuration": {
+                        "max_router_iterations": board.get(
+                            "detail_iterations", board.get("probe_iterations", 30)
+                        ),
+                        "max_expansions": 50000,
+                        "max_static_seed_workers": 2,
+                        "search_diversification": True,
+                        "router_args": router_args,
+                        "telemetry_level": effective_telemetry_level,
+                        "arcs": True,
+                    },
+                    "result": detailed,
+                }
+                write_json_once(tier_dir / "detail-result.json", detailed_record)
+                board_result["detailed"] = detailed_record
                 detailed_qualified = (
                     detailed.get("complete") is True
                     and detailed.get("validation_errors") == 0
@@ -406,6 +503,7 @@ def verify_board(
                     print(f"RENDER {board_id}: final copper PNGs in {tier_dir / 'copper'}")
 
         qualified = global_qualified if qualification == "global_complete" else detailed_qualified
+        board_result["qualified"] = qualified
         if board["status"] == "qualified":
             require(qualified, f"{board_id}: qualified {qualification} route regressed")
             suffix = "zero-overflow global plan"
@@ -429,9 +527,11 @@ def verify_board(
             f"PASS {board_id}: strict import gate "
             f"({inspected['core_validation_errors']} current structural blockers)"
         )
+        board_result["qualified"] = False
 
     require(sha256(source) == before, f"{board_id}: source board was modified")
     require(sha256(reference) == reference_before, f"{board_id}: routed reference was modified")
+    return board_result
 
 
 def main() -> int:
@@ -460,6 +560,11 @@ def main() -> int:
         "--failed-route-png-mode", choices=("copper", "spline", "both"), default="both"
     )
     parser.add_argument("--max-failed-route-png-results", type=int, default=8)
+    parser.add_argument(
+        "--preflight-only",
+        action="store_true",
+        help="verify identities and emit run manifests without starting routing",
+    )
     args = parser.parse_args()
 
     flux_cli = args.flux_cli.resolve()
@@ -474,8 +579,9 @@ def main() -> int:
     kicad_cli = args.kicad_cli or Path(shutil.which("kicad-cli") or "")
     inkscape = args.inkscape or Path(shutil.which("inkscape") or "")
     require(flux_cli.is_file(), f"missing flux-cli: {flux_cli}")
-    require(kicad_cli.is_file(), f"missing kicad-cli: {kicad_cli}")
-    require(inkscape.is_file(), f"missing Inkscape: {inkscape}")
+    if not args.preflight_only:
+        require(kicad_cli.is_file(), f"missing kicad-cli: {kicad_cli}")
+        require(inkscape.is_file(), f"missing Inkscape: {inkscape}")
     require(
         args.max_failed_route_png_results > 0,
         "--max-failed-route-png-results must be positive",
@@ -511,6 +617,8 @@ def main() -> int:
     else:
         if args.level == "unlocked":
             maximum = max(board["level"] for board in boards if board["status"] != "locked")
+        elif args.level == "qualified":
+            maximum = max(board["level"] for board in boards if board["status"] == "qualified")
         else:
             maximum = (
                 max(board["level"] for board in boards)
@@ -520,20 +628,116 @@ def main() -> int:
         selected = [board for board in boards if board["level"] <= maximum]
     require(selected, "no corpus boards selected")
 
-    for board in selected:
-        verify_board(
-            flux_cli,
-            corpus,
-            artifacts,
-            kicad_cli,
-            inkscape,
-            board,
-            args.telemetry_level,
-            telemetry_record_dir,
-            failed_route_png_dir,
-            args.failed_route_png_mode,
-            args.max_failed_route_png_results,
+    artifacts.mkdir(parents=True, exist_ok=True)
+    system_info = run_json([str(flux_cli), "system-info", "--json"], timeout=30)
+    capabilities = run_json([str(flux_cli), "capabilities", "--json"], timeout=30)
+    metadata = {
+        "schema": "flux_routing_baseline",
+        "schema_version": 1,
+        "created_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "mode": "preflight" if args.preflight_only else "routing",
+        "invocation": [str(Path(sys.argv[0]).resolve()), *sys.argv[1:]],
+        "environment": {
+            "platform": platform.platform(),
+            "python": sys.version,
+            "flux_vulkan_device_override": os.environ.get("FLUX_VULKAN_DEVICE"),
+            "flux": system_info,
+            "kicad_cli": command_identity([str(kicad_cli), "--version"])
+            if kicad_cli.is_file()
+            else {"available": False},
+            "inkscape": command_identity([str(inkscape), "--version"])
+            if inkscape.is_file()
+            else {"available": False},
+        },
+        "executable": {
+            "path": str(flux_cli),
+            "sha256": sha256(flux_cli),
+        },
+        "capability_contract": {
+            "schema": capabilities.get("schema"),
+            "schema_version": capabilities.get("schema_version"),
+            "reference": capabilities.get("reference"),
+            "sha256": hashlib.sha256(
+                json.dumps(capabilities, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            ).hexdigest(),
+        },
+        "corpus": {
+            "path": str(corpus),
+            "manifest_sha256": sha256(manifest_path),
+            "source_corpus": manifest.get("source_corpus"),
+        },
+        "selection": {
+            "level": args.level,
+            "explicit_boards": args.board,
+            "boards": [
+                {
+                    "id": board["id"],
+                    "level": board["level"],
+                    "status": board["status"],
+                    "qualification": board.get("qualification"),
+                    "source_sha256": board["board_sha256"],
+                    "project_sha256": board["project_sha256"],
+                    "reference_sha256": board["reference_sha256"],
+                    "router_args": board.get("router_args", []),
+                }
+                for board in selected
+            ],
+        },
+        "artifact_contract": {
+            "telemetry_level": args.telemetry_level,
+            "failed_route_png_mode": args.failed_route_png_mode,
+            "max_failed_route_png_results": args.max_failed_route_png_results,
+            "analysis_pngs_required_for_routing": True,
+            "telemetry_required_for_routing": True,
+            "source_boards_immutable": True,
+            "files_write_once": True,
+        },
+    }
+    write_json_once(artifacts / "run-metadata.json", metadata)
+
+    board_results = []
+    try:
+        for board in selected:
+            board_results.append(
+                verify_board(
+                    flux_cli,
+                    corpus,
+                    artifacts,
+                    kicad_cli,
+                    inkscape,
+                    board,
+                    args.telemetry_level,
+                    telemetry_record_dir,
+                    failed_route_png_dir,
+                    args.failed_route_png_mode,
+                    args.max_failed_route_png_results,
+                    args.preflight_only,
+                )
+            )
+    except (RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
+        write_json_once(
+            artifacts / "run-result.json",
+            {
+                "schema": "flux_routing_baseline_result",
+                "schema_version": 1,
+                "status": "failed",
+                "diagnostic": str(error),
+                "boards": board_results,
+                "artifacts": artifact_inventory(artifacts),
+            },
         )
+        raise
+    write_json_once(
+        artifacts / "run-result.json",
+        {
+            "schema": "flux_routing_baseline_result",
+            "schema_version": 1,
+            "status": "preflight_complete" if args.preflight_only else "complete",
+            "diagnostic": "",
+            "boards": board_results,
+            "artifacts": artifact_inventory(artifacts),
+        },
+    )
     print(f"{len(selected)}/{len(selected)} selected corpus boards passed")
     return 0
 

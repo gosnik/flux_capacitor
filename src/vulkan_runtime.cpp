@@ -19,6 +19,25 @@ namespace {
   return result;
 }
 
+[[nodiscard]] bool is_gpu(VkPhysicalDeviceType type) {
+  return type == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU ||
+         type == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ||
+         type == VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU;
+}
+
+[[nodiscard]] std::string device_type_name(VkPhysicalDeviceType type) {
+  switch (type) {
+  case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:
+    return "discrete";
+  case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU:
+    return "integrated";
+  case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:
+    return "virtual";
+  default:
+    return "unsupported";
+  }
+}
+
 } // namespace
 
 Runtime& Runtime::instance() {
@@ -70,12 +89,14 @@ Runtime::Runtime() {
       candidate.family = family;
       candidate.index = device_index;
       vkGetPhysicalDeviceProperties(candidate.device, &candidate.properties);
+      if (!is_gpu(candidate.properties.deviceType))
+        break;
       candidates.push_back(candidate);
       break;
     }
   }
   if (candidates.empty()) {
-    diagnostic_ = "shared Vulkan runtime found no compute queue";
+    diagnostic_ = "shared Vulkan runtime found no compute-capable GPU";
     return;
   }
   const auto matches_override = [&](const Candidate& candidate) {
@@ -103,6 +124,11 @@ Runtime::Runtime() {
   physical_ = selected->device;
   queue_family_ = selected->family;
   device_name_ = selected->properties.deviceName;
+  device_type_ = device_type_name(selected->properties.deviceType);
+  vendor_id_ = selected->properties.vendorID;
+  device_id_ = selected->properties.deviceID;
+  api_version_ = selected->properties.apiVersion;
+  driver_version_ = selected->properties.driverVersion;
 
   const float priority = 1.0F;
   VkDeviceQueueCreateInfo queue_info{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};

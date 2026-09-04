@@ -751,4 +751,20 @@ relax_routing_xpbd(const std::vector<RoutingXpbdParticle>& particles,
 
 [[nodiscard]] bool routing_compute_gpu_available();
 
+struct RoutingComputeDeviceInfo {
+  bool available{false};
+  std::string device_name;
+  std::string device_type;
+  std::uint32_t vendor_id{0U};
+  std::uint32_t device_id{0U};
+  std::uint32_t api_version{0U};
+  std::uint32_t driver_version{0U};
+  std::string diagnostic;
+};
+
+// Reports the exact process-wide Vulkan device selected by the same runtime used for production
+// routing. This is observational metadata for run manifests; it does not participate in device
+// selection or routing decisions.
+[[nodiscard]] RoutingComputeDeviceInfo routing_compute_device_info();
+
 } // namespace flux

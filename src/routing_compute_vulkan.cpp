@@ -391,6 +391,20 @@ bool routing_compute_gpu_available_impl() {
   return context().ok();
 }
 
+RoutingComputeDeviceInfo routing_compute_device_info_impl() {
+  std::lock_guard lock(context_mutex());
+  const auto& runtime = vulkan::Runtime::instance();
+  const auto& compute = context();
+  return {compute.ok(),
+          runtime.device_name(),
+          runtime.device_type(),
+          runtime.vendor_id(),
+          runtime.device_id(),
+          runtime.api_version(),
+          runtime.driver_version(),
+          compute.ok() ? std::string{} : compute.diagnostic()};
+}
+
 RoutingComputeProximityResult
 probe_routing_proximity_gpu(const std::vector<RoutingComputePoint>& queries,
                             const std::vector<RoutingComputeSegment>& segments,

@@ -15,6 +15,7 @@ target_include_directories(
 target_link_libraries(flux_telemetry_viewer_tests PRIVATE flux::core flux::telemetry)
 target_compile_features(flux_telemetry_viewer_tests PRIVATE cxx_std_20)
 add_test(NAME flux_telemetry_viewer_tests COMMAND flux_telemetry_viewer_tests)
+set_tests_properties(flux_telemetry_viewer_tests PROPERTIES LABELS "risk;telemetry")
 
 add_executable(
   flux_telemetry_live_client_tests
@@ -27,10 +28,31 @@ target_compile_definitions(flux_telemetry_live_client_tests PRIVATE BOOST_ERROR_
 target_link_libraries(
   flux_telemetry_live_client_tests PRIVATE flux::core flux::telemetry Threads::Threads)
 add_test(NAME flux_telemetry_live_client_tests COMMAND flux_telemetry_live_client_tests)
-set_tests_properties(flux_telemetry_live_client_tests PROPERTIES RUN_SERIAL TRUE)
+set_tests_properties(
+  flux_telemetry_live_client_tests PROPERTIES
+  RUN_SERIAL TRUE
+  LABELS "risk;telemetry")
 
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
+  add_test(
+    NAME flux_cli_capabilities_manifest
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/python/verify_capabilities_manifest.py"
+            --flux-cli $<TARGET_FILE:flux-cli>
+            --manifest "${PROJECT_SOURCE_DIR}/docs/parity_manifest.json"
+            --fixtures "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/parity/manifest.json")
+  set_tests_properties(
+    flux_cli_capabilities_manifest PROPERTIES LABELS "risk;parity-contract")
+  add_test(
+    NAME flux_routing_baseline_manifest
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/python/test_routing_baseline_manifest.py"
+            --flux-cli $<TARGET_FILE:flux-cli>
+            --corpus "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/routing-corpus"
+            --verifier "${CMAKE_CURRENT_SOURCE_DIR}/python/verify_routing_corpus.py")
+  set_tests_properties(
+    flux_routing_baseline_manifest PROPERTIES LABELS "risk;parity-contract")
   add_test(
     NAME flux_kicad_netclass_bridge_tests
     COMMAND "${Python3_EXECUTABLE}"
@@ -55,21 +77,41 @@ find_program(INKSCAPE_EXECUTABLE inkscape PATHS /snap/bin)
 set(FLUX_FIXTURES "${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 if(Python3_Interpreter_FOUND AND KICAD_CLI_EXECUTABLE AND INKSCAPE_EXECUTABLE)
   add_test(
-    NAME flux_cli_routing_corpus_unlocked
+    NAME flux_cli_routing_corpus_qualified
     COMMAND "${Python3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/python/verify_routing_corpus.py"
+            "${CMAKE_CURRENT_SOURCE_DIR}/python/run_routing_corpus_ctest.py"
+            --verifier "${CMAKE_CURRENT_SOURCE_DIR}/python/verify_routing_corpus.py"
             --flux-cli $<TARGET_FILE:flux-cli>
             --corpus ${FLUX_FIXTURES}/routing-corpus
-            --artifacts ${CMAKE_CURRENT_BINARY_DIR}/routing-corpus-artifacts
+            --level qualified
+            --kicad-cli ${KICAD_CLI_EXECUTABLE}
+            --inkscape ${INKSCAPE_EXECUTABLE})
+  set_tests_properties(
+    flux_cli_routing_corpus_qualified PROPERTIES
+    LABELS "routing-corpus;real-board;qualified"
+    TIMEOUT 3600)
+  add_test(
+    NAME flux_cli_routing_corpus_unlocked
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/python/run_routing_corpus_ctest.py"
+            --verifier "${CMAKE_CURRENT_SOURCE_DIR}/python/verify_routing_corpus.py"
+            --flux-cli $<TARGET_FILE:flux-cli>
+            --corpus ${FLUX_FIXTURES}/routing-corpus
+            --level unlocked
             --kicad-cli ${KICAD_CLI_EXECUTABLE}
             --inkscape ${INKSCAPE_EXECUTABLE})
   set_tests_properties(
     flux_cli_routing_corpus_unlocked PROPERTIES
-    LABELS "routing-corpus;real-board"
+    LABELS "routing-corpus;real-board;frontier"
     TIMEOUT 7200)
 endif()
 flux_add_cli_test(flux_cli_demo "\"valid\": true" demo)
 flux_add_cli_test(flux_cli_version "board-schema 18" version)
+flux_add_cli_test(
+  flux_cli_system_info
+  "\"gpu_available\": true"
+  system-info --json)
+set_tests_properties(flux_cli_system_info PROPERTIES LABELS "risk;gpu")
 flux_add_cli_test(flux_cli_route_demo "\"complete\": true" route-demo)
 flux_add_cli_test(
   flux_cli_strict_medial_route_demo

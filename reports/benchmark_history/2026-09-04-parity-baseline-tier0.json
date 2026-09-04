@@ -1,0 +1,66 @@
+{
+  "schema": "flux_parity_baseline_summary",
+  "schema_version": 1,
+  "date": "2026-09-04",
+  "purpose": "Milestone 0 routing-baseline recorder qualification",
+  "canonical_performance_baseline": false,
+  "performance_context": "A separate Tier 1 routing process was already active, so timing and utilization are diagnostic only.",
+  "source": {
+    "board_id": "pt2399_delay",
+    "source_revision": "kicad-20241229:pcbnew:e8578b52adc129c7",
+    "source_sha256": "c48693b458eb28ae11f2ef099acf33ee9a797d87f430457c6961b41e2f2c4cab",
+    "corpus_manifest_sha256": "7803e8152f98cf2d7c568a264c931816c887c521d355c9fa0185ef7734e5b298"
+  },
+  "engine": {
+    "version": "0.128.0",
+    "board_schema": 18,
+    "executable_sha256": "1913822e4b65d53f41f8e4df6ee492cf83968abd786f3b268763668e4a1274a8",
+    "gpu_required": true,
+    "gpu_available": true,
+    "gpu_device": "NVIDIA GeForce RTX 5080",
+    "gpu_device_type": "discrete",
+    "gpu_vendor_id": 4318,
+    "gpu_device_id": 11266,
+    "gpu_api_version_raw": 4211017,
+    "gpu_driver_version_raw": 2496987136
+  },
+  "global": {
+    "duration_seconds": 143.67694024881348,
+    "paths": 50,
+    "unrouted_nets": 0,
+    "sampled_or_negotiated_overflow": 6,
+    "hydraulic_gpu_routes": 49,
+    "hydraulic_gpu_peak_batch_size": 1,
+    "planning_ready_for_exact_regional_handoff": true
+  },
+  "detailed": {
+    "duration_seconds": 324.56842079013586,
+    "complete": true,
+    "validation_errors": 0,
+    "open_connections": 0,
+    "copper_violations": 0,
+    "added_tracks": 124,
+    "added_track_arcs": 48,
+    "added_vias": 4,
+    "unrounded_non_junction_bends": 0,
+    "ph_gpu_precondition_dispatches": 19,
+    "ph_gpu_polish_dispatches": 456,
+    "external_kicad_drc": "pass"
+  },
+  "artifacts": {
+    "root": "build/parity-baseline-20260904-m0",
+    "run_metadata_sha256": "6b80b1a837e77373b5131c40a38776de7dcff4187f5c857ee8e5c55a1bc6f173",
+    "run_result_sha256": "bf369423da3f04a07fd2e5711a47aed84d0e32d8414202c429ee82074ee5dd31",
+    "final_board_sha256": "55693d3e7c255ef9ee74578bf93e3350994868b1b70dbe96450582ca8c21cfd3",
+    "kicad_drc_sha256": "0cf65802c0d8f00b75e2dfe2dc104032bb1b6b7bf206a957255cb8f23273999a",
+    "inventory_entries": 28,
+    "telemetry_records": 2,
+    "analysis_and_final_pngs": 18
+  },
+  "qualification": {
+    "tier0_exact_copper": "pass",
+    "external_kicad_drc": "pass",
+    "baseline_recorder": "pass",
+    "full_active_tier_performance_baseline": "pending uncontended Tier 0 plus Tier 1 run"
+  }
+}

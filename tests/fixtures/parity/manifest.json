@@ -1,0 +1,177 @@
+{
+  "schema": "flux_parity_fixtures",
+  "schema_version": 1,
+  "reference": {
+    "project": "KiCadRoutingTools",
+    "version": "0.21.5",
+    "commit": "e239e067c204870b4ac570fc9e931a374bdfd5b4",
+    "license": "MIT",
+    "license_sha256": "6df0be9100e852f1749d2e88df423b0f71cab5bff7af35f749e10cf644911390",
+    "license_file": "tests/fixtures/parity/LICENSE.KiCadRoutingTools.txt"
+  },
+  "selection_policy": {
+    "prefer_smallest_representative": true,
+    "preserve_exact_upstream_bytes": true,
+    "strict_import_required_before_qualification": true,
+    "normalization_permitted": false,
+    "catalog_entry_implies_support": false
+  },
+  "fixtures": [
+    {
+      "id": "flux.minimal",
+      "origin": "flux",
+      "upstream_path": null,
+      "license": "project",
+      "files": [
+        {"path": "tests/fixtures/minimal.kicad_pcb", "sha256": "4e75f2013353fd886593f86aa0fb1bc054152f21478e3f1a087cad6bbb420b6e"}
+      ],
+      "capabilities": ["routing.scope", "routing.power-traces", "placement.integrated", "placement.design-intent", "verification.diagnostics", "integration.kicad", "workflow.plans-ai"],
+      "current_gate": {"state": "contract", "strict_import": true, "blockers": []}
+    },
+    {
+      "id": "flux.minimal-differential-pair",
+      "origin": "flux",
+      "upstream_path": null,
+      "license": "project",
+      "files": [
+        {"path": "tests/fixtures/minimal.kicad_pcb", "sha256": "4e75f2013353fd886593f86aa0fb1bc054152f21478e3f1a087cad6bbb420b6e"},
+        {"path": "tests/fixtures/minimal.diffpairs", "sha256": "ec270d043000e9a3187c43ba2f9728acc113aaee1194788b319ca2a8f747c6d9"}
+      ],
+      "capabilities": ["routing.differential-pairs"],
+      "current_gate": {"state": "contract", "strict_import": true, "blockers": []}
+    },
+    {
+      "id": "flux.minimal-ordered-bus",
+      "origin": "flux",
+      "upstream_path": null,
+      "license": "project",
+      "files": [
+        {"path": "tests/fixtures/minimal.kicad_pcb", "sha256": "4e75f2013353fd886593f86aa0fb1bc054152f21478e3f1a087cad6bbb420b6e"},
+        {"path": "tests/fixtures/minimal.buses", "sha256": "b88d91baf72fcef7372b2a2d4d30ff447ea598eac41aa3bf26019565efbe319e"}
+      ],
+      "capabilities": ["routing.ordered-buses"],
+      "current_gate": {"state": "contract", "strict_import": true, "blockers": []}
+    },
+    {
+      "id": "corpus.pt2399-delay",
+      "origin": "licensed-routing-corpus",
+      "upstream_path": "storskegg/Block-PT2399@cf5bedc2295c0ad2a7b3bfe4b9055eafed56edd2:Block-PT2399.kicad_pcb",
+      "license": "Apache-2.0",
+      "files": [
+        {"path": "tests/fixtures/routing-corpus/pt2399_delay.kicad_pcb", "sha256": "c48693b458eb28ae11f2ef099acf33ee9a797d87f430457c6961b41e2f2c4cab"}
+      ],
+      "capabilities": ["routing.single-ended", "routing.ordering", "observability.render-replay"],
+      "current_gate": {"state": "qualified", "strict_import": true, "blockers": []}
+    },
+    {
+      "id": "corpus.bm-svf",
+      "origin": "licensed-routing-corpus",
+      "upstream_path": "bread-modular/bread-modular@09ff60b19e7f8cb47b458185cef44005c8a29728:modules/svf/svf.kicad_pcb",
+      "license": "MIT",
+      "files": [
+        {"path": "tests/fixtures/routing-corpus/bm_svf.kicad_pcb", "sha256": "308ce5513cb6b2b33820648a0062a54f548f6b3c13d856cdcd9b7c3ac8a20d2a"}
+      ],
+      "capabilities": ["routing.ripup-recovery", "routing.proximity-guidance", "qualification.stress-release"],
+      "current_gate": {"state": "frontier", "strict_import": true, "blockers": ["global_and_detailed_route_incomplete"]}
+    },
+    {
+      "id": "krt.cap-chain",
+      "origin": "KiCadRoutingTools",
+      "upstream_path": "kicad_files/cap_chain.kicad_pcb",
+      "license": "MIT",
+      "files": [
+        {"path": "tests/fixtures/parity/krt/cap_chain.kicad_pcb", "sha256": "fc73dd07f4dcfabf28d49d0b044d8acda8e8622b4969bd2c3443450c526eb9cd"}
+      ],
+      "capabilities": ["tuning.length-time"],
+      "current_gate": {"state": "import-blocked", "strict_import": false, "blockers": ["unknown_net_ordinal"]}
+    },
+    {
+      "id": "krt.qfn-interior-pads",
+      "origin": "KiCadRoutingTools",
+      "upstream_path": "kicad_files/qfn_interior_pads.kicad_pcb",
+      "license": "MIT",
+      "files": [
+        {"path": "tests/fixtures/parity/krt/qfn_interior_pads.kicad_pcb", "sha256": "ef1e6ab7694753c3e501bb42383891030a1c5074654b36b1946af55064d2760b"}
+      ],
+      "capabilities": ["fanout.package-aware"],
+      "current_gate": {"state": "import-blocked", "strict_import": false, "blockers": ["unknown_net_ordinal"]}
+    },
+    {
+      "id": "krt.qfn-underpad-coupling",
+      "origin": "KiCadRoutingTools",
+      "upstream_path": "kicad_files/qfn_underpad_coupling.kicad_pcb",
+      "license": "MIT",
+      "files": [
+        {"path": "tests/fixtures/parity/krt/qfn_underpad_coupling.kicad_pcb", "sha256": "202cecd0bcf61b88e088fbe0bb705868c1ba8de8589f57e534aa2816473fb0c9"}
+      ],
+      "capabilities": ["fanout.package-aware", "routing.differential-pairs"],
+      "current_gate": {"state": "import-blocked", "strict_import": false, "blockers": ["unknown_net_ordinal", "non_copper_pad_ignored"]}
+    },
+    {
+      "id": "krt.qfn-differential-escape",
+      "origin": "KiCadRoutingTools",
+      "upstream_path": "kicad_files/qfn_diffpair_escape.kicad_pcb",
+      "license": "MIT",
+      "files": [
+        {"path": "tests/fixtures/parity/krt/qfn_diffpair_escape.kicad_pcb", "sha256": "70b666c3d59dd8264a3c6c3cffd8a5027521f12ff827605f155897b4bacfc747"}
+      ],
+      "capabilities": ["routing.differential-pairs", "vias.return-and-stitch", "placement.logical-swaps", "copper.teardrops"],
+      "current_gate": {"state": "import-blocked", "strict_import": false, "blockers": ["unknown_net_ordinal", "non_copper_pad_ignored"]}
+    },
+    {
+      "id": "krt.qfn-csi-underpad-differential",
+      "origin": "KiCadRoutingTools",
+      "upstream_path": "kicad_files/qfn_csi_underpad_diff.kicad_pcb",
+      "license": "MIT",
+      "files": [
+        {"path": "tests/fixtures/parity/krt/qfn_csi_underpad_diff.kicad_pcb", "sha256": "5b8eedaa798c8a369e74fcfdb5a4198da566c6755b8416ef3cc1deacfb498522"}
+      ],
+      "capabilities": ["fanout.package-aware", "routing.differential-pairs"],
+      "current_gate": {"state": "import-blocked", "strict_import": false, "blockers": ["unknown_net_ordinal", "non_copper_pad_ignored"]}
+    },
+    {
+      "id": "krt.lvds-dual-clock",
+      "origin": "KiCadRoutingTools",
+      "upstream_path": "kicad_files/lvds_converter_dualclk.kicad_pcb",
+      "license": "MIT",
+      "files": [
+        {"path": "tests/fixtures/parity/krt/lvds_converter_dualclk.kicad_pcb", "sha256": "46f70ced3dfc43cba7e2008c9475db4670e94fbfbaf9fb893d393fc26547503a"}
+      ],
+      "capabilities": ["electrical.impedance", "routing.differential-pairs", "tuning.length-time"],
+      "current_gate": {"state": "import-blocked", "strict_import": false, "blockers": ["unknown_net_ordinal", "unfilled_zone_ignored"]}
+    },
+    {
+      "id": "krt.two-islands-smd-stub-via",
+      "origin": "KiCadRoutingTools",
+      "upstream_path": "tests/fixtures/island_semantics/two_islands_smd_stub_via.kicad_pcb",
+      "license": "MIT",
+      "files": [
+        {"path": "tests/fixtures/parity/krt/two_islands_smd_stub_via.kicad_pcb", "sha256": "81cc5a32c71681b3dc0e12958686de365b1f5f3bd7f3818838b00f442486ca52"}
+      ],
+      "capabilities": ["planes.synthesis-repair", "cleanup.copper"],
+      "current_gate": {"state": "import-blocked", "strict_import": false, "blockers": ["unknown_net_ordinal", "missing_courtyard"]}
+    },
+    {
+      "id": "krt.two-islands-through-hole",
+      "origin": "KiCadRoutingTools",
+      "upstream_path": "tests/fixtures/island_semantics/two_islands_tht.kicad_pcb",
+      "license": "MIT",
+      "files": [
+        {"path": "tests/fixtures/parity/krt/two_islands_tht.kicad_pcb", "sha256": "4e4e00d830f296d19a0bf1fc3d14f6c34f39748cf93cd3a33f59825cfa680837"}
+      ],
+      "capabilities": ["planes.synthesis-repair", "vias.return-and-stitch"],
+      "current_gate": {"state": "import-blocked", "strict_import": false, "blockers": ["unknown_net_ordinal", "missing_courtyard"]}
+    },
+    {
+      "id": "krt.two-islands-via-only",
+      "origin": "KiCadRoutingTools",
+      "upstream_path": "tests/fixtures/island_semantics/two_islands_via_only.kicad_pcb",
+      "license": "MIT",
+      "files": [
+        {"path": "tests/fixtures/parity/krt/two_islands_via_only.kicad_pcb", "sha256": "c6359a096630309010a56e3aeccd94989da004fb1ccb431ca8e5f84edacab095"}
+      ],
+      "capabilities": ["planes.synthesis-repair", "vias.return-and-stitch"],
+      "current_gate": {"state": "import-blocked", "strict_import": false, "blockers": ["unknown_net_ordinal", "missing_courtyard"]}
+    }
+  ]
+}

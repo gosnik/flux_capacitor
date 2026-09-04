@@ -208,6 +208,33 @@ measured wall-time improvement or a demonstrated removal of a scaling bottleneck
 Milestones are dependency-ordered. Work within a milestone may proceed in parallel only when it
 does not create two board models or two acceptance paths.
 
+Progress ledger (updated 2026-09-04):
+
+- Milestone 0.1 complete: `docs/parity_manifest.json` records the pinned reference evidence,
+  current Flux evidence, honest status, fixtures, stress samples, public commands, gaps, and
+  acceptance criteria under stable capability IDs.
+- Milestone 0.2 complete: `flux-cli capabilities --json` emits the exact embedded manifest, and a
+  serialization-compatibility test prevents the CLI contract from drifting from the checked-in
+  source.
+- Milestone 0.3 infrastructure complete, qualification partial: `run_tiers.sh` now emits a
+  write-once source/tool/config/GPU manifest, complete stage-result JSON, diagnostic telemetry,
+  mandatory analysis images, and a content-hashed final inventory. Tier 0 passed the end-to-end
+  recorder and exact external KiCad DRC; the recorded timing is non-canonical because another
+  routing process was active. An uncontended qualified-plus-frontier run remains required.
+- Milestone 0.4 complete: `tests/fixtures/parity/manifest.json` maps every capability to the
+  smallest selected Flux, licensed corpus, or pinned KiCadRoutingTools fixture. Nine upstream
+  boards are preserved byte-for-byte with paths, SHA-256 identities, the pinned MIT notice, and
+  honest current gates. Their KiCad 10 string-net import failures remain attributed frontier
+  evidence rather than being normalized away.
+- Milestone 0.5 complete: `tests/suites.json` and `run_suite.sh` define executable per-change,
+  frontier, and release boundaries. The per-change suite runs only the three retained high-risk
+  routing invariants, observer/contract/GPU tests, and qualified tiers; frontier adds the unlocked
+  tier; release adds the full parity-fixture and progressive-corpus import inventory. Corpus CTest
+  runs use disposable artifact roots while manual runs retain write-once evidence.
+- Milestone 0.6 through Milestone 12 remain open unless their individual exit gates are supported
+  by recorded qualification evidence; an implementation named in the capability inventory is not
+  itself proof of qualification.
+
 ### Milestone 0 — Freeze the parity contract and benchmark baseline
 
 Priority: P0.

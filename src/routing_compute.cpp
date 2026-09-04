@@ -496,6 +496,7 @@ discover_routing_broadphase_pairs_gpu(const std::vector<RoutingComputePrimitiveB
 RoutingComputeViaCandidateResult
 filter_routing_via_candidates_gpu(const RoutingComputeViaCandidateInput&);
 bool routing_compute_gpu_available_impl();
+RoutingComputeDeviceInfo routing_compute_device_info_impl();
 #endif
 
 bool routing_compute_gpu_available() {
@@ -503,6 +504,15 @@ bool routing_compute_gpu_available() {
   return routing_compute_gpu_available_impl();
 #else
   return false;
+#endif
+}
+
+RoutingComputeDeviceInfo routing_compute_device_info() {
+#if FLUX_HAS_VULKAN_HYDRAULIC_PATHS
+  return routing_compute_device_info_impl();
+#else
+  return {false, {}, {}, 0U, 0U, 0U, 0U,
+          "Flux was built without the mandatory Vulkan routing backend"};
 #endif
 }
 

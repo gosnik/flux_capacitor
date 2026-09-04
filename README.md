@@ -1676,6 +1676,28 @@ Higher boards remain locked until the preceding tier qualifies. Each
 stripped input travels with its project, routed human reference, exact upstream revision/hash, and
 license. See
 [`tests/fixtures/routing-corpus/README.md`](tests/fixtures/routing-corpus/README.md).
+Run the complete qualified-plus-frontier baseline with `./run_tiers.sh`. Every invocation writes a
+new artifact root containing an immutable `run-metadata.json`, complete global/detailed result JSON
+with stage counters and durations, diagnostic telemetry, mandatory analysis PNGs, and a final
+`run-result.json` inventory with content hashes. The metadata records the exact Flux executable,
+capability contract, corpus manifest, board revisions, normalized route arguments, KiCad/Inkscape
+versions, Vulkan override, and the GPU selected by Flux's shared compute runtime. Use
+`FLUX_ARTIFACTS=/new/path ./run_tiers.sh` to choose a write-once destination. A fast
+`./run_tiers.sh --preflight-only` validates all active source identities and the complete run
+contract without launching a route.
+
+The dependency-ordered verification boundaries are executable through `run_suite.sh`:
+
+- `./run_suite.sh per-change` runs the three high-risk routing invariants, observer/manifest/GPU
+  contract tests, and every permanently qualified tier;
+- `./run_suite.sh frontier` runs the same risk checks followed by all qualified tiers and the one
+  unlocked tier;
+- `./run_suite.sh release` additionally validates the complete parity-fixture and progressive
+  corpus inventory. Locked boards remain strict-import gates until their preceding tier qualifies;
+  milestone promotion adds the representative routed feature waves.
+
+Append `--preflight-only` to any suite command to validate its identities and selection without
+launching tier routing. `tests/suites.json` is the machine-readable membership contract.
 Routine manual routing and application validation now uses the external Teensy CNC controller as a
 strictly read-only target. It is never an automated test dependency, generated outputs stay under
 `build/verification/teensy_cnc/`, and its machinery-safety/`DO NOT FABRICATE` rules remain binding.

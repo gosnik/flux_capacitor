@@ -7,6 +7,7 @@
 #include "flux/core/integrated_optimizer.hpp"
 #include "flux/core/regional_router.hpp"
 #include "flux/core/router_telemetry.hpp"
+#include "flux/core/routing_compute.hpp"
 #include "flux/core/routing_rules.hpp"
 #include "flux/io/differential_pair_constraints.hpp"
 #include "flux/io/kicad_export.hpp"
@@ -20,6 +21,7 @@
 #include "flux/io/relative_placement_constraints.hpp"
 #include "flux/io/routing_bus_constraints.hpp"
 #include "flux/io/specctra.hpp"
+#include "flux/generated/parity_manifest.hpp"
 
 #include <algorithm>
 #include <array>
@@ -7339,6 +7341,8 @@ void print_help() {
   std::cout << "flux-cli 0.128.0\n\n"
                "Usage:\n"
                "  flux-cli version       Print the engine version\n"
+               "  flux-cli capabilities --json  Print the pinned feature-parity contract\n"
+               "  flux-cli system-info --json  Print production GPU and schema identity\n"
                "  flux-cli demo          Evaluate a valid built-in board\n"
                "  flux-cli demo-invalid  Evaluate an overlapping built-in board\n"
                "  flux-cli route-demo [--strict-medial] [--direct-medial] Globally route the "
@@ -7541,6 +7545,34 @@ int main(int argc, char** argv) {
   if (command == "version" && argc == 2) {
     std::cout << "flux_capacitor 0.128.0 board-schema 18\n";
     return EXIT_SUCCESS;
+  }
+  if (command == "capabilities" && argc == 3 && std::string_view{argv[2]} == "--json") {
+    std::cout << flux::generated::parity_manifest_json;
+    if (!flux::generated::parity_manifest_json.ends_with('\n')) {
+      std::cout << '\n';
+    }
+    return EXIT_SUCCESS;
+  }
+  if (command == "system-info" && argc == 3 && std::string_view{argv[2]} == "--json") {
+    const auto device = flux::routing_compute_device_info();
+    const char* override_value = std::getenv("FLUX_VULKAN_DEVICE");
+    std::cout << "{\n"
+              << "  \"engine\": \"flux_capacitor\",\n"
+              << "  \"version\": \"0.128.0\",\n"
+              << "  \"board_schema\": 18,\n"
+              << "  \"production_gpu_required\": true,\n"
+              << "  \"gpu_available\": " << (device.available ? "true" : "false") << ",\n"
+              << "  \"gpu_device\": " << json_quote(device.device_name) << ",\n"
+              << "  \"gpu_device_type\": " << json_quote(device.device_type) << ",\n"
+              << "  \"gpu_vendor_id\": " << device.vendor_id << ",\n"
+              << "  \"gpu_device_id\": " << device.device_id << ",\n"
+              << "  \"gpu_api_version_raw\": " << device.api_version << ",\n"
+              << "  \"gpu_driver_version_raw\": " << device.driver_version << ",\n"
+              << "  \"gpu_override\": "
+              << (override_value == nullptr ? "null" : json_quote(override_value)) << ",\n"
+              << "  \"gpu_diagnostic\": " << json_quote(device.diagnostic) << "\n"
+              << "}\n";
+    return device.available ? EXIT_SUCCESS : 4;
   }
   if ((command == "demo" || command == "demo-invalid") && argc == 2) {
     const auto result = flux::evaluate_board(make_demo_board(command == "demo-invalid"));

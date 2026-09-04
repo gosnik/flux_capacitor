@@ -326,11 +326,17 @@ struct SplineFittedPiece {
     const std::vector<Point>& polyline, Nanometres corner_guard,
     const PHInterpolationConfig& config = {});
 [[nodiscard]] bool rebuild_quintic_ph_route(QuinticPHRoute& route);
+// Rebuilds the bounded PH support of one changed interpolation node. Falls back to a complete
+// rebuild when the existing prepared chain is structurally unavailable.
+[[nodiscard]] bool rebuild_quintic_ph_route_around_control(QuinticPHRoute& route,
+                                                           std::size_t control_index);
 [[nodiscard]] bool enforce_quintic_ph_continuity(
     QuinticPHRoute& route, PHJoinContinuity continuity, long double tolerance_nm = 10.0L,
     std::size_t maximum_iterations = 24U);
 [[nodiscard]] bool insert_quintic_ph_interpolation_node(QuinticPHRoute& route,
                                                         long double parameter);
+// Attaches an independently certified convex corridor to an already prepared PH chain. This does
+// not change interpolation geometry and therefore deliberately preserves the segment caches.
 [[nodiscard]] bool set_quintic_ph_corridor(QuinticPHRoute& route,
                                            const std::vector<Polygon>& convex_regions);
 

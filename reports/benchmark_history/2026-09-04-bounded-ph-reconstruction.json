@@ -1,0 +1,74 @@
+{
+  "schema": "flux_benchmark_experiment",
+  "schema_version": 1,
+  "date": "2026-09-04",
+  "git_revision": "ecf5eac40db4d42f706182316ae6c657afef02e6",
+  "working_tree_dirty": true,
+  "engine_version": "0.138.0",
+  "promoted_engine_version": "0.139.0",
+  "board_schema": 21,
+  "experiment": "bounded exact PH reconstruction after local interpolation-node deformation",
+  "hypothesis": "Preserving PH caches during corridor attachment and rebuilding only the at-most-four-segment support of one moved node will reduce regional realization time without changing exact geometry or acceptance.",
+  "profile": {
+    "board": "bm_svf",
+    "binary": "pre-change isolated running executable",
+    "duration_seconds": 8,
+    "cycles_samples": 798,
+    "lost_samples": 0,
+    "samples_through_complete_ph_rebuild": 771,
+    "dominant_work": "long-double PH polynomial evaluation, recursive root isolation, branch rotation scoring and complex multiplication"
+  },
+  "verification": [
+    {
+      "test": "quintic_ph_geometry_preserves_invariants_and_exact_offsets",
+      "outcome": "pass",
+      "new_invariant": "one-node bounded reconstruction matches complete reconstruction within 0.001 nm over 33 parameters"
+    },
+    {
+      "test": "constrained_ph_rebound_avoids_inter_sample_obstacle",
+      "outcome": "pass"
+    },
+    {
+      "suite": "per-change",
+      "outcome": "pass",
+      "risk_tests": 9,
+      "qualified_tiers": 1
+    }
+  ],
+  "tier_0": {
+    "board": "pt2399_delay",
+    "outcome": "pass",
+    "global_duration_seconds": 107.59314818587154,
+    "detailed_duration_seconds": 290.6339398212731,
+    "preceding_detailed_duration_seconds": 325.3496161461808,
+    "directional_detailed_reduction_percent": 10.67,
+    "byte_identical_to_preceding_final_board": true,
+    "canonical_performance_result": false,
+    "performance_context": "A separate old-binary BM-SVF Tier-1 run was active during both measurements.",
+    "paths": 50,
+    "unrouted_nets": 0,
+    "represented_copper_violations": 0,
+    "external_kicad_drc": "pass",
+    "fitted_ph_runs": 47,
+    "added_native_arcs": 48,
+    "ph_candidates": 10488,
+    "exact_gpu_shortlist_checks": 3648,
+    "artifact_root": "build/suite-per-change-20260904-144713"
+  },
+  "artifacts": {
+    "run_metadata_sha256": "8e07202b09c20565bf783a730f78ae4dc0b143a9dd872c065d2a52a4222a6ebe",
+    "run_result_sha256": "9260776be08333ce0b01780254c812c0a11e9aecd2cde1ff409d070602a38439",
+    "final_board_sha256": "ff67a745e609253a5ba919c482ab570f0402c7ad564ad5695f0d09a79c230d57",
+    "kicad_drc_sha256": "d28c6494cff36c83004998dd4a576c7cd23d75ab8ae8dde371c6d2de55651fcc",
+    "analysis_pngs": "present",
+    "final_copper_pngs": "present_and_visually_reviewed"
+  },
+  "tier_1": {
+    "board": "bm_svf",
+    "pre_change_run": "build/tiers-check-20260904-134424",
+    "status": "running at record creation",
+    "post_change_comparison": "pending pre-change completion"
+  },
+  "decision": "keep",
+  "next_hypothesis": "Run the rebuilt executable through BM-SVF; profile again only if exact PH reconstruction remains the dominant regional stage."
+}

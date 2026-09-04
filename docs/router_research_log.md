@@ -1865,3 +1865,60 @@ analysis PNGs are under `build/suite-per-change-20260904-140424/`.
 Keep. This closes a demonstrated acceptance mismatch and moves physical feedback earlier without
 adding a parallel legality model. Focused KiCad rule-query agreement and custom/physical-hole rules
 remain Milestone 2 work.
+
+## Experiment 33 — Bounded PH reconstruction after local deformation
+
+### Failure
+
+The long BM-SVF Tier-1 run spent its post-global-routing time almost entirely in regional PH
+realization. An eight-second root-privileged `perf` sample captured 798 cycles samples without loss;
+771 sampled call chains passed through `rebuild_quintic_ph_route()` and segment reconstruction.
+Symbolized leaf work was concentrated in long-double power-polynomial evaluation, recursive root
+isolation, complex multiplication, and rotation evaluation. GPU XPBD and broadphase were not the
+limiting stage. Inspection found two avoidable rebuild widths: attaching an immutable corridor
+reconstructed a curve whose interpolation state had not changed, and exact polishing of one moved
+interpolation node reconstructed every span in the chain.
+
+### Hypothesis
+
+PH geometry has local support even though its final certificate is whole-chain. Attaching corridor
+metadata should preserve all prepared geometry. Moving one interpolation node can change only the
+two adjacent chord lengths, the tangents at that node and its immediate neighbours, and therefore
+at most four PH spans. Recomputing cheap normalized parameters and node derivatives globally,
+reconstructing that bounded support, and then running the unchanged whole-chain certificates should
+produce the same curve as a complete rebuild at substantially lower cost.
+
+### Change
+
+- Corridor attachment now validates a prepared-chain cardinality invariant without rebuilding the
+  quadratic preimage, branch portfolio, power bases, extrema, or bounds.
+- PH reconstruction separates cheap interpolation-state preparation and whole-chain join
+  certification from exact per-segment reconstruction.
+- Single-node trajectory candidates rebuild only segment indices `[node - 2, node + 1]`; malformed
+  or unavailable prepared state still falls back through the complete public rebuild boundary.
+- GPU candidate ranking and CPU exact shape, corridor, clearance, connectivity, and DRC authority
+  are unchanged.
+
+### Verification
+
+The retained PH invariant test now moves an interior node in a six-node chain and proves that the
+bounded reconstruction matches a complete reconstruction to one picometre over 33 route
+parameters. The retained continuous-envelope rebound test also passes. The qualified Tier-0 board
+passes all 50 paths, represented copper DRC, and external KiCad DRC, with 47/47 PH runs fitted and
+48 native arcs. Required global/detail analysis images and final copper-layer PNGs are under
+`build/suite-per-change-20260904-144713/`; visual inspection shows continuous rounded runs without
+new loop or staircase artifacts.
+
+The detailed stage took 290.63 seconds versus 325.35 seconds for the immediately preceding retained
+run, a 10.67% reduction while processing the same 10,488 PH candidates and 3,648 exact GPU-shortlist
+checks. The final KiCad board is byte-identical in both runs
+(`ff67a745e609253a5ba919c482ab570f0402c7ad564ad5695f0d09a79c230d57`). A separate old-binary
+BM-SVF run was active during both measurements, so this is strong
+directional evidence rather than an uncontended canonical timing result. That Tier-1 run remains
+the before-checkpoint for the subsequent frontier comparison.
+
+### Decision
+
+Keep. The optimization removes recomputation without relaxing or replacing any geometric
+certificate. Run the rebuilt executable through BM-SVF after the isolated before-run completes;
+profile again if exact PH reconstruction remains the dominant regional cost.

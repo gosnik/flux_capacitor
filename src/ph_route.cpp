@@ -624,6 +624,33 @@ struct PHKinematics {
          hull_excess * 10.0L;
 }
 
+[[nodiscard]] bool certify_route_join_continuity(QuinticPHRoute& route) {
+  if (route.segments.size() + 1U != route.control_points.size())
+    return false;
+  route.tangent_continuous = true;
+  route.curvature_continuous = true;
+  for (std::size_t i = 1U; i < route.segments.size(); ++i) {
+    auto left = evaluate_segment_differential(route.segments[i - 1U], 1.0L);
+    auto right = evaluate_segment_differential(route.segments[i], 0.0L);
+    const auto left_span =
+        route.segments[i - 1U].route_parameter_end - route.segments[i - 1U].route_parameter_start;
+    const auto right_span =
+        route.segments[i].route_parameter_end - route.segments[i].route_parameter_start;
+    left.tangent = scale(left.tangent, 1.0L / left_span);
+    right.tangent = scale(right.tangent, 1.0L / right_span);
+    left.second_derivative = scale(left.second_derivative, 1.0L / (left_span * left_span));
+    right.second_derivative = scale(right.second_derivative, 1.0L / (right_span * right_span));
+    const auto tangent_scale_value = std::max({1.0L, norm(left.tangent), norm(right.tangent)});
+    route.tangent_continuous =
+        route.tangent_continuous &&
+        norm(subtract(left.tangent, right.tangent)) <= tangent_scale_value * 1.0e-9L;
+    route.curvature_continuous =
+        route.curvature_continuous &&
+        norm(subtract(left.second_derivative, right.second_derivative)) <= 10.0L;
+  }
+  return route.tangent_continuous;
+}
+
 [[nodiscard]] bool build_route_segments_from_derivatives(QuinticPHRoute& route) {
   if (route.control_points.size() < 2U ||
       route.node_derivatives.size() != route.control_points.size() ||
@@ -648,28 +675,7 @@ struct PHKinematics {
     segment->route_parameter_end = route.node_parameters[i];
     route.segments.push_back(*segment);
   }
-  route.tangent_continuous = true;
-  route.curvature_continuous = true;
-  for (std::size_t i = 1U; i < route.segments.size(); ++i) {
-    auto left = evaluate_segment_differential(route.segments[i - 1U], 1.0L);
-    auto right = evaluate_segment_differential(route.segments[i], 0.0L);
-    const auto left_span =
-        route.segments[i - 1U].route_parameter_end - route.segments[i - 1U].route_parameter_start;
-    const auto right_span =
-        route.segments[i].route_parameter_end - route.segments[i].route_parameter_start;
-    left.tangent = scale(left.tangent, 1.0L / left_span);
-    right.tangent = scale(right.tangent, 1.0L / right_span);
-    left.second_derivative = scale(left.second_derivative, 1.0L / (left_span * left_span));
-    right.second_derivative = scale(right.second_derivative, 1.0L / (right_span * right_span));
-    const auto tangent_scale_value = std::max({1.0L, norm(left.tangent), norm(right.tangent)});
-    route.tangent_continuous =
-        route.tangent_continuous &&
-        norm(subtract(left.tangent, right.tangent)) <= tangent_scale_value * 1.0e-9L;
-    route.curvature_continuous =
-        route.curvature_continuous &&
-        norm(subtract(left.second_derivative, right.second_derivative)) <= 10.0L;
-  }
-  return route.tangent_continuous;
+  return certify_route_join_continuity(route);
 }
 
 [[nodiscard]] bool convex_polygon(const Polygon& polygon) {
@@ -775,7 +781,7 @@ std::optional<QuinticPHSegment> interpolate_quintic_ph_segment(SplineVector star
   return best;
 }
 
-bool rebuild_quintic_ph_route(QuinticPHRoute& route) {
+[[nodiscard]] bool prepare_route_interpolation_state(QuinticPHRoute& route) {
   if (route.control_points.size() < 2U)
     return false;
   route.node_parameters =
@@ -806,7 +812,48 @@ bool rebuild_quintic_ph_route(QuinticPHRoute& route) {
     if (!(norm(route.node_derivatives[i]) > 0.0L))
       return false;
   }
+  return true;
+}
+
+bool rebuild_quintic_ph_route(QuinticPHRoute& route) {
+  if (!prepare_route_interpolation_state(route))
+    return false;
   return build_route_segments_from_derivatives(route);
+}
+
+bool rebuild_quintic_ph_route_around_control(QuinticPHRoute& route,
+                                             std::size_t control_index) {
+  if (control_index >= route.control_points.size() ||
+      route.segments.size() + 1U != route.control_points.size())
+    return rebuild_quintic_ph_route(route);
+  if (!prepare_route_interpolation_state(route))
+    return false;
+
+  // A node displacement changes its two adjacent chord lengths. The derived tangent at a node
+  // depends only on its two adjacent chords, so the exact PH support is bounded to segment indices
+  // [control-2, control+1]. Centripetal normalization changes every route parameter by the same
+  // factor; it cancels when a global node derivative is scaled into an unaffected local span.
+  const auto first_segment = control_index > 1U ? control_index - 2U : 0U;
+  const auto last_segment = std::min(route.segments.size() - 1U, control_index + 1U);
+  for (std::size_t segment_index = 0U; segment_index < route.segments.size(); ++segment_index) {
+    const auto end_node = segment_index + 1U;
+    const auto parameter_span =
+        route.node_parameters[end_node] - route.node_parameters[segment_index];
+    if (!(parameter_span > 0.0L))
+      return false;
+    if (segment_index >= first_segment && segment_index <= last_segment) {
+      auto segment = interpolate_quintic_ph_segment(
+          route.control_points[segment_index], route.control_points[end_node],
+          scale(route.node_derivatives[segment_index], parameter_span),
+          scale(route.node_derivatives[end_node], parameter_span));
+      if (!segment)
+        return false;
+      route.segments[segment_index] = std::move(*segment);
+    }
+    route.segments[segment_index].route_parameter_start = route.node_parameters[segment_index];
+    route.segments[segment_index].route_parameter_end = route.node_parameters[end_node];
+  }
+  return certify_route_join_continuity(route);
 }
 
 namespace {
@@ -1092,7 +1139,13 @@ bool set_quintic_ph_corridor(QuinticPHRoute& route, const std::vector<Polygon>& 
       !std::all_of(convex_regions.begin(), convex_regions.end(), convex_polygon))
     return false;
   route.convex_corridor = convex_regions;
-  return rebuild_quintic_ph_route(route);
+  // A corridor is a constraint on an existing route, not a geometric degree of freedom. Every
+  // public constructor and deformation path has already prepared the quadratic preimage, power
+  // bases, extrema, and bounds. Rebuilding here repeated the eight-branch PH interpolation and
+  // exact root certificates for every regional seed portfolio candidate even though no control
+  // point changed. Preserve those immutable caches and let the following corridor certificate
+  // decide whether the existing curve is admissible.
+  return route.segments.size() + 1U == route.control_points.size();
 }
 
 std::vector<PHInflection> quintic_ph_inflections(const QuinticPHSegment& segment) {
@@ -2368,6 +2421,7 @@ optimize_quintic_ph_trajectory(QuinticPHRoute& route,
     bool improved = false;
     ++result.iterations;
     std::vector<QuinticPHRoute> candidate_routes;
+    std::vector<std::size_t> candidate_control_nodes;
     for (std::size_t node = 1U; node + 1U < best.control_points.size(); ++node) {
       struct MoveProposal {
         SplineVector direction;
@@ -2441,6 +2495,7 @@ optimize_quintic_ph_trajectory(QuinticPHRoute& route,
                                      static_cast<long double>(segment.bezier.size() - 1U)));
         }
         candidate_routes.push_back(std::move(candidate));
+        candidate_control_nodes.push_back(node);
       }
       if (result.budget_exhausted)
         break;
@@ -2509,8 +2564,10 @@ optimize_quintic_ph_trajectory(QuinticPHRoute& route,
       result.parallel_exact_checks += exact_candidates.size();
     }
     exact_candidate_pool.run(exact_candidates.size(), [&](std::size_t slot) {
-      auto& candidate = candidate_routes[exact_candidates[slot]];
-      if (!rebuild_quintic_ph_route(candidate))
+      const auto candidate_index = exact_candidates[slot];
+      auto& candidate = candidate_routes[candidate_index];
+      if (!rebuild_quintic_ph_route_around_control(
+              candidate, candidate_control_nodes[candidate_index]))
         return;
       exact_evaluations[slot] = ExactCandidateEvaluation{
           assess_trajectory(candidate, config, clearance_evaluator),

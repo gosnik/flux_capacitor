@@ -1429,6 +1429,24 @@ void quintic_ph_geometry_preserves_invariants_and_exact_offsets() {
               parameters.back() == 1.0L && parameters[1] > 0.0L && parameters[1] < 0.5L,
           "centripetal parameter selection must retain order and de-emphasize a long chord");
 
+  auto local_rebuild = flux::make_quintic_ph_route(
+      {mm(0.0, 0.0), mm(4.0, 1.0), mm(8.0, 0.0), mm(12.0, 1.0), mm(16.0, 0.0),
+       mm(20.0, 0.5)});
+  require(local_rebuild.has_value(), "local PH rebuild fixture must interpolate");
+  auto complete_rebuild = *local_rebuild;
+  local_rebuild->control_points[2U].y += mm_value(0.35L);
+  complete_rebuild.control_points[2U].y += mm_value(0.35L);
+  require(flux::rebuild_quintic_ph_route_around_control(*local_rebuild, 2U) &&
+              flux::rebuild_quintic_ph_route(complete_rebuild),
+          "one-node and complete PH rebuilds must both retain a valid prepared chain");
+  for (std::size_t sample = 0U; sample <= 32U; ++sample) {
+    const auto parameter = static_cast<long double>(sample) / 32.0L;
+    const auto local = flux::evaluate_quintic_ph(*local_rebuild, parameter);
+    const auto complete = flux::evaluate_quintic_ph(complete_rebuild, parameter);
+    require(std::hypotl(local.x - complete.x, local.y - complete.y) < 1.0e-3L,
+            "bounded one-node PH reconstruction must match a complete exact rebuild");
+  }
+
   const auto segment = flux::interpolate_quintic_ph_segment(
       {0.0L, 0.0L}, {mm_value(10.0L), mm_value(4.0L)}, {mm_value(9.0L), 0.0L},
       {mm_value(7.0L), mm_value(4.0L)});

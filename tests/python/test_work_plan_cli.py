@@ -384,6 +384,66 @@ exit 5
             print(diagnostic_preview.stdout + diagnostic_preview.stderr)
             return 1
 
+        placement_document = copy.deepcopy(document)
+        placement_document["steps"] = [
+            {
+                "id": "place-and-route",
+                "kind": "placement",
+                "depends_on": [],
+                "selectors": {
+                    "all_nets": False,
+                    "exact_nets": [],
+                    "include_globs": [],
+                    "exclude_globs": [],
+                    "net_classes": [],
+                    "footprints": ["J1", "J2"],
+                    "placement_groups": [],
+                    "group_scope": "touching",
+                },
+                "options": {
+                    "enable_global_placement": True,
+                    "enable_global_routing_guidance": True,
+                    "max_candidate_evaluations": 12,
+                    "max_candidate_evaluation_workers": 2,
+                    "max_full_routing_candidates_per_wave": 2,
+                    "max_placement_passes": 3,
+                    "move_step_nm": 1000000,
+                    "orientation_repair": True,
+                    "suggested_placement_move_priorities": True,
+                },
+            }
+        ]
+        placement_plan = Path(temporary) / "placement.flux.json"
+        placement_plan.write_text(json.dumps(placement_document), encoding="utf-8")
+        placement = run(
+            [
+                str(args.flux_cli),
+                "inspect-work-plan-kicad",
+                str(args.board),
+                str(placement_plan),
+            ]
+        )
+        placement_result = json.loads(placement.stdout)
+        placement_configuration = placement_result["compiled_route_steps"][0][
+            "placement"
+        ]
+        if not (
+            placement.returncode == 0
+            and placement_result["ok"] is True
+            and placement_result["expanded_steps"][0]["footprints"] == ["J1", "J2"]
+            and placement_result["expanded_steps"][0]["nets"] == ["SIGNAL"]
+            and placement_result["compiled_route_steps"][0]["selected_footprints"]
+            == ["J1", "J2"]
+            and placement_configuration["max_placement_passes"] == 3
+            and placement_configuration["max_candidate_evaluations"] == 12
+            and placement_configuration["enable_global_placement"] is True
+            and placement_configuration["enable_global_routing_guidance"] is True
+            and placement_configuration["orientation_repair"] is True
+            and placement_configuration["suggested_placement_move_priorities"] is True
+        ):
+            print(placement.stdout + placement.stderr)
+            return 1
+
         blocked_output = Path(temporary) / "must-not-exist.kicad_pcb"
         blocked_execution = run(
             [

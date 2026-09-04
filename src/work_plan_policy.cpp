@@ -242,6 +242,9 @@ apply_flux_work_plan_policies(const Board& source, const FluxWorkPlan& plan,
       auto applied = load_placement_move_priorities(board, policy.contents);
       append_constraint_diagnostics(result, applied.diagnostics, policy.index);
       accepted = applied.ok();
+      if (accepted) {
+        result.placement_move_priorities = std::move(applied.policy);
+      }
       break;
     }
     }

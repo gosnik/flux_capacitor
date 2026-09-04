@@ -1,6 +1,7 @@
 #pragma once
 
 #include "flux/core/board.hpp"
+#include "flux/core/placement_move_priority.hpp"
 
 #include <cstdint>
 #include <filesystem>
@@ -112,6 +113,8 @@ struct WorkPlanLoadResult {
   // Present for file-backed loads with a source board after every declared policy has been
   // identity-checked and applied through its strict source-bound adapter.
   std::optional<Board> policy_board;
+  // Non-board optimizer policy retained from the same one-read identity boundary.
+  std::optional<PlacementMovePriorityPolicy> placement_move_priorities;
   std::vector<std::string> applied_policy_kinds;
   std::vector<WorkPlanDiagnostic> diagnostics;
 
@@ -121,6 +124,7 @@ struct WorkPlanLoadResult {
 
 struct WorkPlanPolicyApplicationResult {
   std::optional<Board> board;
+  std::optional<PlacementMovePriorityPolicy> placement_move_priorities;
   std::vector<std::string> applied_policy_kinds;
   std::vector<WorkPlanDiagnostic> diagnostics;
 

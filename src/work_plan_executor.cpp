@@ -2,8 +2,10 @@
 
 #include "flux/core/connectivity.hpp"
 #include "flux/core/drc.hpp"
+#include "flux/core/integrated_optimizer.hpp"
 #include "flux/core/routing_feedback.hpp"
 #include "flux/core/validation.hpp"
+#include "flux/io/placement_move_priorities.hpp"
 
 #include <boost/json.hpp>
 #include <openssl/evp.h>
@@ -113,6 +115,48 @@ compiled_step(const WorkPlanRouteCompileResult& compiled, std::string_view id) {
                                              : std::optional<CompiledWorkPlanRouteStep>{*found};
 }
 
+[[nodiscard]] std::string_view
+integrated_stop_reason_name(IntegratedOptimizerStopReason reason) {
+  switch (reason) {
+  case IntegratedOptimizerStopReason::complete:
+    return "complete";
+  case IntegratedOptimizerStopReason::no_improving_move:
+    return "no-improving-move";
+  case IntegratedOptimizerStopReason::pass_limit:
+    return "pass-limit";
+  case IntegratedOptimizerStopReason::evaluation_limit:
+    return "evaluation-limit";
+  case IntegratedOptimizerStopReason::invalid_config:
+    return "invalid-config";
+  case IntegratedOptimizerStopReason::cancelled:
+    return "cancelled";
+  }
+  return "unknown";
+}
+
+void restore_footprint_locks(Board& candidate, const Board& source) {
+  for (auto& footprint : candidate.footprints) {
+    const auto original = std::find_if(
+        source.footprints.begin(), source.footprints.end(),
+        [&footprint](const Footprint& item) { return item.id == footprint.id; });
+    if (original != source.footprints.end()) {
+      footprint.locked = original->locked;
+    }
+  }
+}
+
+[[nodiscard]] bool only_selected_footprints_moved(const Board& source, const Board& candidate,
+                                                  const std::set<ObjectId>& selected) {
+  return std::all_of(source.footprints.begin(), source.footprints.end(), [&](const auto& original) {
+    const auto placed = std::find_if(candidate.footprints.begin(), candidate.footprints.end(),
+                                     [&](const auto& item) { return item.id == original.id; });
+    return placed != candidate.footprints.end() &&
+           (selected.contains(original.id) ||
+            (placed->position == original.position && placed->rotation == original.rotation &&
+             placed->side == original.side));
+  });
+}
+
 void append_diagnostic(WorkPlanExecutionResult& result, std::string code, std::string message,
                        std::string pointer) {
   result.diagnostics.push_back(
@@ -139,7 +183,8 @@ namespace {
 
 WorkPlanExecutionResult execute_impl(const Board& source, const FluxWorkPlan& plan,
                                      bool policies_preapplied, std::stop_token stop_token,
-                                     RouterTelemetrySink* telemetry) {
+                                     RouterTelemetrySink* telemetry,
+                                     const PlacementMovePriorityPolicy* placement_priorities) {
   WorkPlanExecutionResult result;
   const auto emit = [telemetry](RouterTelemetryEvent event) {
     if (telemetry != nullptr) {
@@ -161,7 +206,8 @@ WorkPlanExecutionResult execute_impl(const Board& source, const FluxWorkPlan& pl
     const auto& step = plan.steps[index];
     if (step.kind != WorkPlanStepKind::route &&
         step.kind != WorkPlanStepKind::differential_pair &&
-        step.kind != WorkPlanStepKind::bus && step.kind != WorkPlanStepKind::validation) {
+        step.kind != WorkPlanStepKind::bus && step.kind != WorkPlanStepKind::placement &&
+        step.kind != WorkPlanStepKind::validation) {
       append_diagnostic(result, "unsupported_work_plan_execution_step",
                         "this step kind has no authoritative execution adapter",
                         "/steps/" + std::to_string(index) + "/kind");
@@ -255,6 +301,174 @@ WorkPlanExecutionResult execute_impl(const Board& source, const FluxWorkPlan& pl
       step_result.diagnostic = step_result.acceptance.exact_internal_acceptance
                                    ? "whole-board internal validation passed"
                                    : "whole-board internal validation failed";
+    } else if (step.kind == WorkPlanStepKind::placement) {
+      auto compiled_placement = compiled_step(compiled, step.id);
+      if (!compiled_placement || !compiled_placement->placement) {
+        step_result.status = WorkPlanStepExecutionStatus::failed;
+        step_result.diagnostic = "compiled placement step is unavailable";
+      } else {
+        step_result.selected_footprints = compiled_placement->selected_footprints;
+        std::set<NetId> active;
+        if (plan.mode == WorkPlanMode::preview || plan.mode == WorkPlanMode::new_routing) {
+          active = nets_requiring_new_routing(current, compiled_placement->selected_nets);
+        } else {
+          active.insert(compiled_placement->selected_nets.begin(),
+                        compiled_placement->selected_nets.end());
+        }
+        step_result.selected_nets.assign(active.begin(), active.end());
+        if (active.empty()) {
+          const std::set<NetId> selected(compiled_placement->selected_nets.begin(),
+                                         compiled_placement->selected_nets.end());
+          step_result.acceptance = acceptance(current, &selected);
+          step_result.status = step_result.acceptance.exact_internal_acceptance
+                                   ? WorkPlanStepExecutionStatus::completed
+                                   : WorkPlanStepExecutionStatus::failed;
+          step_result.diagnostic =
+              "selected footprints have no newly routable touching nets; placement preserved";
+        } else {
+          const auto& placement = *compiled_placement->placement;
+          IntegratedOptimizerConfig configuration;
+          configuration.global_router = compiled_placement->configuration.planner.global;
+          configuration.regional_router = compiled_placement->configuration.planner.regional;
+          configuration.detailed_router = compiled_placement->configuration.detailed;
+          configuration.global_router.selected_nets.assign(active.begin(), active.end());
+          std::erase_if(configuration.global_router.priority_nets,
+                        [&active](NetId net) { return !active.contains(net); });
+          std::set<NetId> replacement;
+          if (configuration.detailed_router.existing_routing_replacement_scope) {
+            for (const auto& net :
+                 *configuration.detailed_router.existing_routing_replacement_scope) {
+              if (active.contains(net)) {
+                replacement.insert(net);
+              }
+            }
+          }
+          configuration.detailed_router.existing_routing_replacement_scope =
+              std::vector<NetId>{replacement.begin(), replacement.end()};
+          step_result.replacement_nets.assign(replacement.begin(), replacement.end());
+          configuration.move_step = placement.move_step;
+          configuration.routing_feedback_margin = placement.routing_feedback_margin;
+          configuration.max_passes = placement.max_passes;
+          configuration.max_candidate_evaluations = placement.max_candidate_evaluations;
+          configuration.max_candidate_evaluation_workers =
+              placement.max_candidate_evaluation_workers;
+          configuration.max_full_routing_candidates_per_wave =
+              placement.max_full_routing_candidates_per_wave;
+          configuration.candidate_evaluation_offset = placement.candidate_evaluation_offset;
+          configuration.max_routing_guided_targets_per_footprint =
+              placement.max_routing_guided_targets_per_footprint;
+          configuration.max_swap_partners_per_footprint =
+              placement.max_swap_partners_per_footprint;
+          configuration.max_group_translation_proposals_per_group =
+              placement.max_group_translation_proposals_per_group;
+          configuration.max_relative_component_translation_proposals =
+              placement.max_relative_component_translation_proposals;
+          configuration.max_global_routing_guides = placement.max_global_routing_guides;
+          configuration.max_orientation_proposals_per_footprint =
+              placement.max_orientation_proposals_per_footprint;
+          configuration.full_routing_verification_interval =
+              placement.full_routing_verification_interval;
+          configuration.max_pareto_checkpoints = placement.max_pareto_checkpoints;
+          configuration.allow_diagonal_moves = placement.allow_diagonal_moves;
+          configuration.enable_global_placement = placement.enable_global_placement;
+          configuration.enable_global_routing_guidance =
+              placement.enable_global_routing_guidance;
+          configuration.enable_routing_guided_moves = placement.enable_routing_guided_moves;
+          configuration.enable_swap_moves = placement.enable_swap_moves;
+          configuration.enable_group_moves = placement.enable_group_moves;
+          configuration.enable_relative_component_moves =
+              placement.enable_relative_component_moves;
+          configuration.enable_incremental_routing = placement.enable_incremental_routing;
+          configuration.optimize_routed_quality = placement.optimize_routed_quality;
+          configuration.allow_tentative_placement_envelopes =
+              placement.allow_tentative_placement_envelopes;
+          configuration.global_placer.enable_assignment_legalization =
+              placement.assignment_global_placement;
+          configuration.orientation_scope = compiled_placement->selected_footprints;
+
+          if (placement_priorities != nullptr) {
+            configuration.placement_move_priorities = *placement_priorities;
+          } else if (placement.suggested_placement_move_priorities) {
+            configuration.placement_move_priorities =
+                make_suggested_placement_move_priorities(current);
+            configuration.suggested_placement_move_priorities = true;
+          }
+
+          std::set<Microdegrees> rotation_offsets;
+          for (const auto& id : compiled_placement->selected_footprints) {
+            const auto footprint = std::find_if(
+                current.footprints.begin(), current.footprints.end(),
+                [&id](const Footprint& item) { return item.id == id; });
+            if (footprint == current.footprints.end()) {
+              continue;
+            }
+            if (placement.orientation_repair) {
+              for (const auto target : footprint->orientation_constraints.allowed_rotations) {
+                const auto offset = Microdegrees{target.value() - footprint->rotation.value()};
+                if (offset != Microdegrees{} && rotation_offsets.insert(offset).second) {
+                  configuration.rotation_offsets.push_back(offset);
+                }
+              }
+            }
+            if (placement.side_flip_repair) {
+              configuration.enable_side_flips =
+                  configuration.enable_side_flips ||
+                  (footprint->side == BoardSide::front
+                       ? footprint->orientation_constraints.allow_back
+                       : footprint->orientation_constraints.allow_front);
+            }
+          }
+
+          const std::set<ObjectId> selected(compiled_placement->selected_footprints.begin(),
+                                            compiled_placement->selected_footprints.end());
+          auto scoped_source = current;
+          for (auto& footprint : scoped_source.footprints) {
+            if (!selected.contains(footprint.id)) {
+              footprint.locked = true;
+            }
+          }
+          step_result.placement_attempted = true;
+          auto optimized = optimize_integrated_placement_routing(
+              scoped_source, configuration, stop_token, telemetry);
+          step_result.placement_candidate_evaluations = optimized.candidate_evaluations;
+          step_result.placement_full_route_evaluations = optimized.full_route_evaluations;
+          step_result.placement_moves_accepted = optimized.accepted_moves.size();
+          step_result.placement_priority_tiers_unlocked =
+              optimized.placement_priority_tiers_unlocked;
+          step_result.placement_move_priorities_configured =
+              optimized.configured_placement_move_priorities;
+          step_result.placement_human_review_required =
+              optimized.human_placement_review_required;
+          step_result.placement_stop_reason =
+              std::string(integrated_stop_reason_name(optimized.stop_reason));
+          if (optimized.candidate) {
+            restore_footprint_locks(*optimized.candidate, current);
+            step_result.acceptance = acceptance(*optimized.candidate, &active);
+          } else {
+            step_result.acceptance = acceptance(current, &active);
+          }
+          const bool scope_preserved =
+              optimized.candidate && only_selected_footprints_moved(current, *optimized.candidate,
+                                                                    selected);
+          if (optimized.feasible() && optimized.candidate && scope_preserved &&
+              step_result.acceptance.exact_internal_acceptance) {
+            current = std::move(*optimized.candidate);
+            step_result.status = WorkPlanStepExecutionStatus::completed;
+            step_result.diagnostic = optimized.diagnostic;
+          } else if (stop_token.stop_requested() ||
+                     optimized.stop_reason == IntegratedOptimizerStopReason::cancelled) {
+            step_result.status = WorkPlanStepExecutionStatus::cancelled;
+            step_result.diagnostic = optimized.diagnostic.empty()
+                                         ? "placement step cancelled"
+                                         : optimized.diagnostic;
+          } else {
+            step_result.status = WorkPlanStepExecutionStatus::failed;
+            step_result.diagnostic = !scope_preserved && optimized.candidate
+                                         ? "placement candidate changed an unselected footprint"
+                                         : optimized.diagnostic;
+          }
+        }
+      }
     } else {
       auto route = compiled_step(compiled, step.id);
       if (!route) {
@@ -467,6 +681,11 @@ WorkPlanExecutionResult execute_impl(const Board& source, const FluxWorkPlan& pl
     step_finished.detail = "Work plan step " +
                            std::string(work_plan_step_execution_status_name(step_result.status)) +
                            ": " + step.id;
+    if (step_result.placement_attempted) {
+      step_finished.total_groups = step_result.selected_footprints.size();
+      step_finished.search_expansions = step_result.placement_candidate_evaluations;
+      step_finished.remaining_alternatives = step_result.placement_moves_accepted;
+    }
     emit(std::move(step_finished));
     result.steps.push_back(std::move(step_result));
   }
@@ -508,7 +727,7 @@ WorkPlanExecutionResult execute_impl(const Board& source, const FluxWorkPlan& pl
 WorkPlanExecutionResult execute_flux_work_plan(const Board& source, const FluxWorkPlan& plan,
                                                std::stop_token stop_token,
                                                RouterTelemetrySink* telemetry) {
-  return execute_impl(source, plan, false, stop_token, telemetry);
+  return execute_impl(source, plan, false, stop_token, telemetry, nullptr);
 }
 
 WorkPlanExecutionResult execute_loaded_flux_work_plan(const WorkPlanLoadResult& loaded,
@@ -525,7 +744,10 @@ WorkPlanExecutionResult execute_loaded_flux_work_plan(const WorkPlanLoadResult& 
         static_cast<void>(telemetry->try_emit(std::move(event)));
       }
     }
-    return execute_impl(*loaded.policy_board, *loaded.plan, true, stop_token, telemetry);
+    return execute_impl(*loaded.policy_board, *loaded.plan, true, stop_token, telemetry,
+                        loaded.placement_move_priorities
+                            ? &*loaded.placement_move_priorities
+                            : nullptr);
   }
   WorkPlanExecutionResult result;
   result.diagnostics = loaded.diagnostics;
@@ -549,6 +771,14 @@ std::string serialize_flux_work_plan_execution_summary(const WorkPlanExecutionRe
     return value;
   };
   const auto ids_json = [](const std::vector<NetId>& ids) {
+    json::array values;
+    values.reserve(ids.size());
+    for (const auto& id : ids) {
+      values.emplace_back(id.value());
+    }
+    return values;
+  };
+  const auto object_ids_json = [](const std::vector<ObjectId>& ids) {
     json::array values;
     values.reserve(ids.size());
     for (const auto& id : ids) {
@@ -588,6 +818,7 @@ std::string serialize_flux_work_plan_execution_summary(const WorkPlanExecutionRe
     value["kind"] = work_plan_step_kind_name(step.kind);
     value["status"] = work_plan_step_execution_status_name(step.status);
     value["selected_nets"] = ids_json(step.selected_nets);
+    value["selected_footprints"] = object_ids_json(step.selected_footprints);
     value["replacement_nets"] = ids_json(step.replacement_nets);
     value["global_unrouted_nets"] = step.global_unrouted_nets;
     value["global_overflow"] = step.global_overflow;
@@ -619,6 +850,15 @@ std::string serialize_flux_work_plan_execution_summary(const WorkPlanExecutionRe
         step.incomplete_diagnostic_preview_available;
     value["incomplete_diagnostic_preview_paths"] =
         step.incomplete_diagnostic_preview_paths;
+    value["placement_attempted"] = step.placement_attempted;
+    value["placement_candidate_evaluations"] = step.placement_candidate_evaluations;
+    value["placement_full_route_evaluations"] = step.placement_full_route_evaluations;
+    value["placement_moves_accepted"] = step.placement_moves_accepted;
+    value["placement_priority_tiers_unlocked"] = step.placement_priority_tiers_unlocked;
+    value["placement_move_priorities_configured"] =
+        step.placement_move_priorities_configured;
+    value["placement_human_review_required"] = step.placement_human_review_required;
+    value["placement_stop_reason"] = step.placement_stop_reason;
     value["acceptance"] = acceptance_json(step.acceptance);
     value["diagnostic"] = step.diagnostic;
     steps.push_back(std::move(value));

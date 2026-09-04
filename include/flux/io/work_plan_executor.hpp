@@ -29,6 +29,7 @@ struct WorkPlanStepExecutionResult {
   WorkPlanStepKind kind{WorkPlanStepKind::validation};
   WorkPlanStepExecutionStatus status{WorkPlanStepExecutionStatus::skipped};
   std::vector<NetId> selected_nets;
+  std::vector<ObjectId> selected_footprints;
   std::vector<NetId> replacement_nets;
   std::size_t global_unrouted_nets{0U};
   std::size_t global_overflow{0U};
@@ -50,6 +51,14 @@ struct WorkPlanStepExecutionResult {
   bool incomplete_diagnostic_preview_attempted{false};
   bool incomplete_diagnostic_preview_available{false};
   std::size_t incomplete_diagnostic_preview_paths{0U};
+  bool placement_attempted{false};
+  std::size_t placement_candidate_evaluations{0U};
+  std::size_t placement_full_route_evaluations{0U};
+  std::size_t placement_moves_accepted{0U};
+  std::size_t placement_priority_tiers_unlocked{0U};
+  bool placement_move_priorities_configured{false};
+  bool placement_human_review_required{false};
+  std::string placement_stop_reason;
   WorkPlanAcceptanceState acceptance;
   std::string diagnostic;
 
@@ -84,11 +93,11 @@ struct WorkPlanExecutionResult {
   [[nodiscard]] bool ok() const { return internally_complete; }
 };
 
-// Executes currently supported route, differential-pair, bus, and validation steps on private
-// board copies. Preview never authorizes export. Every route-like step is committed to the next
-// step only after detailed exact acceptance; the sole provisional exception is an explicitly
-// terminal refill-required route that can authorize only the external refill transaction. A
-// failed/cancelled step leaves the prior checkpoint intact and skips dependants.
+// Executes currently supported route, differential-pair, bus, placement, and validation steps on
+// private board copies. Preview never authorizes export. Every route-like or placement step is
+// committed to the next step only after detailed exact acceptance; the sole provisional exception
+// is an explicitly terminal refill-required route that can authorize only the external refill
+// transaction. A failed/cancelled step leaves the prior checkpoint intact and skips dependants.
 [[nodiscard]] WorkPlanExecutionResult
 execute_flux_work_plan(const Board& source, const FluxWorkPlan& plan,
                        std::stop_token stop_token = {}, RouterTelemetrySink* telemetry = nullptr);

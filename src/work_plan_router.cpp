@@ -110,7 +110,7 @@ string_list_option(const WorkPlanStep& step, std::string_view name,
 
 [[nodiscard]] bool compiled_route_kind(WorkPlanStepKind kind) {
   return kind == WorkPlanStepKind::route || kind == WorkPlanStepKind::differential_pair ||
-         kind == WorkPlanStepKind::bus;
+         kind == WorkPlanStepKind::bus || kind == WorkPlanStepKind::placement;
 }
 
 [[nodiscard]] bool belongs_to_differential_pair(const Board& source, NetId net) {
@@ -143,7 +143,11 @@ WorkPlanRouteCompileResult compile_flux_work_plan_routes(const Board& source,
   result.diagnostics = result.expansion.diagnostics;
   static const std::set<std::string_view> supported_options{
       "atomic_complete_net_routing",
+      "allow_diagonal_moves",
+      "allow_tentative_placement_envelopes",
+      "assignment_global_placement",
       "bounded_residual_conflict_refinement",
+      "candidate_evaluation_offset",
       "checkpoint_objective",
       "circular_arc_refinement",
       "clearance_shadow_cost_quantum_nm",
@@ -156,13 +160,25 @@ WorkPlanRouteCompileResult compile_flux_work_plan_routes(const Board& source,
       "differential_pair_skew_tuning_batch_assignment",
       "direct_medial_edges",
       "diversify_pin_access_rings",
+      "enable_global_placement",
+      "enable_global_routing_guidance",
+      "enable_group_moves",
+      "enable_incremental_routing",
+      "enable_relative_component_moves",
+      "enable_routing_guided_moves",
+      "enable_swap_moves",
       "expansion_retry_heuristic_weight_per_mille",
       "grid_pitch_nm",
       "hard_capacity_start_iteration",
       "interleave_routability_feedback",
       "local_pin_escape_pitch_nm",
       "max_expansions_per_connection",
+      "max_candidate_evaluations",
+      "max_candidate_evaluation_workers",
+      "max_full_routing_candidates_per_wave",
       "max_final_routability_feedback_passes",
+      "max_global_routing_guides",
+      "max_group_translation_proposals_per_group",
       "max_corridor_neck_down_length_nm",
       "max_corridor_neck_down_states",
       "max_hard_capacity_blocker_reuse_invalidations_per_failed_net",
@@ -172,19 +188,27 @@ WorkPlanRouteCompileResult compile_flux_work_plan_routes(const Board& source,
       "max_present_congestion_scale_per_mille",
       "max_local_pin_escape_expansions_per_terminal",
       "max_medial_neck_down_length_nm",
+      "max_orientation_proposals_per_footprint",
+      "max_pareto_checkpoints",
+      "max_placement_passes",
       "max_pin_access_nodes_per_terminal",
       "max_post_negotiation_sampled_conflict_repair_cones",
       "max_router_iterations",
+      "max_relative_component_translation_proposals",
+      "max_routing_guided_targets_per_footprint",
+      "max_swap_partners_per_footprint",
       "max_static_seed_workers",
       "max_terminal_escape_reservation_resources",
       "max_terminal_neck_down_length_nm",
       "max_voronoi_resource_segment_length_nm",
       "medial_neck_down_width_nm",
       "multisource_steiner_growth",
+      "move_step_nm",
       "negotiate_voronoi_lane_conflicts",
       "former_route_memory_cost",
       "physical_envelope_ordering",
       "physical_overflow_history",
+      "orientation_repair",
       "pin_escape_grid_radius",
       "post_negotiation_sampled_conflict_repair",
       "present_congestion_escalation_start_iteration",
@@ -195,6 +219,7 @@ WorkPlanRouteCompileResult compile_flux_work_plan_routes(const Board& source,
       "retain_incomplete_diagnostic_preview",
       "reuse_weighted_search_frontier",
       "river_following_cost",
+      "routing_feedback_margin_nm",
       "routability_feedback_retries",
       "rollback_failed_hard_capacity_ripup",
       "sampled_route_clearance_reservations",
@@ -203,12 +228,16 @@ WorkPlanRouteCompileResult compile_flux_work_plan_routes(const Board& source,
       "search_diversification",
       "selective_congestion_reroute",
       "selective_full_reroute_interval",
+      "side_flip_repair",
       "spline_route_workers",
       "strict_medial_topology",
       "terminal_escape_proximity_cost",
       "terminal_escape_reservation_cost",
       "terminal_neck_down_width_nm",
       "topology_locked_medial_materialization",
+      "full_routing_verification_interval",
+      "optimize_routed_quality",
+      "suggested_placement_move_priorities",
       "via_site_phase_x",
       "via_site_phase_y",
       "via_site_pitch_nm",
@@ -218,6 +247,47 @@ WorkPlanRouteCompileResult compile_flux_work_plan_routes(const Board& source,
       "xpbd_maximum_step_nm",
       "xpbd_prefer_gpu",
       "xpbd_relaxation",
+  };
+  static const std::set<std::string_view> placement_only_options{
+      "allow_diagonal_moves",
+      "allow_tentative_placement_envelopes",
+      "assignment_global_placement",
+      "candidate_evaluation_offset",
+      "enable_global_placement",
+      "enable_global_routing_guidance",
+      "enable_group_moves",
+      "enable_incremental_routing",
+      "enable_relative_component_moves",
+      "enable_routing_guided_moves",
+      "enable_swap_moves",
+      "full_routing_verification_interval",
+      "max_candidate_evaluations",
+      "max_candidate_evaluation_workers",
+      "max_full_routing_candidates_per_wave",
+      "max_global_routing_guides",
+      "max_group_translation_proposals_per_group",
+      "max_orientation_proposals_per_footprint",
+      "max_pareto_checkpoints",
+      "max_placement_passes",
+      "max_relative_component_translation_proposals",
+      "max_routing_guided_targets_per_footprint",
+      "max_swap_partners_per_footprint",
+      "move_step_nm",
+      "optimize_routed_quality",
+      "orientation_repair",
+      "routing_feedback_margin_nm",
+      "side_flip_repair",
+      "suggested_placement_move_priorities",
+  };
+  static const std::set<std::string_view> placement_unsupported_options{
+      "interleave_routability_feedback",
+      "max_final_routability_feedback_passes",
+      "max_post_negotiation_sampled_conflict_repair_cones",
+      "post_negotiation_sampled_conflict_repair",
+      "refillable_zone_fills",
+      "retain_incomplete_diagnostic_preview",
+      "retained_global_portfolios",
+      "routability_feedback_retries",
   };
 
   for (std::size_t step_index = 0U; step_index < plan.steps.size(); ++step_index) {
@@ -238,6 +308,7 @@ WorkPlanRouteCompileResult compile_flux_work_plan_routes(const Board& source,
     compiled.kind = step.kind;
     compiled.configuration = make_autoroute_v1_configuration();
     compiled.selected_nets = expanded->nets;
+    compiled.selected_footprints = expanded->footprints;
     compiled.configuration.planner.global.selected_nets = compiled.selected_nets;
     if (step.kind == WorkPlanStepKind::differential_pair &&
         std::any_of(compiled.selected_nets.begin(), compiled.selected_nets.end(),
@@ -282,12 +353,27 @@ WorkPlanRouteCompileResult compile_flux_work_plan_routes(const Board& source,
         compiled.configuration.planner.global.selected_nets = compiled.selected_nets;
       }
     }
+    if (step.kind == WorkPlanStepKind::placement &&
+        !compiled.configuration.detailed.existing_routing_replacement_scope) {
+      // Preview/new-routing placement has no authority to remove source copper. The integrated
+      // optimizer deliberately switches to replacement mode internally, so retain an explicit
+      // empty scope rather than the nullopt meaning "every routed net".
+      compiled.configuration.detailed.existing_routing_replacement_scope = std::vector<NetId>{};
+    }
 
     for (const auto& [name, unused] : step.options) {
       static_cast<void>(unused);
-      if (!supported_options.contains(name)) {
+      if (!supported_options.contains(name) ||
+          (placement_only_options.contains(name) &&
+           step.kind != WorkPlanStepKind::placement)) {
         error(result, "unsupported_work_plan_route_option",
               "route option is not supported by the canonical configuration adapter",
+              "/steps/" + std::to_string(step_index) + "/options/" + name);
+      } else if (step.kind == WorkPlanStepKind::placement &&
+                 placement_unsupported_options.contains(name)) {
+        error(result, "unsupported_work_plan_placement_option",
+              "this route-transaction option is not implemented by the integrated placement "
+              "optimizer",
               "/steps/" + std::to_string(step_index) + "/options/" + name);
       } else {
         compiled.applied_options.push_back(name);
@@ -566,6 +652,74 @@ WorkPlanRouteCompileResult compile_flux_work_plan_routes(const Board& source,
                                                      option_pointer("priority_nets"));
       compiled.configuration.planner.global.priority_nets = compiled.priority_nets;
     }
+    if (step.kind == WorkPlanStepKind::placement) {
+      CompiledWorkPlanPlacementOptions placement;
+      const auto set_placement_size = [&](std::string_view name, std::size_t& target,
+                                          std::uint64_t minimum = 1U) {
+        if (const auto value = unsigned_option(step, name, minimum, maximum_size, result,
+                                               option_pointer(name))) {
+          target = static_cast<std::size_t>(*value);
+        }
+      };
+      set_placement_size("max_placement_passes", placement.max_passes);
+      set_placement_size("max_candidate_evaluations", placement.max_candidate_evaluations);
+      set_placement_size("max_candidate_evaluation_workers",
+                         placement.max_candidate_evaluation_workers);
+      set_placement_size("max_full_routing_candidates_per_wave",
+                         placement.max_full_routing_candidates_per_wave);
+      set_placement_size("candidate_evaluation_offset", placement.candidate_evaluation_offset,
+                         0U);
+      set_placement_size("max_routing_guided_targets_per_footprint",
+                         placement.max_routing_guided_targets_per_footprint);
+      set_placement_size("max_swap_partners_per_footprint",
+                         placement.max_swap_partners_per_footprint);
+      set_placement_size("max_group_translation_proposals_per_group",
+                         placement.max_group_translation_proposals_per_group);
+      set_placement_size("max_relative_component_translation_proposals",
+                         placement.max_relative_component_translation_proposals);
+      set_placement_size("max_global_routing_guides", placement.max_global_routing_guides);
+      set_placement_size("max_orientation_proposals_per_footprint",
+                         placement.max_orientation_proposals_per_footprint);
+      set_placement_size("full_routing_verification_interval",
+                         placement.full_routing_verification_interval);
+      set_placement_size("max_pareto_checkpoints", placement.max_pareto_checkpoints);
+      if (const auto value = unsigned_option(step, "move_step_nm", 1U, max_abs_coordinate_nm,
+                                             result, option_pointer("move_step_nm"))) {
+        placement.move_step = Nanometres{static_cast<std::int64_t>(*value)};
+      }
+      if (const auto value = unsigned_option(step, "routing_feedback_margin_nm", 0U,
+                                             max_abs_coordinate_nm, result,
+                                             option_pointer("routing_feedback_margin_nm"))) {
+        placement.routing_feedback_margin =
+            Nanometres{static_cast<std::int64_t>(*value)};
+      }
+      const auto set_placement_bool = [&](std::string_view name, bool& target) {
+        if (const auto value = boolean_option(step, name, result, option_pointer(name))) {
+          target = *value;
+        }
+      };
+      set_placement_bool("allow_diagonal_moves", placement.allow_diagonal_moves);
+      set_placement_bool("enable_global_placement", placement.enable_global_placement);
+      set_placement_bool("enable_global_routing_guidance",
+                         placement.enable_global_routing_guidance);
+      set_placement_bool("enable_routing_guided_moves",
+                         placement.enable_routing_guided_moves);
+      set_placement_bool("enable_swap_moves", placement.enable_swap_moves);
+      set_placement_bool("enable_group_moves", placement.enable_group_moves);
+      set_placement_bool("enable_relative_component_moves",
+                         placement.enable_relative_component_moves);
+      set_placement_bool("enable_incremental_routing", placement.enable_incremental_routing);
+      set_placement_bool("optimize_routed_quality", placement.optimize_routed_quality);
+      set_placement_bool("orientation_repair", placement.orientation_repair);
+      set_placement_bool("side_flip_repair", placement.side_flip_repair);
+      set_placement_bool("assignment_global_placement",
+                         placement.assignment_global_placement);
+      set_placement_bool("allow_tentative_placement_envelopes",
+                         placement.allow_tentative_placement_envelopes);
+      set_placement_bool("suggested_placement_move_priorities",
+                         placement.suggested_placement_move_priorities);
+      compiled.placement = placement;
+    }
     const auto& global = compiled.configuration.planner.global;
     const auto dependency_error = [&](std::string_view name, std::string message) {
       error(result, "invalid_work_plan_route_option_dependency", std::move(message),
@@ -603,6 +757,51 @@ WorkPlanRouteCompileResult compile_flux_work_plan_routes(const Board& source,
       if (compiled.refillable_zone_fills) {
         dependency_error("retain_incomplete_diagnostic_preview",
                          "an incomplete diagnostic candidate cannot enter the zone-refill path");
+      }
+    }
+    if (compiled.placement) {
+      const auto& placement = *compiled.placement;
+      if (step.selectors.group_scope != WorkPlanSelectorScope::touching ||
+          compiled.selected_nets.empty()) {
+        error(result, "invalid_work_plan_placement_scope",
+              "placement execution requires touching scope so every moved terminal net enters "
+              "the exact routing transaction",
+              "/steps/" + std::to_string(step_index) + "/selectors/group_scope");
+      }
+      if (placement.enable_global_routing_guidance && !placement.enable_global_placement) {
+        dependency_error("enable_global_routing_guidance",
+                         "global routing guidance requires global placement");
+      }
+      if (placement.assignment_global_placement && !placement.enable_global_placement) {
+        dependency_error("assignment_global_placement",
+                         "assignment legalization requires global placement");
+      }
+      if (placement.enable_group_moves && source.placement_groups.empty()) {
+        dependency_error("enable_group_moves",
+                         "placement-group moves require a bound placement-group policy");
+      }
+      if (placement.enable_relative_component_moves &&
+          source.relative_placement_constraints.empty()) {
+        dependency_error(
+            "enable_relative_component_moves",
+            "relative-component moves require a bound relative-placement policy");
+      }
+      if ((placement.allow_tentative_placement_envelopes ||
+           placement.suggested_placement_move_priorities) &&
+          plan.mode != WorkPlanMode::preview) {
+        dependency_error(
+            placement.allow_tentative_placement_envelopes
+                ? "allow_tentative_placement_envelopes"
+                : "suggested_placement_move_priorities",
+            "tentative placement geometry and suggested classifications are preview-only");
+      }
+      if (placement.suggested_placement_move_priorities &&
+          std::any_of(plan.policies.begin(), plan.policies.end(), [](const auto& policy) {
+            return policy.kind == "placement-move-priorities";
+          })) {
+        dependency_error("suggested_placement_move_priorities",
+                         "suggested and reviewed placement-move priorities are mutually "
+                         "exclusive");
       }
     }
     if (global.hard_capacity_start_iteration > 0U &&

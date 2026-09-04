@@ -1768,6 +1768,15 @@ still fails, dependants remain skipped, and the result is marked
 The retained-path count and a stable summary event make the same state visible to telemetry
 consumers. See
 [`ADR 0165`](docs/adr/0165-non-authoritative-work-plan-incomplete-preview.md).
+Saved `placement` steps now invoke the existing integrated placement/routing optimizer on a
+private board. They require explicit selected footprints with `touching` net projection, lock and
+post-check every unselected transform, and carry only the plan's exact existing-copper authority.
+Supported typed route options configure the nested router, while bounded placement options control
+global/routing-guided moves, swaps, groups, relative closures, orientation repair, and evaluation
+budgets. Reviewed move-priority policy survives the one-read policy boundary; tentative envelopes
+and prefix suggestions remain preview-only. A step advances only after complete detailed routing,
+selected-net connectivity, structural validation, and whole-board copper DRC. See
+[`ADR 0166`](docs/adr/0166-atomic-work-plan-integrated-placement.md).
 Execution/replay remains
 withheld for any selected capability still marked partial. `flux-cli execute-work-plan-kicad BOARD
 PLAN [OUTPUT]` therefore executes only a fully qualified plan: preview mode forbids an output,

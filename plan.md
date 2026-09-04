@@ -293,8 +293,11 @@ Progress ledger (updated 2026-09-04):
   provisional mode and enters a shell-free, bounded KiCad refill, strict re-import, exact internal
   acceptance, external KiCad DRC, and atomic publication transaction. Explicit preview-only
   incomplete-route retention now returns partial diagnostic copper and telemetry while preserving
-  failed status and prohibiting refill/export. Remaining non-route step adapters are still open.
-  See ADR 0162 through ADR 0165.
+  failed status and prohibiting refill/export. Placement steps now also compile the shared routing
+  configuration plus bounded integrated-
+  optimizer policy, retain reviewed move priorities through the one-read policy boundary, scope
+  movement to explicit footprints/touching nets, and advance only an exact routed private
+  checkpoint. See ADR 0162 through ADR 0166.
 - Milestone 1.5 policy identity complete: loading a plan resolves relative policy paths from the
   plan directory, requires bounded regular files, reads each artifact once, verifies its SHA-256,
   and rejects missing, oversized, unreadable, stale, duplicate, or unsupported policy artifacts.
@@ -317,8 +320,11 @@ Progress ledger (updated 2026-09-04):
   same private export boundary, invokes KiCad Python under process/report/artifact bounds, and may
   advance to DRC/publication only after strict re-import plus exact internal acceptance. An
   explicit preview-only option can retain incomplete partial copper for telemetry and visual
-  diagnosis without authorizing a dependent step, refill, export, or publication. Fanout, plane,
-  tuning, cleanup, placement, and trace-replay adapters remain open. See ADR 0160 through ADR 0165.
+  diagnosis without authorizing a dependent step, refill, export, or publication. The placement
+  adapter now executes selected-footprint router-in-loop proposals with strict copper authority,
+  scope preservation, source-bound move priorities, deterministic summaries, and exact acceptance.
+  Fanout, plane, tuning, cleanup, and trace-replay adapters remain open. See ADR 0160 through ADR
+  0166.
 - Remaining Milestone 1 items and Milestones 2 through 12 remain open unless their individual exit
   gates are supported
   by recorded qualification evidence; an implementation named in the capability inventory is not

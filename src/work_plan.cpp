@@ -451,7 +451,8 @@ void expansion_error(WorkPlanExpansionResult& result, std::string code, std::str
 
 [[nodiscard]] bool requires_atomic_coupled_scope(WorkPlanStepKind kind) {
   return kind == WorkPlanStepKind::route || kind == WorkPlanStepKind::differential_pair ||
-         kind == WorkPlanStepKind::bus || kind == WorkPlanStepKind::tuning;
+         kind == WorkPlanStepKind::bus || kind == WorkPlanStepKind::tuning ||
+         kind == WorkPlanStepKind::placement;
 }
 
 } // namespace
@@ -707,6 +708,7 @@ WorkPlanLoadResult load_flux_work_plan_file(const std::filesystem::path& path,
   if (source != nullptr) {
     auto policies = apply_flux_work_plan_policies(*source, *result.plan, path.parent_path());
     result.policy_board = std::move(policies.board);
+    result.placement_move_priorities = std::move(policies.placement_move_priorities);
     result.applied_policy_kinds = std::move(policies.applied_policy_kinds);
     result.diagnostics.insert(result.diagnostics.end(),
                               std::make_move_iterator(policies.diagnostics.begin()),
@@ -952,7 +954,7 @@ WorkPlanExpansionResult expand_flux_work_plan(const Board& source, const FluxWor
     expanded.wildcard_only_nets = sorted_ids(wildcard_only);
     if (step.kind == WorkPlanStepKind::route ||
         step.kind == WorkPlanStepKind::differential_pair ||
-        step.kind == WorkPlanStepKind::bus) {
+        step.kind == WorkPlanStepKind::bus || step.kind == WorkPlanStepKind::placement) {
       force_reroute_authority.insert(non_wildcard_nets.begin(), non_wildcard_nets.end());
     }
     result.steps.push_back(std::move(expanded));

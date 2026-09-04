@@ -5976,6 +5976,8 @@ struct WorkPlanPrintOutcome {
           std::cout << (index == 0U ? "" : ",") << "\n    {\"id\": " << json_quote(step.id)
                     << ", \"selected_nets\": ";
           print_ids(step.selected_nets, net_name);
+          std::cout << ", \"selected_footprints\": ";
+          print_ids(step.selected_footprints, footprint_reference);
           std::cout << ", \"priority_nets\": ";
           print_ids(step.priority_nets, net_name);
           std::cout << ", \"applied_options\": [";
@@ -6016,7 +6018,51 @@ struct WorkPlanPrintOutcome {
                                 flux::ExistingRoutingPolicy::replace_unlocked_for_routed_nets
                             ? "true"
                             : "false")
-                    << "}}";
+                    << '}';
+          if (step.placement) {
+            const auto& placement = *step.placement;
+            std::cout << ", \"placement\": {\"move_step_nm\": "
+                      << placement.move_step.value()
+                      << ", \"routing_feedback_margin_nm\": "
+                      << placement.routing_feedback_margin.value()
+                      << ", \"max_placement_passes\": " << placement.max_passes
+                      << ", \"max_candidate_evaluations\": "
+                      << placement.max_candidate_evaluations
+                      << ", \"max_candidate_evaluation_workers\": "
+                      << placement.max_candidate_evaluation_workers
+                      << ", \"max_full_routing_candidates_per_wave\": "
+                      << placement.max_full_routing_candidates_per_wave
+                      << ", \"candidate_evaluation_offset\": "
+                      << placement.candidate_evaluation_offset
+                      << ", \"enable_global_placement\": "
+                      << (placement.enable_global_placement ? "true" : "false")
+                      << ", \"enable_global_routing_guidance\": "
+                      << (placement.enable_global_routing_guidance ? "true" : "false")
+                      << ", \"enable_routing_guided_moves\": "
+                      << (placement.enable_routing_guided_moves ? "true" : "false")
+                      << ", \"enable_swap_moves\": "
+                      << (placement.enable_swap_moves ? "true" : "false")
+                      << ", \"enable_group_moves\": "
+                      << (placement.enable_group_moves ? "true" : "false")
+                      << ", \"enable_relative_component_moves\": "
+                      << (placement.enable_relative_component_moves ? "true" : "false")
+                      << ", \"enable_incremental_routing\": "
+                      << (placement.enable_incremental_routing ? "true" : "false")
+                      << ", \"optimize_routed_quality\": "
+                      << (placement.optimize_routed_quality ? "true" : "false")
+                      << ", \"orientation_repair\": "
+                      << (placement.orientation_repair ? "true" : "false")
+                      << ", \"side_flip_repair\": "
+                      << (placement.side_flip_repair ? "true" : "false")
+                      << ", \"assignment_global_placement\": "
+                      << (placement.assignment_global_placement ? "true" : "false")
+                      << ", \"allow_tentative_placement_envelopes\": "
+                      << (placement.allow_tentative_placement_envelopes ? "true" : "false")
+                      << ", \"suggested_placement_move_priorities\": "
+                      << (placement.suggested_placement_move_priorities ? "true" : "false")
+                      << '}';
+          }
+          std::cout << '}';
         }
         if (!compiled->route_steps.empty()) {
           std::cout << '\n';
@@ -7849,7 +7895,7 @@ constrained_optimizer_config(const Board& board,
 }
 
 void print_help() {
-  std::cout << "flux-cli 0.134.0\n\n"
+  std::cout << "flux-cli 0.135.0\n\n"
                "Usage:\n"
                "  flux-cli version       Print the engine version\n"
                "  flux-cli capabilities --json  Print the pinned feature-parity contract\n"
@@ -8059,7 +8105,7 @@ int main(int argc, char** argv) {
   }
   const std::string_view command{argv[1]};
   if (command == "version" && argc == 2) {
-    std::cout << "flux_capacitor 0.134.0 board-schema 19\n";
+    std::cout << "flux_capacitor 0.135.0 board-schema 19\n";
     return EXIT_SUCCESS;
   }
   if (command == "capabilities" && argc == 3 && std::string_view{argv[2]} == "--json") {
@@ -8074,7 +8120,7 @@ int main(int argc, char** argv) {
     const char* override_value = std::getenv("FLUX_VULKAN_DEVICE");
     std::cout << "{\n"
               << "  \"engine\": \"flux_capacitor\",\n"
-              << "  \"version\": \"0.134.0\",\n"
+              << "  \"version\": \"0.135.0\",\n"
               << "  \"board_schema\": 19,\n"
               << "  \"production_gpu_required\": true,\n"
               << "  \"gpu_available\": " << (device.available ? "true" : "false") << ",\n"

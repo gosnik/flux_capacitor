@@ -193,7 +193,7 @@
       "title": "Router-in-the-loop placement",
       "status": "partial",
       "reference_evidence": ["docs/placement-optimization.md", "py_placer/place_optimize.py", "py_placer/place_route_loop.py"],
-      "flux_evidence": ["src/global_placer.cpp", "src/integrated_optimizer.cpp"],
+      "flux_evidence": ["src/global_placer.cpp", "src/integrated_optimizer.cpp", "src/work_plan_router.cpp", "src/work_plan_executor.cpp", "docs/adr/0166-atomic-work-plan-integrated-placement.md"],
       "focused_fixture": "flux.minimal",
       "stress_sample": "reference:kicad_files/sonde_u.kicad_pcb",
       "public_commands": ["flux-cli optimize-kicad", "flux-cli global-optimize-kicad"],
@@ -303,7 +303,8 @@
         "docs/adr/0162-shared-materialization-feedback-transaction.md",
         "docs/adr/0163-shared-sampled-conflict-cone-repair.md",
         "docs/adr/0164-atomic-work-plan-zone-refill-publication.md",
-        "docs/adr/0165-non-authoritative-work-plan-incomplete-preview.md"
+        "docs/adr/0165-non-authoritative-work-plan-incomplete-preview.md",
+        "docs/adr/0166-atomic-work-plan-integrated-placement.md"
       ],
       "focused_fixture": "flux.minimal",
       "stress_sample": "tests/fixtures/routing-corpus/pt2399_delay.kicad_pcb",
@@ -314,7 +315,7 @@
         "flux-cli execute-work-plan-kicad"
       ],
       "acceptance": "A versioned source-bound work plan dry-runs, preflights, serializes, replays deterministically, and treats optional AI as an untrusted author.",
-      "gap": "The source-bound typed schema, deterministic round trip, template, one-read policy verification/application, deterministic selector/protected-copper expansion, shared autoroute_v1 route-option compiler, inspection, and non-mutating capability preflight exist. The private-checkpoint executor supports generic route, declared differential-pair, declared ordered-bus, and validation steps with exact summaries, bounded fallbacks, shared exact-materialization feedback and sampled-conflict cone repair transactions, terminal refill-required routing, explicit non-authoritative incomplete diagnostic previews, stop tokens, policy/selector/step telemetry, and SIGINT/SIGTERM cancellation, while the CLI refuses execution for partial manifest capabilities. Non-preview output is staged with source rule context and atomically published only after either exact ordinary acceptance or bounded KiCad refill plus strict re-import, and then shell-free external KiCad JSON DRC. Remaining fanout/plane/tuning/cleanup/placement adapters, deterministic replay, and optional untrusted AI authorship remain incomplete."
+      "gap": "The source-bound typed schema, deterministic round trip, template, one-read policy verification/application, deterministic selector/protected-copper expansion, shared autoroute_v1 route-option compiler, inspection, and non-mutating capability preflight exist. The private-checkpoint executor supports generic route, declared differential-pair, declared ordered-bus, selected-footprint integrated placement, and validation steps with exact summaries, bounded fallbacks, shared exact-materialization feedback and sampled-conflict cone repair transactions, terminal refill-required routing, explicit non-authoritative incomplete diagnostic previews, stop tokens, policy/selector/step telemetry, and SIGINT/SIGTERM cancellation, while the CLI refuses execution for partial manifest capabilities. Non-preview output is staged with source rule context and atomically published only after either exact ordinary acceptance or bounded KiCad refill plus strict re-import, and then shell-free external KiCad JSON DRC. Remaining fanout/plane/tuning/cleanup adapters, deterministic replay, and optional untrusted AI authorship remain incomplete."
     },
     {
       "id": "qualification.stress-release",

@@ -5519,6 +5519,135 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
           "preview mode must observe an already complete selected net without replacing or "
           "export-authorizing its source copper");
 
+  auto placement_source = two_pad_board();
+  Footprint placement_bystander;
+  placement_bystander.id = ObjectId{"BYSTANDER"};
+  placement_bystander.reference = "BYSTANDER";
+  placement_bystander.position = mm(50.0, 15.0);
+  placement_bystander.courtyard = local_rectangle(2.0, 2.0);
+  placement_source.footprints.push_back(placement_bystander);
+  auto placement_plan =
+      flux::io::make_flux_work_plan_template(placement_source, "placement.kicad_pcb");
+  placement_plan.mode = flux::io::WorkPlanMode::new_routing;
+  flux::io::WorkPlanStep placement_step;
+  placement_step.id = "place-and-route";
+  placement_step.kind = flux::io::WorkPlanStepKind::placement;
+  placement_step.selectors.footprints = {"U1", "U2"};
+  placement_step.selectors.group_scope = flux::io::WorkPlanSelectorScope::touching;
+  placement_step.options = {
+      {"checkpoint_objective", std::string{"aggregate-overflow"}},
+      {"crossing_safe_diagonal_grid_edges", false},
+      {"direct_medial_edges", false},
+      {"enable_incremental_routing", false},
+      {"enable_routing_guided_moves", false},
+      {"grid_pitch_nm", std::uint64_t{5'000'000U}},
+      {"max_candidate_evaluations", std::uint64_t{2U}},
+      {"max_candidate_evaluation_workers", std::uint64_t{1U}},
+      {"max_expansions_per_connection", std::uint64_t{100'000U}},
+      {"max_full_routing_candidates_per_wave", std::uint64_t{1U}},
+      {"max_placement_passes", std::uint64_t{1U}},
+      {"max_router_iterations", std::uint64_t{2U}},
+      {"negotiate_voronoi_lane_conflicts", false},
+      {"physical_envelope_ordering", false},
+      {"physical_overflow_history", false},
+      {"strict_medial_topology", false},
+      {"topology_locked_medial_materialization", false}};
+  placement_plan.steps = {placement_step};
+  const auto placement_compile =
+      flux::io::compile_flux_work_plan_routes(placement_source, placement_plan);
+  require(placement_compile.ok() && placement_compile.route_steps.size() == 1U &&
+              placement_compile.route_steps.front().placement &&
+              placement_compile.route_steps.front().selected_footprints ==
+                  std::vector<ObjectId>{ObjectId{"U1"}, ObjectId{"U2"}} &&
+              placement_compile.route_steps.front().selected_nets ==
+                  std::vector<NetId>{NetId{"net-1"}} &&
+              placement_compile.route_steps.front().placement->max_passes == 1U &&
+              placement_compile.route_steps.front()
+                      .placement->max_candidate_evaluations == 2U &&
+              placement_compile.route_steps.front()
+                      .configuration.detailed.existing_routing_replacement_scope ==
+                  std::optional<std::vector<NetId>>{std::vector<NetId>{}},
+          "a placement step must compile selected footprints and all touching nets through the "
+          "shared router plus bounded integrated-optimizer configuration");
+  CollectingTelemetrySink placement_telemetry;
+  const auto placement_execution = flux::io::execute_flux_work_plan(
+      placement_source, placement_plan, {}, &placement_telemetry);
+  const bool bystander_preserved = placement_execution.candidate &&
+      std::any_of(placement_execution.candidate->footprints.begin(),
+                  placement_execution.candidate->footprints.end(),
+                  [&placement_bystander](const auto& footprint) {
+                    return footprint.id == ObjectId{"BYSTANDER"} &&
+                           footprint.position == placement_bystander.position &&
+                           !footprint.locked;
+                  });
+  require(placement_execution.ok() && placement_execution.whole_board_accepted &&
+              placement_execution.candidate_ready_for_export && placement_execution.candidate &&
+              placement_execution.steps.size() == 1U &&
+              placement_execution.steps.front().status ==
+                  flux::io::WorkPlanStepExecutionStatus::completed &&
+              placement_execution.steps.front().placement_attempted &&
+              placement_execution.steps.front().placement_candidate_evaluations > 0U &&
+              placement_execution.steps.front().placement_full_route_evaluations > 0U &&
+              bystander_preserved &&
+              placement_source.tracks.empty() && !placement_execution.candidate->tracks.empty() &&
+              std::any_of(placement_telemetry.events.begin(), placement_telemetry.events.end(),
+                          [](const auto& event) {
+                            return event.stable_id == "work-plan-step:place-and-route" &&
+                                   event.total_groups == 2U && event.search_expansions > 0U;
+                          }),
+          "placement execution must route on a private board, preserve unselected transforms and "
+          "locks, and commit only an exact accepted integrated checkpoint: " +
+              flux::io::serialize_flux_work_plan_execution_summary(placement_execution));
+
+  auto reviewed_placement_plan = placement_plan;
+  reviewed_placement_plan.policies = {{"placement-move-priorities",
+                                       "reviewed-priorities.policy",
+                                       std::string(64U, '0'),
+                                       placement_source.source_revision}};
+  flux::PlacementMovePriorityPolicy reviewed_priorities;
+  reviewed_priorities.source_revision = placement_source.source_revision;
+  reviewed_priorities.order = flux::default_placement_move_priority_order();
+  for (const auto& footprint : placement_source.footprints) {
+    reviewed_priorities.footprints.push_back(
+        {footprint.id, flux::PlacementMovePriorityClass::other});
+  }
+  flux::io::WorkPlanLoadResult loaded_placement;
+  loaded_placement.plan = reviewed_placement_plan;
+  loaded_placement.policy_board = placement_source;
+  loaded_placement.placement_move_priorities = reviewed_priorities;
+  loaded_placement.applied_policy_kinds = {"placement-move-priorities"};
+  const auto reviewed_placement_execution =
+      flux::io::execute_loaded_flux_work_plan(loaded_placement);
+  require(reviewed_placement_execution.ok() && reviewed_placement_execution.steps.size() == 1U &&
+              reviewed_placement_execution.steps.front()
+                  .placement_move_priorities_configured,
+          "the one-read reviewed move-priority policy must reach the integrated placement "
+          "optimizer rather than being discarded after identity validation");
+
+  auto unsafe_placement_plan = placement_plan;
+  unsafe_placement_plan.steps.front().options["allow_tentative_placement_envelopes"] = true;
+  require(!flux::io::compile_flux_work_plan_routes(placement_source, unsafe_placement_plan).ok(),
+          "tentative placement envelopes must remain preview-only in a saved WorkPlan");
+  auto ignored_placement_option_plan = placement_plan;
+  ignored_placement_option_plan.steps.front().options["refillable_zone_fills"] = true;
+  require(!flux::io::compile_flux_work_plan_routes(placement_source,
+                                                    ignored_placement_option_plan)
+               .ok(),
+          "a placement step must reject route-transaction wrappers that its optimizer would not "
+          "execute");
+  auto unprojected_placement_plan = placement_plan;
+  unprojected_placement_plan.steps.front().selectors.group_scope =
+      flux::io::WorkPlanSelectorScope::selected;
+  require(!flux::io::compile_flux_work_plan_routes(placement_source,
+                                                    unprojected_placement_plan)
+               .ok(),
+          "placement must project every selected footprint to touching nets before execution");
+  auto route_with_placement_option = executable_plan;
+  route_with_placement_option.steps.front().options["max_placement_passes"] =
+      std::uint64_t{2U};
+  require(!flux::io::compile_flux_work_plan_routes(connected, route_with_placement_option).ok(),
+          "placement-only configuration must not be silently accepted by an ordinary route step");
+
   auto refill_source = two_pad_board();
   refill_source.layers.resize(1U);
   refill_source.nets.push_back(Net{NetId{"work-plan-plane"}, "WORK_PLAN_PLANE", 0});

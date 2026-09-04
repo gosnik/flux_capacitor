@@ -1629,16 +1629,21 @@ public:
       }
     }
     mutable_geometry_->maximum_clearance_nm =
-        std::max(mutable_geometry_->maximum_clearance_nm,
-                 static_cast<long double>(board.rules.hole_to_hole_clearance.value()));
+        std::max({mutable_geometry_->maximum_clearance_nm,
+                  static_cast<long double>(board.rules.hole_clearance.value()),
+                  static_cast<long double>(board.rules.hole_to_hole_clearance.value())});
     mutable_geometry_->bins.resize(grid_.layers.size() * grid_.layer_size());
     for (const auto& drill : drill_shapes(board)) {
       if (drill.owner_kind == DrillOwnerKind::via && !include_existing_copper) {
         continue;
       }
-      for (std::size_t layer = 0U; layer < grid_.layers.size(); ++layer) {
+      for (const auto& layer_id : drill.layers) {
+        const auto layer = layer_index(layer_id);
+        if (!layer) {
+          continue;
+        }
         add_obstacle(IndexedObstacle{
-            drill.id, drill.net, layer, ObstacleShape::drill, drill.position, drill.position,
+            drill.id, drill.net, *layer, ObstacleShape::drill, drill.position, drill.position,
             static_cast<long double>(std::max(drill.width, drill.height).value()) / 2.0L,
             std::nullopt, std::nullopt, std::nullopt, std::nullopt, drill});
       }
@@ -2205,19 +2210,30 @@ private:
         continue;
       }
       if (obstacle.shape == ObstacleShape::drill) {
-        if (!planned_via || board_.rules.hole_to_hole_clearance.value() <= 0) {
-          continue;
-        }
         const auto& drill = *obstacle.drill_geometry;
+        const auto reusable_feature =
+            planned_via && drill.net == net && drill.position == start && start == end;
         // An existing same-net via or plated pad at this exact point is a reusable vertical
         // feature, not a second drilled object. Nearby same-net holes remain mechanical blockers.
-        if (drill.net == net && drill.position == start && start == end) {
+        if (reusable_feature) {
           continue;
         }
-        const auto required =
-            static_cast<long double>(rules_for(net).via_drill.value()) / 2.0L +
-            static_cast<long double>(board_.rules.hole_to_hole_clearance.value());
-        if (point_to_drill_boundary_distance_nm(start, drill) < required) {
+        if (drill.net != net && board_.rules.hole_clearance.value() > 0) {
+          const auto actual = planned_via
+                                  ? point_to_drill_boundary_distance_nm(start, drill)
+                                  : segment_to_pad_copper_distance_nm(
+                                        start, end, drill_clearance_shape(drill));
+          const auto required =
+              planned_radius_nm + static_cast<long double>(board_.rules.hole_clearance.value());
+          if (actual < required) {
+            result.obstacles.push_back(drill.id);
+          }
+        }
+        if (planned_via && drill.mechanically_drilled &&
+            board_.rules.hole_to_hole_clearance.value() > 0 &&
+            point_to_drill_boundary_distance_nm(start, drill) <
+                static_cast<long double>(rules_for(net).via_drill.value()) / 2.0L +
+                    static_cast<long double>(board_.rules.hole_to_hole_clearance.value())) {
           result.obstacles.push_back(drill.id);
         }
         continue;
@@ -2243,8 +2259,14 @@ private:
              static_cast<long double>(rules_for(net).differential_pair_gap.value()),
              static_cast<long double>(rules_for(obstacle.net).differential_pair_gap.value())});
       }
-      const auto required =
-          planned_radius_nm + planned_pair_clearance + (is_pad ? 0.0L : obstacle.radius_nm);
+      auto planned_envelope = planned_radius_nm + planned_pair_clearance;
+      if (planned_via && obstacle.net != net && board_.rules.hole_clearance.value() > 0) {
+        planned_envelope =
+            std::max(planned_envelope,
+                     static_cast<long double>(rules_for(net).via_drill.value()) / 2.0L +
+                         static_cast<long double>(board_.rules.hole_clearance.value()));
+      }
+      const auto required = planned_envelope + (is_pad || is_zone ? 0.0L : obstacle.radius_nm);
       const auto actual =
           is_pad    ? segment_to_pad_copper_distance_nm(start, end, *obstacle.pad_geometry)
           : is_zone ? segment_indexed_zone_copper_distance_nm(start, end, *obstacle.zone_geometry)

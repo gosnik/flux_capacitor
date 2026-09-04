@@ -1,5 +1,13 @@
 # flux_capacitor
 
+v0.138/schema 21 applies the source-bound KiCad hole-clearance floor as an exact
+different-net drill-boundary-to-copper rule for straight tracks, arcs, vias, supported pads, and
+saved zone fills. Whole-board and dynamic DRC share that predicate with global and regional route
+screening. Mechanically drilled round holes alone participate in hole-to-hole checks; milled oval
+holes remain exact copper-clearance obstacles, and laser-drilled microvias stop strict import until
+their distinct fabrication semantics are represented. See
+[`ADR 0167`](docs/adr/0167-source-bound-fabrication-rules-and-stackup.md).
+
 v0.137/schema 21 preserves the saved physical board thickness and ordered KiCad stackup as
 canonical source state. Copper, dielectric, mask, paste, and silkscreen entries retain their
 physical order; dielectric `addsublayer` records retain independent material and thickness data;

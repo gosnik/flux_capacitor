@@ -58,6 +58,7 @@ using flux::Nanometres;
 using flux::Net;
 using flux::NetId;
 using flux::ObjectId;
+using flux::Pad;
 using flux::Point;
 using flux::Polygon;
 
@@ -164,6 +165,11 @@ void source_bound_board_rules_control_geometry_and_hole_clearance() {
           "project floors must raise generated copper dimensions without rewriting class values");
 
   auto board = *applied.board;
+  board.tracks = {
+      {ObjectId{"same-net-hole-neighbour"}, NetId{"net-1"}, LayerId{"F.Cu"}, mm(39.5, 40.3),
+       mm(40.5, 40.3), Nanometres{100'000}, false},
+      {ObjectId{"foreign-hole-neighbour"}, NetId{"net-2"}, LayerId{"F.Cu"}, mm(39.5, 39.7),
+       mm(40.5, 39.7), Nanometres{100'000}, false}};
   board.vias = {
       {ObjectId{"hole-a"}, NetId{"net-1"}, mm(40.0, 40.0), Nanometres{600000},
        Nanometres{300000}, {LayerId{"F.Cu"}, LayerId{"B.Cu"}}, false},
@@ -180,13 +186,57 @@ void source_bound_board_rules_control_geometry_and_hole_clearance() {
                   flux::check_dynamic_copper_rules(board, {ObjectId{"hole-b"}})),
           "hole-to-hole clearance must remain mechanical across same-net vias in whole and "
           "dynamic exact DRC");
+  const auto has_hole_clearance_for = [](const auto& report, std::string_view id) {
+    return std::any_of(report.violations.begin(), report.violations.end(), [&](const auto& item) {
+      return item.kind == flux::CopperViolationKind::hole_clearance &&
+             std::find(item.object_ids.begin(), item.object_ids.end(), id) !=
+                 item.object_ids.end();
+    });
+  };
+  require(has_hole_clearance_for(whole, "foreign-hole-neighbour") &&
+              !has_hole_clearance_for(whole, "same-net-hole-neighbour") &&
+              has_hole_clearance_for(
+                  flux::check_dynamic_copper_rules(
+                      board, {ObjectId{"foreign-hole-neighbour"}}),
+                  "foreign-hole-neighbour") &&
+              !has_hole_clearance_for(
+                  flux::check_dynamic_copper_rules(
+                      board, {ObjectId{"same-net-hole-neighbour"}}),
+                  "same-net-hole-neighbour"),
+          "hole clearance must use exact hole-to-copper boundaries on traversed layers and exempt "
+          "same-net copper in whole and dynamic DRC");
+
+  Footprint slotted;
+  slotted.id = ObjectId{"slotted"};
+  slotted.reference = "H1";
+  slotted.position = mm(60.0, 40.0);
+  Pad slot;
+  slot.id = ObjectId{"oval-hole"};
+  slot.net = NetId{"net-1"};
+  slot.layers = {LayerId{"F.Cu"}, LayerId{"B.Cu"}};
+  slot.drill_width = Nanometres{1'000'000};
+  slot.drill_height = Nanometres{400'000};
+  slot.plated = false;
+  slotted.pads = {slot};
+  board.footprints.push_back(slotted);
+  board.vias.push_back(
+      {ObjectId{"near-slot"}, NetId{"net-1"}, mm(60.7, 40.0), Nanometres{600'000},
+       Nanometres{300'000}, {LayerId{"F.Cu"}, LayerId{"B.Cu"}}, false});
+  const auto slotted_report = flux::check_copper_rules(board);
+  require(std::none_of(slotted_report.violations.begin(), slotted_report.violations.end(),
+                       [](const auto& item) {
+                         return item.kind == flux::CopperViolationKind::hole_to_hole_clearance &&
+                                std::find(item.object_ids.begin(), item.object_ids.end(),
+                                          "oval-hole") != item.object_ids.end();
+                       }),
+          "milled oval holes must not be treated as mechanically drilled hole-to-hole pairs");
 
   const flux::DrillShape oval{ObjectId{"oval"}, NetId{}, mm(0.0, 0.0), Nanometres{1'000'000},
                               Nanometres{400'000}, Microdegrees{0},
-                              flux::DrillOwnerKind::pad};
+                              flux::DrillOwnerKind::pad, {LayerId{"F.Cu"}}, false};
   const flux::DrillShape circle{ObjectId{"circle"}, NetId{}, mm(0.7, 0.0), Nanometres{300'000},
                                 Nanometres{300'000}, Microdegrees{0},
-                                flux::DrillOwnerKind::via};
+                                flux::DrillOwnerKind::via, {LayerId{"F.Cu"}}, true};
   require(std::abs(flux::drill_to_drill_boundary_distance_nm(oval, circle) - 50'000.0L) < 1.0L,
           "oval drill spacing must use the exact capsule boundary rather than a bounding circle");
 }
@@ -3628,6 +3678,22 @@ void cancellation_and_kicad_export_boundaries_fail_closed() {
                           }),
           "unrepresented frequency-dependent stackup semantics must stop strict import with an "
           "attributed diagnostic");
+  auto microvia_contents = contents;
+  const auto microvia_board_close = microvia_contents.rfind(')');
+  require(microvia_board_close != std::string::npos,
+          "microvia fixture must retain the root closing delimiter");
+  microvia_contents.insert(
+      microvia_board_close,
+      "  (via micro (at 50 40) (size 0.4) (drill 0.1) (layers \"F.Cu\" \"B.Cu\") "
+      "(net 1) (uuid \"unsupported-microvia\"))\n");
+  const auto microvia_import = flux::io::import_kicad_pcb(microvia_contents);
+  require(!microvia_import.strict() &&
+              std::any_of(microvia_import.diagnostics.begin(),
+                          microvia_import.diagnostics.end(), [](const auto& diagnostic) {
+                            return diagnostic.code == "unsupported_microvia";
+                          }),
+          "laser-drilled microvias must fail strict import until their fabrication semantics are "
+          "represented explicitly");
   auto unfilled_zone_contents = contents;
   const auto board_close = unfilled_zone_contents.rfind(')');
   require(board_close != std::string::npos,

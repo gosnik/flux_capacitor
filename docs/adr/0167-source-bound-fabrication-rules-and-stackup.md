@@ -45,11 +45,17 @@ exactly:
 Every value is converted from decimal millimetres to integer nanometres with deterministic half-up
 rounding. Missing, extra, negative, malformed, stale, or partially applied fields reject the whole
 snapshot. The resolver applies track, clearance, drill, diameter, and annular values as floors after
-normal net-class inheritance; it does not rewrite source classes. Exact circular/oval drill shapes
-make hole-to-hole spacing mechanical and independent of net/layer identity. Whole-board and dynamic
-DRC report the violation, while global and regional via selection reject such sites early. Same-net
+normal net-class inheritance; it does not rewrite source classes. Following KiCad's
+[custom-rule definitions](https://gitlab.com/kicad/code/kicad/-/blob/master/pcbnew/dialogs/panel_setup_rules_help.md),
+exact circular/oval drill shapes carry every traversed copper layer. Hole-to-copper clearance is
+measured from the drill boundary to straight tracks, arcs, vias, supported pads, and saved zone
+fills on a different net. Whole-board and dynamic DRC share those predicates with global and
+regional run-up/via screening. Hole-to-hole spacing remains independent of net and layer identity
+but applies only to mechanically drilled round holes; milled oval holes are excluded. Same-net
 reuse exempts only an existing hole at the exact selected coordinate; it does not exempt a nearby
-same-net drill.
+same-net mechanical drill. Laser-drilled microvias stop strict import until the canonical model can
+preserve their distinct fabrication type and rules; mechanically drilled blind/buried spans remain
+represented by their explicit layer sequence.
 
 Board schema 21 additionally stores:
 
@@ -75,14 +81,13 @@ stackup records; live and replay viewers show compact physical-layer/dielectric 
 
 ## Consequences
 
-Generated ordinary copper now observes the captured project floors, and mechanical drill conflicts
-influence both exact acceptance and via planning. The selected two- and four-layer parity, Teensy,
-and ESC sources retain calculation-ready stackup geometry without introducing a second electrical
-board model.
+Generated ordinary copper now observes the captured project floors. Different-net hole-to-copper
+and mechanical drill conflicts influence both exact acceptance and route/via planning. The selected
+two- and four-layer parity, Teensy, and ESC sources retain calculation-ready stackup geometry
+without introducing a second electrical board model.
 
-This does not complete KiCad rule parity. The captured project hole-to-copper value is retained but
-is not yet an authoritative analytic copper/hole predicate. Region-dependent/custom rules,
-pairwise clearances, per-layer rule specializations, length/skew constraints, blind/buried/microvia
-fabrication policy, and frequency-dependent dielectric models remain explicit Milestone 2 work.
-No impedance or propagation-delay result may claim a hard electrical constraint from absent or
-unsupported material data.
+This does not complete KiCad rule parity. Region-dependent/custom and physical-hole-clearance
+rules, pairwise clearances, per-layer rule specializations, length/skew constraints, explicit
+blind/buried/microvia fabrication policy, and frequency-dependent dielectric models remain
+Milestone 2 work. No impedance or propagation-delay result may claim a hard electrical constraint
+from absent or unsupported material data.

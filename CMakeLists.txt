@@ -6,7 +6,7 @@ endif()
 
 project(
   flux_capacitor
-  VERSION 0.137.0
+  VERSION 0.138.0
   DESCRIPTION "Integrated PCB placement and routing engine"
   LANGUAGES CXX)
 

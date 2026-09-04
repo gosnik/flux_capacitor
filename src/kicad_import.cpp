@@ -1835,6 +1835,13 @@ void import_tracks_and_vias(const SExpression& root, Board& board, Importer& imp
 
   std::size_t via_index = 0;
   for (const auto* expression : find_children(root, "via")) {
+    if (has_atom(*expression, "micro")) {
+      importer.error("unsupported_microvia",
+                     "laser-drilled microvia geometry is not represented by the canonical via "
+                     "model",
+                     expression->location);
+      continue;
+    }
     const auto position = named_point(*expression, "at", importer);
     const auto diameter = named_number(*expression, "size", importer);
     const auto drill = named_number(*expression, "drill", importer);

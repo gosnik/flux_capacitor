@@ -389,7 +389,14 @@ std::vector<DrillShape> drill_shapes(const Board& board) {
   for (const auto& via : board.vias) {
     if (via.drill.value() > 0) {
       result.push_back(DrillShape{via.id, via.net, via.position, via.drill, via.drill,
-                                  Microdegrees{0}, DrillOwnerKind::via});
+                                  Microdegrees{0}, DrillOwnerKind::via, via.layers, true});
+    }
+  }
+  std::vector<LayerId> through_layers;
+  through_layers.reserve(board.layers.size());
+  for (const auto& layer : board.layers) {
+    if (layer.kind == LayerKind::copper) {
+      through_layers.push_back(layer.id);
     }
   }
   for (const auto& footprint : board.footprints) {
@@ -406,19 +413,19 @@ std::vector<DrillShape> drill_shapes(const Board& board) {
                                   pad.drill_width,
                                   pad.drill_height,
                                   Microdegrees{-rotation_value},
-                                  DrillOwnerKind::pad});
+                                  DrillOwnerKind::pad,
+                                  through_layers,
+                                  pad.drill_width == pad.drill_height});
     }
   }
   return result;
 }
 
-namespace {
-
-[[nodiscard]] CopperPadShape drill_as_pad(const DrillShape& drill) {
+CopperPadShape drill_clearance_shape(const DrillShape& drill) {
   return CopperPadShape{drill.id,
                         drill.net,
                         drill.position,
-                        {},
+                        drill.layers,
                         drill.width == drill.height ? PadShape::circle : PadShape::oval,
                         drill.width,
                         drill.height,
@@ -428,14 +435,12 @@ namespace {
                             2.0L};
 }
 
-} // namespace
-
 long double point_to_drill_boundary_distance_nm(Point point, const DrillShape& drill) {
-  return point_to_pad_copper_distance_nm(point, drill_as_pad(drill));
+  return point_to_pad_copper_distance_nm(point, drill_clearance_shape(drill));
 }
 
 long double drill_to_drill_boundary_distance_nm(const DrillShape& lhs, const DrillShape& rhs) {
-  return pad_to_pad_copper_distance_nm(drill_as_pad(lhs), drill_as_pad(rhs));
+  return pad_to_pad_copper_distance_nm(drill_clearance_shape(lhs), drill_clearance_shape(rhs));
 }
 
 std::optional<PolygonalPadOutline> polygonal_pad_outline(const CopperPadShape& pad,

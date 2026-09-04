@@ -140,7 +140,13 @@ void check_hole_to_hole(const Board& board, CopperDrcReport& report,
   }
   const auto holes = drill_shapes(board);
   for (std::size_t first = 0U; first < holes.size(); ++first) {
+    if (!holes[first].mechanically_drilled) {
+      continue;
+    }
     for (std::size_t second = first + 1U; second < holes.size(); ++second) {
+      if (!holes[second].mechanically_drilled) {
+        continue;
+      }
       if (!selected_for_dynamic_check(selected, holes[first].id, &holes[second].id)) {
         continue;
       }
@@ -150,6 +156,77 @@ void check_hole_to_hole(const Board& board, CopperDrcReport& report,
                       "hole_to_hole_clearance",
                       {holes[first].id.value(), holes[second].id.value()}, required, actual);
       }
+    }
+  }
+}
+
+void check_hole_clearance(const Board& board, const std::vector<CopperPadShape>& pads,
+                          CopperDrcReport& report,
+                          const std::set<std::string>* selected = nullptr) {
+  const auto required = static_cast<long double>(board.rules.hole_clearance.value());
+  if (required <= 0.0L) {
+    return;
+  }
+  const auto holes = drill_shapes(board);
+  const auto eligible = [&](const DrillShape& hole, const ObjectId& copper_id,
+                            const NetId& copper_net) {
+    return hole.id != copper_id && hole.net != copper_net &&
+           selected_for_dynamic_check(selected, hole.id, &copper_id);
+  };
+  const auto report_if_too_close = [&](const DrillShape& hole, const ObjectId& copper_id,
+                                       long double actual) {
+    if (actual < required) {
+      add_violation(report, CopperViolationKind::hole_clearance, "hole_clearance",
+                    {hole.id.value(), copper_id.value()}, required, actual);
+    }
+  };
+  for (const auto& hole : holes) {
+    const auto hole_shape = drill_clearance_shape(hole);
+    for (const auto& track : board.tracks) {
+      if (!eligible(hole, track.id, track.net) || !contains_layer(hole.layers, track.layer)) {
+        continue;
+      }
+      const auto actual = std::max(
+          0.0L, segment_to_pad_copper_distance_nm(track.start, track.end, hole_shape) -
+                    static_cast<long double>(track.width.value()) / 2.0L);
+      report_if_too_close(hole, track.id, actual);
+    }
+    for (const auto& arc : board.track_arcs) {
+      if (!eligible(hole, arc.id, arc.net) || !contains_layer(hole.layers, arc.layer)) {
+        continue;
+      }
+      const auto actual = std::max(
+          0.0L, circular_arc_to_pad_copper_distance_nm(arc.start, arc.middle, arc.end, hole_shape) -
+                    static_cast<long double>(arc.width.value()) / 2.0L);
+      report_if_too_close(hole, arc.id, actual);
+    }
+    for (const auto& via : board.vias) {
+      if (!eligible(hole, via.id, via.net) || !share_layer(hole.layers, via.layers)) {
+        continue;
+      }
+      const auto actual =
+          std::max(0.0L, point_to_drill_boundary_distance_nm(via.position, hole) -
+                             static_cast<long double>(via.diameter.value()) / 2.0L);
+      report_if_too_close(hole, via.id, actual);
+    }
+    for (const auto& pad : pads) {
+      if (!eligible(hole, pad.id, pad.net) || !share_layer(hole.layers, pad.layers)) {
+        continue;
+      }
+      report_if_too_close(hole, pad.id, pad_to_pad_copper_distance_nm(hole_shape, pad));
+    }
+    for (const auto& zone : board.zones) {
+      if (!eligible(hole, zone.id, zone.net)) {
+        continue;
+      }
+      auto actual = std::numeric_limits<long double>::infinity();
+      for (const auto& fill : zone.fills) {
+        if (contains_layer(hole.layers, fill.layer)) {
+          actual =
+              std::min(actual, pad_to_filled_region_copper_distance_nm(hole_shape, fill));
+        }
+      }
+      report_if_too_close(hole, zone.id, actual);
     }
   }
 }
@@ -259,6 +336,7 @@ CopperDrcReport check_copper_rules(const Board& board) {
   const auto pads = copper_pad_shapes(board);
   check_fabrication_minimums(board, report);
   check_hole_to_hole(board, report);
+  check_hole_clearance(board, pads, report);
   check_board_edge(board, pads, report);
 
   for (std::size_t i = 0; i < board.tracks.size(); ++i) {
@@ -650,6 +728,7 @@ CopperDrcReport check_dynamic_copper_rules(const Board& board,
     return static_cast<long double>(resolve_pairwise_clearance(board, lhs, rhs).value());
   };
   const auto pads = copper_pad_shapes(board);
+  check_hole_clearance(board, pads, report, &selected);
   const auto edge_clearance =
       static_cast<long double>(board.rules.copper_to_edge_clearance.value());
   struct BroadphaseObject {

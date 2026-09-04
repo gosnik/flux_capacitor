@@ -7913,7 +7913,7 @@ constrained_optimizer_config(const Board& board,
 }
 
 void print_help() {
-  std::cout << "flux-cli 0.137.0\n\n"
+  std::cout << "flux-cli 0.138.0\n\n"
                "Usage:\n"
                "  flux-cli version       Print the engine version\n"
                "  flux-cli capabilities --json  Print the pinned feature-parity contract\n"
@@ -8123,7 +8123,7 @@ int main(int argc, char** argv) {
   }
   const std::string_view command{argv[1]};
   if (command == "version" && argc == 2) {
-    std::cout << "flux_capacitor 0.137.0 board-schema " << flux::board_schema_version << '\n';
+    std::cout << "flux_capacitor 0.138.0 board-schema " << flux::board_schema_version << '\n';
     return EXIT_SUCCESS;
   }
   if (command == "capabilities" && argc == 3 && std::string_view{argv[2]} == "--json") {
@@ -8138,7 +8138,7 @@ int main(int argc, char** argv) {
     const char* override_value = std::getenv("FLUX_VULKAN_DEVICE");
     std::cout << "{\n"
               << "  \"engine\": \"flux_capacitor\",\n"
-              << "  \"version\": \"0.137.0\",\n"
+              << "  \"version\": \"0.138.0\",\n"
               << "  \"board_schema\": " << flux::board_schema_version << ",\n"
               << "  \"production_gpu_required\": true,\n"
               << "  \"gpu_available\": " << (device.available ? "true" : "false") << ",\n"

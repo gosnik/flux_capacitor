@@ -2648,6 +2648,8 @@ void populate_selected_endpoint_choices(const Board& board, const GlobalRouteRes
                                   Nanometres diameter) {
     const auto rules = resolve_net_routing_rules(board, net);
     const auto radius = static_cast<long double>(diameter.value()) / 2.0L;
+    const auto drill_radius = static_cast<long double>(rules.via_drill.value()) / 2.0L;
+    const auto hole_clearance = static_cast<long double>(board.rules.hole_clearance.value());
     const auto touches_layer = [&](const LayerId& layer) {
       return std::find(span.begin(), span.end(), layer) != span.end();
     };
@@ -2660,8 +2662,10 @@ void populate_selected_endpoint_choices(const Board& board, const GlobalRouteRes
       if (track.net == net || !touches_layer(track.layer)) {
         continue;
       }
-      const auto required = radius + static_cast<long double>(track.width.value()) / 2.0L +
-                            static_cast<long double>(pairwise_clearance(net, track.net).value());
+      const auto required =
+          std::max(radius + static_cast<long double>(pairwise_clearance(net, track.net).value()),
+                   drill_radius + hole_clearance) +
+          static_cast<long double>(track.width.value()) / 2.0L;
       if (geometry::point_segment_distance_nm(site, track.start, track.end) < required) {
         return false;
       }
@@ -2670,8 +2674,10 @@ void populate_selected_endpoint_choices(const Board& board, const GlobalRouteRes
       if (arc.net == net || !touches_layer(arc.layer)) {
         continue;
       }
-      const auto required = radius + static_cast<long double>(arc.width.value()) / 2.0L +
-                            static_cast<long double>(pairwise_clearance(net, arc.net).value());
+      const auto required =
+          std::max(radius + static_cast<long double>(pairwise_clearance(net, arc.net).value()),
+                   drill_radius + hole_clearance) +
+          static_cast<long double>(arc.width.value()) / 2.0L;
       if (geometry::point_circular_arc_distance_nm(site, arc.start, arc.middle, arc.end) <
           required) {
         return false;
@@ -2681,8 +2687,10 @@ void populate_selected_endpoint_choices(const Board& board, const GlobalRouteRes
       if (via.net == net || std::none_of(via.layers.begin(), via.layers.end(), touches_layer)) {
         continue;
       }
-      const auto required = radius + static_cast<long double>(via.diameter.value()) / 2.0L +
-                            static_cast<long double>(pairwise_clearance(net, via.net).value());
+      const auto required =
+          std::max(radius + static_cast<long double>(pairwise_clearance(net, via.net).value()),
+                   drill_radius + hole_clearance) +
+          static_cast<long double>(via.diameter.value()) / 2.0L;
       if (geometry::point_distance_nm(site, via.position) < required) {
         return false;
       }
@@ -2692,22 +2700,27 @@ void populate_selected_endpoint_choices(const Board& board, const GlobalRouteRes
         continue;
       }
       const auto required =
-          radius + static_cast<long double>(pairwise_clearance(net, pad.net).value());
+          std::max(radius + static_cast<long double>(pairwise_clearance(net, pad.net).value()),
+                   drill_radius + hole_clearance);
       if (point_to_pad_copper_distance_nm(site, pad) < required) {
         return false;
       }
     }
-    if (board.rules.hole_to_hole_clearance.value() > 0) {
-      const auto required = static_cast<long double>(rules.via_drill.value()) / 2.0L +
-                            static_cast<long double>(
-                                board.rules.hole_to_hole_clearance.value());
-      for (const auto& drill : static_drills) {
-        if (drill.net == net && drill.position == site) {
-          continue;
-        }
-        if (point_to_drill_boundary_distance_nm(site, drill) < required) {
-          return false;
-        }
+    for (const auto& drill : static_drills) {
+      if (drill.net == net && drill.position == site) {
+        continue;
+      }
+      const auto overlaps_span =
+          std::any_of(drill.layers.begin(), drill.layers.end(), touches_layer);
+      if (drill.net != net && overlaps_span && hole_clearance > 0.0L &&
+          point_to_drill_boundary_distance_nm(site, drill) < radius + hole_clearance) {
+        return false;
+      }
+      if (drill.mechanically_drilled && board.rules.hole_to_hole_clearance.value() > 0 &&
+          point_to_drill_boundary_distance_nm(site, drill) <
+              drill_radius +
+                  static_cast<long double>(board.rules.hole_to_hole_clearance.value())) {
+        return false;
       }
     }
     if (!result.configured.treat_saved_zone_fills_as_refillable) {
@@ -2716,7 +2729,8 @@ void populate_selected_endpoint_choices(const Board& board, const GlobalRouteRes
           continue;
         }
         const auto required =
-            radius + static_cast<long double>(pairwise_clearance(net, zone.net).value());
+            std::max(radius + static_cast<long double>(pairwise_clearance(net, zone.net).value()),
+                     drill_radius + hole_clearance);
         for (const auto& fill : zone.fills) {
           if (touches_layer(fill.layer) &&
               geometry::point_filled_region_copper_distance_nm(site, fill) < required) {
@@ -2785,6 +2799,20 @@ void populate_selected_endpoint_choices(const Board& board, const GlobalRouteRes
           radius + static_cast<long double>(pairwise_clearance(net, pad.net).value());
       if (segment_to_pad_copper_distance_nm(start, end, pad) < required) {
         return false;
+      }
+    }
+    if (board.rules.hole_clearance.value() > 0) {
+      const auto required =
+          radius + static_cast<long double>(board.rules.hole_clearance.value());
+      for (const auto& drill : static_drills) {
+        if (drill.net == net ||
+            std::find(drill.layers.begin(), drill.layers.end(), layer) == drill.layers.end()) {
+          continue;
+        }
+        if (segment_to_pad_copper_distance_nm(start, end, drill_clearance_shape(drill)) <
+            required) {
+          return false;
+        }
       }
     }
     if (!result.configured.treat_saved_zone_fills_as_refillable) {
@@ -2959,10 +2987,16 @@ void populate_selected_endpoint_choices(const Board& board, const GlobalRouteRes
                      planned.span.end();
             });
         if (planned.net != path.net && spans_overlap) {
-          const auto required =
-              static_cast<long double>(rules.via_diameter.value() + planned.diameter.value()) /
-                  2.0L +
-              static_cast<long double>(std::max(rules.clearance, planned.clearance).value());
+          const auto required = std::max(
+              {static_cast<long double>(rules.via_diameter.value() + planned.diameter.value()) /
+                       2.0L +
+                   static_cast<long double>(std::max(rules.clearance, planned.clearance).value()),
+               static_cast<long double>(rules.via_drill.value() + planned.diameter.value()) /
+                       2.0L +
+                   static_cast<long double>(board.rules.hole_clearance.value()),
+               static_cast<long double>(rules.via_diameter.value() + planned.drill.value()) /
+                       2.0L +
+                   static_cast<long double>(board.rules.hole_clearance.value())});
           margin = std::min(margin, geometry::point_distance_nm(site, planned.site) - required);
         }
         if (!(planned.net == path.net && planned.site == site) &&

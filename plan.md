@@ -252,11 +252,15 @@ Progress ledger (updated 2026-09-04):
 - Milestone 2.2 partial: net-class snapshot version 3 now binds the exact board revision and an
   independently SHA-256-bound matching saved project. It captures the complete supported set of
   eight board-wide KiCad fabrication minima, raises resolved track/clearance/via/drill geometry to
-  those floors, and exact-checks circular/oval mechanical hole-to-hole clearance in whole/dynamic
-  DRC plus global/regional via selection. Schema 20 keeps same-net hole reuse exact-coordinate-only.
+  those floors, and exact-checks different-net drill-boundary clearance against straight tracks,
+  arcs, vias, supported pads, and saved zone fills in whole/dynamic DRC. Global and regional route,
+  run-up, and via selection reuse the same traversed-layer drill geometry. Mechanically drilled
+  round holes alone participate in net-independent hole-to-hole clearance; milled oval holes remain
+  hole-to-copper obstacles, and laser-drilled microvias stop strict import until represented.
+  Schema 20 keeps same-net mechanical-hole reuse exact-coordinate-only.
   The installed official IPC surface remains the authority for live net-class membership but does
   not expose these board minima, so the guarded one-read project snapshot is explicit. Project
-  hole-to-copper enforcement, custom/region-dependent rules, pairwise/per-layer rules, and focused
+  physical-hole clearance, custom/region-dependent rules, pairwise/per-layer rules, and focused
   KiCad rule-query agreement remain open; see ADR 0167.
 - Milestone 2.3 partial: board schema 21 now preserves optional physical board thickness and the
   ordered KiCad physical stackup, including copper and dielectric nanometre thickness, bounded

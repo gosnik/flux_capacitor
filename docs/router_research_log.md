@@ -1813,3 +1813,55 @@ qualified routing fail-closed. Do not interpret the HardwareSim artifact or tele
 copper. Do not restart this board until its Altium conversion artifacts are normalized. A separate
 future improvement should make cancellation hand a retained global checkpoint to preview
 materialization instead of exiting before export.
+
+## Experiment 32 — Source-bound hole-clearance legality
+
+### Failure
+
+Milestone 2 retained KiCad's project `min_hole_clearance` value but used it only as metadata. The
+exact DRC accepted different-net copper inside that drill-boundary clearance, the global router
+ignored holes for planar steps, and the regional router considered only copper envelopes and
+hole-to-hole spacing. Conversely, the existing hole-to-hole check incorrectly included milled oval
+holes. This was a rule-fidelity failure upstream of any tier result: an internally clean route could
+still fail KiCad's `hole_clearance` check.
+
+### Hypothesis
+
+A single exact drill representation carrying traversed layers and mechanical-drill eligibility can
+make global/regional screening predict the same failure that whole-board and dynamic DRC enforce.
+This should prevent avoidable late rejection without weakening ordinary clearance or final KiCad
+authority.
+
+### Research
+
+KiCad's official custom-rule documentation defines `hole_clearance` as drilled-hole boundary to
+different-net copper. It defines `hole_to_hole` only for mechanically drilled holes and explicitly
+excludes laser microvias and milled oval holes. KiCad's official board-format documentation also
+identifies `micro` and `blind` as explicit via types.
+
+### Change
+
+- Drill shapes now carry all traversed copper layers and mechanical-drill eligibility.
+- Exact whole/dynamic DRC checks straight tracks, arcs, vias, supported pads, and saved fills
+  against different-net drill boundaries.
+- Global planar/via legality and regional run-up/via selection use the same shapes and project
+  floor, including both directions of via copper/drill interaction.
+- Milled oval holes no longer enter hole-to-hole checks. Laser-drilled microvias fail strict import
+  until their fabrication type and rule set are canonical.
+
+### Verification
+
+The retained source-bound rule test proves same-net exemption, different-net whole/dynamic
+rejection, exact oval geometry, and mechanical-hole filtering. The retained KiCad import/export
+boundary test proves attributed microvia rejection. BM-SVF, CH32V003, Teensy, and ESC sources still
+import strictly; BM-SVF, Teensy, and ESC retain zero canonical validation errors while CH32V003
+retains its three pre-existing source findings. Qualified Tier 0 passes all 50 paths, exact copper,
+and external KiCad DRC. Detailed runtime was 325.35 seconds versus 324.57 seconds in the retained
+baseline (approximately +0.24%, within run noise). Diagnostic telemetry and mandatory global/detail
+analysis PNGs are under `build/suite-per-change-20260904-140424/`.
+
+### Decision
+
+Keep. This closes a demonstrated acceptance mismatch and moves physical feedback earlier without
+adding a parallel legality model. Focused KiCad rule-query agreement and custom/physical-hole rules
+remain Milestone 2 work.

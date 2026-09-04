@@ -1761,6 +1761,13 @@ exact internal connectivity/copper acceptance, runs external KiCad DRC, and atom
 only the fully accepted refilled artifact. Refill/tool/import/DRC failure leaves the requested path
 absent. See
 [`ADR 0164`](docs/adr/0164-atomic-work-plan-zone-refill-publication.md).
+An explicit preview-only `retain_incomplete_diagnostic_preview` route option preserves the final
+non-empty partial path set as conventional diagnostic copper on a private board copy. Execution
+still fails, dependants remain skipped, and the result is marked
+`candidate_is_incomplete_diagnostic_preview`; refill, export, and publication remain unavailable.
+The retained-path count and a stable summary event make the same state visible to telemetry
+consumers. See
+[`ADR 0165`](docs/adr/0165-non-authoritative-work-plan-incomplete-preview.md).
 Execution/replay remains
 withheld for any selected capability still marked partial. `flux-cli execute-work-plan-kicad BOARD
 PLAN [OUTPUT]` therefore executes only a fully qualified plan: preview mode forbids an output,

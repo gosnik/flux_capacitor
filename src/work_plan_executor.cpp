@@ -201,6 +201,7 @@ WorkPlanExecutionResult execute_impl(const Board& source, const FluxWorkPlan& pl
   emit(std::move(plan_started));
 
   Board current = source;
+  std::optional<Board> incomplete_diagnostic_candidate;
   std::map<std::string, WorkPlanStepExecutionStatus> status_by_id;
   bool halted = false;
   for (const auto& step : plan.steps) {
@@ -396,6 +397,37 @@ WorkPlanExecutionResult execute_impl(const Board& source, const FluxWorkPlan& pl
               step_result.global_cost = routing.coarse_global.total_cost;
             }
           }
+          if (result.preview && route->retain_incomplete_diagnostic_preview &&
+              !routing.coarse_global.complete() && !routing.coarse_global.paths.empty() &&
+              !stop_token.stop_requested()) {
+            step_result.incomplete_diagnostic_preview_attempted = true;
+            step_result.incomplete_diagnostic_preview_paths =
+                routing.coarse_global.paths.size();
+            auto preview_global = routing.coarse_global;
+            preview_global.stop_reason = GlobalRouterStopReason::complete;
+            preview_global.unrouted_nets.clear();
+            preview_global.total_overflow = 0U;
+            preview_global.diagnostic =
+                "incomplete WorkPlan checkpoint awaiting non-authoritative preview materialization";
+            auto preview_config = configuration.detailed;
+            preview_config.topology_locked_medial_materialization = false;
+            preview_config.differential_pair_skew_tuning = false;
+            preview_config.differential_pair_skew_tuning_batch_assignment = false;
+            auto preview_detailed = materialize_detailed_route(
+                current, preview_global, preview_config, stop_token);
+            if (preview_detailed.candidate) {
+              incomplete_diagnostic_candidate = std::move(*preview_detailed.candidate);
+              step_result.incomplete_diagnostic_preview_available = true;
+              RouterTelemetryEvent preview_available;
+              preview_available.kind = RouterTelemetryEventKind::search_summary;
+              preview_available.stable_id = "work-plan-diagnostic-preview:" + step.id;
+              preview_available.total_nets = step_result.incomplete_diagnostic_preview_paths;
+              preview_available.remaining_alternatives = step_result.global_unrouted_nets;
+              preview_available.detail =
+                  "Incomplete WorkPlan route retained for diagnostic viewing only";
+              emit(std::move(preview_available));
+            }
+          }
           if (detailed.candidate) {
             step_result.acceptance = acceptance(*detailed.candidate, &active);
           } else {
@@ -444,7 +476,12 @@ WorkPlanExecutionResult execute_impl(const Board& source, const FluxWorkPlan& pl
       std::all_of(result.steps.begin(), result.steps.end(), [](const auto& step) {
         return step.status == WorkPlanStepExecutionStatus::completed;
       });
-  result.candidate = std::move(current);
+  if (result.preview && !result.internally_complete && incomplete_diagnostic_candidate) {
+    result.candidate = std::move(incomplete_diagnostic_candidate);
+    result.candidate_is_incomplete_diagnostic_preview = true;
+  } else {
+    result.candidate = std::move(current);
+  }
   result.final_acceptance = acceptance(*result.candidate);
   result.whole_board_accepted =
       result.internally_complete && result.final_acceptance.exact_internal_acceptance;
@@ -530,6 +567,8 @@ std::string serialize_flux_work_plan_execution_summary(const WorkPlanExecutionRe
   root["candidate_ready_for_export"] = result.candidate_ready_for_export;
   root["candidate_ready_for_zone_refill"] = result.candidate_ready_for_zone_refill;
   root["zone_refill_required"] = result.zone_refill_required;
+  root["candidate_is_incomplete_diagnostic_preview"] =
+      result.candidate_is_incomplete_diagnostic_preview;
   root["zone_refill_run"] = result.zone_refill_run;
   root["zone_refill_passed"] = result.zone_refill_passed;
   root["zone_refill_exit_code"] = result.zone_refill_exit_code;
@@ -574,6 +613,12 @@ std::string serialize_flux_work_plan_execution_summary(const WorkPlanExecutionRe
     value["final_routability_diagnoses_consumed"] =
         step.final_routability_diagnoses_consumed;
     value["provisional_zone_refill_required"] = step.provisional_zone_refill_required;
+    value["incomplete_diagnostic_preview_attempted"] =
+        step.incomplete_diagnostic_preview_attempted;
+    value["incomplete_diagnostic_preview_available"] =
+        step.incomplete_diagnostic_preview_available;
+    value["incomplete_diagnostic_preview_paths"] =
+        step.incomplete_diagnostic_preview_paths;
     value["acceptance"] = acceptance_json(step.acceptance);
     value["diagnostic"] = step.diagnostic;
     steps.push_back(std::move(value));

@@ -47,6 +47,9 @@ struct WorkPlanStepExecutionResult {
   std::size_t final_routability_feedback_improvements{0U};
   std::size_t final_routability_diagnoses_consumed{0U};
   bool provisional_zone_refill_required{false};
+  bool incomplete_diagnostic_preview_attempted{false};
+  bool incomplete_diagnostic_preview_available{false};
+  std::size_t incomplete_diagnostic_preview_paths{0U};
   WorkPlanAcceptanceState acceptance;
   std::string diagnostic;
 
@@ -62,6 +65,7 @@ struct WorkPlanExecutionResult {
   bool candidate_ready_for_export{false};
   bool candidate_ready_for_zone_refill{false};
   bool zone_refill_required{false};
+  bool candidate_is_incomplete_diagnostic_preview{false};
   bool zone_refill_run{false};
   bool zone_refill_passed{false};
   int zone_refill_exit_code{-1};

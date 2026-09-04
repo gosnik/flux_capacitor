@@ -5207,6 +5207,39 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
           "a refill-required route must terminate the private plan because later steps would "
           "observe stale saved-fill geometry");
 
+  auto diagnostic_preview_plan = scoped_plan;
+  diagnostic_preview_plan.mode = flux::io::WorkPlanMode::preview;
+  diagnostic_preview_plan.steps.front().options["retain_incomplete_diagnostic_preview"] = true;
+  const auto diagnostic_preview_compile =
+      flux::io::compile_flux_work_plan_routes(scoped_board, diagnostic_preview_plan);
+  require(diagnostic_preview_compile.ok() &&
+              diagnostic_preview_compile.route_steps.size() == 1U &&
+              diagnostic_preview_compile.route_steps.front()
+                  .retain_incomplete_diagnostic_preview,
+          "the diagnostic incomplete-copper transaction must compile only as explicit preview "
+          "policy");
+  auto mutating_diagnostic_preview_plan = diagnostic_preview_plan;
+  mutating_diagnostic_preview_plan.mode = flux::io::WorkPlanMode::new_routing;
+  const auto mutating_diagnostic_preview_compile =
+      flux::io::compile_flux_work_plan_routes(scoped_board, mutating_diagnostic_preview_plan);
+  require(!mutating_diagnostic_preview_compile.ok() &&
+              std::any_of(mutating_diagnostic_preview_compile.diagnostics.begin(),
+                          mutating_diagnostic_preview_compile.diagnostics.end(),
+                          [](const auto& diagnostic) {
+                            return diagnostic.code ==
+                                   "invalid_work_plan_route_option_dependency";
+                          }),
+          "an incomplete diagnostic candidate must never compile in a mutating WorkPlan mode");
+  auto refill_diagnostic_preview_plan = diagnostic_preview_plan;
+  refill_diagnostic_preview_plan.steps.front().options["refillable_zone_fills"] = true;
+  refill_diagnostic_preview_plan.steps.front().options["differential_pair_skew_tuning"] = false;
+  refill_diagnostic_preview_plan.steps.front()
+      .options["differential_pair_skew_tuning_batch_assignment"] = false;
+  const auto refill_diagnostic_preview_compile =
+      flux::io::compile_flux_work_plan_routes(scoped_board, refill_diagnostic_preview_plan);
+  require(!refill_diagnostic_preview_compile.ok(),
+          "incomplete diagnostic copper must not enter a zone-refill transaction");
+
   auto wildcard_plan = scoped_plan;
   wildcard_plan.steps.front().selectors.net_classes.clear();
   wildcard_plan.steps.front().selectors.placement_groups.clear();
@@ -5528,6 +5561,86 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
           "a refill-required WorkPlan must retain the exact provisional candidate privately and "
           "authorize only the external refill transaction: " +
               flux::io::serialize_flux_work_plan_execution_summary(provisional_refill));
+
+  Board partial_preview_source;
+  partial_preview_source.source_revision = "partial-preview-fixture";
+  partial_preview_source.outline = rectangle(0.0, 0.0, 100.0, 80.0);
+  partial_preview_source.layers = {
+      {LayerId{"F.Cu"}, "F.Cu", LayerKind::copper, 0U}};
+  const NetId preview_easy{"preview-easy"};
+  const NetId preview_blocked{"preview-blocked"};
+  partial_preview_source.nets = {{preview_easy, "PREVIEW_EASY", 0},
+                                 {preview_blocked, "PREVIEW_BLOCKED", 0}};
+  const auto preview_terminal = [](std::string id, NetId net, Point position) {
+    Footprint footprint;
+    footprint.id = ObjectId{id};
+    footprint.reference = id;
+    footprint.position = position;
+    footprint.courtyard = local_rectangle(2.0, 2.0);
+    footprint.pads = {
+        {ObjectId{id + "-pad"}, net, Point{}, {LayerId{"F.Cu"}}}};
+    return footprint;
+  };
+  partial_preview_source.footprints = {
+      preview_terminal("E1", preview_easy, mm(10.0, 20.0)),
+      preview_terminal("E2", preview_easy, mm(30.0, 20.0)),
+      preview_terminal("B1", preview_blocked, mm(10.0, 60.0)),
+      preview_terminal("B2", preview_blocked, mm(90.0, 60.0))};
+  partial_preview_source.keepouts = {
+      {ObjectId{"preview-wall"}, rectangle(45.0, 0.0, 55.0, 80.0),
+       {LayerId{"F.Cu"}}, flux::KeepoutRules{true, true, false, false, false},
+       "preview wall"}};
+  auto incomplete_preview_plan = flux::io::make_flux_work_plan_template(
+      partial_preview_source, "partial-preview.kicad_pcb");
+  incomplete_preview_plan.mode = flux::io::WorkPlanMode::preview;
+  flux::io::WorkPlanStep incomplete_preview_route;
+  incomplete_preview_route.id = "incomplete-preview";
+  incomplete_preview_route.kind = flux::io::WorkPlanStepKind::route;
+  incomplete_preview_route.selectors.exact_nets = {"PREVIEW_EASY", "PREVIEW_BLOCKED"};
+  incomplete_preview_route.options = {
+      {"checkpoint_objective", std::string{"aggregate-overflow"}},
+      {"crossing_safe_diagonal_grid_edges", false},
+      {"direct_medial_edges", false},
+      {"grid_pitch_nm", std::uint64_t{5'000'000U}},
+      {"interleave_routability_feedback", false},
+      {"max_expansions_per_connection", std::uint64_t{100'000U}},
+      {"max_router_iterations", std::uint64_t{2U}},
+      {"negotiate_voronoi_lane_conflicts", false},
+      {"physical_envelope_ordering", false},
+      {"physical_overflow_history", false},
+      {"retain_incomplete_diagnostic_preview", true},
+      {"routability_feedback_retries", std::uint64_t{0U}},
+      {"strict_medial_topology", false},
+      {"topology_locked_medial_materialization", false}};
+  incomplete_preview_plan.steps = {incomplete_preview_route};
+  CollectingTelemetrySink incomplete_preview_telemetry;
+  const auto incomplete_preview_execution = flux::io::execute_flux_work_plan(
+      partial_preview_source, incomplete_preview_plan, {}, &incomplete_preview_telemetry);
+  require(!incomplete_preview_execution.ok() && incomplete_preview_execution.preview &&
+              incomplete_preview_execution.candidate_is_incomplete_diagnostic_preview &&
+              !incomplete_preview_execution.candidate_ready_for_export &&
+              !incomplete_preview_execution.candidate_ready_for_zone_refill &&
+              incomplete_preview_execution.candidate &&
+              !incomplete_preview_execution.candidate->tracks.empty() &&
+              partial_preview_source.tracks.empty() &&
+              incomplete_preview_execution.steps.size() == 1U &&
+              incomplete_preview_execution.steps.front().status ==
+                  flux::io::WorkPlanStepExecutionStatus::failed &&
+              incomplete_preview_execution.steps.front()
+                  .incomplete_diagnostic_preview_attempted &&
+              incomplete_preview_execution.steps.front()
+                  .incomplete_diagnostic_preview_available &&
+              incomplete_preview_execution.steps.front().incomplete_diagnostic_preview_paths >
+                  0U &&
+              std::any_of(incomplete_preview_telemetry.events.begin(),
+                          incomplete_preview_telemetry.events.end(), [](const auto& event) {
+                            return event.stable_id ==
+                                   "work-plan-diagnostic-preview:incomplete-preview";
+                          }),
+          "an incomplete preview must retain partial copper and telemetry without changing failure "
+          "or publication authority: " +
+              flux::io::serialize_flux_work_plan_execution_summary(
+                  incomplete_preview_execution));
 
   std::stop_source cancelled_source;
   cancelled_source.request_stop();

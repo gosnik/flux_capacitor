@@ -5996,6 +5996,8 @@ struct WorkPlanPrintOutcome {
                     << step.max_post_negotiation_sampled_conflict_repair_cones
                     << ", \"refillable_zone_fills\": "
                     << (step.refillable_zone_fills ? "true" : "false")
+                    << ", \"retain_incomplete_diagnostic_preview\": "
+                    << (step.retain_incomplete_diagnostic_preview ? "true" : "false")
                     << ", \"max_expansions_per_connection\": "
                     << planner.global.max_expansions_per_connection
                     << ", \"routability_feedback_retries\": "
@@ -7847,7 +7849,7 @@ constrained_optimizer_config(const Board& board,
 }
 
 void print_help() {
-  std::cout << "flux-cli 0.133.0\n\n"
+  std::cout << "flux-cli 0.134.0\n\n"
                "Usage:\n"
                "  flux-cli version       Print the engine version\n"
                "  flux-cli capabilities --json  Print the pinned feature-parity contract\n"
@@ -8057,7 +8059,7 @@ int main(int argc, char** argv) {
   }
   const std::string_view command{argv[1]};
   if (command == "version" && argc == 2) {
-    std::cout << "flux_capacitor 0.133.0 board-schema 19\n";
+    std::cout << "flux_capacitor 0.134.0 board-schema 19\n";
     return EXIT_SUCCESS;
   }
   if (command == "capabilities" && argc == 3 && std::string_view{argv[2]} == "--json") {
@@ -8072,7 +8074,7 @@ int main(int argc, char** argv) {
     const char* override_value = std::getenv("FLUX_VULKAN_DEVICE");
     std::cout << "{\n"
               << "  \"engine\": \"flux_capacitor\",\n"
-              << "  \"version\": \"0.133.0\",\n"
+              << "  \"version\": \"0.134.0\",\n"
               << "  \"board_schema\": 19,\n"
               << "  \"production_gpu_required\": true,\n"
               << "  \"gpu_available\": " << (device.available ? "true" : "false") << ",\n"

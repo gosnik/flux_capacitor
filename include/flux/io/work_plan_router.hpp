@@ -21,6 +21,7 @@ struct CompiledWorkPlanRouteStep {
   bool post_negotiation_sampled_conflict_repair{false};
   std::size_t max_post_negotiation_sampled_conflict_repair_cones{2U};
   bool refillable_zone_fills{false};
+  bool retain_incomplete_diagnostic_preview{false};
 
   bool operator==(const CompiledWorkPlanRouteStep&) const = default;
 };

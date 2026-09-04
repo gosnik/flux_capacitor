@@ -2,7 +2,7 @@
 
 ## 1. Scope and current state
 
-This document describes the implementation present in Flux Capacitor v0.133.0, using canonical board schema 19. It is a description of the working code, its execution flow, and its current limits. The ADRs under `docs/adr/` remain the detailed decision history; `plan.md` records the completed replacement of the old optional seed-guidance path. Schema 19 preserves an unfilled KiCad zone as an immutable requires-refill marker and never treats it as physical copper; only the explicitly provisional refill workflow may route such a source before KiCad refill, strict re-import, connectivity, and DRC. It also retains exact circular/oval pad-drill dimensions and pad-local offsets, using physical hole centres for non-plated obstacles and reusable plated-pad transitions.
+This document describes the implementation present in Flux Capacitor v0.134.0, using canonical board schema 19. It is a description of the working code, its execution flow, and its current limits. The ADRs under `docs/adr/` remain the detailed decision history; `plan.md` records the completed replacement of the old optional seed-guidance path. Schema 19 preserves an unfilled KiCad zone as an immutable requires-refill marker and never treats it as physical copper; only the explicitly provisional refill workflow may route such a source before KiCad refill, strict re-import, connectivity, and DRC. It also retains exact circular/oval pad-drill dimensions and pad-local offsets, using physical hole centres for non-plated obstacles and reusable plated-pad transitions.
 
 Flux is an experimental C++20 placement-and-routing engine with KiCad as its first integration. Its defining design choice is that placement and routing operate on the same board model:
 
@@ -691,6 +691,14 @@ terminal within a plan because later steps would otherwise inspect stale saved-f
 Unavailable tools, nonzero helper exit, malformed JSON, output aliases/symlinks, strict-import
 loss, opens, copper violations, DRC failure, or cancellation all withhold publication. See ADR
 0164.
+
+Preview WorkPlans may explicitly request retention of an incomplete diagnostic realization. After
+the authoritative global route has exhausted its bounded recovery, the executor materializes only
+the paths that exist on a private board copy, reports the retained path count, and emits a stable
+telemetry summary for the viewer. The route step and plan remain failed, dependent steps remain
+skipped, and refill, export, and publication stay prohibited. The returned candidate is marked
+`candidate_is_incomplete_diagnostic_preview`; it is observable evidence, not accepted copper. See
+ADR 0165.
 
 ### Refillable zones
 

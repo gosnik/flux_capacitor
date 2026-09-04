@@ -192,6 +192,7 @@ WorkPlanRouteCompileResult compile_flux_work_plan_routes(const Board& source,
       "priority_nets",
       "retained_global_portfolios",
       "refillable_zone_fills",
+      "retain_incomplete_diagnostic_preview",
       "reuse_weighted_search_frontier",
       "river_following_cost",
       "routability_feedback_retries",
@@ -529,6 +530,11 @@ WorkPlanRouteCompileResult compile_flux_work_plan_routes(const Board& source,
                                           option_pointer("refillable_zone_fills"))) {
       compiled.refillable_zone_fills = *value;
     }
+    if (const auto value = boolean_option(
+            step, "retain_incomplete_diagnostic_preview", result,
+            option_pointer("retain_incomplete_diagnostic_preview"))) {
+      compiled.retain_incomplete_diagnostic_preview = *value;
+    }
     if (compiled.configuration.planner.regional.enable_xpbd_feedback) {
       compiled.configuration.planner.regional.enable_xpbd_relaxation = true;
     }
@@ -588,6 +594,16 @@ WorkPlanRouteCompileResult compile_flux_work_plan_routes(const Board& source,
       compiled.configuration.detailed.pull_tight_45_degrees = false;
       compiled.configuration.detailed.continuous_refinement = false;
       compiled.configuration.detailed.topology_locked_medial_materialization = false;
+    }
+    if (compiled.retain_incomplete_diagnostic_preview) {
+      if (plan.mode != WorkPlanMode::preview) {
+        dependency_error("retain_incomplete_diagnostic_preview",
+                         "an incomplete diagnostic candidate is available only in preview mode");
+      }
+      if (compiled.refillable_zone_fills) {
+        dependency_error("retain_incomplete_diagnostic_preview",
+                         "an incomplete diagnostic candidate cannot enter the zone-refill path");
+      }
     }
     if (global.hard_capacity_start_iteration > 0U &&
         !global.require_voronoi_topological_transitions &&

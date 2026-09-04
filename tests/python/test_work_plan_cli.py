@@ -94,6 +94,7 @@ def main() -> int:
             and execution_summary["zone_refill_required"] is False
             and execution_summary["zone_refill_run"] is False
             and execution_summary["zone_refill_passed"] is False
+            and execution_summary["candidate_is_incomplete_diagnostic_preview"] is False
             and execution_summary["export_attempted"] is False
             and execution_summary["output"] is None
         ):
@@ -353,6 +354,34 @@ exit 5
             is True
         ):
             print("exact route selector did not produce explicit protected-copper authority")
+            return 1
+
+        diagnostic_preview_document = copy.deepcopy(scoped_document)
+        diagnostic_preview_document["mode"] = "preview"
+        diagnostic_preview_document["steps"][0]["options"].pop("refillable_zone_fills")
+        diagnostic_preview_document["steps"][0]["options"][
+            "retain_incomplete_diagnostic_preview"
+        ] = True
+        diagnostic_preview_plan = Path(temporary) / "diagnostic-preview.flux.json"
+        diagnostic_preview_plan.write_text(
+            json.dumps(diagnostic_preview_document), encoding="utf-8"
+        )
+        diagnostic_preview = run(
+            [
+                str(args.flux_cli),
+                "inspect-work-plan-kicad",
+                str(args.board),
+                str(diagnostic_preview_plan),
+            ]
+        )
+        diagnostic_preview_result = json.loads(diagnostic_preview.stdout)
+        if not (
+            diagnostic_preview.returncode == 0
+            and diagnostic_preview_result["compiled_route_steps"][0]["configuration"]
+            ["retain_incomplete_diagnostic_preview"]
+            is True
+        ):
+            print(diagnostic_preview.stdout + diagnostic_preview.stderr)
             return 1
 
         blocked_output = Path(temporary) / "must-not-exist.kicad_pcb"

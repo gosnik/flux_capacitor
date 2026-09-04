@@ -1745,6 +1745,15 @@ The saved route step also carries XPBD step/device policy and coupled differenti
 tuning. Declared differential-pair and ordered-bus step kinds now execute as atomic route
 transactions with exact selected-copper authority and an observable, exactly gated zero-overflow
 coarse-polyline fallback. See [`ADR 0160`](docs/adr/0160-atomic-coupled-work-plan-routing.md).
+The final exact-copper diagnosis loop is also shared with `detail-kicad`: a saved
+`max_final_routability_feedback_passes` bound controls incremental affected-net replanning, and its
+attempts, accepted improvements, and consumed diagnoses are included in the deterministic step
+summary. See
+[`ADR 0162`](docs/adr/0162-shared-materialization-feedback-transaction.md).
+The CLI-only sampled-overflow repair is now shared as well. WorkPlans may explicitly enable
+`post_negotiation_sampled_conflict_repair`, bound its deterministic attributed conflict cones, and
+observe attempted/accepted cones and participating nets without weakening the global checkpoint
+comparator. See [`ADR 0163`](docs/adr/0163-shared-sampled-conflict-cone-repair.md).
 Execution/replay remains
 withheld for any selected capability still marked partial. `flux-cli execute-work-plan-kicad BOARD
 PLAN [OUTPUT]` therefore executes only a fully qualified plan: preview mode forbids an output,

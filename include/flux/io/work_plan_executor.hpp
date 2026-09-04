@@ -33,10 +33,20 @@ struct WorkPlanStepExecutionResult {
   std::size_t global_unrouted_nets{0U};
   std::size_t global_overflow{0U};
   std::uint64_t global_cost{0U};
+  bool post_negotiation_sampled_conflict_repair_enabled{false};
+  std::size_t post_negotiation_cone_repair_attempts{0U};
+  std::size_t post_negotiation_cone_repairs_accepted{0U};
+  std::size_t post_negotiation_cone_repair_nets_attempted{0U};
   bool coarse_polyline_fallback_attempted{false};
   bool coarse_polyline_fallback_accepted{false};
   bool sampled_fallback_attempted{false};
   bool sampled_fallback_accepted{false};
+  bool final_routability_feedback_attempted{false};
+  bool final_routability_feedback_selected{false};
+  std::size_t final_routability_feedback_passes{0U};
+  std::size_t final_routability_feedback_improvements{0U};
+  std::size_t final_routability_diagnoses_consumed{0U};
+  bool provisional_zone_refill_required{false};
   WorkPlanAcceptanceState acceptance;
   std::string diagnostic;
 
@@ -50,6 +60,13 @@ struct WorkPlanExecutionResult {
   bool internally_complete{false};
   bool whole_board_accepted{false};
   bool candidate_ready_for_export{false};
+  bool candidate_ready_for_zone_refill{false};
+  bool zone_refill_required{false};
+  bool zone_refill_run{false};
+  bool zone_refill_passed{false};
+  int zone_refill_exit_code{-1};
+  std::string zone_refill_executable;
+  std::string zone_refill_diagnostic;
   bool external_kicad_drc_run{false};
   bool external_kicad_drc_passed{false};
   int external_kicad_drc_exit_code{-1};

@@ -2,6 +2,7 @@
 
 #include "flux/core/connectivity.hpp"
 #include "flux/core/drc.hpp"
+#include "flux/core/routing_feedback.hpp"
 #include "flux/core/validation.hpp"
 
 #include <boost/json.hpp>
@@ -291,12 +292,26 @@ WorkPlanExecutionResult execute_impl(const Board& source, const FluxWorkPlan& pl
           step_result.replacement_nets.assign(replacement.begin(), replacement.end());
           auto planning_board = current;
           remove_authorized_routing(planning_board, replacement);
-          auto routing = plan_routes(planning_board, configuration.planner, stop_token, telemetry);
+          auto routing = route->post_negotiation_sampled_conflict_repair
+                             ? plan_routes_with_sampled_conflict_repair(
+                                   planning_board, configuration.planner,
+                                   route->max_post_negotiation_sampled_conflict_repair_cones,
+                                   stop_token, telemetry)
+                             : plan_routes(planning_board, configuration.planner, stop_token,
+                                           telemetry);
           auto detailed =
               materialize_detailed_route(current, routing, configuration.detailed, stop_token);
           step_result.global_unrouted_nets = routing.coarse_global.unrouted_nets.size();
           step_result.global_overflow = routing.coarse_global.total_overflow;
           step_result.global_cost = routing.coarse_global.total_cost;
+          step_result.post_negotiation_sampled_conflict_repair_enabled =
+              route->post_negotiation_sampled_conflict_repair;
+          step_result.post_negotiation_cone_repair_attempts =
+              routing.coarse_global.post_negotiation_cone_repair_attempts;
+          step_result.post_negotiation_cone_repairs_accepted =
+              routing.coarse_global.post_negotiation_cone_repairs_accepted;
+          step_result.post_negotiation_cone_repair_nets_attempted =
+              routing.coarse_global.post_negotiation_cone_repair_nets_attempted;
           const bool coarse_topology_complete =
               routing.coarse_global.unrouted_nets.empty() &&
               routing.coarse_global.unaccepted_selected_voronoi_lane_transitions == 0U;
@@ -328,7 +343,34 @@ WorkPlanExecutionResult execute_impl(const Board& source, const FluxWorkPlan& pl
               detailed = std::move(coarse_detailed);
             }
           }
-          if (coarse_topology_complete && routing.coarse_global.total_overflow == 0U &&
+          if (!route->post_negotiation_sampled_conflict_repair && !detailed.complete() &&
+              !detailed.provisional_zone_refill_candidate() &&
+              !detailed.routability_diagnoses.empty() && !stop_token.stop_requested()) {
+            auto feedback = refine_materialization_with_routability_feedback(
+                planning_board, current, std::move(routing), std::move(detailed),
+                configuration.planner, configuration.detailed,
+                route->max_final_routability_feedback_passes, stop_token, telemetry);
+            routing = std::move(feedback.routing);
+            detailed = std::move(feedback.detailed);
+            step_result.global_unrouted_nets = routing.coarse_global.unrouted_nets.size();
+            step_result.global_overflow = routing.coarse_global.total_overflow;
+            step_result.global_cost = routing.coarse_global.total_cost;
+          }
+          step_result.final_routability_feedback_attempted =
+              detailed.final_routability_feedback_attempted;
+          step_result.final_routability_feedback_selected =
+              detailed.final_routability_feedback_selected;
+          step_result.final_routability_feedback_passes =
+              detailed.final_routability_feedback_passes;
+          step_result.final_routability_feedback_improvements =
+              detailed.final_routability_feedback_improvements;
+          step_result.final_routability_diagnoses_consumed =
+              detailed.final_routability_diagnoses_consumed;
+          const bool final_coarse_topology_complete =
+              routing.coarse_global.unrouted_nets.empty() &&
+              routing.coarse_global.unaccepted_selected_voronoi_lane_transitions == 0U;
+          if (!route->post_negotiation_sampled_conflict_repair &&
+              final_coarse_topology_complete && routing.coarse_global.total_overflow == 0U &&
               detailed.stop_reason == DetailedRouterStopReason::copper_violations &&
               !stop_token.stop_requested()) {
             step_result.sampled_fallback_attempted = true;
@@ -362,6 +404,14 @@ WorkPlanExecutionResult execute_impl(const Board& source, const FluxWorkPlan& pl
           if (detailed.complete() && detailed.candidate &&
               step_result.acceptance.exact_internal_acceptance) {
             current = std::move(*detailed.candidate);
+            step_result.status = WorkPlanStepExecutionStatus::completed;
+            step_result.diagnostic = detailed.diagnostic;
+          } else if (route->refillable_zone_fills &&
+                     detailed.provisional_zone_refill_candidate() && detailed.candidate &&
+                     detailed.validation.ok() && detailed.connectivity.open_connections == 0U &&
+                     detailed.copper_drc.ok()) {
+            current = std::move(*detailed.candidate);
+            step_result.provisional_zone_refill_required = true;
             step_result.status = WorkPlanStepExecutionStatus::completed;
             step_result.diagnostic = detailed.diagnostic;
           } else if (stop_token.stop_requested() ||
@@ -398,7 +448,14 @@ WorkPlanExecutionResult execute_impl(const Board& source, const FluxWorkPlan& pl
   result.final_acceptance = acceptance(*result.candidate);
   result.whole_board_accepted =
       result.internally_complete && result.final_acceptance.exact_internal_acceptance;
+  result.zone_refill_required =
+      std::any_of(result.steps.begin(), result.steps.end(), [](const auto& step) {
+        return step.provisional_zone_refill_required;
+      });
+  result.candidate_ready_for_zone_refill = result.internally_complete && !result.preview &&
+                                           result.zone_refill_required && result.candidate.has_value();
   result.candidate_ready_for_export = result.internally_complete && !result.preview &&
+                                      !result.zone_refill_required &&
                                       result.final_acceptance.structural_validation_ok &&
                                       result.final_acceptance.copper_violations == 0U;
   RouterTelemetryEvent plan_finished;
@@ -472,6 +529,13 @@ std::string serialize_flux_work_plan_execution_summary(const WorkPlanExecutionRe
   root["internally_complete"] = result.internally_complete;
   root["whole_board_accepted"] = result.whole_board_accepted;
   root["candidate_ready_for_export"] = result.candidate_ready_for_export;
+  root["candidate_ready_for_zone_refill"] = result.candidate_ready_for_zone_refill;
+  root["zone_refill_required"] = result.zone_refill_required;
+  root["zone_refill_run"] = result.zone_refill_run;
+  root["zone_refill_passed"] = result.zone_refill_passed;
+  root["zone_refill_exit_code"] = result.zone_refill_exit_code;
+  root["zone_refill_executable"] = result.zone_refill_executable;
+  root["zone_refill_diagnostic"] = result.zone_refill_diagnostic;
   root["external_kicad_drc_run"] = result.external_kicad_drc_run;
   root["external_kicad_drc_passed"] = result.external_kicad_drc_passed;
   root["external_kicad_drc_exit_code"] = result.external_kicad_drc_exit_code;
@@ -490,10 +554,27 @@ std::string serialize_flux_work_plan_execution_summary(const WorkPlanExecutionRe
     value["global_unrouted_nets"] = step.global_unrouted_nets;
     value["global_overflow"] = step.global_overflow;
     value["global_cost"] = step.global_cost;
+    value["post_negotiation_sampled_conflict_repair_enabled"] =
+        step.post_negotiation_sampled_conflict_repair_enabled;
+    value["post_negotiation_cone_repair_attempts"] =
+        step.post_negotiation_cone_repair_attempts;
+    value["post_negotiation_cone_repairs_accepted"] =
+        step.post_negotiation_cone_repairs_accepted;
+    value["post_negotiation_cone_repair_nets_attempted"] =
+        step.post_negotiation_cone_repair_nets_attempted;
     value["coarse_polyline_fallback_attempted"] = step.coarse_polyline_fallback_attempted;
     value["coarse_polyline_fallback_accepted"] = step.coarse_polyline_fallback_accepted;
     value["sampled_fallback_attempted"] = step.sampled_fallback_attempted;
     value["sampled_fallback_accepted"] = step.sampled_fallback_accepted;
+    value["final_routability_feedback_attempted"] =
+        step.final_routability_feedback_attempted;
+    value["final_routability_feedback_selected"] = step.final_routability_feedback_selected;
+    value["final_routability_feedback_passes"] = step.final_routability_feedback_passes;
+    value["final_routability_feedback_improvements"] =
+        step.final_routability_feedback_improvements;
+    value["final_routability_diagnoses_consumed"] =
+        step.final_routability_diagnoses_consumed;
+    value["provisional_zone_refill_required"] = step.provisional_zone_refill_required;
     value["acceptance"] = acceptance_json(step.acceptance);
     value["diagnostic"] = step.diagnostic;
     steps.push_back(std::move(value));

@@ -162,6 +162,7 @@ WorkPlanRouteCompileResult compile_flux_work_plan_routes(const Board& source,
       "interleave_routability_feedback",
       "local_pin_escape_pitch_nm",
       "max_expansions_per_connection",
+      "max_final_routability_feedback_passes",
       "max_corridor_neck_down_length_nm",
       "max_corridor_neck_down_states",
       "max_hard_capacity_blocker_reuse_invalidations_per_failed_net",
@@ -172,6 +173,7 @@ WorkPlanRouteCompileResult compile_flux_work_plan_routes(const Board& source,
       "max_local_pin_escape_expansions_per_terminal",
       "max_medial_neck_down_length_nm",
       "max_pin_access_nodes_per_terminal",
+      "max_post_negotiation_sampled_conflict_repair_cones",
       "max_router_iterations",
       "max_static_seed_workers",
       "max_terminal_escape_reservation_resources",
@@ -184,10 +186,12 @@ WorkPlanRouteCompileResult compile_flux_work_plan_routes(const Board& source,
       "physical_envelope_ordering",
       "physical_overflow_history",
       "pin_escape_grid_radius",
+      "post_negotiation_sampled_conflict_repair",
       "present_congestion_escalation_start_iteration",
       "present_congestion_multiplier_per_mille",
       "priority_nets",
       "retained_global_portfolios",
+      "refillable_zone_fills",
       "reuse_weighted_search_frontier",
       "river_following_cost",
       "routability_feedback_retries",
@@ -309,6 +313,15 @@ WorkPlanRouteCompileResult compile_flux_work_plan_routes(const Board& source,
     if (const auto value = unsigned_option(step, "max_static_seed_workers", 0U, 256U, result,
                                            option_pointer("max_static_seed_workers")))
       compiled.configuration.planner.global.max_static_seed_workers =
+          static_cast<std::size_t>(*value);
+    if (const auto value = unsigned_option(
+            step, "max_final_routability_feedback_passes", 1U, 64U, result,
+            option_pointer("max_final_routability_feedback_passes")))
+      compiled.max_final_routability_feedback_passes = static_cast<std::size_t>(*value);
+    if (const auto value = unsigned_option(
+            step, "max_post_negotiation_sampled_conflict_repair_cones", 1U, 64U, result,
+            option_pointer("max_post_negotiation_sampled_conflict_repair_cones")))
+      compiled.max_post_negotiation_sampled_conflict_repair_cones =
           static_cast<std::size_t>(*value);
     if (const auto value = unsigned_option(step, "routability_feedback_retries", 0U, 64U, result,
                                            option_pointer("routability_feedback_retries")))
@@ -507,6 +520,15 @@ WorkPlanRouteCompileResult compile_flux_work_plan_routes(const Board& source,
              compiled.configuration.detailed.differential_pair_skew_tuning);
     set_bool("differential_pair_skew_tuning_batch_assignment",
              compiled.configuration.detailed.differential_pair_skew_tuning_batch_assignment);
+    if (const auto value = boolean_option(
+            step, "post_negotiation_sampled_conflict_repair", result,
+            option_pointer("post_negotiation_sampled_conflict_repair"))) {
+      compiled.post_negotiation_sampled_conflict_repair = *value;
+    }
+    if (const auto value = boolean_option(step, "refillable_zone_fills", result,
+                                          option_pointer("refillable_zone_fills"))) {
+      compiled.refillable_zone_fills = *value;
+    }
     if (compiled.configuration.planner.regional.enable_xpbd_feedback) {
       compiled.configuration.planner.regional.enable_xpbd_relaxation = true;
     }
@@ -543,6 +565,30 @@ WorkPlanRouteCompileResult compile_flux_work_plan_routes(const Board& source,
       error(result, "invalid_work_plan_route_option_dependency", std::move(message),
             option_pointer(name));
     };
+    if (option(step, "max_post_negotiation_sampled_conflict_repair_cones") != nullptr &&
+        !compiled.post_negotiation_sampled_conflict_repair) {
+      dependency_error("max_post_negotiation_sampled_conflict_repair_cones",
+                       "a sampled-conflict repair cone budget requires post-negotiation repair");
+    }
+    if (compiled.refillable_zone_fills) {
+      if (step_index + 1U != plan.steps.size()) {
+        dependency_error("refillable_zone_fills",
+                         "a refill-required route must be the final WorkPlan step");
+      }
+      if (compiled.configuration.detailed.differential_pair_skew_tuning ||
+          compiled.configuration.detailed.differential_pair_skew_tuning_batch_assignment) {
+        dependency_error("refillable_zone_fills",
+                         "refill-required routing cannot run differential-pair skew tuning");
+      }
+      compiled.configuration.planner.global.treat_saved_zone_fills_as_refillable = true;
+      compiled.configuration.planner.regional.treat_saved_zone_fills_as_refillable = true;
+      compiled.configuration.planner.global.single_lane_direct_voronoi_resources =
+          compiled.configuration.planner.global.use_direct_voronoi_resource_edges;
+      compiled.configuration.detailed.defer_saved_zone_fill_clearance_to_refill = true;
+      compiled.configuration.detailed.pull_tight_45_degrees = false;
+      compiled.configuration.detailed.continuous_refinement = false;
+      compiled.configuration.detailed.topology_locked_medial_materialization = false;
+    }
     if (global.hard_capacity_start_iteration > 0U &&
         !global.require_voronoi_topological_transitions &&
         !global.use_direct_voronoi_resource_edges) {

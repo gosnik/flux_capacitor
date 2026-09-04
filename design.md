@@ -2,7 +2,7 @@
 
 ## 1. Scope and current state
 
-This document describes the implementation present in Flux Capacitor v0.130.0, using canonical board schema 19. It is a description of the working code, its execution flow, and its current limits. The ADRs under `docs/adr/` remain the detailed decision history; `plan.md` records the completed replacement of the old optional seed-guidance path. Schema 19 preserves an unfilled KiCad zone as an immutable requires-refill marker and never treats it as physical copper; only the explicitly provisional refill workflow may route such a source before KiCad refill, strict re-import, connectivity, and DRC. It also retains exact circular/oval pad-drill dimensions and pad-local offsets, using physical hole centres for non-plated obstacles and reusable plated-pad transitions.
+This document describes the implementation present in Flux Capacitor v0.132.0, using canonical board schema 19. It is a description of the working code, its execution flow, and its current limits. The ADRs under `docs/adr/` remain the detailed decision history; `plan.md` records the completed replacement of the old optional seed-guidance path. Schema 19 preserves an unfilled KiCad zone as an immutable requires-refill marker and never treats it as physical copper; only the explicitly provisional refill workflow may route such a source before KiCad refill, strict re-import, connectivity, and DRC. It also retains exact circular/oval pad-drill dimensions and pad-local offsets, using physical hole centres for non-plated obstacles and reusable plated-pad transitions.
 
 Flux is an experimental C++20 placement-and-routing engine with KiCad as its first integration. Its defining design choice is that placement and routing operate on the same board model:
 
@@ -656,6 +656,22 @@ interleaved checkpoint has complete zero-overflow coarse topology but no usable 
 the executor may try the conventional coarse polyline transaction without changing its topology or
 paths. The attempt and acceptance are recorded separately, and a failed transaction leaves the
 prior board untouched. See ADR 0160.
+
+Exact materialization rejection is not a terminal blind retry. The shared materialization-feedback
+transaction accumulates attributed physical diagnoses and clean-copper evidence into cost-only
+routability knowledge, reroutes only the cumulative affected net set against the planning board,
+repeats regional realization, and exact-materializes against the immutable source checkpoint. A
+lexicographically better exact result alone replaces the retained checkpoint. Direct
+`detail-kicad` and WorkPlan execution use this same implementation and the same default three-pass
+bound; WorkPlans may serialize a bounded override and report every pass. See ADR 0162.
+
+An earlier, explicitly selected repair mode operates on connected global checkpoints with sampled,
+shared-medial, or clearance-shadow overflow. It groups attributed conflicts into deterministic
+spatial cones, reroutes each complete participating net set with immediate hard-capacity pressure,
+and accepts only a feasibility-first checkpoint improvement before regional realization. Direct
+route/detail commands and WorkPlans call the same core function; saved plans also carry the cone
+budget and result counters. This mode is kept separate from final materialization feedback so a
+saved plan has one deterministic retry sequence. See ADR 0163.
 
 Non-preview WorkPlan publication is a second transaction. The source-preserving candidate and
 matching source `.kicad_pro`/`.kicad_dru` rule files are staged in a private sibling directory.

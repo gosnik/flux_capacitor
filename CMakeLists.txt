@@ -6,7 +6,7 @@ endif()
 
 project(
   flux_capacitor
-  VERSION 0.130.0
+  VERSION 0.132.0
   DESCRIPTION "Integrated PCB placement and routing engine"
   LANGUAGES CXX)
 
@@ -113,6 +113,7 @@ add_library(flux_core
   src/router_telemetry.cpp
   src/routing_compute.cpp
   src/routing_compute_advanced.cpp
+  src/routing_feedback.cpp
   src/routing_xpbd.cpp
   src/sexpr.cpp
   src/specctra.cpp

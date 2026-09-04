@@ -284,7 +284,13 @@ Progress ledger (updated 2026-09-04):
   the expanded scope fail closed. Exact replacement scopes carry independently into detailed
   materialization. XPBD step/device policy and coupled differential-pair skew/batch tuning also
   compile through the same route step, with batch selection enabling its required tuning pass.
-  Remaining orchestration-only CLI behavior and non-route step adapters are still open.
+  The final exact-copper diagnosis loop is now one shared core transaction used by direct
+  `detail-kicad` and WorkPlan execution. Its bounded pass count is serializable, and exact
+  pass/improvement/diagnosis evidence is present in the deterministic step summary. The former
+  CLI-only sampled-conflict cone repair is also shared by route/detail/WorkPlan execution, carries
+  an explicit bounded plan budget, observes stop requests, and reports attempted/accepted cones and
+  attributed nets. Remaining diagnostic-preview/refill orchestration plus non-route step adapters
+  are still open. See ADR 0162 and ADR 0163.
 - Milestone 1.5 policy identity complete: loading a plan resolves relative policy paths from the
   plan directory, requires bounded regular files, reads each artifact once, verifies its SHA-256,
   and rejects missing, oversized, unreadable, stale, duplicate, or unsupported policy artifacts.
@@ -304,7 +310,7 @@ Progress ledger (updated 2026-09-04):
   matching project/custom-rule context, checked by a bounded shell-free KiCad CLI JSON DRC process,
   and atomically published only after success; unavailable tooling, violations, cancellation, and
   malformed reports leave no requested output. Fanout, plane, tuning, cleanup, placement, and
-  trace-replay adapters remain open. See ADR 0160 and ADR 0161.
+  trace-replay adapters remain open. See ADR 0160 through ADR 0163.
 - Remaining Milestone 1 items and Milestones 2 through 12 remain open unless their individual exit
   gates are supported
   by recorded qualification evidence; an implementation named in the capability inventory is not

@@ -295,7 +295,10 @@ exit 5
                 },
                 "options": {
                     "circular_arc_refinement": True,
+                    "max_final_routability_feedback_passes": 5,
+                    "max_post_negotiation_sampled_conflict_repair_cones": 4,
                     "max_router_iterations": 9,
+                    "post_negotiation_sampled_conflict_repair": True,
                     "priority_nets": ["SIGNAL"],
                     "xpbd_feedback": True,
                 },
@@ -325,6 +328,15 @@ exit 5
             and scoped_result["compiled_route_steps"][0]["configuration"]
             ["max_router_iterations"]
             == 9
+            and scoped_result["compiled_route_steps"][0]["configuration"]
+            ["max_final_routability_feedback_passes"]
+            == 5
+            and scoped_result["compiled_route_steps"][0]["configuration"]
+            ["post_negotiation_sampled_conflict_repair"]
+            is True
+            and scoped_result["compiled_route_steps"][0]["configuration"]
+            ["max_post_negotiation_sampled_conflict_repair_cones"]
+            == 4
             and scoped_result["compiled_route_steps"][0]["configuration"]
             ["xpbd_relaxation"]
             is True

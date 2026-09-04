@@ -4818,10 +4818,13 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
                            std::uint64_t{64U}},
                           {"max_hard_capacity_ripup_attempts_per_pass", std::uint64_t{2U}},
                           {"max_hard_capacity_ripup_nets_per_attempt", std::uint64_t{3U}},
+                          {"max_final_routability_feedback_passes", std::uint64_t{7U}},
                           {"max_local_pin_escape_expansions_per_terminal",
                            std::uint64_t{23'456U}},
                           {"max_medial_neck_down_length_nm", std::uint64_t{600'000U}},
                           {"max_pin_access_nodes_per_terminal", std::uint64_t{24U}},
+                          {"max_post_negotiation_sampled_conflict_repair_cones",
+                           std::uint64_t{6U}},
                           {"max_present_congestion_scale_per_mille",
                            std::uint64_t{4'800U}},
                           {"max_router_iterations", std::uint64_t{42U}},
@@ -4834,6 +4837,7 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
                           {"physical_envelope_ordering", true},
                           {"physical_overflow_history", true},
                           {"pin_escape_grid_radius", std::uint64_t{5U}},
+                          {"post_negotiation_sampled_conflict_repair", true},
                           {"present_congestion_escalation_start_iteration",
                            std::uint64_t{3U}},
                           {"present_congestion_multiplier_per_mille",
@@ -4924,6 +4928,10 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
                       .configuration.planner.global.max_voronoi_resource_segment_length ==
                   Nanometres{2'000'000} &&
               compiled.route_steps.front().configuration.planner.global.max_iterations == 42U &&
+              compiled.route_steps.front().max_final_routability_feedback_passes == 7U &&
+              compiled.route_steps.front().post_negotiation_sampled_conflict_repair &&
+              compiled.route_steps.front()
+                      .max_post_negotiation_sampled_conflict_repair_cones == 6U &&
               compiled.route_steps.front().configuration.planner.global.allow_diagonal_grid_edges &&
               !compiled.route_steps.front()
                    .configuration.planner.global.allow_crossing_safe_diagonal_grid_edges &&
@@ -5063,6 +5071,21 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
                                    "invalid_work_plan_route_option_dependency";
                           }),
           "terminal neck-down WorkPlan geometry must require a paired physical length bound");
+
+  auto orphan_sampled_repair_budget_plan = scoped_plan;
+  orphan_sampled_repair_budget_plan.steps.front()
+      .options["post_negotiation_sampled_conflict_repair"] = false;
+  const auto orphan_sampled_repair_budget =
+      flux::io::compile_flux_work_plan_routes(scoped_board, orphan_sampled_repair_budget_plan);
+  require(!orphan_sampled_repair_budget.ok() &&
+              std::any_of(orphan_sampled_repair_budget.diagnostics.begin(),
+                          orphan_sampled_repair_budget.diagnostics.end(),
+                          [](const auto& diagnostic) {
+                            return diagnostic.code ==
+                                   "invalid_work_plan_route_option_dependency";
+                          }),
+          "a WorkPlan sampled-conflict repair budget must not be accepted when the repair "
+          "transaction is disabled");
 
   auto wildcard_plan = scoped_plan;
   wildcard_plan.steps.front().selectors.net_classes.clear();

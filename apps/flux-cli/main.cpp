@@ -8,6 +8,7 @@
 #include "flux/core/regional_router.hpp"
 #include "flux/core/router_telemetry.hpp"
 #include "flux/core/routing_compute.hpp"
+#include "flux/core/routing_feedback.hpp"
 #include "flux/core/routing_preset.hpp"
 #include "flux/core/routing_rules.hpp"
 #include "flux/io/differential_pair_constraints.hpp"
@@ -5986,6 +5987,12 @@ struct WorkPlanPrintOutcome {
                     << planner.global.grid_pitch.value() << ", \"via_site_pitch_nm\": "
                     << planner.global.via_site_pitch.value()
                     << ", \"max_router_iterations\": " << planner.global.max_iterations
+                    << ", \"max_final_routability_feedback_passes\": "
+                    << step.max_final_routability_feedback_passes
+                    << ", \"post_negotiation_sampled_conflict_repair\": "
+                    << (step.post_negotiation_sampled_conflict_repair ? "true" : "false")
+                    << ", \"max_post_negotiation_sampled_conflict_repair_cones\": "
+                    << step.max_post_negotiation_sampled_conflict_repair_cones
                     << ", \"max_expansions_per_connection\": "
                     << planner.global.max_expansions_per_connection
                     << ", \"routability_feedback_retries\": "
@@ -7037,114 +7044,6 @@ make_router_telemetry_service(const KicadCommandTail& tail) {
   return std::make_unique<flux::RouterTelemetryService>(std::move(config));
 }
 
-[[nodiscard]] flux::GlobalRouteResult route_with_optional_sampled_conflict_repair(
-    const flux::Board& board, const flux::GlobalRouterConfig& config, bool repair_sampled_conflicts,
-    flux::RouterTelemetrySink* telemetry = nullptr) {
-  auto result = flux::route_global(board, config, {}, telemetry);
-  if (!repair_sampled_conflicts || result.complete() || !result.unrouted_nets.empty() ||
-      (result.sampled_overflow == 0U && result.total_voronoi_overflow_nm == 0U &&
-       result.clearance_shadow_overflow == 0U) ||
-      result.corridor_overflow != 0U) {
-    return result;
-  }
-
-  struct RepairCone {
-    std::vector<flux::NetId> nets;
-    std::size_t pressure{0};
-    std::tuple<std::string, std::int64_t, std::int64_t> tile;
-  };
-  struct TileMembers {
-    std::set<flux::NetId> nets;
-    std::size_t pressure{0};
-  };
-  const auto pitch = config.grid_pitch.value();
-  const auto tile_span = pitch > std::numeric_limits<std::int64_t>::max() / 4 ? pitch : pitch * 4;
-  const auto tile_coordinate = [tile_span](std::int64_t coordinate) {
-    auto quotient = coordinate / tile_span;
-    if (coordinate % tile_span < 0) {
-      --quotient;
-    }
-    return quotient;
-  };
-  std::map<std::tuple<std::string, std::int64_t, std::int64_t>, TileMembers> tiles;
-  const auto add_tile = [&](flux::Point first, flux::Point second, const flux::LayerId& layer,
-                            const auto& nets, std::size_t pressure) {
-    const auto midpoint_x = std::midpoint(first.x.value(), second.x.value());
-    const auto midpoint_y = std::midpoint(first.y.value(), second.y.value());
-    auto& tile = tiles[{layer.value(), tile_coordinate(midpoint_x), tile_coordinate(midpoint_y)}];
-    tile.nets.insert(nets.begin(), nets.end());
-    tile.pressure += pressure;
-  };
-  for (const auto& conflict : result.clearance_shadow_conflicts) {
-    const std::array nets{conflict.first_net, conflict.second_net};
-    add_tile(conflict.first.position, conflict.second.position, conflict.first.layer, nets, 1U);
-  }
-  for (const auto& resource : result.resource_usage) {
-    if (resource.congested()) {
-      add_tile(resource.first.position, resource.second.position, resource.first.layer,
-               resource.nets, resource.demand - resource.capacity);
-    }
-  }
-  for (const auto& resource : result.voronoi_resource_usage) {
-    if (resource.congested()) {
-      add_tile(resource.start, resource.end, resource.layer, resource.nets, 1U);
-    }
-  }
-  std::vector<RepairCone> repair_cones;
-  repair_cones.reserve(tiles.size());
-  for (auto& [key, members] : tiles) {
-    if (members.nets.size() < 2U) {
-      continue;
-    }
-    repair_cones.push_back(RepairCone{
-        std::vector<flux::NetId>(members.nets.begin(), members.nets.end()), members.pressure, key});
-  }
-  std::stable_sort(repair_cones.begin(), repair_cones.end(), [](const auto& lhs, const auto& rhs) {
-    return lhs.pressure != rhs.pressure
-               ? lhs.pressure > rhs.pressure
-               : std::tie(lhs.nets, lhs.tile) < std::tie(rhs.nets, rhs.tile);
-  });
-  if (repair_cones.empty()) {
-    return result;
-  }
-
-  auto repair_config = config;
-  repair_config.atomic_complete_net_routing = true;
-  repair_config.diversify_pin_access_rings = true;
-  repair_config.hard_capacity_start_iteration = 1U;
-  repair_config.max_iterations = std::min(config.max_iterations, std::size_t{12U});
-  repair_config.selective_congestion_reroute = false;
-  repair_config.selective_full_reroute_interval = 0U;
-  constexpr std::size_t max_repair_cones = 2U;
-  std::set<std::vector<flux::NetId>> attempted;
-  std::size_t attempts = 0U;
-  std::size_t accepted = 0U;
-  std::size_t nets_attempted = 0U;
-  for (const auto& cone : repair_cones) {
-    if (attempts >= max_repair_cones || cone.nets.empty() || !attempted.insert(cone.nets).second) {
-      continue;
-    }
-    ++attempts;
-    nets_attempted += cone.nets.size();
-    auto repair_checkpoint = result;
-    // The repair makes search stricter only after removing every participant in this attributed
-    // spatial cone. Preserved paths remain reserved and the original checkpoint survives every
-    // non-improving or incomplete hard-capacity transaction.
-    repair_checkpoint.configured_diversify_pin_access_rings = true;
-    repair_checkpoint.configured_hard_capacity_start_iteration = 1U;
-    auto repaired = flux::route_global_incremental(board, repair_checkpoint, cone.nets,
-                                                   repair_config, {}, telemetry);
-    if (flux::global_route_checkpoint_better(repaired, result, config.checkpoint_objective)) {
-      result = std::move(repaired);
-      ++accepted;
-    }
-  }
-  result.post_negotiation_cone_repair_attempts = attempts;
-  result.post_negotiation_cone_repairs_accepted = accepted;
-  result.post_negotiation_cone_repair_nets_attempted = nets_attempted;
-  return result;
-}
-
 [[nodiscard]] bool apply_router_tail(const KicadCommandTail& tail, const flux::Board& board,
                                      flux::GlobalRouterConfig& config) {
   std::set<std::string> selected_names;
@@ -7864,7 +7763,7 @@ constrained_optimizer_config(const Board& board,
 }
 
 void print_help() {
-  std::cout << "flux-cli 0.130.0\n\n"
+  std::cout << "flux-cli 0.132.0\n\n"
                "Usage:\n"
                "  flux-cli version       Print the engine version\n"
                "  flux-cli capabilities --json  Print the pinned feature-parity contract\n"
@@ -8074,7 +7973,7 @@ int main(int argc, char** argv) {
   }
   const std::string_view command{argv[1]};
   if (command == "version" && argc == 2) {
-    std::cout << "flux_capacitor 0.130.0 board-schema 19\n";
+    std::cout << "flux_capacitor 0.132.0 board-schema 19\n";
     return EXIT_SUCCESS;
   }
   if (command == "capabilities" && argc == 3 && std::string_view{argv[2]} == "--json") {
@@ -8089,7 +7988,7 @@ int main(int argc, char** argv) {
     const char* override_value = std::getenv("FLUX_VULKAN_DEVICE");
     std::cout << "{\n"
               << "  \"engine\": \"flux_capacitor\",\n"
-              << "  \"version\": \"0.130.0\",\n"
+              << "  \"version\": \"0.132.0\",\n"
               << "  \"board_schema\": 19,\n"
               << "  \"production_gpu_required\": true,\n"
               << "  \"gpu_available\": " << (device.available ? "true" : "false") << ",\n"
@@ -8829,23 +8728,14 @@ int main(int argc, char** argv) {
     }
     flux::RegionalRouterConfig regional_config;
     apply_regional_tail(*tail, regional_config);
+    auto planner_config = flux::RoutingPlannerConfig{};
+    planner_config.global = config;
+    planner_config.regional = regional_config;
     flux::RoutingPlanResult routing_plan;
     if (tail->repair_sampled_conflicts) {
-      routing_plan.coarse_global =
-          route_with_optional_sampled_conflict_repair(*source, config, true, telemetry.get());
-      routing_plan.regional = flux::analyze_regional_conflicts(
-          *source, routing_plan.coarse_global, regional_config, {}, telemetry.get());
-      routing_plan.paths = routing_plan.regional.spline_candidate_available
-                               ? routing_plan.regional.spline_candidate_paths
-                               : routing_plan.coarse_global.paths;
-      routing_plan.stop_reason =
-          routing_plan.coarse_global.complete() && routing_plan.regional.complete()
-              ? flux::RoutingPlanStopReason::complete
-              : flux::RoutingPlanStopReason::regional_conflicts;
+      routing_plan = flux::plan_routes_with_sampled_conflict_repair(
+          *source, planner_config, 2U, {}, telemetry.get());
     } else {
-      auto planner_config = flux::RoutingPlannerConfig{};
-      planner_config.global = config;
-      planner_config.regional = regional_config;
       routing_plan = flux::plan_routes(*source, planner_config, {}, telemetry.get());
     }
     std::optional<flux::RouterTelemetryStatistics> telemetry_statistics;
@@ -8919,23 +8809,14 @@ int main(int argc, char** argv) {
     }
     flux::RegionalRouterConfig regional_config;
     apply_regional_tail(*tail, regional_config);
+    auto planner_config = flux::RoutingPlannerConfig{};
+    planner_config.global = global_config;
+    planner_config.regional = regional_config;
     flux::RoutingPlanResult regional_plan;
     if (tail->repair_sampled_conflicts) {
-      regional_plan.coarse_global = route_with_optional_sampled_conflict_repair(
-          *source, global_config, true, telemetry.get());
-      regional_plan.regional = flux::analyze_regional_conflicts(
-          *source, regional_plan.coarse_global, regional_config, {}, telemetry.get());
-      regional_plan.paths = regional_plan.regional.spline_candidate_available
-                                ? regional_plan.regional.spline_candidate_paths
-                                : regional_plan.coarse_global.paths;
-      regional_plan.stop_reason =
-          regional_plan.coarse_global.complete() && regional_plan.regional.complete()
-              ? flux::RoutingPlanStopReason::complete
-              : flux::RoutingPlanStopReason::regional_conflicts;
+      regional_plan = flux::plan_routes_with_sampled_conflict_repair(
+          *source, planner_config, 2U, {}, telemetry.get());
     } else {
-      auto planner_config = flux::RoutingPlannerConfig{};
-      planner_config.global = global_config;
-      planner_config.regional = regional_config;
       regional_plan = flux::plan_routes(*source, planner_config, {}, telemetry.get());
     }
     auto global = regional_plan.coarse_global;
@@ -8967,117 +8848,14 @@ int main(int argc, char** argv) {
         !previewing_incomplete_global
             ? flux::materialize_detailed_route(*source, regional_plan, detailed_config)
             : flux::materialize_detailed_route(*source, materialization_global, detailed_config);
-    if (!previewing_incomplete_global && !tail->repair_sampled_conflicts && !detailed.complete() &&
-        !detailed.provisional_zone_refill_candidate() && !detailed.routability_diagnoses.empty()) {
-      // Exact copper is the first representation that sees every track/via interaction. Consume
-      // each rejection as cost-only knowledge and retry from the immutable source. The accepted
-      // transaction remains monotonic, but rejected portfolios also teach later passes so one
-      // locally worse alternative cannot trap the feedback loop.
-      const auto max_feedback_passes = tail->max_final_routability_feedback_passes.value_or(3U);
-      const auto exact_quality = [](const flux::DetailedRouteResult& candidate) {
-        return std::tuple{
-            candidate.complete() ? 0U : 1U,         candidate.candidate ? 0U : 1U,
-            candidate.validation.error_count(),     candidate.connectivity.open_connections,
-            candidate.copper_drc.violation_count(), candidate.routability_diagnoses.size()};
-      };
-      auto feedback_knowledge = regional_plan.routability_knowledge;
-      auto diagnoses = detailed.routability_diagnoses;
-      std::set<flux::NetId> affected_feedback_nets;
-      std::size_t diagnoses_consumed = 0U;
-      std::size_t feedback_passes = 0U;
-      std::size_t improvements = 0U;
-      const auto final_feedback_epoch_iterations = std::max<std::size_t>(
-          1U, (global_config.max_iterations + std::max<std::size_t>(1U, max_feedback_passes) - 1U) /
-                  std::max<std::size_t>(1U, max_feedback_passes));
-      for (; feedback_passes < max_feedback_passes && !diagnoses.empty(); ++feedback_passes) {
-        diagnoses_consumed += diagnoses.size();
-        for (const auto& diagnosis : diagnoses) {
-          affected_feedback_nets.insert(diagnosis.resource.nets.begin(),
-                                        diagnosis.resource.nets.end());
-        }
-        if (telemetry) {
-          for (const auto& diagnosis : diagnoses) {
-            flux::RouterTelemetryEvent event;
-            event.kind = flux::RouterTelemetryEventKind::search_summary;
-            event.stable_id = diagnosis.resource.stable_id;
-            event.detail =
-                "final routability diagnosis pass " + std::to_string(feedback_passes + 1U) + ": " +
-                std::string(flux::to_string(diagnosis.kind)) +
-                ", relaxation=" + std::string(flux::to_string(diagnosis.suggested_relaxation));
-            static_cast<void>(telemetry->try_emit(std::move(event)));
-          }
-        }
-        flux::accumulate_clean_copper_knowledge(feedback_knowledge, detailed);
-        flux::accumulate_routability_knowledge(feedback_knowledge, diagnoses);
-        auto feedback_global_config = global_config;
-        feedback_global_config.max_iterations = final_feedback_epoch_iterations;
-        if (feedback_global_config.hard_capacity_start_iteration > 0U) {
-          feedback_global_config.hard_capacity_start_iteration = 1U;
-        }
-        if (feedback_global_config.bidirectional_route_growth_start_iteration > 0U) {
-          feedback_global_config.bidirectional_route_growth_start_iteration = 1U;
-        }
-        if (feedback_global_config.present_congestion_escalation_start_iteration > 0U) {
-          feedback_global_config.present_congestion_escalation_start_iteration = 1U;
-        }
-        feedback_global_config.routability_history = feedback_knowledge.history;
-        feedback_global_config.hydraulic_success_history = feedback_knowledge.success_history;
-        // Preserve every unaffected route from the complete checkpoint. Exact failures are local
-        // physical evidence; throwing away all connected topology made the fresh planner lose
-        // nets before it could compare a new copper transaction.
-        flux::RoutingPlanResult feedback_plan;
-        const std::vector<flux::NetId> affected_nets(affected_feedback_nets.begin(),
-                                                     affected_feedback_nets.end());
-        feedback_plan.coarse_global =
-            flux::route_global_incremental(*source, regional_plan.coarse_global, affected_nets,
-                                           feedback_global_config, {}, telemetry.get(), true);
-        feedback_plan.regional = flux::analyze_regional_conflicts(
-            *source, feedback_plan.coarse_global, regional_config, {}, telemetry.get());
-        feedback_plan.paths = feedback_plan.regional.spline_candidate_available
-                                  ? feedback_plan.regional.spline_candidate_paths
-                                  : feedback_plan.coarse_global.paths;
-        const auto connected_topology = feedback_plan.coarse_global.unrouted_nets.empty() &&
-                                        !feedback_plan.coarse_global.paths.empty();
-        const auto physically_realizable = feedback_plan.regional.complete() &&
-                                           (feedback_plan.coarse_global.complete() ||
-                                            feedback_plan.regional.spline_candidate_available);
-        feedback_plan.stop_reason =
-            connected_topology && physically_realizable ? flux::RoutingPlanStopReason::complete
-            : !connected_topology ? flux::RoutingPlanStopReason::coarse_global_incomplete
-                                  : flux::RoutingPlanStopReason::regional_conflicts;
-        auto feedback_diagnoses = flux::probe_global_routability(feedback_plan.coarse_global);
-        const auto regional_diagnoses = flux::diagnose_regional_routability(feedback_plan.regional);
-        feedback_diagnoses.insert(feedback_diagnoses.end(), regional_diagnoses.begin(),
-                                  regional_diagnoses.end());
-        flux::accumulate_routability_knowledge(feedback_knowledge, feedback_diagnoses);
-        feedback_plan.routability_knowledge = feedback_knowledge;
-        if (!feedback_plan.complete()) {
-          diagnoses = std::move(feedback_diagnoses);
-          continue;
-        }
-        auto feedback_detailed =
-            flux::materialize_detailed_route(*source, feedback_plan, detailed_config);
-        // Retain diagnoses learned inside the nested global/regional loop as well as the exact
-        // materialization diagnoses consumed at the next outer iteration.
-        feedback_knowledge = feedback_plan.routability_knowledge;
-        flux::accumulate_clean_copper_knowledge(feedback_knowledge, feedback_detailed);
-        diagnoses = feedback_detailed.routability_diagnoses;
-        if (exact_quality(feedback_detailed) < exact_quality(detailed)) {
-          ++improvements;
-          regional_plan = std::move(feedback_plan);
-          global = regional_plan.coarse_global;
-          detailed = std::move(feedback_detailed);
-          if (detailed.complete() || detailed.provisional_zone_refill_candidate()) {
-            ++feedback_passes;
-            break;
-          }
-        }
-      }
-      detailed.final_routability_feedback_attempted = feedback_passes > 0U;
-      detailed.final_routability_feedback_selected = improvements > 0U;
-      detailed.final_routability_feedback_passes = feedback_passes;
-      detailed.final_routability_feedback_improvements = improvements;
-      detailed.final_routability_diagnoses_consumed = diagnoses_consumed;
+    if (!previewing_incomplete_global && !tail->repair_sampled_conflicts) {
+      auto feedback = flux::refine_materialization_with_routability_feedback(
+          *source, *source, std::move(regional_plan), std::move(detailed), planner_config,
+          detailed_config, tail->max_final_routability_feedback_passes.value_or(3U), {},
+          telemetry.get());
+      regional_plan = std::move(feedback.routing);
+      global = regional_plan.coarse_global;
+      detailed = std::move(feedback.detailed);
     }
     if (previewing_incomplete_global && detailed.complete()) {
       detailed.stop_reason = flux::DetailedRouterStopReason::incomplete_global_route;

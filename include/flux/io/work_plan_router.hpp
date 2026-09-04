@@ -3,6 +3,7 @@
 #include "flux/core/routing_preset.hpp"
 #include "flux/io/work_plan.hpp"
 
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -15,6 +16,11 @@ struct CompiledWorkPlanRouteStep {
   std::vector<NetId> selected_nets;
   std::vector<NetId> priority_nets;
   std::vector<std::string> applied_options;
+  // Bounded exact-copper rejection feedback after global/regional checkpoint selection.
+  std::size_t max_final_routability_feedback_passes{3U};
+  bool post_negotiation_sampled_conflict_repair{false};
+  std::size_t max_post_negotiation_sampled_conflict_repair_cones{2U};
+  bool refillable_zone_fills{false};
 
   bool operator==(const CompiledWorkPlanRouteStep&) const = default;
 };

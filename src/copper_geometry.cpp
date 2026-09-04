@@ -383,6 +383,61 @@ std::vector<CopperPadShape> copper_pad_shapes(const Board& board) {
   return result;
 }
 
+std::vector<DrillShape> drill_shapes(const Board& board) {
+  std::vector<DrillShape> result;
+  result.reserve(board.vias.size() + board.footprints.size());
+  for (const auto& via : board.vias) {
+    if (via.drill.value() > 0) {
+      result.push_back(DrillShape{via.id, via.net, via.position, via.drill, via.drill,
+                                  Microdegrees{0}, DrillOwnerKind::via});
+    }
+  }
+  for (const auto& footprint : board.footprints) {
+    for (const auto& pad : footprint.pads) {
+      if (!pad_has_drill(pad)) {
+        continue;
+      }
+      const auto rotation_value =
+          footprint.rotation.value() +
+          (footprint.side == BoardSide::front ? pad.rotation.value() : -pad.rotation.value());
+      result.push_back(DrillShape{pad.id,
+                                  pad.net,
+                                  pad_drill_world_position(footprint, pad),
+                                  pad.drill_width,
+                                  pad.drill_height,
+                                  Microdegrees{-rotation_value},
+                                  DrillOwnerKind::pad});
+    }
+  }
+  return result;
+}
+
+namespace {
+
+[[nodiscard]] CopperPadShape drill_as_pad(const DrillShape& drill) {
+  return CopperPadShape{drill.id,
+                        drill.net,
+                        drill.position,
+                        {},
+                        drill.width == drill.height ? PadShape::circle : PadShape::oval,
+                        drill.width,
+                        drill.height,
+                        Nanometres{0},
+                        drill.rotation,
+                        static_cast<long double>(std::max(drill.width, drill.height).value()) /
+                            2.0L};
+}
+
+} // namespace
+
+long double point_to_drill_boundary_distance_nm(Point point, const DrillShape& drill) {
+  return point_to_pad_copper_distance_nm(point, drill_as_pad(drill));
+}
+
+long double drill_to_drill_boundary_distance_nm(const DrillShape& lhs, const DrillShape& rhs) {
+  return pad_to_pad_copper_distance_nm(drill_as_pad(lhs), drill_as_pad(rhs));
+}
+
 std::optional<PolygonalPadOutline> polygonal_pad_outline(const CopperPadShape& pad,
                                                          Nanometres maximum_radial_excess) {
   if (maximum_radial_excess.value() <= 0 || pad.width.value() <= 0 || pad.height.value() <= 0) {

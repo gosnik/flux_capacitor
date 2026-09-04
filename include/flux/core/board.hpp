@@ -11,7 +11,7 @@
 
 namespace flux {
 
-inline constexpr std::uint32_t board_schema_version = 19;
+inline constexpr std::uint32_t board_schema_version = 20;
 inline constexpr std::int64_t max_abs_coordinate_nm = 1'000'000'000;
 
 struct Point {
@@ -309,7 +309,16 @@ struct BoardDesignRules {
   Nanometres default_differential_pair_track_width{Nanometres::from_mm(0.25)};
   Nanometres default_differential_pair_gap{Nanometres::from_mm(0.2)};
   Nanometres default_differential_pair_via_gap{Nanometres::from_mm(0.2)};
+  // KiCad project-level fabrication floors. Zero means that no authoritative project snapshot
+  // supplied the corresponding floor; net-class defaults remain independently represented above.
+  Nanometres minimum_clearance{Nanometres{0}};
+  Nanometres minimum_track_width{Nanometres{0}};
+  Nanometres minimum_via_diameter{Nanometres{0}};
+  Nanometres minimum_via_annular_width{Nanometres{0}};
+  Nanometres minimum_through_drill{Nanometres{0}};
   Nanometres copper_to_edge_clearance{Nanometres::from_mm(0.5)};
+  Nanometres hole_clearance{Nanometres{0}};
+  Nanometres hole_to_hole_clearance{Nanometres{0}};
 
   bool operator==(const BoardDesignRules&) const = default;
 };

@@ -1,5 +1,6 @@
 #include "flux/core/copper_geometry.hpp"
 #include "flux/core/detailed_router.hpp"
+#include "flux/core/drc.hpp"
 #include "flux/core/geometry.hpp"
 #include "flux/core/global_router.hpp"
 #include "flux/core/hydraulic_path.hpp"
@@ -9,9 +10,11 @@
 #include "flux/core/regional_router.hpp"
 #include "flux/core/router_telemetry.hpp"
 #include "flux/core/routing_compute.hpp"
+#include "flux/core/routing_rules.hpp"
 #include "flux/core/spline_route.hpp"
 #include "flux/io/kicad_export.hpp"
 #include "flux/io/kicad_import.hpp"
+#include "flux/io/kicad_netclass_snapshot.hpp"
 #include "flux/io/kicad_refill.hpp"
 #include "flux/io/placement_move_priorities.hpp"
 #include "flux/io/work_plan.hpp"
@@ -116,6 +119,76 @@ void require(bool condition, const std::string& message) {
   };
   board.footprints = {footprint("U1", mm(20.0, 40.0)), footprint("U2", mm(80.0, 40.0))};
   return board;
+}
+
+void source_bound_board_rules_control_geometry_and_hole_clearance() {
+  auto source = two_pad_board();
+  const std::string snapshot = R"((flux_kicad_netclass_snapshot
+  (version 3)
+  (source_revision "risk-fixture")
+  (project_revision "sha256:project-fixture")
+  (api_version "10.0.4-test")
+  (board_rules
+    (minimum_clearance_nm 250000)
+    (minimum_track_width_nm 300000)
+    (minimum_via_diameter_nm 400000)
+    (minimum_via_annular_width_nm 150000)
+    (minimum_through_drill_nm 300000)
+    (copper_to_edge_clearance_nm 350000)
+    (hole_clearance_nm 200000)
+    (hole_to_hole_clearance_nm 250000)
+  )
+  (class
+    (name "Default")
+    (source_priority 2147483647)
+    (clearance_nm 100000)
+    (track_width_nm 200000)
+    (via_diameter_nm 400000)
+    (via_drill_nm 100000)
+    (diff_pair_track_width_nm 200000)
+    (diff_pair_gap_nm 150000)
+    (diff_pair_via_gap_nm 200000)
+  )
+  (net (name "SIGNAL") (classes))
+))";
+  const auto applied = flux::io::apply_kicad_netclass_snapshot(source, snapshot);
+  require(applied.ok() && applied.applied_board_rules && applied.board &&
+              applied.project_revision == "sha256:project-fixture",
+          "a version-3 KiCad snapshot must atomically bind project fabrication rules");
+  const auto resolved = flux::resolve_net_routing_rules(*applied.board, NetId{"net-1"});
+  require(resolved.clearance == Nanometres{250000} &&
+              resolved.track_width == Nanometres{300000} &&
+              resolved.via_drill == Nanometres{300000} &&
+              resolved.via_diameter == Nanometres{600000} &&
+              applied.board->rules.copper_to_edge_clearance == Nanometres{350000},
+          "project floors must raise generated copper dimensions without rewriting class values");
+
+  auto board = *applied.board;
+  board.vias = {
+      {ObjectId{"hole-a"}, NetId{"net-1"}, mm(40.0, 40.0), Nanometres{600000},
+       Nanometres{300000}, {LayerId{"F.Cu"}, LayerId{"B.Cu"}}, false},
+      {ObjectId{"hole-b"}, NetId{"net-1"}, mm(40.5, 40.0), Nanometres{600000},
+       Nanometres{300000}, {LayerId{"F.Cu"}, LayerId{"B.Cu"}}, false}};
+  const auto whole = flux::check_copper_rules(board);
+  const auto has_hole_violation = [](const auto& report) {
+    return std::any_of(report.violations.begin(), report.violations.end(), [](const auto& item) {
+      return item.kind == flux::CopperViolationKind::hole_to_hole_clearance;
+    });
+  };
+  require(has_hole_violation(whole) &&
+              has_hole_violation(
+                  flux::check_dynamic_copper_rules(board, {ObjectId{"hole-b"}})),
+          "hole-to-hole clearance must remain mechanical across same-net vias in whole and "
+          "dynamic exact DRC");
+
+  const flux::DrillShape oval{ObjectId{"oval"}, NetId{}, mm(0.0, 0.0), Nanometres{1'000'000},
+                              Nanometres{400'000}, Microdegrees{0},
+                              flux::DrillOwnerKind::pad};
+  const flux::DrillShape circle{ObjectId{"circle"}, NetId{}, mm(0.7, 0.0), Nanometres{300'000},
+                                Nanometres{300'000}, Microdegrees{0},
+                                flux::DrillOwnerKind::via};
+  require(std::abs(flux::drill_to_drill_boundary_distance_nm(oval, circle) - 50'000.0L) < 1.0L,
+          "oval drill spacing must use the exact capsule boundary rather than a bounding circle");
 }
 
 [[nodiscard]] std::string load_minimal_kicad_fixture() {
@@ -5788,6 +5861,8 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
 int main(int argc, char** argv) {
   const std::vector<TestCase> tests{
       {"units_remain_exact_and_saturating", units_remain_exact_and_saturating},
+      {"source_bound_board_rules_control_geometry_and_hole_clearance",
+       source_bound_board_rules_control_geometry_and_hole_clearance},
       {"dimensioned_pathfinder_pressure_preserves_units_and_group_fairness",
        dimensioned_pathfinder_pressure_preserves_units_and_group_fairness},
       {"physical_checkpoint_ordering_is_feasibility_first_and_fail_closed",

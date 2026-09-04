@@ -2524,6 +2524,7 @@ void populate_selected_endpoint_choices(const Board& board, const GlobalRouteRes
     }
   }
   const auto static_pads = copper_pad_shapes(board);
+  const auto static_drills = drill_shapes(board);
   const auto static_keepouts = world_keepouts(board);
   std::map<std::pair<NetId, NetId>, Nanometres> pairwise_clearances;
   const auto pairwise_clearance = [&](NetId first, NetId second) {
@@ -2599,6 +2600,7 @@ void populate_selected_endpoint_choices(const Board& board, const GlobalRouteRes
     Point site;
     std::vector<LayerId> span;
     Nanometres diameter;
+    Nanometres drill;
     Nanometres clearance;
   };
   struct SelectedViaTransition {
@@ -2636,13 +2638,15 @@ void populate_selected_endpoint_choices(const Board& board, const GlobalRouteRes
       if (span.size() >= 2U) {
         selected_transitions.push_back(SelectedViaTransition{&path, begin, end, site, span});
         planned_via_sites.push_back(
-            PlannedViaSite{path.net, site, span, rules.via_diameter, rules.clearance});
+            PlannedViaSite{path.net, site, span, rules.via_diameter, rules.via_drill,
+                           rules.clearance});
       }
       begin = end;
     }
   }
   const auto via_site_legal = [&](const NetId& net, Point site, const std::vector<LayerId>& span,
                                   Nanometres diameter) {
+    const auto rules = resolve_net_routing_rules(board, net);
     const auto radius = static_cast<long double>(diameter.value()) / 2.0L;
     const auto touches_layer = [&](const LayerId& layer) {
       return std::find(span.begin(), span.end(), layer) != span.end();
@@ -2691,6 +2695,19 @@ void populate_selected_endpoint_choices(const Board& board, const GlobalRouteRes
           radius + static_cast<long double>(pairwise_clearance(net, pad.net).value());
       if (point_to_pad_copper_distance_nm(site, pad) < required) {
         return false;
+      }
+    }
+    if (board.rules.hole_to_hole_clearance.value() > 0) {
+      const auto required = static_cast<long double>(rules.via_drill.value()) / 2.0L +
+                            static_cast<long double>(
+                                board.rules.hole_to_hole_clearance.value());
+      for (const auto& drill : static_drills) {
+        if (drill.net == net && drill.position == site) {
+          continue;
+        }
+        if (point_to_drill_boundary_distance_nm(site, drill) < required) {
+          return false;
+        }
       }
     }
     if (!result.configured.treat_saved_zone_fills_as_refillable) {
@@ -2936,17 +2953,25 @@ void populate_selected_endpoint_choices(const Board& board, const GlobalRouteRes
     const auto planned_margin = [&](Point site) {
       auto margin = std::numeric_limits<long double>::infinity();
       for (const auto& planned : planned_via_sites) {
-        if (planned.net == path.net ||
-            std::none_of(span.begin(), span.end(), [&](const auto& layer) {
+        const bool spans_overlap =
+            std::any_of(span.begin(), span.end(), [&](const auto& layer) {
               return std::find(planned.span.begin(), planned.span.end(), layer) !=
                      planned.span.end();
-            })) {
-          continue;
+            });
+        if (planned.net != path.net && spans_overlap) {
+          const auto required =
+              static_cast<long double>(rules.via_diameter.value() + planned.diameter.value()) /
+                  2.0L +
+              static_cast<long double>(std::max(rules.clearance, planned.clearance).value());
+          margin = std::min(margin, geometry::point_distance_nm(site, planned.site) - required);
         }
-        const auto required =
-            static_cast<long double>(rules.via_diameter.value() + planned.diameter.value()) / 2.0L +
-            static_cast<long double>(std::max(rules.clearance, planned.clearance).value());
-        margin = std::min(margin, geometry::point_distance_nm(site, planned.site) - required);
+        if (!(planned.net == path.net && planned.site == site) &&
+            board.rules.hole_to_hole_clearance.value() > 0) {
+          const auto required =
+              static_cast<long double>(rules.via_drill.value() + planned.drill.value()) / 2.0L +
+              static_cast<long double>(board.rules.hole_to_hole_clearance.value());
+          margin = std::min(margin, geometry::point_distance_nm(site, planned.site) - required);
+        }
       }
       return margin;
     };

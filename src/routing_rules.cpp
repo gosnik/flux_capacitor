@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <map>
 
 namespace flux {
@@ -16,16 +17,15 @@ ResolvedNetRoutingRules resolve_net_routing_rules(const Board& board, const NetI
                                  board.rules.default_differential_pair_via_gap};
   const auto found_net = std::find_if(board.nets.begin(), board.nets.end(),
                                       [&net](const Net& candidate) { return candidate.id == net; });
-  if (found_net == board.nets.end()) {
-    return result;
-  }
   std::map<std::uint32_t, const NetClass*> assigned;
-  for (const auto& class_id : found_net->classes) {
-    const auto found_class =
-        std::find_if(board.net_classes.begin(), board.net_classes.end(),
-                     [&class_id](const NetClass& candidate) { return candidate.id == class_id; });
-    if (found_class != board.net_classes.end()) {
-      assigned.emplace(found_class->priority, &*found_class);
+  if (found_net != board.nets.end()) {
+    for (const auto& class_id : found_net->classes) {
+      const auto found_class =
+          std::find_if(board.net_classes.begin(), board.net_classes.end(),
+                       [&class_id](const NetClass& candidate) { return candidate.id == class_id; });
+      if (found_class != board.net_classes.end()) {
+        assigned.emplace(found_class->priority, &*found_class);
+      }
     }
   }
   for (const auto& [priority, net_class] : assigned) {
@@ -60,6 +60,18 @@ ResolvedNetRoutingRules resolve_net_routing_rules(const Board& board, const NetI
   if (in_differential_pair) {
     result.track_width = result.differential_pair_track_width;
   }
+  result.clearance = std::max(result.clearance, board.rules.minimum_clearance);
+  result.track_width = std::max(result.track_width, board.rules.minimum_track_width);
+  result.differential_pair_track_width =
+      std::max(result.differential_pair_track_width, board.rules.minimum_track_width);
+  result.via_drill = std::max(result.via_drill, board.rules.minimum_through_drill);
+  result.via_diameter = std::max(result.via_diameter, board.rules.minimum_via_diameter);
+  const auto maximum = std::numeric_limits<std::int64_t>::max();
+  const auto drill = result.via_drill.value();
+  const auto annular = board.rules.minimum_via_annular_width.value();
+  const auto annular_diameter =
+      annular > (maximum - drill) / 2 ? maximum : drill + annular * 2;
+  result.via_diameter = std::max(result.via_diameter, Nanometres{annular_diameter});
   return result;
 }
 

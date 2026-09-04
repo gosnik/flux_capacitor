@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import pathlib
+import tempfile
 import types
 import unittest
 
@@ -15,6 +17,10 @@ SPEC = importlib.util.spec_from_file_location("flux_export_netclasses", MODULE_P
 assert SPEC is not None and SPEC.loader is not None
 BRIDGE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(BRIDGE)
+
+BOARD_RULES = {
+    field: 100_000 + index for index, (field, _) in enumerate(BRIDGE.PROJECT_RULE_FIELDS)
+}
 
 
 def net_class(
@@ -51,9 +57,12 @@ class BridgeTests(unittest.TestCase):
         )
         signal = types.SimpleNamespace(name="SIGNAL")
         snapshot = BRIDGE.build_snapshot(
-            "revision", "9.0.8", [default], [signal], {"SIGNAL": default}
+            "revision", "sha256:project", "9.0.8", BOARD_RULES,
+            [default], [signal], {"SIGNAL": default}
         )
         self.assertIn('(api_version "9.0.8")', snapshot)
+        self.assertIn('(project_revision "sha256:project")', snapshot)
+        self.assertIn('(hole_to_hole_clearance_nm 100007)', snapshot)
         self.assertIn('(name "SIGNAL")\n    (classes)', snapshot)
 
     def test_snapshot_is_deterministic_complete_and_escaped(self):
@@ -70,10 +79,10 @@ class BridgeTests(unittest.TestCase):
             "A": default,
             "": default,
         }
-        first = BRIDGE.build_snapshot("revision", "10.0.1", [physical, default, high], nets,
-                                      effective)
-        second = BRIDGE.build_snapshot("revision", "10.0.1", [high, physical, default],
-                                       list(reversed(nets)), effective)
+        first = BRIDGE.build_snapshot("revision", "sha256:project", "10.0.1", BOARD_RULES,
+                                      [physical, default, high], nets, effective)
+        second = BRIDGE.build_snapshot("revision", "sha256:project", "10.0.1", BOARD_RULES,
+                                       [high, physical, default], list(reversed(nets)), effective)
         self.assertEqual(first, second)
         self.assertIn('(name "A \\"high\\"")', first)
         self.assertIn('(classes "A \\"high\\"" "Physical")', first)
@@ -87,7 +96,7 @@ class BridgeTests(unittest.TestCase):
             250_000, 200_000, 250_000
         )
         with self.assertRaisesRegex(ValueError, "omitted effective classes"):
-            BRIDGE.build_snapshot("revision", "10", [default],
+            BRIDGE.build_snapshot("revision", "sha256:project", "10", BOARD_RULES, [default],
                                   [types.SimpleNamespace(name="SIGNAL")], {})
 
     def test_unknown_constituent_fails_closed(self):
@@ -98,7 +107,24 @@ class BridgeTests(unittest.TestCase):
         net = types.SimpleNamespace(name="SIGNAL")
         effective = {"SIGNAL": net_class("effective", -1, constituents=["Missing"])}
         with self.assertRaisesRegex(ValueError, "undefined constituent"):
-            BRIDGE.build_snapshot("revision", "10", [default], [net], effective)
+            BRIDGE.build_snapshot("revision", "sha256:project", "10", BOARD_RULES,
+                                  [default], [net], effective)
+
+    def test_saved_project_rules_are_source_bound_and_rounded_to_nanometres(self):
+        rules = {project: index / 10 for index, (_, project) in
+                 enumerate(BRIDGE.PROJECT_RULE_FIELDS, start=1)}
+        rules["min_track_width"] = 0.19999999999999998
+        document = {"board": {"design_settings": {"rules": rules}}}
+        with tempfile.TemporaryDirectory() as directory:
+            board = pathlib.Path(directory) / "sample.kicad_pcb"
+            board.write_text("(kicad_pcb)", encoding="utf-8")
+            project = board.with_suffix(".kicad_pro")
+            project.write_text(json.dumps(document), encoding="utf-8")
+            revision, captured, captured_path = BRIDGE.load_project_rules(board)
+        self.assertEqual(captured_path, project)
+        self.assertRegex(revision, r"^sha256:[0-9a-f]{64}$")
+        self.assertEqual(captured["minimum_track_width_nm"], 200_000)
+        self.assertEqual(captured["hole_to_hole_clearance_nm"], 800_000)
 
 
 if __name__ == "__main__":

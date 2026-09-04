@@ -27,6 +27,27 @@ struct CopperPadShape {
 [[nodiscard]] Point pad_drill_world_position(const Footprint& footprint, const Pad& pad);
 [[nodiscard]] std::vector<CopperPadShape> copper_pad_shapes(const Board& board);
 
+enum class DrillOwnerKind { pad, via };
+
+// World-space physical drill geometry. Circular holes use equal dimensions; oval holes are exact
+// capsules with the same rotation convention as CopperPadShape. Drill clearance is mechanical and
+// therefore does not disappear merely because two owners share a net or do not share copper layers.
+struct DrillShape {
+  ObjectId id;
+  NetId net;
+  Point position;
+  Nanometres width;
+  Nanometres height;
+  Microdegrees rotation;
+  DrillOwnerKind owner_kind{DrillOwnerKind::pad};
+};
+
+[[nodiscard]] std::vector<DrillShape> drill_shapes(const Board& board);
+[[nodiscard]] long double point_to_drill_boundary_distance_nm(Point point,
+                                                              const DrillShape& drill);
+[[nodiscard]] long double drill_to_drill_boundary_distance_nm(const DrillShape& lhs,
+                                                              const DrillShape& rhs);
+
 struct PolygonalPadOutline {
   Polygon area;
   bool conservative{false};

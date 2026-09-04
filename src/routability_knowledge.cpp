@@ -645,7 +645,11 @@ diagnose_detailed_routability(const DetailedRouteResult& detailed,
     const auto via_conflict = violation.kind == CopperViolationKind::track_via_clearance ||
                               violation.kind == CopperViolationKind::via_clearance ||
                               violation.kind == CopperViolationKind::via_pad_clearance ||
-                              violation.kind == CopperViolationKind::via_zone_clearance;
+                              violation.kind == CopperViolationKind::via_zone_clearance ||
+                              violation.kind == CopperViolationKind::via_diameter ||
+                              violation.kind == CopperViolationKind::via_drill ||
+                              violation.kind == CopperViolationKind::via_annular_width ||
+                              violation.kind == CopperViolationKind::hole_to_hole_clearance;
     const auto terminal_conflict = violation.kind == CopperViolationKind::track_pad_clearance ||
                                    violation.kind == CopperViolationKind::pad_clearance;
     builder.add(RoutabilityDiagnosis{

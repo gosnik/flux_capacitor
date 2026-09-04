@@ -26,7 +26,7 @@ struct ExportedObjectId {
 
 struct KicadExportOptions {
   std::string generator{"flux_capacitor"};
-  std::string generator_version{"0.135.0"};
+  std::string generator_version{"0.136.0"};
   bool verify_round_trip{true};
   // Write a review-only copper artifact from a lossy/invalid canonical projection. Source byte
   // identity and supported-design-change checks remain enforced, but strict semantic round-trip

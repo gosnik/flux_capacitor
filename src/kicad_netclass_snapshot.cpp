@@ -4,6 +4,7 @@
 #include "flux/io/sexpr.hpp"
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
@@ -41,6 +42,17 @@ struct ParsedClass {
 struct ParsedNet {
   std::string name;
   std::vector<std::string> classes;
+};
+
+struct ParsedBoardRules {
+  Nanometres minimum_clearance;
+  Nanometres minimum_track_width;
+  Nanometres minimum_via_diameter;
+  Nanometres minimum_via_annular_width;
+  Nanometres minimum_through_drill;
+  Nanometres copper_to_edge_clearance;
+  Nanometres hole_clearance;
+  Nanometres hole_to_hole_clearance;
 };
 
 struct Loader {
@@ -198,6 +210,33 @@ void reject_unknown_children(const SExpression& parent, const std::set<std::stri
   return result;
 }
 
+[[nodiscard]] std::optional<ParsedBoardRules>
+parse_board_rules(const SExpression& expression, Loader& loader) {
+  constexpr std::array<std::string_view, 8U> fields{
+      "minimum_clearance_nm",          "minimum_track_width_nm",
+      "minimum_via_diameter_nm",       "minimum_via_annular_width_nm",
+      "minimum_through_drill_nm",      "copper_to_edge_clearance_nm",
+      "hole_clearance_nm",             "hole_to_hole_clearance_nm"};
+  reject_unknown_children(expression, std::set<std::string_view>{fields.begin(), fields.end()},
+                          loader);
+  std::array<std::optional<Nanometres>, fields.size()> values;
+  for (std::size_t index = 0U; index < fields.size(); ++index) {
+    values[index] =
+        parse_dimension(unique_child(expression, fields[index], loader), fields[index], loader,
+                        "board-rules");
+    if (values[index] && values[index]->value() < 0) {
+      loader.error("invalid_netclass_snapshot_dimension",
+                   std::string(fields[index]) + " must be non-negative", expression.location,
+                   {"board-rules"});
+    }
+  }
+  if (std::any_of(values.begin(), values.end(), [](const auto& value) { return !value; })) {
+    return std::nullopt;
+  }
+  return ParsedBoardRules{*values[0], *values[1], *values[2], *values[3],
+                          *values[4], *values[5], *values[6], *values[7]};
+}
+
 [[nodiscard]] NetClassId class_id(std::string_view name) {
   return NetClassId{"kicad-netclass:" + std::string(name)};
 }
@@ -229,14 +268,18 @@ KicadNetClassSnapshotResult apply_kicad_netclass_snapshot(const Board& source,
                  "snapshot root must be flux_kicad_netclass_snapshot", root.location);
     return std::move(loader.result);
   }
-  reject_unknown_children(root, {"version", "source_revision", "api_version", "class", "net"},
+  reject_unknown_children(root,
+                          {"version", "source_revision", "project_revision", "api_version",
+                           "board_rules", "class", "net"},
                           loader);
   const auto* version = unique_child(root, "version", loader);
   const auto* revision = unique_child(root, "source_revision", loader);
+  const auto* project_revision = unique_child(root, "project_revision", loader);
   const auto* api_version = unique_child(root, "api_version", loader);
-  if (version == nullptr || atom_at(*version, 1) != std::optional<std::string_view>{"2"} ||
+  const auto* board_rules_field = unique_child(root, "board_rules", loader);
+  if (version == nullptr || atom_at(*version, 1) != std::optional<std::string_view>{"3"} ||
       version->children.size() != 2U) {
-    loader.error("unsupported_netclass_snapshot_version", "snapshot version must be 2",
+    loader.error("unsupported_netclass_snapshot_version", "snapshot version must be 3",
                  version == nullptr ? root.location : version->location);
   }
   const auto revision_value = revision == nullptr ? std::nullopt : atom_at(*revision, 1);
@@ -248,6 +291,16 @@ KicadNetClassSnapshotResult apply_kicad_netclass_snapshot(const Board& source,
                  "net-class snapshot was generated for a different board revision",
                  revision->location);
   }
+  const auto project_revision_value =
+      project_revision == nullptr ? std::nullopt : atom_at(*project_revision, 1);
+  if (!project_revision_value || project_revision_value->empty() ||
+      project_revision->children.size() != 2U) {
+    loader.error("invalid_netclass_snapshot_project_revision",
+                 "project_revision requires exactly one non-empty value",
+                 project_revision == nullptr ? root.location : project_revision->location);
+  } else {
+    loader.result.project_revision = std::string(*project_revision_value);
+  }
   const auto api_version_value = api_version == nullptr ? std::nullopt : atom_at(*api_version, 1);
   if (!api_version_value || api_version_value->empty() || api_version->children.size() != 2U) {
     loader.error("invalid_netclass_snapshot_api_version",
@@ -256,6 +309,9 @@ KicadNetClassSnapshotResult apply_kicad_netclass_snapshot(const Board& source,
   } else {
     loader.result.api_version = std::string(*api_version_value);
   }
+  const auto board_rules = board_rules_field == nullptr
+                               ? std::optional<ParsedBoardRules>{}
+                               : parse_board_rules(*board_rules_field, loader);
 
   std::map<std::string, ParsedClass> classes;
   for (const auto* entry : find_children(root, "class")) {
@@ -339,6 +395,14 @@ KicadNetClassSnapshotResult apply_kicad_netclass_snapshot(const Board& source,
   candidate.rules.default_differential_pair_gap = *default_class->second.differential_pair_gap;
   candidate.rules.default_differential_pair_via_gap =
       *default_class->second.differential_pair_via_gap;
+  candidate.rules.minimum_clearance = board_rules->minimum_clearance;
+  candidate.rules.minimum_track_width = board_rules->minimum_track_width;
+  candidate.rules.minimum_via_diameter = board_rules->minimum_via_diameter;
+  candidate.rules.minimum_via_annular_width = board_rules->minimum_via_annular_width;
+  candidate.rules.minimum_through_drill = board_rules->minimum_through_drill;
+  candidate.rules.copper_to_edge_clearance = board_rules->copper_to_edge_clearance;
+  candidate.rules.hole_clearance = board_rules->hole_clearance;
+  candidate.rules.hole_to_hole_clearance = board_rules->hole_to_hole_clearance;
   std::vector<const ParsedClass*> ordered;
   ordered.reserve(classes.size() - 1U);
   for (const auto& [name, parsed_class] : classes) {
@@ -373,6 +437,7 @@ KicadNetClassSnapshotResult apply_kicad_netclass_snapshot(const Board& source,
   }
   loader.result.applied_classes = candidate.net_classes.size();
   loader.result.applied_nets = board_nets.size();
+  loader.result.applied_board_rules = true;
   loader.result.board = std::move(candidate);
   return std::move(loader.result);
 }

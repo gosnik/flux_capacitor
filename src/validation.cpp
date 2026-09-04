@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <set>
 #include <string>
 #include <unordered_set>
@@ -103,7 +104,18 @@ ValidationReport validate_board_impl(const Board& board, bool reuse_static_zone_
       board.rules.default_differential_pair_track_width.value() <= 0 ||
       board.rules.default_differential_pair_gap.value() < 0 ||
       board.rules.default_differential_pair_via_gap.value() < 0 ||
-      board.rules.copper_to_edge_clearance.value() < 0) {
+      board.rules.minimum_clearance.value() < 0 ||
+      board.rules.minimum_track_width.value() < 0 ||
+      board.rules.minimum_via_diameter.value() < 0 ||
+      board.rules.minimum_via_annular_width.value() < 0 ||
+      board.rules.minimum_through_drill.value() < 0 ||
+      board.rules.copper_to_edge_clearance.value() < 0 ||
+      board.rules.hole_clearance.value() < 0 ||
+      board.rules.hole_to_hole_clearance.value() < 0 ||
+      board.rules.minimum_via_annular_width.value() >
+          (std::numeric_limits<std::int64_t>::max() -
+           board.rules.minimum_through_drill.value()) /
+              2) {
     add_issue(report, IssueSeverity::error, "invalid_board_design_rules",
               "board design-rule dimensions are inconsistent");
   }

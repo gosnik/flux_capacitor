@@ -79,6 +79,81 @@ void add_violation(CopperDrcReport& report, CopperViolationKind kind, std::strin
                       Nanometres{static_cast<std::int64_t>(std::ceil(bounded_required))}, actual});
 }
 
+[[nodiscard]] bool selected_for_dynamic_check(const std::set<std::string>* selected,
+                                              const ObjectId& first,
+                                              const ObjectId* second = nullptr) {
+  return selected == nullptr || selected->contains(first.value()) ||
+         (second != nullptr && selected->contains(second->value()));
+}
+
+void check_fabrication_minimums(const Board& board, CopperDrcReport& report,
+                                const std::set<std::string>* selected = nullptr) {
+  const auto minimum_track = static_cast<long double>(board.rules.minimum_track_width.value());
+  if (minimum_track > 0.0L) {
+    for (const auto& track : board.tracks) {
+      if (selected_for_dynamic_check(selected, track.id) && track.width.value() < minimum_track) {
+        add_violation(report, CopperViolationKind::track_width, "track_width",
+                      {track.id.value()}, minimum_track,
+                      static_cast<long double>(track.width.value()));
+      }
+    }
+    for (const auto& arc : board.track_arcs) {
+      if (selected_for_dynamic_check(selected, arc.id) && arc.width.value() < minimum_track) {
+        add_violation(report, CopperViolationKind::track_width, "track_arc_width",
+                      {arc.id.value()}, minimum_track,
+                      static_cast<long double>(arc.width.value()));
+      }
+    }
+  }
+  const auto minimum_via = static_cast<long double>(board.rules.minimum_via_diameter.value());
+  const auto minimum_drill = static_cast<long double>(board.rules.minimum_through_drill.value());
+  const auto minimum_annular =
+      static_cast<long double>(board.rules.minimum_via_annular_width.value());
+  for (const auto& via : board.vias) {
+    if (!selected_for_dynamic_check(selected, via.id)) {
+      continue;
+    }
+    if (minimum_via > 0.0L && via.diameter.value() < minimum_via) {
+      add_violation(report, CopperViolationKind::via_diameter, "via_diameter",
+                    {via.id.value()}, minimum_via,
+                    static_cast<long double>(via.diameter.value()));
+    }
+    if (minimum_drill > 0.0L && via.drill.value() < minimum_drill) {
+      add_violation(report, CopperViolationKind::via_drill, "via_drill", {via.id.value()},
+                    minimum_drill, static_cast<long double>(via.drill.value()));
+    }
+    const auto annular =
+        (static_cast<long double>(via.diameter.value()) - via.drill.value()) / 2.0L;
+    if (minimum_annular > 0.0L && annular < minimum_annular) {
+      add_violation(report, CopperViolationKind::via_annular_width, "via_annular_width",
+                    {via.id.value()}, minimum_annular, std::max(0.0L, annular));
+    }
+  }
+}
+
+void check_hole_to_hole(const Board& board, CopperDrcReport& report,
+                        const std::set<std::string>* selected = nullptr) {
+  const auto required =
+      static_cast<long double>(board.rules.hole_to_hole_clearance.value());
+  if (required <= 0.0L) {
+    return;
+  }
+  const auto holes = drill_shapes(board);
+  for (std::size_t first = 0U; first < holes.size(); ++first) {
+    for (std::size_t second = first + 1U; second < holes.size(); ++second) {
+      if (!selected_for_dynamic_check(selected, holes[first].id, &holes[second].id)) {
+        continue;
+      }
+      const auto actual = drill_to_drill_boundary_distance_nm(holes[first], holes[second]);
+      if (actual < required) {
+        add_violation(report, CopperViolationKind::hole_to_hole_clearance,
+                      "hole_to_hole_clearance",
+                      {holes[first].id.value(), holes[second].id.value()}, required, actual);
+      }
+    }
+  }
+}
+
 [[nodiscard]] std::uint64_t routed_length_impl(const Board& board, const NetId& net) {
   std::uint64_t result = 0;
   for (const auto& track : board.tracks) {
@@ -182,6 +257,8 @@ CopperDrcReport check_copper_rules(const Board& board) {
     return static_cast<long double>(resolve_pairwise_clearance(board, lhs, rhs).value());
   };
   const auto pads = copper_pad_shapes(board);
+  check_fabrication_minimums(board, report);
+  check_hole_to_hole(board, report);
   check_board_edge(board, pads, report);
 
   for (std::size_t i = 0; i < board.tracks.size(); ++i) {
@@ -567,6 +644,8 @@ CopperDrcReport check_dynamic_copper_rules(const Board& board,
   const auto is_selected = [&selected](const ObjectId& id) {
     return selected.contains(id.value());
   };
+  check_fabrication_minimums(board, report, &selected);
+  check_hole_to_hole(board, report, &selected);
   const auto clearance = [&board](const NetId& lhs, const NetId& rhs) {
     return static_cast<long double>(resolve_pairwise_clearance(board, lhs, rhs).value());
   };

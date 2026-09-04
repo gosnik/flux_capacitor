@@ -6412,6 +6412,9 @@ void print_netclass_snapshot_result(const flux::io::KicadNetClassSnapshotResult&
             << "  \"ok\": " << (snapshot.ok() ? "true" : "false") << ",\n"
             << "  \"netclass_snapshot_errors\": " << errors << ",\n"
             << "  \"api_version\": " << json_quote(snapshot.api_version) << ",\n"
+            << "  \"project_revision\": " << json_quote(snapshot.project_revision) << ",\n"
+            << "  \"applied_board_rules\": "
+            << (snapshot.applied_board_rules ? "true" : "false") << ",\n"
             << "  \"applied_classes\": " << snapshot.applied_classes << ",\n"
             << "  \"applied_nets\": " << snapshot.applied_nets
             << ",\n  \"netclass_snapshot_diagnostics\": [";
@@ -7895,7 +7898,7 @@ constrained_optimizer_config(const Board& board,
 }
 
 void print_help() {
-  std::cout << "flux-cli 0.135.0\n\n"
+  std::cout << "flux-cli 0.136.0\n\n"
                "Usage:\n"
                "  flux-cli version       Print the engine version\n"
                "  flux-cli capabilities --json  Print the pinned feature-parity contract\n"
@@ -8105,7 +8108,7 @@ int main(int argc, char** argv) {
   }
   const std::string_view command{argv[1]};
   if (command == "version" && argc == 2) {
-    std::cout << "flux_capacitor 0.135.0 board-schema 19\n";
+    std::cout << "flux_capacitor 0.136.0 board-schema 20\n";
     return EXIT_SUCCESS;
   }
   if (command == "capabilities" && argc == 3 && std::string_view{argv[2]} == "--json") {
@@ -8120,8 +8123,8 @@ int main(int argc, char** argv) {
     const char* override_value = std::getenv("FLUX_VULKAN_DEVICE");
     std::cout << "{\n"
               << "  \"engine\": \"flux_capacitor\",\n"
-              << "  \"version\": \"0.135.0\",\n"
-              << "  \"board_schema\": 19,\n"
+              << "  \"version\": \"0.136.0\",\n"
+              << "  \"board_schema\": 20,\n"
               << "  \"production_gpu_required\": true,\n"
               << "  \"gpu_available\": " << (device.available ? "true" : "false") << ",\n"
               << "  \"gpu_device\": " << json_quote(device.device_name) << ",\n"

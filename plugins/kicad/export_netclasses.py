@@ -8,11 +8,13 @@ without KiCad or third-party packages. Optimization remains in the C++ core.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import pathlib
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any
 
 
@@ -26,6 +28,19 @@ PHYSICAL_FIELDS = (
     ("diff_pair_via_gap_nm", "diff_pair_via_gap"),
 )
 
+PROJECT_RULE_FIELDS = (
+    ("minimum_clearance_nm", "min_clearance"),
+    ("minimum_track_width_nm", "min_track_width"),
+    ("minimum_via_diameter_nm", "min_via_diameter"),
+    ("minimum_via_annular_width_nm", "min_via_annular_width"),
+    ("minimum_through_drill_nm", "min_through_hole_diameter"),
+    ("copper_to_edge_clearance_nm", "min_copper_edge_clearance"),
+    ("hole_clearance_nm", "min_hole_clearance"),
+    ("hole_to_hole_clearance_nm", "min_hole_to_hole"),
+)
+
+MAXIMUM_PROJECT_BYTES = 16 * 1024 * 1024
+
 
 def _quote(value: str) -> str:
     replacements = {
@@ -36,6 +51,47 @@ def _quote(value: str) -> str:
         "\t": "\\t",
     }
     return '"' + "".join(replacements.get(character, character) for character in value) + '"'
+
+
+def _millimetres_to_nanometres(value: Any, name: str) -> int:
+    try:
+        decimal = value if isinstance(value, Decimal) else Decimal(str(value))
+        nanometres = (decimal * Decimal(1_000_000)).quantize(Decimal(1), rounding=ROUND_HALF_UP)
+        result = int(nanometres)
+    except (InvalidOperation, ValueError, TypeError) as error:
+        raise ValueError(f"KiCad project rule {name!r} is not a finite number") from error
+    if not decimal.is_finite() or result < 0 or result > 9_223_372_036_854_775_807:
+        raise ValueError(f"KiCad project rule {name!r} is outside the supported range")
+    return result
+
+
+def load_project_rules(board_path: pathlib.Path) -> tuple[str, dict[str, int], pathlib.Path]:
+    project_path = board_path.with_suffix(".kicad_pro")
+    stat_before = project_path.stat()
+    if not project_path.is_file() or stat_before.st_size > MAXIMUM_PROJECT_BYTES:
+        raise ValueError("matching KiCad project file is absent, non-regular, or oversized")
+    contents = project_path.read_bytes()
+    if len(contents) != stat_before.st_size:
+        raise ValueError("KiCad project changed while it was read")
+    try:
+        project = json.loads(contents, parse_float=Decimal, parse_int=Decimal)
+        rules = project["board"]["design_settings"]["rules"]
+    except (json.JSONDecodeError, KeyError, TypeError) as error:
+        raise ValueError("KiCad project does not contain complete board design rules") from error
+    if not isinstance(rules, Mapping):
+        raise ValueError("KiCad project board design rules are not an object")
+    result: dict[str, int] = {}
+    for snapshot_name, project_name in PROJECT_RULE_FIELDS:
+        if project_name not in rules:
+            raise ValueError(f"KiCad project omits board design rule {project_name!r}")
+        result[snapshot_name] = _millimetres_to_nanometres(rules[project_name], project_name)
+    stat_after = project_path.stat()
+    if (stat_before.st_mtime_ns, stat_before.st_size) != (
+        stat_after.st_mtime_ns,
+        stat_after.st_size,
+    ):
+        raise ValueError("KiCad project changed while its rules were captured")
+    return "sha256:" + hashlib.sha256(contents).hexdigest(), result, project_path
 
 
 def _explicit_classes(classes: Sequence[Any]) -> list[Any]:
@@ -84,15 +140,24 @@ def _memberships(effective: Any, explicit_names: set[str]) -> list[str]:
 
 def build_snapshot(
     source_revision: str,
+    project_revision: str,
     api_version: str,
+    board_rules: Mapping[str, int],
     classes: Sequence[Any],
     nets: Sequence[Any],
     effective_by_net: Mapping[str, Any],
 ) -> str:
     if not source_revision:
         raise ValueError("source revision must be non-empty")
+    if not project_revision:
+        raise ValueError("project revision must be non-empty")
     if not api_version:
         raise ValueError("KiCad API version must be non-empty")
+    if set(board_rules) != {field for field, _ in PROJECT_RULE_FIELDS}:
+        raise ValueError("board rule snapshot must contain exactly the supported project rules")
+    for name, value in board_rules.items():
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(f"board rule {name!r} must be a non-negative integer nanometre value")
     explicit = _explicit_classes(classes)
     explicit_names = {str(net_class.name) for net_class in explicit}
     named_nets: dict[str, Any] = {}
@@ -112,10 +177,15 @@ def build_snapshot(
 
     lines = [
         "(flux_kicad_netclass_snapshot",
-        "  (version 2)",
+        "  (version 3)",
         f"  (source_revision {_quote(source_revision)})",
+        f"  (project_revision {_quote(project_revision)})",
         f"  (api_version {_quote(api_version)})",
+        "  (board_rules",
     ]
+    for field, _ in PROJECT_RULE_FIELDS:
+        lines.append(f"    ({field} {board_rules[field]})")
+    lines.append("  )")
     for net_class in explicit:
         lines.extend(
             [
@@ -171,6 +241,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         project = kicad.get_project(board.document)
         nets = board.get_nets()
+        project_revision, board_rules, project_path = load_project_rules(board_path)
+        project_stat_before = project_path.stat()
         inspected = subprocess.run(
             [args.flux_cli, "inspect-kicad", str(board_path)],
             check=True,
@@ -185,7 +257,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise ValueError("C++ import did not return a source revision")
         snapshot = build_snapshot(
             source_revision,
+            project_revision,
             str(kicad_version),
+            board_rules,
             project.get_net_classes(),
             nets,
             board.get_netclass_for_nets(nets),
@@ -196,6 +270,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             stat_after.st_size,
         ):
             raise ValueError("saved board changed while its net-class snapshot was captured")
+        project_stat_after = project_path.stat()
+        if (project_stat_before.st_mtime_ns, project_stat_before.st_size) != (
+            project_stat_after.st_mtime_ns,
+            project_stat_after.st_size,
+        ):
+            raise ValueError("saved project changed while its rule snapshot was captured")
     except Exception as error:  # IPC failures are reported at the process boundary.
         print(f"flux KiCad net-class export failed: {error}", file=sys.stderr)
         return 2

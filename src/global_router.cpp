@@ -191,7 +191,7 @@ struct Edge {
               grid.node(cell_x + 1U, cell_y + 1U, first_layer)};
 }
 
-enum class ObstacleShape { segment, circular_arc, point, pad, zone, keepout };
+enum class ObstacleShape { segment, circular_arc, point, pad, drill, zone, keepout };
 
 struct PolygonBounds {
   Point minimum;
@@ -232,6 +232,7 @@ struct IndexedObstacle {
   std::optional<WorldKeepout> keepout_geometry;
   std::optional<IndexedCopperZoneFill> zone_geometry{};
   std::optional<TrackArc> arc_geometry{};
+  std::optional<DrillShape> drill_geometry{};
 };
 
 struct EdgeBlockage {
@@ -1627,7 +1628,21 @@ public:
         account_rules(rules_for(net.id), pair_member);
       }
     }
+    mutable_geometry_->maximum_clearance_nm =
+        std::max(mutable_geometry_->maximum_clearance_nm,
+                 static_cast<long double>(board.rules.hole_to_hole_clearance.value()));
     mutable_geometry_->bins.resize(grid_.layers.size() * grid_.layer_size());
+    for (const auto& drill : drill_shapes(board)) {
+      if (drill.owner_kind == DrillOwnerKind::via && !include_existing_copper) {
+        continue;
+      }
+      for (std::size_t layer = 0U; layer < grid_.layers.size(); ++layer) {
+        add_obstacle(IndexedObstacle{
+            drill.id, drill.net, layer, ObstacleShape::drill, drill.position, drill.position,
+            static_cast<long double>(std::max(drill.width, drill.height).value()) / 2.0L,
+            std::nullopt, std::nullopt, std::nullopt, std::nullopt, drill});
+      }
+    }
     if (include_existing_copper) {
       for (const auto& track : board.tracks) {
         const auto layer = layer_index(track.layer);
@@ -2186,6 +2201,24 @@ private:
         if (prohibited &&
             segment_copper_overlaps_keepout(start, end, planned_radius_nm, keepout.area)) {
           result.obstacles.push_back(obstacle.id);
+        }
+        continue;
+      }
+      if (obstacle.shape == ObstacleShape::drill) {
+        if (!planned_via || board_.rules.hole_to_hole_clearance.value() <= 0) {
+          continue;
+        }
+        const auto& drill = *obstacle.drill_geometry;
+        // An existing same-net via or plated pad at this exact point is a reusable vertical
+        // feature, not a second drilled object. Nearby same-net holes remain mechanical blockers.
+        if (drill.net == net && drill.position == start && start == end) {
+          continue;
+        }
+        const auto required =
+            static_cast<long double>(rules_for(net).via_drill.value()) / 2.0L +
+            static_cast<long double>(board_.rules.hole_to_hole_clearance.value());
+        if (point_to_drill_boundary_distance_nm(start, drill) < required) {
+          result.obstacles.push_back(drill.id);
         }
         continue;
       }

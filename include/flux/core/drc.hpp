@@ -22,6 +22,11 @@ enum class CopperViolationKind {
   zone_clearance,
   differential_pair_gap,
   differential_pair_skew,
+  track_width,
+  via_diameter,
+  via_drill,
+  via_annular_width,
+  hole_to_hole_clearance,
   copper_edge_clearance,
   copper_outside_board,
   keepout

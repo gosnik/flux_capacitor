@@ -24,6 +24,8 @@ struct NetClassSnapshotDiagnostic {
 struct KicadNetClassSnapshotResult {
   std::optional<Board> board;
   std::string api_version;
+  std::string project_revision;
+  bool applied_board_rules{false};
   std::size_t applied_classes{0};
   std::size_t applied_nets{0};
   std::vector<NetClassSnapshotDiagnostic> diagnostics;

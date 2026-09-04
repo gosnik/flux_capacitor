@@ -252,8 +252,9 @@ canonical board core and negotiated-congestion routing baseline.
 
 ## Build and test
 
-Requirements: CMake 3.25+, Ninja, a C++20 compiler, Boost 1.74+ headers, Vulkan headers/loader,
-`glslc`, and a Vulkan 1.1 compute-capable GPU with a working driver. GPU acceleration is a
+Requirements: CMake 3.25+, Ninja, a C++20 compiler, Boost 1.75+ with Boost.JSON, OpenSSL 3,
+Vulkan headers/loader, `glslc`, and a Vulkan 1.1 compute-capable GPU with a working driver. GPU
+acceleration is a
 mandatory Flux runtime requirement: configuration fails without the Vulkan toolchain and routing
 fails closed if a compute device cannot execute the startup probe. The deterministic CPU hydraulic
 implementation is retained only as a test/oracle backend, not as a production fallback.
@@ -1702,7 +1703,9 @@ Pinned reference-router comparisons are defined by
 `tests/fixtures/parity/reference_cases.json` and replayed with
 `tests/python/record_reference_parity.py`; the checked summary under
 `reports/reference_comparison/` compares connectivity, DRC, route scope, and feature behavior
-rather than copper bytes. Current KiCad 10 reference fixtures remain honest Flux import blockers.
+rather than copper bytes. Flux now strictly imports and source-preserving round-trips KiCad 10's
+quoted name-valued net references; capability gaps on those unchanged reference fixtures remain
+frontier work rather than being hidden behind format conversion.
 
 The first versioned workflow boundary is available as `FluxWorkPlan` JSON. Create a write-once,
 source-revision-bound empty template with `flux-cli work-plan-template-kicad BOARD PLAN`, inspect it
@@ -1710,9 +1713,33 @@ with `flux-cli inspect-work-plan-kicad BOARD PLAN`, and perform a non-mutating c
 with `flux-cli dry-run-work-plan-kicad BOARD PLAN`. The schema carries ordered route, fanout,
 differential-pair, bus, plane, tuning, cleanup, validation, and placement step kinds; explicit net,
 glob, class, footprint, and placement-group selectors; protected routing modes; immutable policy
-identities; typed scalar options; dependencies; and default-on telemetry. Empty templates infer no
-work. Execution/replay remains withheld until option semantics and selector expansion share the
-existing authoritative CLI/configuration path.
+identities; typed scalar/string-list options; dependencies; and default-on telemetry. Empty
+templates infer no work. Bound policy files are read once under a fixed size limit, SHA-256 checked
+relative to the plan file, and applied through strict adapters before selector expansion. Supported
+kinds are KiCad net-class snapshots, differential-pair and routing-bus constraints, placement
+envelopes/groups/regions/relative constraints, orientation constraints, and placement move
+priorities; unknown or duplicate kinds fail closed. Route steps compile through the same
+`autoroute_v1` preset now used by the direct CLI, with unknown options and type/range errors
+rejected. Execution/replay remains
+withheld for any selected capability still marked partial. `flux-cli execute-work-plan-kicad BOARD
+PLAN [OUTPUT]` therefore executes only a fully qualified plan: preview mode forbids an output,
+whereas a non-preview mode requires one and writes it only through the ordinary source-preserving
+exporter. The current core executor supports ordered route and whole-board validation steps,
+stop-token cancellation, exact per-step acceptance records, sampled fallback, and a deterministic
+plan/result identity. Runtime telemetry also exposes policy identities, selector expansion, and
+active step lifecycle without influencing routing. SIGINT/SIGTERM request the same transactional
+stop token used by the router and return exit status 130 after summary publication. Other step
+kinds, external KiCad DRC orchestration, and deterministic replay remain fail-closed.
+
+Inspection and dry-run expand selectors deterministically against the immutable, policy-prepared
+board.
+Positive selectors are unioned, exclusions are applied last, and footprint or placement-group
+selection reaches nets only through an explicit `touching` or `internal` terminal scope. The JSON
+result explains every selector match, exposes board-order net masks, and separates removable
+unlocked tracks/arcs/vias from immutable routing. `all_nets` and glob-only matches may select future
+work but never authorize removal of pre-existing copper; locked copper and zones remain immutable
+in every mode.
+
 Routine manual routing and application validation now uses the external Teensy CNC controller as a
 strictly read-only target. It is never an automated test dependency, generated outputs stay under
 `build/verification/teensy_cnc/`, and its machinery-safety/`DO NOT FABRICATE` rules remain binding.

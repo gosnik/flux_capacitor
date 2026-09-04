@@ -4832,6 +4832,8 @@ DetailedRouteResult materialize_impl(const Board& source, const GlobalRouteResul
 
   if (config.track_width.value() < 0 || config.via_diameter.value() < 0 ||
       config.via_drill.value() < 0 || config.continuous_trust_region.value() < 0 ||
+      (config.existing_routing == ExistingRoutingPolicy::preserve &&
+       config.existing_routing_replacement_scope.has_value()) ||
       config.maximum_circular_arc_radius.value() < 0 ||
       (config.circular_arc_refinement &&
        (config.maximum_circular_arc_radius.value() == 0 || config.max_circular_arcs == 0U ||
@@ -4896,6 +4898,22 @@ DetailedRouteResult materialize_impl(const Board& source, const GlobalRouteResul
   std::set<NetId> routed_nets;
   for (const auto& path : global.paths) {
     routed_nets.insert(path.net);
+  }
+  std::set<NetId> replacement_nets = routed_nets;
+  if (config.existing_routing_replacement_scope) {
+    replacement_nets.clear();
+    for (const auto& net : *config.existing_routing_replacement_scope) {
+      const auto source_net = std::find_if(source.nets.begin(), source.nets.end(),
+                                           [&net](const Net& candidate) {
+                                             return candidate.id == net && !candidate.name.empty();
+                                           });
+      if (source_net == source.nets.end() || !routed_nets.contains(net) ||
+          !replacement_nets.insert(net).second) {
+        result.stop_reason = DetailedRouterStopReason::invalid_input;
+        result.diagnostic = "existing-routing replacement scope must contain unique named routed nets";
+        return result;
+      }
+    }
   }
   const auto coupled_groups = coupled_routing_groups(source, routed_nets);
   std::map<NetId, ResolvedNetRoutingRules> dimensions;
@@ -5064,7 +5082,7 @@ DetailedRouteResult materialize_impl(const Board& source, const GlobalRouteResul
     return result;
   }
   if (config.existing_routing == ExistingRoutingPolicy::replace_unlocked_for_routed_nets) {
-    remove_unlocked_routing(candidate, routed_nets, result);
+    remove_unlocked_routing(candidate, replacement_nets, result);
   }
   auto used_ids = object_ids(candidate);
   if (checkpoint != nullptr && checkpoint->candidate) {

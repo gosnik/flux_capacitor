@@ -25,6 +25,10 @@ struct DetailedRouterConfig {
   Nanometres via_diameter{Nanometres{0}};
   Nanometres via_drill{Nanometres{0}};
   ExistingRoutingPolicy existing_routing{ExistingRoutingPolicy::preserve};
+  // Null selects every net materialized by the global plan (the direct CLI behavior). A present
+  // vector is an exact replacement authority and may be empty. It must be unique, source-valid,
+  // and a subset of routed nets. Locked objects remain immutable in either case.
+  std::optional<std::vector<NetId>> existing_routing_replacement_scope;
   // Check detailed copper without saved zone-fill polygons, then return a provisional result that
   // requires external KiCad refill, strict re-import, connectivity, and DRC before acceptance.
   bool defer_saved_zone_fill_clearance_to_refill{false};

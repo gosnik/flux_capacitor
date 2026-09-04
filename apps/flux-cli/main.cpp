@@ -8,6 +8,7 @@
 #include "flux/core/regional_router.hpp"
 #include "flux/core/router_telemetry.hpp"
 #include "flux/core/routing_compute.hpp"
+#include "flux/core/routing_preset.hpp"
 #include "flux/core/routing_rules.hpp"
 #include "flux/io/differential_pair_constraints.hpp"
 #include "flux/io/kicad_export.hpp"
@@ -22,13 +23,17 @@
 #include "flux/io/routing_bus_constraints.hpp"
 #include "flux/io/specctra.hpp"
 #include "flux/io/work_plan.hpp"
+#include "flux/io/work_plan_executor.hpp"
+#include "flux/io/work_plan_router.hpp"
 #include "flux/generated/parity_manifest.hpp"
 
 #include <boost/json.hpp>
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <charconv>
+#include <csignal>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -42,6 +47,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -63,6 +69,51 @@ using flux::Pad;
 using flux::Point;
 using flux::Polygon;
 using flux::TrackSegment;
+
+volatile std::sig_atomic_t work_plan_signal_requested = 0;
+
+extern "C" void request_work_plan_stop(int) { work_plan_signal_requested = 1; }
+
+class WorkPlanSignalBridge {
+public:
+  WorkPlanSignalBridge() {
+    work_plan_signal_requested = 0;
+    previous_interrupt_ = std::signal(SIGINT, request_work_plan_stop);
+    previous_terminate_ = std::signal(SIGTERM, request_work_plan_stop);
+    monitor_ = std::jthread([this](std::stop_token token) {
+      while (!token.stop_requested()) {
+        if (work_plan_signal_requested != 0) {
+          source_.request_stop();
+          return;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds{10});
+      }
+    });
+  }
+
+  WorkPlanSignalBridge(const WorkPlanSignalBridge&) = delete;
+  WorkPlanSignalBridge& operator=(const WorkPlanSignalBridge&) = delete;
+
+  ~WorkPlanSignalBridge() {
+    if (previous_interrupt_ != SIG_ERR) {
+      std::signal(SIGINT, previous_interrupt_);
+    }
+    if (previous_terminate_ != SIG_ERR) {
+      std::signal(SIGTERM, previous_terminate_);
+    }
+    monitor_.request_stop();
+  }
+
+  [[nodiscard]] std::stop_token token() const noexcept { return source_.get_token(); }
+  [[nodiscard]] bool stop_requested() const noexcept { return source_.stop_requested(); }
+
+private:
+  using SignalHandler = void (*)(int);
+  SignalHandler previous_interrupt_{SIG_DFL};
+  SignalHandler previous_terminate_{SIG_DFL};
+  std::stop_source source_;
+  std::jthread monitor_;
+};
 
 [[nodiscard]] Point mm(double x, double y) {
   return Point{Nanometres::from_mm(x), Nanometres::from_mm(y)};
@@ -5751,22 +5802,41 @@ void print_specctra_import(const flux::io::SpecctraSesImportResult& result, bool
   return result;
 }
 
-[[nodiscard]] bool print_work_plan_result(const flux::io::WorkPlanLoadResult& loaded,
-                                          bool dry_run) {
+[[nodiscard]] bool work_plan_capabilities_satisfied(
+    const flux::io::FluxWorkPlan& plan, const std::map<std::string, std::string>& statuses) {
+  const auto capabilities = flux::io::required_flux_work_plan_capabilities(plan);
+  return std::all_of(capabilities.begin(), capabilities.end(), [&](const auto& capability) {
+        const auto found = statuses.find(capability);
+        return found != statuses.end() &&
+               (found->second == "present" ||
+                found->second == "intentional-stronger-alternative");
+      });
+}
+
+struct WorkPlanPrintOutcome {
+  bool valid{false};
+  bool executable{false};
+};
+
+[[nodiscard]] WorkPlanPrintOutcome print_work_plan_result(
+    const flux::io::WorkPlanLoadResult& loaded, const flux::Board& source, bool dry_run) {
+  const auto& prepared_source = loaded.policy_board ? *loaded.policy_board : source;
   const auto statuses = parity_capability_statuses();
   std::vector<std::string> capabilities;
-  bool capability_preflight_ok = loaded.ok();
+  std::optional<flux::io::WorkPlanRouteCompileResult> compiled;
+  if (loaded.plan) {
+    compiled = flux::io::compile_flux_work_plan_routes(prepared_source, *loaded.plan);
+  }
+  const auto* expansion = compiled ? &compiled->expansion : nullptr;
+  const bool valid = loaded.ok() && compiled && compiled->ok();
+  bool capability_preflight_ok = valid;
   if (loaded.plan) {
     capabilities = flux::io::required_flux_work_plan_capabilities(*loaded.plan);
-    for (const auto& capability : capabilities) {
-      const auto found = statuses.find(capability);
-      capability_preflight_ok =
-          capability_preflight_ok && found != statuses.end() &&
-          (found->second == "present" || found->second == "intentional-stronger-alternative");
-    }
+    capability_preflight_ok =
+        capability_preflight_ok && work_plan_capabilities_satisfied(*loaded.plan, statuses);
   }
   std::cout << "{\n"
-            << "  \"ok\": " << (loaded.ok() ? "true" : "false") << ",\n"
+            << "  \"ok\": " << (valid ? "true" : "false") << ",\n"
             << "  \"dry_run\": " << (dry_run ? "true" : "false") << ",\n"
             << "  \"would_mutate_board\": false,\n"
             << "  \"capability_preflight_ok\": " << (capability_preflight_ok ? "true" : "false")
@@ -5778,9 +5848,14 @@ void print_specctra_import(const flux::io::SpecctraSesImportResult& result, bool
               << ", \"status\": "
               << json_quote(status == statuses.end() ? "unknown" : status->second) << '}';
   }
+  std::vector<flux::io::WorkPlanDiagnostic> diagnostics = loaded.diagnostics;
+  if (compiled) {
+    diagnostics.insert(diagnostics.end(), compiled->diagnostics.begin(),
+                       compiled->diagnostics.end());
+  }
   std::cout << "],\n  \"diagnostics\": [";
-  for (std::size_t index = 0U; index < loaded.diagnostics.size(); ++index) {
-    const auto& diagnostic = loaded.diagnostics[index];
+  for (std::size_t index = 0U; index < diagnostics.size(); ++index) {
+    const auto& diagnostic = diagnostics[index];
     std::cout << (index == 0U ? "" : ",") << "\n    {\"severity\": "
               << json_quote(diagnostic.severity == flux::io::WorkPlanDiagnosticSeverity::error
                                 ? "error"
@@ -5789,7 +5864,7 @@ void print_specctra_import(const flux::io::SpecctraSesImportResult& result, bool
               << ", \"message\": " << json_quote(diagnostic.message)
               << ", \"json_pointer\": " << json_quote(diagnostic.json_pointer) << '}';
   }
-  if (!loaded.diagnostics.empty()) {
+  if (!diagnostics.empty()) {
     std::cout << '\n';
   }
   std::cout << "  ]";
@@ -5799,6 +5874,11 @@ void print_specctra_import(const flux::io::SpecctraSesImportResult& result, bool
               << ",\n  \"mode\": " << json_quote(flux::io::work_plan_mode_name(plan.mode))
               << ",\n  \"telemetry_enabled\": " << (plan.telemetry.enabled ? "true" : "false")
               << ",\n  \"policy_count\": " << plan.policies.size()
+              << ",\n  \"applied_policy_kinds\": [";
+    for (std::size_t index = 0U; index < loaded.applied_policy_kinds.size(); ++index) {
+      std::cout << (index == 0U ? "" : ", ") << json_quote(loaded.applied_policy_kinds[index]);
+    }
+    std::cout << ']'
               << ",\n  \"step_count\": " << plan.steps.size() << ",\n  \"steps\": [";
     for (std::size_t index = 0U; index < plan.steps.size(); ++index) {
       const auto& step = plan.steps[index];
@@ -5810,10 +5890,161 @@ void print_specctra_import(const flux::io::SpecctraSesImportResult& result, bool
     if (!plan.steps.empty()) {
       std::cout << '\n';
     }
-    std::cout << "  ],\n  \"canonical_plan\": " << flux::io::serialize_flux_work_plan(plan);
+    std::cout << "  ]";
+    if (expansion) {
+      const auto net_name = [&prepared_source](const flux::NetId& id) {
+        const auto found =
+            std::find_if(prepared_source.nets.begin(), prepared_source.nets.end(),
+                         [&id](const auto& net) { return net.id == id; });
+        return found == prepared_source.nets.end() ? id.value() : found->name;
+      };
+      const auto footprint_reference = [&prepared_source](const flux::ObjectId& id) {
+        const auto found = std::find_if(
+            prepared_source.footprints.begin(), prepared_source.footprints.end(),
+            [&id](const auto& fp) { return fp.id == id; });
+        return found == prepared_source.footprints.end() ? id.value() : found->reference;
+      };
+      const auto print_ids = [](const auto& ids, const auto& label) {
+        std::cout << '[';
+        for (std::size_t index = 0U; index < ids.size(); ++index) {
+          std::cout << (index == 0U ? "" : ", ") << json_quote(label(ids[index]));
+        }
+        std::cout << ']';
+      };
+      std::cout << ",\n  \"expanded_steps\": [";
+      for (std::size_t index = 0U; index < expansion->steps.size(); ++index) {
+        const auto& step = expansion->steps[index];
+        std::cout << (index == 0U ? "" : ",") << "\n    {\"id\": " << json_quote(step.id)
+                  << ", \"kind\": " << json_quote(flux::io::work_plan_step_kind_name(step.kind))
+                  << ", \"nets\": ";
+        print_ids(step.nets, net_name);
+        std::cout << ", \"footprints\": ";
+        print_ids(step.footprints, footprint_reference);
+        std::cout << ", \"wildcard_only_nets\": ";
+        print_ids(step.wildcard_only_nets, net_name);
+        std::cout << ", \"selector_evidence\": [";
+        for (std::size_t evidence_index = 0U; evidence_index < step.evidence.size();
+             ++evidence_index) {
+          const auto& evidence = step.evidence[evidence_index];
+          std::cout << (evidence_index == 0U ? "" : ",") << "{\"field\": "
+                    << json_quote(evidence.field) << ", \"value\": " << json_quote(evidence.value)
+                    << ", \"exclusion\": " << (evidence.exclusion ? "true" : "false")
+                    << ", \"nets\": ";
+          print_ids(evidence.nets, net_name);
+          std::cout << ", \"footprints\": ";
+          print_ids(evidence.footprints, footprint_reference);
+          std::cout << '}';
+        }
+        std::cout << "]}";
+      }
+      if (!expansion->steps.empty()) {
+        std::cout << '\n';
+      }
+      const auto& authority = expansion->copper_authority;
+      std::cout << "  ],\n  \"existing_copper_authority\": {\"reroutable_nets\": ";
+      print_ids(authority.reroutable_nets, net_name);
+      std::cout << ", \"removable_unlocked_tracks\": " << authority.removable_tracks.size()
+                << ", \"removable_unlocked_track_arcs\": "
+                << authority.removable_track_arcs.size() << ", \"removable_unlocked_vias\": "
+                << authority.removable_vias.size() << ", \"immutable_tracks\": "
+                << authority.immutable_tracks.size() << ", \"immutable_track_arcs\": "
+                << authority.immutable_track_arcs.size() << ", \"immutable_vias\": "
+                << authority.immutable_vias.size() << ", \"immutable_zones\": "
+                << authority.immutable_zones.size() << "},\n  \"selected_net_mask\": [";
+      for (std::size_t index = 0U; index < expansion->selected_net_mask.size(); ++index) {
+        std::cout << (index == 0U ? "" : ",")
+                  << static_cast<unsigned int>(expansion->selected_net_mask[index]);
+      }
+      std::cout << "],\n  \"reroutable_net_mask\": [";
+      for (std::size_t index = 0U; index < expansion->reroutable_net_mask.size(); ++index) {
+        std::cout << (index == 0U ? "" : ",")
+                  << static_cast<unsigned int>(expansion->reroutable_net_mask[index]);
+      }
+      std::cout << ']';
+      if (compiled) {
+        std::cout << ",\n  \"compiled_route_steps\": [";
+        for (std::size_t index = 0U; index < compiled->route_steps.size(); ++index) {
+          const auto& step = compiled->route_steps[index];
+          const auto& planner = step.configuration.planner;
+          const auto& detailed = step.configuration.detailed;
+          std::cout << (index == 0U ? "" : ",") << "\n    {\"id\": " << json_quote(step.id)
+                    << ", \"selected_nets\": ";
+          print_ids(step.selected_nets, net_name);
+          std::cout << ", \"priority_nets\": ";
+          print_ids(step.priority_nets, net_name);
+          std::cout << ", \"applied_options\": [";
+          for (std::size_t option_index = 0U; option_index < step.applied_options.size();
+               ++option_index) {
+            std::cout << (option_index == 0U ? "" : ", ")
+                      << json_quote(step.applied_options[option_index]);
+          }
+          std::cout << "], \"configuration\": {\"grid_pitch_nm\": "
+                    << planner.global.grid_pitch.value() << ", \"via_site_pitch_nm\": "
+                    << planner.global.via_site_pitch.value()
+                    << ", \"max_router_iterations\": " << planner.global.max_iterations
+                    << ", \"max_expansions_per_connection\": "
+                    << planner.global.max_expansions_per_connection
+                    << ", \"routability_feedback_retries\": "
+                    << planner.max_routability_feedback_retries
+                    << ", \"retained_global_portfolios\": "
+                    << planner.retained_global_portfolios << ", \"xpbd_relaxation\": "
+                    << (planner.regional.enable_xpbd_relaxation ? "true" : "false")
+                    << ", \"xpbd_feedback\": "
+                    << (planner.regional.enable_xpbd_feedback ? "true" : "false")
+                    << ", \"xpbd_iterations\": " << planner.regional.xpbd.iterations
+                    << ", \"circular_arc_refinement\": "
+                    << (detailed.circular_arc_refinement ? "true" : "false")
+                    << ", \"spline_route_workers\": " << detailed.spline_route_workers
+                    << ", \"replace_existing_routing\": "
+                    << (detailed.existing_routing ==
+                                flux::ExistingRoutingPolicy::replace_unlocked_for_routed_nets
+                            ? "true"
+                            : "false")
+                    << "}}";
+        }
+        if (!compiled->route_steps.empty()) {
+          std::cout << '\n';
+        }
+        std::cout << "  ]";
+      }
+    }
+    std::cout << ",\n  \"canonical_plan\": " << flux::io::serialize_flux_work_plan(plan);
   }
   std::cout << "}\n";
-  return loaded.ok() && capability_preflight_ok;
+  return {valid, capability_preflight_ok};
+}
+
+void print_work_plan_execution(
+    const flux::io::WorkPlanExecutionResult& execution,
+    const std::optional<std::filesystem::path>& output_path = std::nullopt,
+    const flux::io::KicadExportResult* export_result = nullptr) {
+  boost::system::error_code error;
+  auto value = boost::json::parse(flux::io::serialize_flux_work_plan_execution_summary(execution),
+                                  error);
+  if (error || !value.is_object()) {
+    std::cout << "{\"internally_complete\":false,\"diagnostics\":[{\"code\":"
+                 "\"work_plan_summary_serialization_failed\"}]}\n";
+    return;
+  }
+  auto& object = value.as_object();
+  object["output"] = output_path ? boost::json::value(output_path->generic_string())
+                                 : boost::json::value();
+  object["export_attempted"] = export_result != nullptr;
+  object["export_ok"] = export_result != nullptr && export_result->ok();
+  boost::json::array diagnostics;
+  if (export_result != nullptr) {
+    diagnostics.reserve(export_result->diagnostics.size());
+    for (const auto& diagnostic : export_result->diagnostics) {
+      boost::json::object item;
+      item["severity"] =
+          diagnostic.severity == flux::io::ExportSeverity::error ? "error" : "warning";
+      item["code"] = diagnostic.code;
+      item["message"] = diagnostic.message;
+      diagnostics.push_back(std::move(item));
+    }
+  }
+  object["export_diagnostics"] = std::move(diagnostics);
+  std::cout << boost::json::serialize(value) << '\n';
 }
 
 void print_netclass_snapshot_result(const flux::io::KicadNetClassSnapshotResult& snapshot) {
@@ -6960,30 +7191,6 @@ void apply_integrated_tail(const KicadCommandTail& tail, flux::IntegratedOptimiz
   }
 }
 
-[[nodiscard]] flux::GlobalRouterConfig minimal_autoroute_config() {
-  flux::GlobalRouterConfig config;
-  // The production workflow uses the crossing-capacity-gated 45-degree topology. The core
-  // router remains opt-in so diagnostic callers can retain the orthogonal comparison baseline.
-  config.allow_crossing_safe_diagonal_grid_edges = true;
-  config.max_iterations = 6U;
-  config.max_expansions_per_connection = 50'000U;
-  config.expansion_retry_heuristic_weight_per_mille = 10'000U;
-  config.reuse_weighted_search_frontier = true;
-  config.checkpoint_objective = flux::GlobalRouteCheckpointObjective::dimensioned_physical_overflow;
-  config.scale_voronoi_history_by_overflow = true;
-  config.present_congestion_multiplier_per_mille = 1'050U;
-  config.max_present_congestion_scale_per_mille = 10'000U;
-  config.present_congestion_escalation_start_iteration = 4U;
-  config.use_voronoi_allocation_resources = true;
-  config.use_direct_voronoi_resource_edges = true;
-  config.require_voronoi_topological_transitions = true;
-  config.negotiate_voronoi_lane_conflicts = true;
-  config.atomic_complete_net_routing = true;
-  config.selective_congestion_reroute = true;
-  config.order_routing_groups_by_physical_envelope = true;
-  return config;
-}
-
 [[nodiscard]] std::optional<Board>
 apply_optional_routing_policy(const Board& source,
                               const std::optional<std::filesystem::path>& snapshot_path,
@@ -7448,6 +7655,7 @@ void print_help() {
                "  flux-cli work-plan-template-kicad BOARD OUTPUT.flux.json\n"
                "  flux-cli inspect-work-plan-kicad BOARD PLAN.flux.json\n"
                "  flux-cli dry-run-work-plan-kicad BOARD PLAN.flux.json\n"
+               "  flux-cli execute-work-plan-kicad BOARD PLAN.flux.json [OUTPUT.kicad_pcb]\n"
                "  flux-cli demo          Evaluate a valid built-in board\n"
                "  flux-cli demo-invalid  Evaluate an overlapping built-in board\n"
                "  flux-cli route-demo [--strict-medial] [--direct-medial] Globally route the "
@@ -7708,11 +7916,79 @@ int main(int argc, char** argv) {
     const auto loaded =
         flux::io::load_flux_work_plan_file(std::filesystem::path{argv[3]}, &*imported.board);
     const bool dry_run = command == "dry-run-work-plan-kicad";
-    const bool executable = print_work_plan_result(loaded, dry_run);
-    if (!loaded.ok()) {
+    const auto outcome = print_work_plan_result(loaded, *imported.board, dry_run);
+    if (!outcome.valid) {
       return 11;
     }
-    return !dry_run || executable ? EXIT_SUCCESS : 12;
+    return !dry_run || outcome.executable ? EXIT_SUCCESS : 12;
+  }
+  if (command == "execute-work-plan-kicad" && (argc == 4 || argc == 5)) {
+    const auto source_path = std::filesystem::path{argv[2]};
+    const auto imported = flux::io::import_kicad_pcb_file(source_path);
+    if (!imported.strict()) {
+      print_import_result(imported);
+      return 4;
+    }
+    const auto loaded =
+        flux::io::load_flux_work_plan_file(std::filesystem::path{argv[3]}, &*imported.board);
+    const auto& prepared_source = loaded.policy_board ? *loaded.policy_board : *imported.board;
+    const auto compiled = loaded.plan
+                              ? std::optional{flux::io::compile_flux_work_plan_routes(
+                                    prepared_source, *loaded.plan)}
+                              : std::nullopt;
+    if (!loaded.ok() || !compiled || !compiled->ok() || !loaded.plan) {
+      static_cast<void>(print_work_plan_result(loaded, *imported.board, true));
+      return 11;
+    }
+    if (!work_plan_capabilities_satisfied(*loaded.plan, parity_capability_statuses())) {
+      static_cast<void>(print_work_plan_result(loaded, *imported.board, true));
+      return 12;
+    }
+    const bool preview = loaded.plan->mode == flux::io::WorkPlanMode::preview;
+    if ((preview && argc != 4) || (!preview && argc != 5)) {
+      std::cerr << "preview plans forbid an output path; mutating modes require one\n";
+      return 2;
+    }
+    KicadCommandTail telemetry_tail;
+    telemetry_tail.telemetry = loaded.plan->telemetry.enabled;
+    telemetry_tail.telemetry_listen = loaded.plan->telemetry.listen;
+    telemetry_tail.telemetry_rate_hz = loaded.plan->telemetry.rate_hz;
+    if (loaded.plan->telemetry.level == "diagnostic") {
+      telemetry_tail.telemetry_level = flux::RouterTelemetryLevel::diagnostic;
+    } else if (loaded.plan->telemetry.level == "trace") {
+      telemetry_tail.telemetry_level = flux::RouterTelemetryLevel::trace;
+    } else {
+      telemetry_tail.telemetry_level = flux::RouterTelemetryLevel::normal;
+    }
+    if (loaded.plan->telemetry.record) {
+      telemetry_tail.telemetry_record =
+          std::filesystem::path{*loaded.plan->telemetry.record};
+    }
+    auto telemetry = make_router_telemetry_service(telemetry_tail);
+    if (loaded.plan->telemetry.enabled && !telemetry) {
+      std::cerr << "invalid work-plan telemetry WebSocket listen endpoint\n";
+      return 11;
+    }
+    if (telemetry) {
+      telemetry->publish_source_board(prepared_source, source_path.string());
+    }
+    WorkPlanSignalBridge stop_bridge;
+    auto execution =
+        flux::io::execute_loaded_flux_work_plan(loaded, stop_bridge.token(), telemetry.get());
+    std::optional<std::filesystem::path> output_path;
+    std::optional<flux::io::KicadExportResult> exported;
+    if (!preview) {
+      output_path = std::filesystem::path{argv[4]};
+      if (execution.candidate_ready_for_export && execution.candidate) {
+        exported = flux::io::export_kicad_candidate_file(source_path, *output_path, prepared_source,
+                                                         *execution.candidate);
+      }
+    }
+    print_work_plan_execution(execution, output_path, exported ? &*exported : nullptr);
+    if (stop_bridge.stop_requested()) {
+      return 130;
+    }
+    return execution.ok() && (preview || (exported && exported->ok())) ? EXIT_SUCCESS : 13;
   }
   if ((command == "demo" || command == "demo-invalid") && argc == 2) {
     const auto result = flux::evaluate_board(make_demo_board(command == "demo-invalid"));
@@ -8128,16 +8404,14 @@ int main(int argc, char** argv) {
     if (telemetry) {
       telemetry->publish_source_board(*source, source_path.string());
     }
-    const auto autoroute_config = minimal_autoroute_config();
-    auto planner_config = flux::RoutingPlannerConfig{};
-    planner_config.global = autoroute_config;
+    auto autoroute = flux::make_autoroute_v1_configuration();
+    const auto autoroute_config = autoroute.planner.global;
+    auto planner_config = autoroute.planner;
     apply_regional_tail(*tail, planner_config.regional);
     auto routing_plan = flux::plan_routes(*source, planner_config, {}, telemetry.get());
     auto global = routing_plan.coarse_global;
-    flux::DetailedRouterConfig detailed_config;
-    detailed_config.existing_routing =
-        flux::ExistingRoutingPolicy::replace_unlocked_for_routed_nets;
-    detailed_config.topology_locked_medial_materialization = true;
+    auto detailed_config = autoroute.detailed;
+    detailed_config.existing_routing = flux::ExistingRoutingPolicy::replace_unlocked_for_routed_nets;
     auto detailed = flux::materialize_detailed_route(*source, routing_plan, detailed_config);
     if (global.complete() &&
         detailed.stop_reason == flux::DetailedRouterStopReason::copper_violations) {

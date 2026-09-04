@@ -83,7 +83,7 @@
         {"path": "tests/fixtures/parity/krt/cap_chain.kicad_pcb", "sha256": "fc73dd07f4dcfabf28d49d0b044d8acda8e8622b4969bd2c3443450c526eb9cd"}
       ],
       "capabilities": ["tuning.length-time"],
-      "current_gate": {"state": "import-blocked", "strict_import": false, "blockers": ["unknown_net_ordinal"]}
+      "current_gate": {"state": "frontier", "strict_import": true, "blockers": ["length_time_tuning_not_qualified"]}
     },
     {
       "id": "krt.qfn-interior-pads",
@@ -94,7 +94,7 @@
         {"path": "tests/fixtures/parity/krt/qfn_interior_pads.kicad_pcb", "sha256": "ef1e6ab7694753c3e501bb42383891030a1c5074654b36b1946af55064d2760b"}
       ],
       "capabilities": ["fanout.package-aware"],
-      "current_gate": {"state": "import-blocked", "strict_import": false, "blockers": ["unknown_net_ordinal"]}
+      "current_gate": {"state": "frontier", "strict_import": true, "blockers": ["package_fanout_not_qualified"]}
     },
     {
       "id": "krt.qfn-underpad-coupling",
@@ -105,7 +105,7 @@
         {"path": "tests/fixtures/parity/krt/qfn_underpad_coupling.kicad_pcb", "sha256": "202cecd0bcf61b88e088fbe0bb705868c1ba8de8589f57e534aa2816473fb0c9"}
       ],
       "capabilities": ["fanout.package-aware", "routing.differential-pairs"],
-      "current_gate": {"state": "import-blocked", "strict_import": false, "blockers": ["unknown_net_ordinal", "non_copper_pad_ignored"]}
+      "current_gate": {"state": "frontier", "strict_import": true, "blockers": ["package_fanout_not_qualified"]}
     },
     {
       "id": "krt.qfn-differential-escape",
@@ -116,7 +116,7 @@
         {"path": "tests/fixtures/parity/krt/qfn_diffpair_escape.kicad_pcb", "sha256": "70b666c3d59dd8264a3c6c3cffd8a5027521f12ff827605f155897b4bacfc747"}
       ],
       "capabilities": ["routing.differential-pairs", "vias.return-and-stitch", "placement.logical-swaps", "copper.teardrops"],
-      "current_gate": {"state": "import-blocked", "strict_import": false, "blockers": ["unknown_net_ordinal", "non_copper_pad_ignored"]}
+      "current_gate": {"state": "frontier", "strict_import": true, "blockers": ["differential_fanout_not_qualified"]}
     },
     {
       "id": "krt.qfn-csi-underpad-differential",
@@ -127,7 +127,7 @@
         {"path": "tests/fixtures/parity/krt/qfn_csi_underpad_diff.kicad_pcb", "sha256": "5b8eedaa798c8a369e74fcfdb5a4198da566c6755b8416ef3cc1deacfb498522"}
       ],
       "capabilities": ["fanout.package-aware", "routing.differential-pairs"],
-      "current_gate": {"state": "import-blocked", "strict_import": false, "blockers": ["unknown_net_ordinal", "non_copper_pad_ignored"]}
+      "current_gate": {"state": "frontier", "strict_import": true, "blockers": ["differential_fanout_not_qualified"]}
     },
     {
       "id": "krt.lvds-dual-clock",
@@ -138,7 +138,7 @@
         {"path": "tests/fixtures/parity/krt/lvds_converter_dualclk.kicad_pcb", "sha256": "46f70ced3dfc43cba7e2008c9475db4670e94fbfbaf9fb893d393fc26547503a"}
       ],
       "capabilities": ["electrical.impedance", "routing.differential-pairs", "tuning.length-time"],
-      "current_gate": {"state": "import-blocked", "strict_import": false, "blockers": ["unknown_net_ordinal", "unfilled_zone_ignored"]}
+      "current_gate": {"state": "import-blocked", "strict_import": false, "blockers": ["unfilled_zone_ignored"]}
     },
     {
       "id": "krt.two-islands-smd-stub-via",
@@ -149,7 +149,7 @@
         {"path": "tests/fixtures/parity/krt/two_islands_smd_stub_via.kicad_pcb", "sha256": "81cc5a32c71681b3dc0e12958686de365b1f5f3bd7f3818838b00f442486ca52"}
       ],
       "capabilities": ["planes.synthesis-repair", "cleanup.copper"],
-      "current_gate": {"state": "import-blocked", "strict_import": false, "blockers": ["unknown_net_ordinal", "missing_courtyard"]}
+      "current_gate": {"state": "frontier", "strict_import": true, "blockers": ["plane_repair_not_qualified"]}
     },
     {
       "id": "krt.two-islands-through-hole",
@@ -160,7 +160,7 @@
         {"path": "tests/fixtures/parity/krt/two_islands_tht.kicad_pcb", "sha256": "4e4e00d830f296d19a0bf1fc3d14f6c34f39748cf93cd3a33f59825cfa680837"}
       ],
       "capabilities": ["planes.synthesis-repair", "vias.return-and-stitch"],
-      "current_gate": {"state": "import-blocked", "strict_import": false, "blockers": ["unknown_net_ordinal", "missing_courtyard"]}
+      "current_gate": {"state": "frontier", "strict_import": true, "blockers": ["plane_repair_not_qualified"]}
     },
     {
       "id": "krt.two-islands-via-only",
@@ -171,7 +171,7 @@
         {"path": "tests/fixtures/parity/krt/two_islands_via_only.kicad_pcb", "sha256": "c6359a096630309010a56e3aeccd94989da004fb1ccb431ca8e5f84edacab095"}
       ],
       "capabilities": ["planes.synthesis-repair", "vias.return-and-stitch"],
-      "current_gate": {"state": "import-blocked", "strict_import": false, "blockers": ["unknown_net_ordinal", "missing_courtyard"]}
+      "current_gate": {"state": "frontier", "strict_import": true, "blockers": ["plane_repair_not_qualified"]}
     }
   ]
 }

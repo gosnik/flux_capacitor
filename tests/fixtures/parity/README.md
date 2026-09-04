@@ -12,9 +12,10 @@ license reproduced in `LICENSE.KiCadRoutingTools.txt`; no separate notice was pr
 synthetic/reproduction fixtures at the pinned revision. Every copied file retains its upstream
 path and SHA-256 in `manifest.json`.
 
-The KiCad 10 fixtures deliberately remain in their original 2026 syntax. Flux currently rejects
-their string-valued net references with attributed `unknown_net_ordinal` errors. Do not normalize,
-down-convert, or silently edit them to make a test pass: strict KiCad 10 import is Milestone 2 work.
+The KiCad 10 fixtures deliberately remain in their original 2026 syntax. Flux derives stable net
+identity directly from their quoted name-valued references when no ordinal table exists and emits
+the same syntax for new source-preserving copper. Do not normalize, down-convert, or silently edit
+the fixtures: remaining capability blockers must stay attributable to actual routing semantics.
 
 Run the catalog and capability-contract check through:
 

@@ -103,6 +103,9 @@ def main() -> int:
         if inspection_result.get("strict") is not gate["strict_import"]:
             print(f"{fixture['id']} strict-import gate drifted", file=sys.stderr)
             return 1
+        if gate["state"] != "import-blocked" and inspection_result.get("core_validation_errors") != 0:
+            print(f"{fixture['id']} passes syntax import but fails canonical validation", file=sys.stderr)
+            return 1
         actual_issues = set(inspection_result.get("import_issue_counts", {}))
         if gate["state"] == "import-blocked" and not set(gate["blockers"]).issubset(actual_issues):
             print(

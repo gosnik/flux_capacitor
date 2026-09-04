@@ -40,7 +40,8 @@ enum class WorkPlanSelectorScope {
   internal,
 };
 
-using WorkPlanOptionValue = std::variant<bool, std::int64_t, std::uint64_t, std::string>;
+using WorkPlanOptionValue =
+    std::variant<bool, std::int64_t, std::uint64_t, std::string, std::vector<std::string>>;
 
 struct WorkPlanSelectors {
   bool all_nets{false};
@@ -108,20 +109,99 @@ struct WorkPlanDiagnostic {
 
 struct WorkPlanLoadResult {
   std::optional<FluxWorkPlan> plan;
+  // Present for file-backed loads with a source board after every declared policy has been
+  // identity-checked and applied through its strict source-bound adapter.
+  std::optional<Board> policy_board;
+  std::vector<std::string> applied_policy_kinds;
   std::vector<WorkPlanDiagnostic> diagnostics;
 
   [[nodiscard]] bool has_errors() const;
   [[nodiscard]] bool ok() const { return plan.has_value() && !has_errors(); }
 };
 
+struct WorkPlanPolicyApplicationResult {
+  std::optional<Board> board;
+  std::vector<std::string> applied_policy_kinds;
+  std::vector<WorkPlanDiagnostic> diagnostics;
+
+  [[nodiscard]] bool has_errors() const;
+  [[nodiscard]] bool ok() const { return board.has_value() && !has_errors(); }
+};
+
+// One deterministic selector explanation. The field/value pair preserves why a target entered or
+// left the scope; IDs remain canonical and are sorted independently of source serialization order.
+struct WorkPlanSelectorEvidence {
+  std::string field;
+  std::string value;
+  bool exclusion{false};
+  std::vector<NetId> nets;
+  std::vector<ObjectId> footprints;
+
+  bool operator==(const WorkPlanSelectorEvidence&) const = default;
+};
+
+struct WorkPlanStepExpansion {
+  std::string id;
+  WorkPlanStepKind kind{WorkPlanStepKind::validation};
+  std::vector<NetId> nets;
+  std::vector<ObjectId> footprints;
+  // Nets reached only through all_nets/include_globs. They may be planned but cannot authorize
+  // removal of pre-existing copper in force-reroute-selected mode.
+  std::vector<NetId> wildcard_only_nets;
+  std::vector<WorkPlanSelectorEvidence> evidence;
+
+  bool operator==(const WorkPlanStepExpansion&) const = default;
+};
+
+struct WorkPlanExistingCopperAuthority {
+  std::vector<NetId> reroutable_nets;
+  std::vector<ObjectId> removable_tracks;
+  std::vector<ObjectId> removable_track_arcs;
+  std::vector<ObjectId> removable_vias;
+  std::vector<ObjectId> immutable_tracks;
+  std::vector<ObjectId> immutable_track_arcs;
+  std::vector<ObjectId> immutable_vias;
+  std::vector<ObjectId> immutable_zones;
+
+  bool operator==(const WorkPlanExistingCopperAuthority&) const = default;
+};
+
+struct WorkPlanExpansionResult {
+  std::vector<WorkPlanStepExpansion> steps;
+  WorkPlanExistingCopperAuthority copper_authority;
+  // Board-net-order masks are ready for one bounded device upload and reuse by later plan steps.
+  std::vector<std::uint8_t> selected_net_mask;
+  std::vector<std::uint8_t> reroutable_net_mask;
+  std::vector<WorkPlanDiagnostic> diagnostics;
+
+  [[nodiscard]] bool has_errors() const;
+  [[nodiscard]] bool ok() const { return !has_errors(); }
+};
+
 // Parses a bounded, strict JSON document and optionally binds it to an immutable board snapshot.
-// Unknown schema fields and stale revisions fail closed. Step options are scalar values whose
-// semantic support is checked separately by capability preflight before execution.
+// Unknown schema fields and stale revisions fail closed. Step options are bounded typed scalars or
+// string lists whose semantic support is checked separately before execution.
 [[nodiscard]] WorkPlanLoadResult parse_flux_work_plan(std::string_view contents,
                                                       const Board* source = nullptr);
 
+// Relative policy paths resolve from the plan file's directory. Every bound regular file is
+// streamed through SHA-256 under a fixed size bound before the loaded plan can be executable.
 [[nodiscard]] WorkPlanLoadResult load_flux_work_plan_file(const std::filesystem::path& path,
                                                           const Board* source = nullptr);
+
+// Reads every policy artifact once under a fixed bound, verifies its recorded SHA-256, and applies
+// known policy kinds in dependency-safe canonical order. Unknown/duplicate kinds fail closed.
+// Relative paths are resolved from policy_base_directory.
+[[nodiscard]] WorkPlanPolicyApplicationResult
+apply_flux_work_plan_policies(const Board& source, const FluxWorkPlan& plan,
+                              const std::filesystem::path& policy_base_directory);
+
+// Expands all selectors against one immutable canonical board. Selection is a union followed by
+// glob exclusion. Footprint/group selectors project to nets only for explicit touching/internal
+// scope. Locked copper and zones are always immutable, and wildcard-only matches never authorize
+// rip-up of pre-existing copper.
+[[nodiscard]] WorkPlanExpansionResult expand_flux_work_plan(const Board& source,
+                                                            const FluxWorkPlan& plan);
 
 // Emits a deterministic canonical JSON representation. Parsing and reserializing an unchanged
 // plan is byte-stable.

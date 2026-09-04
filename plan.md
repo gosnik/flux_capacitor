@@ -224,8 +224,8 @@ Progress ledger (updated 2026-09-04):
 - Milestone 0.4 complete: `tests/fixtures/parity/manifest.json` maps every capability to the
   smallest selected Flux, licensed corpus, or pinned KiCadRoutingTools fixture. Nine upstream
   boards are preserved byte-for-byte with paths, SHA-256 identities, the pinned MIT notice, and
-  honest current gates. Their KiCad 10 string-net import failures remain attributed frontier
-  evidence rather than being normalized away.
+  honest current gates. Eight now pass strict KiCad 10 named-net import without normalizing source
+  bytes; the LVDS fixture remains specifically blocked by an unfilled-zone semantic.
 - Milestone 0.5 complete: `tests/suites.json` and `run_suite.sh` define executable per-change,
   frontier, and release boundaries. The per-change suite runs only the three retained high-risk
   routing invariants, observer/contract/GPU tests, and qualified tiers; frontier adds the unlocked
@@ -234,9 +234,14 @@ Progress ledger (updated 2026-09-04):
 - Milestone 0.6 complete: the source-bound reference comparison runner replays seven pinned
   KiCadRoutingTools cases covering MPS route scope, connectivity, DRC, AC-coupled matching, QFN
   fanout, inner-layer differential routing, via-in-pad behavior, stagger recovery, and zone-island
-  semantics. All reference cases pass; Flux remains honestly import-blocked on the original KiCad
-  10 fixtures, making string-valued net-reference import the first Milestone 2 gap rather than
-  fabricating a like-for-like route result.
+  semantics. All reference cases pass, and Flux now strictly imports every fixture used by those
+  seven cases. Like-for-like fanout, tuning, and plane-repair routing results remain unqualified.
+- Milestone 2.1 partial: KiCad 9 ordinal-net boards and KiCad 10 boards without a root net table now
+  map through distinct stable canonical identities. Named references are collected only from
+  represented pads/copper, new KiCad 10 tracks/arcs/vias emit quoted names, and strict round-trip
+  verification covers both formats. Repeated source UUIDs on cloned synthetic footprints/pads are
+  occurrence-qualified deterministically without changing unique IDs, and source syntax mapping
+  follows the same rule. Unfilled zones and the remaining geometry list are still open.
 - Milestone 1.1 complete: `FluxWorkPlan` schema 1 now carries an exact source revision, explicit
   protected-routing mode, immutable policy identities, ordered typed workflow steps and
   dependencies, selectors, typed scalar options, and default-on telemetry. Its bounded strict JSON
@@ -245,9 +250,39 @@ Progress ledger (updated 2026-09-04):
   byte-stably.
 - Milestone 1.5 partial: write-once template, inspection, and non-mutating dry-run commands expose
   stable required capability IDs and fail capability preflight unless each selected step is marked
-  present or an intentional stronger alternative. Selector expansion, policy-content hashing,
-  cancellation, execution, and replay remain open.
-- Remaining Milestone 1 items and Milestones 2 through 12 remain open unless their individual exit gates are supported
+  present or an intentional stronger alternative. Policy-content hashing, cancellation, execution,
+  and replay remain open.
+- Milestone 1.2 complete: selector expansion deterministically unions exact net names, bounded
+  simple globs, net classes, footprints, and declared placement groups, applies exclusions last,
+  and projects selected footprints into touching or fully internal terminal nets only when that
+  scope is explicit. Per-selector evidence, stable expanded IDs, and board-order masks make the
+  complete result observable and ready for one bounded GPU upload.
+- Milestone 1.3 authority model and capability-gated execution complete: preview/new-routing preserve every
+  source copper object; force-reroute exposes only unlocked copper selected without wildcard-only
+  inference; allowlisted rip-up accepts exact source net names. Locked tracks/arcs/vias, unrelated
+  copper, and every source zone remain immutable. Coupled route scopes fail when they split a
+  declared pair or bus.
+- Milestone 1.4 partial: direct CLI autorouting and work-plan route compilation now share one
+  `autoroute_v1` preset. A strict initial option registry covers global iteration/search/grid,
+  priority-net string lists, topology, regional feedback/XPBD, and detailed PH/arc controls;
+  unknown names, wrong JSON types, out-of-range values, and priorities outside the expanded scope
+  fail closed. Exact replacement scopes carry independently into detailed materialization. The
+  remaining CLI option families and non-route step adapters are still open.
+- Milestone 1.5 policy identity complete: loading a plan resolves relative policy paths from the
+  plan directory, requires bounded regular files, reads each artifact once, verifies its SHA-256,
+  and rejects missing, oversized, unreadable, stale, duplicate, or unsupported policy artifacts.
+  Known net-class, pair, bus, envelope, group, region, relative-placement, orientation, and move-
+  priority policies are applied in dependency-safe canonical order before selector expansion.
+- Milestone 1.5 execution partial: the core executes precompiled route and whole-board validation
+  steps on private checkpoints, commits only exact detailed acceptance, carries bounded sampled
+  fallback, halts dependants after failure, accepts a stop token, and emits a deterministic
+  source-bound summary. Preview never authorizes export; other modes reach only the ordinary
+  source-preserving exporter. The CLI refuses every plan whose manifest capabilities are partial.
+  Runtime telemetry exposes exact policy identities, selector expansion, and active step lifecycle.
+  SIGINT/SIGTERM are bridged into the executor stop token without signal-context routing work.
+  Non-route adapters, external KiCad DRC, and trace replay remain open.
+- Remaining Milestone 1 items and Milestones 2 through 12 remain open unless their individual exit
+  gates are supported
   by recorded qualification evidence; an implementation named in the capability inventory is not
   itself proof of qualification.
 

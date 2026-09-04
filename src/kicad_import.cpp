@@ -44,6 +44,9 @@ struct Importer {
   KicadImportOptions options;
   KicadImportResult result;
   std::map<std::string, NetId> net_by_ordinal;
+  std::map<std::string, NetId> net_by_name;
+  std::map<std::string, std::size_t> object_token_occurrences;
+  bool named_net_references{false};
   std::map<std::string, std::size_t> copper_layer_index;
 
   void diagnostic(ImportSeverity severity, std::string code, std::string message,
@@ -154,6 +157,14 @@ struct Importer {
     }
   }
   return fallback;
+}
+
+[[nodiscard]] std::string unique_stable_token(const SExpression& expression, std::string fallback,
+                                              Importer& importer) {
+  auto token = stable_token(expression, std::move(fallback));
+  auto& occurrence = importer.object_token_occurrences[token];
+  ++occurrence;
+  return occurrence == 1U ? token : token + "#" + std::to_string(occurrence);
 }
 
 [[nodiscard]] bool has_atom(const SExpression& expression, std::string_view value) {
@@ -433,7 +444,8 @@ void import_layers(const SExpression& root, Board& board, Importer& importer) {
 }
 
 void import_nets(const SExpression& root, Board& board, Importer& importer) {
-  for (const auto* definition : find_children(root, "net")) {
+  const auto definitions = find_children(root, "net");
+  for (const auto* definition : definitions) {
     const auto ordinal = atom_at(*definition, 1);
     const auto name = atom_at(*definition, 2);
     if (!ordinal || !name) {
@@ -442,11 +454,39 @@ void import_nets(const SExpression& root, Board& board, Importer& importer) {
     }
     const NetId id{"kicad-net-" + std::string(*ordinal)};
     importer.net_by_ordinal.emplace(std::string(*ordinal), id);
+    importer.net_by_name.emplace(std::string(*name), id);
     board.nets.push_back(Net{id, std::string(*name), 0});
+  }
+  importer.named_net_references = definitions.empty();
+  if (importer.named_net_references) {
+    std::set<std::string> names;
+    const auto collect = [&names](const SExpression& expression) {
+      if (const auto name = named_atom(expression, "net"); name && !name->empty()) {
+        names.emplace(*name);
+      }
+    };
+    for (const auto type : {"segment", "arc", "via", "zone"}) {
+      for (const auto* expression : find_children(root, type)) {
+        collect(*expression);
+      }
+    }
+    for (const auto type : {"footprint", "module"}) {
+      for (const auto* footprint : find_children(root, type)) {
+        for (const auto* pad : find_children(*footprint, "pad")) {
+          collect(*pad);
+        }
+      }
+    }
+    for (const auto& name : names) {
+      const NetId id{"kicad-net-name:" + name};
+      importer.net_by_name.emplace(name, id);
+      board.nets.push_back(Net{id, name, 0});
+    }
   }
   if (!importer.net_by_ordinal.contains("0")) {
     const NetId no_net{"kicad-net-0"};
     importer.net_by_ordinal.emplace("0", no_net);
+    importer.net_by_name.emplace("", no_net);
     board.nets.insert(board.nets.begin(), Net{no_net, "", 0});
   }
 }
@@ -737,8 +777,9 @@ void import_outline(const SExpression& root, Board& board, Importer& importer) {
   if (!valid) {
     return std::nullopt;
   }
-  return Keepout{ObjectId{stable_token(zone, std::move(fallback_id))}, std::move(area),
-                 std::move(layers), rules, std::string(named_atom(zone, "name").value_or(""))};
+  return Keepout{ObjectId{unique_stable_token(zone, std::move(fallback_id), importer)},
+                 std::move(area), std::move(layers), rules,
+                 std::string(named_atom(zone, "name").value_or(""))};
 }
 
 [[nodiscard]] NetId item_net(const SExpression& item, Importer& importer);
@@ -894,7 +935,7 @@ import_copper_zone(const SExpression& zone, Importer& importer, std::string fall
     return std::nullopt;
   }
   CopperZone result;
-  result.id = ObjectId{stable_token(zone, std::move(fallback_id))};
+  result.id = ObjectId{unique_stable_token(zone, std::move(fallback_id), importer)};
   result.net = item_net(zone, importer);
   result.name = std::string(named_atom(zone, "name").value_or(""));
   result.locked = has_atom(zone, "locked") || find_child(zone, "locked") != nullptr;
@@ -1091,17 +1132,31 @@ struct ImportedPlacementEnvelope {
                                    PlacementEnvelopeSource::explicit_courtyard};
 }
 
-[[nodiscard]] NetId pad_net(const SExpression& pad, Importer& importer) {
-  const auto ordinal = named_atom(pad, "net");
-  if (!ordinal) {
+[[nodiscard]] NetId referenced_net(const SExpression& expression, Importer& importer,
+                                   std::string_view context, bool missing_is_no_net) {
+  const auto reference = named_atom(expression, "net");
+  if (!reference) {
+    if (!missing_is_no_net) {
+      importer.error("missing_item_net", std::string(context) + " has no net reference",
+                     expression.location);
+    }
     return importer.net_by_ordinal.at("0");
   }
-  const auto found = importer.net_by_ordinal.find(std::string(*ordinal));
-  if (found == importer.net_by_ordinal.end()) {
-    importer.error("unknown_net_ordinal", "pad references an undeclared net ordinal", pad.location);
+  const auto& index =
+      importer.named_net_references ? importer.net_by_name : importer.net_by_ordinal;
+  const auto found = index.find(std::string(*reference));
+  if (found == index.end()) {
+    importer.error(importer.named_net_references ? "unknown_net_name" : "unknown_net_ordinal",
+                   std::string(context) + " references an undeclared " +
+                       (importer.named_net_references ? "net name" : "net ordinal"),
+                   expression.location);
     return importer.net_by_ordinal.at("0");
   }
   return found->second;
+}
+
+[[nodiscard]] NetId pad_net(const SExpression& pad, Importer& importer) {
+  return referenced_net(pad, importer, "pad", true);
 }
 
 [[nodiscard]] PadShape parse_pad_shape(std::string_view value) {
@@ -1154,7 +1209,7 @@ void import_footprints(const SExpression& root, Board& board, Importer& importer
   for (const auto* expression : find_children(root, "footprint")) {
     const auto fallback = "footprint-" + std::to_string(footprint_index++);
     Footprint footprint;
-    footprint.id = ObjectId{stable_token(*expression, fallback)};
+    footprint.id = ObjectId{unique_stable_token(*expression, fallback, importer)};
     footprint.reference = fallback;
     for (const auto* property : find_children(*expression, "property")) {
       if (atom_at(*property, 1) == std::optional<std::string_view>{"Reference"}) {
@@ -1216,9 +1271,11 @@ void import_footprints(const SExpression& root, Board& board, Importer& importer
     for (const auto* pad_expression : find_children(*expression, "pad")) {
       const auto pad_name = atom_at(*pad_expression, 1).value_or("unnamed");
       Pad pad;
-      pad.id = ObjectId{stable_token(*pad_expression, footprint.id.value() + "-pad-" +
-                                                          std::to_string(pad_index++) + "-" +
-                                                          std::string(pad_name))};
+      pad.id = ObjectId{unique_stable_token(*pad_expression,
+                                            footprint.id.value() + "-pad-" +
+                                                std::to_string(pad_index++) + "-" +
+                                                std::string(pad_name),
+                                            importer)};
       pad.net = pad_net(*pad_expression, importer);
       if (const auto* pad_at = find_child(*pad_expression, "at")) {
         if (const auto local = parse_point(*pad_at, importer, "pad at")) {
@@ -1288,18 +1345,7 @@ void import_footprints(const SExpression& root, Board& board, Importer& importer
 }
 
 [[nodiscard]] NetId item_net(const SExpression& item, Importer& importer) {
-  const auto ordinal = named_atom(item, "net");
-  if (!ordinal) {
-    importer.error("missing_item_net", "copper item has no net ordinal", item.location);
-    return importer.net_by_ordinal.at("0");
-  }
-  const auto found = importer.net_by_ordinal.find(std::string(*ordinal));
-  if (found == importer.net_by_ordinal.end()) {
-    importer.error("unknown_net_ordinal", "copper item references an undeclared net ordinal",
-                   item.location);
-    return importer.net_by_ordinal.at("0");
-  }
-  return found->second;
+  return referenced_net(item, importer, "copper item", false);
 }
 
 void import_tracks_and_vias(const SExpression& root, Board& board, Importer& importer) {
@@ -1314,7 +1360,8 @@ void import_tracks_and_vias(const SExpression& root, Board& board, Importer& imp
       continue;
     }
     board.tracks.push_back(
-        TrackSegment{ObjectId{stable_token(*expression, "track-" + std::to_string(track_index++))},
+        TrackSegment{ObjectId{unique_stable_token(
+                         *expression, "track-" + std::to_string(track_index++), importer)},
                      item_net(*expression, importer), LayerId{std::string(*layer)}, *start, *end,
                      Nanometres::from_mm(*width), has_atom(*expression, "locked")});
   }
@@ -1330,10 +1377,11 @@ void import_tracks_and_vias(const SExpression& root, Board& board, Importer& imp
       importer.error("invalid_track_arc", "track arc is incomplete", expression->location);
       continue;
     }
-    board.track_arcs.push_back(
-        TrackArc{ObjectId{stable_token(*expression, "track-arc-" + std::to_string(arc_index++))},
-                 item_net(*expression, importer), LayerId{std::string(*layer)}, *start, *middle,
-                 *end, Nanometres::from_mm(*width), has_atom(*expression, "locked")});
+    board.track_arcs.push_back(TrackArc{
+        ObjectId{
+            unique_stable_token(*expression, "track-arc-" + std::to_string(arc_index++), importer)},
+        item_net(*expression, importer), LayerId{std::string(*layer)}, *start, *middle, *end,
+        Nanometres::from_mm(*width), has_atom(*expression, "locked")});
   }
 
   std::size_t via_index = 0;
@@ -1363,10 +1411,10 @@ void import_tracks_and_vias(const SExpression& root, Board& board, Importer& imp
         }
       }
     }
-    board.vias.push_back(
-        Via{ObjectId{stable_token(*expression, "via-" + std::to_string(via_index++))},
-            item_net(*expression, importer), *position, Nanometres::from_mm(*diameter),
-            Nanometres::from_mm(*drill), std::move(layers), has_atom(*expression, "locked")});
+    board.vias.push_back(Via{
+        ObjectId{unique_stable_token(*expression, "via-" + std::to_string(via_index++), importer)},
+        item_net(*expression, importer), *position, Nanometres::from_mm(*diameter),
+        Nanometres::from_mm(*drill), std::move(layers), has_atom(*expression, "locked")});
   }
 
   std::size_t keepout_index = 0;

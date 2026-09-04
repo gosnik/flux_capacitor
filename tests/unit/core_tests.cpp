@@ -14,6 +14,8 @@
 #include "flux/io/kicad_import.hpp"
 #include "flux/io/placement_move_priorities.hpp"
 #include "flux/io/work_plan.hpp"
+#include "flux/io/work_plan_executor.hpp"
+#include "flux/io/work_plan_router.hpp"
 #include "flux/telemetry/event.hpp"
 
 #include <algorithm>
@@ -3451,6 +3453,41 @@ void cancellation_and_kicad_export_boundaries_fail_closed() {
   const auto contents = load_minimal_kicad_fixture();
   const auto imported = flux::io::import_kicad_pcb(contents);
   require(imported.strict(), "the canonical KiCad fixture must import without loss");
+  auto named_net_contents = contents;
+  const auto erase_once = [&named_net_contents](std::string_view value) {
+    const auto position = named_net_contents.find(value);
+    require(position != std::string::npos, "named-net fixture source syntax must be identifiable");
+    named_net_contents.erase(position, value.size());
+  };
+  const auto replace_all = [&named_net_contents](std::string_view from, std::string_view to) {
+    auto position = named_net_contents.find(from);
+    while (position != std::string::npos) {
+      named_net_contents.replace(position, from.size(), to);
+      position = named_net_contents.find(from, position + to.size());
+    }
+  };
+  erase_once("  (net 0 \"\")\n");
+  erase_once("  (net 1 \"SIGNAL\")\n");
+  replace_all("(net 1 \"SIGNAL\")", "(net \"SIGNAL\")");
+  replace_all("(net 1)", "(net \"SIGNAL\")");
+  replace_all("(net 0)", "(net \"\")");
+  const auto named_net_import = flux::io::import_kicad_pcb(named_net_contents);
+  require(named_net_import.strict() && named_net_import.board &&
+              std::any_of(named_net_import.board->nets.begin(), named_net_import.board->nets.end(),
+                          [](const auto& net) {
+                            return net.id == NetId{"kicad-net-name:SIGNAL"} &&
+                                   net.name == "SIGNAL";
+                          }),
+          "a KiCad 10 board without an ordinal net table must derive stable named-net identity");
+  auto named_net_candidate = *named_net_import.board;
+  named_net_candidate.tracks.push_back(
+      {ObjectId{"named-net-added-track"}, NetId{"kicad-net-name:SIGNAL"}, LayerId{"B.Cu"},
+       mm(25.0, 35.0), mm(30.0, 35.0), Nanometres::from_mm(0.25), false});
+  const auto named_net_export = flux::io::export_kicad_candidate(
+      named_net_contents, *named_net_import.board, named_net_candidate);
+  require(named_net_export.ok() && named_net_export.contents &&
+              named_net_export.contents->find("(net \"SIGNAL\")") != std::string::npos,
+          "new KiCad 10 copper must retain quoted net-name references through strict round trip");
   auto differential_suffix_contents = contents;
   const auto signal_net = differential_suffix_contents.find("(net 1 \"SIGNAL\")");
   require(signal_net != std::string::npos,
@@ -4535,6 +4572,7 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
   route.selectors.exact_nets = {"SIGNAL"};
   route.options = {{"arcs", true},
                    {"max_router_iterations", std::uint64_t{30U}},
+                   {"priority_nets", std::vector<std::string>{"SIGNAL"}},
                    {"signed_test", std::int64_t{-1}},
                    {"strategy", std::string{"scarcity"}}};
   flux::io::WorkPlanStep validation;
@@ -4549,7 +4587,8 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
               flux::io::serialize_flux_work_plan(*parsed.plan) == serialized,
           "FluxWorkPlan must round-trip byte-stably without changing typed options");
   require(flux::io::required_flux_work_plan_capabilities(plan) ==
-              std::vector<std::string>{"routing.single-ended", "verification.diagnostics"},
+              std::vector<std::string>{"routing.single-ended", "routing.scope",
+                                       "verification.diagnostics"},
           "ordered step kinds must produce stable capability preflight IDs");
 
   auto stale = board;
@@ -4572,6 +4611,223 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
                             return diagnostic.code == "invalid_work_plan_boolean";
                           }),
           "the plan parser must reject JSON type confusion rather than coerce strings");
+
+  auto scoped_board = two_pad_board();
+  const NetId signal_a{"a"};
+  const NetId signal_b{"b"};
+  const NetId power{"p"};
+  const NetId auxiliary{"x"};
+  const flux::NetClassId power_class{"power-class"};
+  scoped_board.nets = {{signal_a, "SIG_A", 0},
+                       {signal_b, "SIG_B", 0},
+                       {power, "PWR", 0, {power_class}},
+                       {auxiliary, "AUX", 0}};
+  flux::NetClass net_class;
+  net_class.id = power_class;
+  net_class.name = "Power";
+  scoped_board.net_classes = {net_class};
+  scoped_board.footprints[0].pads = {
+      {ObjectId{"u1-a"}, signal_a, Point{}, {LayerId{"F.Cu"}}},
+      {ObjectId{"u1-b"}, signal_b, Point{}, {LayerId{"F.Cu"}}}};
+  scoped_board.footprints[1].pads = {
+      {ObjectId{"u2-a"}, signal_a, Point{}, {LayerId{"F.Cu"}}},
+      {ObjectId{"u2-p"}, power, Point{}, {LayerId{"F.Cu"}}}};
+  Footprint third;
+  third.id = ObjectId{"U3"};
+  third.reference = "U3";
+  third.position = mm(50.0, 15.0);
+  third.courtyard = local_rectangle(4.0, 3.0);
+  third.pads = {{ObjectId{"u3-b"}, signal_b, Point{}, {LayerId{"F.Cu"}}},
+                {ObjectId{"u3-p"}, power, Point{}, {LayerId{"F.Cu"}}},
+                {ObjectId{"u3-x"}, auxiliary, Point{}, {LayerId{"F.Cu"}}}};
+  scoped_board.footprints.push_back(third);
+  scoped_board.placement_groups = {
+      {flux::PlacementGroupId{"core-id"}, "core", {ObjectId{"U1"}, ObjectId{"U2"}}}};
+  scoped_board.tracks = {
+      {ObjectId{"track-a"}, signal_a, LayerId{"F.Cu"}, mm(1.0, 1.0), mm(2.0, 1.0),
+       Nanometres::from_mm(0.25), false},
+      {ObjectId{"track-p-locked"}, power, LayerId{"F.Cu"}, mm(3.0, 1.0), mm(4.0, 1.0),
+       Nanometres::from_mm(0.25), true},
+      {ObjectId{"track-x"}, auxiliary, LayerId{"F.Cu"}, mm(5.0, 1.0), mm(6.0, 1.0),
+       Nanometres::from_mm(0.25), false}};
+  scoped_board.track_arcs = {{ObjectId{"arc-p"}, power, LayerId{"F.Cu"}, mm(7.0, 1.0),
+                              mm(7.5, 1.5), mm(8.0, 1.0), Nanometres::from_mm(0.25), false}};
+  scoped_board.vias = {{ObjectId{"via-p"}, power, mm(9.0, 1.0), Nanometres::from_mm(0.6),
+                        Nanometres::from_mm(0.3), {LayerId{"F.Cu"}, LayerId{"B.Cu"}}, false},
+                       {ObjectId{"via-x-locked"}, auxiliary, mm(10.0, 1.0),
+                        Nanometres::from_mm(0.6), Nanometres::from_mm(0.3),
+                        {LayerId{"F.Cu"}, LayerId{"B.Cu"}}, true}};
+  flux::CopperZone immutable_zone;
+  immutable_zone.id = ObjectId{"zone-p"};
+  immutable_zone.net = power;
+  scoped_board.zones = {immutable_zone};
+
+  auto scoped_plan = flux::io::make_flux_work_plan_template(scoped_board, "scoped.kicad_pcb");
+  scoped_plan.mode = flux::io::WorkPlanMode::force_reroute_selected;
+  flux::io::WorkPlanStep scoped_route;
+  scoped_route.id = "scoped-route";
+  scoped_route.kind = flux::io::WorkPlanStepKind::route;
+  scoped_route.selectors.include_globs = {"SIG_*", "A*"};
+  scoped_route.selectors.exclude_globs = {"SIG_B"};
+  scoped_route.selectors.net_classes = {"Power"};
+  scoped_route.selectors.placement_groups = {"core"};
+  scoped_route.selectors.group_scope = flux::io::WorkPlanSelectorScope::internal;
+  scoped_route.options = {{"circular_arc_refinement", true},
+                          {"grid_pitch_nm", std::uint64_t{250'000U}},
+                          {"max_router_iterations", std::uint64_t{42U}},
+                          {"priority_nets", std::vector<std::string>{"PWR", "SIG_A"}},
+                          {"xpbd_feedback", true},
+                          {"xpbd_iterations", std::uint64_t{17U}}};
+  scoped_plan.steps = {scoped_route};
+  const auto expansion = flux::io::expand_flux_work_plan(scoped_board, scoped_plan);
+  require(expansion.ok() && expansion.steps.size() == 1U &&
+              expansion.steps.front().nets == std::vector<NetId>{signal_a, power, auxiliary} &&
+              expansion.steps.front().footprints ==
+                  std::vector<ObjectId>{ObjectId{"U1"}, ObjectId{"U2"}} &&
+              expansion.steps.front().wildcard_only_nets == std::vector<NetId>{auxiliary} &&
+              expansion.copper_authority.reroutable_nets ==
+                  std::vector<NetId>{signal_a, power} &&
+              expansion.copper_authority.removable_tracks ==
+                  std::vector<ObjectId>{ObjectId{"track-a"}} &&
+              expansion.copper_authority.removable_track_arcs ==
+                  std::vector<ObjectId>{ObjectId{"arc-p"}} &&
+              expansion.copper_authority.removable_vias ==
+                  std::vector<ObjectId>{ObjectId{"via-p"}} &&
+              expansion.copper_authority.immutable_tracks ==
+                  std::vector<ObjectId>{ObjectId{"track-p-locked"}, ObjectId{"track-x"}} &&
+              expansion.copper_authority.immutable_vias ==
+                  std::vector<ObjectId>{ObjectId{"via-x-locked"}} &&
+              expansion.copper_authority.immutable_zones ==
+                  std::vector<ObjectId>{ObjectId{"zone-p"}} &&
+              expansion.selected_net_mask == std::vector<std::uint8_t>({1U, 0U, 1U, 1U}) &&
+              expansion.reroutable_net_mask == std::vector<std::uint8_t>({1U, 0U, 1U, 0U}),
+          "selector expansion must union exact physical scopes, apply exclusions last, expose "
+          "device-ready masks, and keep wildcard-only or locked source copper immutable");
+  const auto compiled = flux::io::compile_flux_work_plan_routes(scoped_board, scoped_plan);
+  require(compiled.ok() && compiled.route_steps.size() == 1U &&
+              compiled.route_steps.front().selected_nets ==
+                  std::vector<NetId>{signal_a, power, auxiliary} &&
+              compiled.route_steps.front().priority_nets == std::vector<NetId>{power, signal_a} &&
+              compiled.route_steps.front().configuration.planner.global.grid_pitch ==
+                  Nanometres{250'000} &&
+              compiled.route_steps.front().configuration.planner.global.max_iterations == 42U &&
+              compiled.route_steps.front().configuration.planner.regional.enable_xpbd_relaxation &&
+              compiled.route_steps.front().configuration.planner.regional.enable_xpbd_feedback &&
+              compiled.route_steps.front().configuration.planner.regional.xpbd.iterations == 17U &&
+              compiled.route_steps.front().configuration.detailed.circular_arc_refinement &&
+              compiled.route_steps.front().configuration.detailed.existing_routing ==
+                  flux::ExistingRoutingPolicy::replace_unlocked_for_routed_nets &&
+              compiled.route_steps.front().configuration.detailed.existing_routing_replacement_scope ==
+                  std::optional<std::vector<NetId>>{std::vector<NetId>{signal_a, power}},
+          "route options must compile into the shared autoroute_v1 configuration without giving "
+          "wildcard-only nets source-copper replacement authority");
+
+  auto wildcard_plan = scoped_plan;
+  wildcard_plan.steps.front().selectors.net_classes.clear();
+  wildcard_plan.steps.front().selectors.placement_groups.clear();
+  const auto wildcard_expansion = flux::io::expand_flux_work_plan(scoped_board, wildcard_plan);
+  require(!wildcard_expansion.ok() &&
+              std::any_of(wildcard_expansion.diagnostics.begin(),
+                          wildcard_expansion.diagnostics.end(), [](const auto& diagnostic) {
+                            return diagnostic.code == "wildcard_only_force_reroute_scope";
+                          }),
+          "glob selection must never infer authority to remove pre-existing copper");
+
+  auto allowlisted_plan = scoped_plan;
+  allowlisted_plan.mode = flux::io::WorkPlanMode::allowlisted_ripup;
+  allowlisted_plan.ripup_allowlist = {"AUX"};
+  const auto allowlisted = flux::io::expand_flux_work_plan(scoped_board, allowlisted_plan);
+  require(allowlisted.ok() &&
+              allowlisted.copper_authority.reroutable_nets == std::vector<NetId>{auxiliary} &&
+              allowlisted.copper_authority.removable_tracks ==
+                  std::vector<ObjectId>{ObjectId{"track-x"}} &&
+              allowlisted.copper_authority.immutable_vias ==
+                  std::vector<ObjectId>{ObjectId{"via-p"}, ObjectId{"via-x-locked"}},
+          "an exact allowlist may expose only unlocked copper on named nets while locked copper "
+          "remains immutable");
+  const auto compiled_allowlisted =
+      flux::io::compile_flux_work_plan_routes(scoped_board, allowlisted_plan);
+  require(compiled_allowlisted.ok() && compiled_allowlisted.route_steps.size() == 1U &&
+              compiled_allowlisted.route_steps.front().selected_nets ==
+                  std::vector<NetId>{signal_a, power, auxiliary} &&
+              compiled_allowlisted.route_steps.front()
+                      .configuration.detailed.existing_routing_replacement_scope ==
+                  std::optional<std::vector<NetId>>{std::vector<NetId>{auxiliary}},
+          "allowlisted blockers must join the planned route set while only their exact unlocked "
+          "copper enters replacement authority");
+
+  auto unsupported_option_plan = scoped_plan;
+  unsupported_option_plan.steps.front().options["not_a_router_option"] = true;
+  const auto unsupported =
+      flux::io::compile_flux_work_plan_routes(scoped_board, unsupported_option_plan);
+  require(!unsupported.ok() &&
+              std::any_of(unsupported.diagnostics.begin(), unsupported.diagnostics.end(),
+                          [](const auto& diagnostic) {
+                            return diagnostic.code == "unsupported_work_plan_route_option";
+                          }),
+          "unknown route options must fail compilation instead of being ignored");
+
+  auto connected = two_pad_board();
+  connected.tracks = {{ObjectId{"source-track"}, NetId{"net-1"}, LayerId{"F.Cu"},
+                       mm(20.0, 40.0), mm(80.0, 40.0), Nanometres::from_mm(0.25), false}};
+  auto executable_plan = flux::io::make_flux_work_plan_template(connected, "board.kicad_pcb");
+  executable_plan.mode = flux::io::WorkPlanMode::force_reroute_selected;
+  flux::io::WorkPlanStep executable_route;
+  executable_route.id = "reroute";
+  executable_route.kind = flux::io::WorkPlanStepKind::route;
+  executable_route.selectors.exact_nets = {"SIGNAL"};
+  executable_route.options = {{"grid_pitch_nm", std::uint64_t{1'000'000U}},
+                              {"max_expansions_per_connection", std::uint64_t{100'000U}},
+                              {"max_router_iterations", std::uint64_t{4U}}};
+  flux::io::WorkPlanStep executable_validation;
+  executable_validation.id = "validate";
+  executable_validation.kind = flux::io::WorkPlanStepKind::validation;
+  executable_validation.depends_on = {"reroute"};
+  executable_plan.steps = {executable_route, executable_validation};
+  CollectingTelemetrySink work_plan_telemetry;
+  const auto execution =
+      flux::io::execute_flux_work_plan(connected, executable_plan, {}, &work_plan_telemetry);
+  require(execution.ok() && execution.whole_board_accepted && execution.candidate_ready_for_export &&
+              execution.candidate && execution.steps.size() == 2U &&
+              execution.steps.front().status ==
+                  flux::io::WorkPlanStepExecutionStatus::completed &&
+              execution.steps.front().replacement_nets == std::vector<NetId>{NetId{"net-1"}} &&
+              std::none_of(execution.candidate->tracks.begin(), execution.candidate->tracks.end(),
+                           [](const auto& track) {
+                             return track.id == ObjectId{"source-track"};
+                           }) &&
+              connected.tracks.size() == 1U && connected.tracks.front().id == ObjectId{"source-track"} &&
+              flux::io::serialize_flux_work_plan_execution_summary(execution) ==
+                  flux::io::serialize_flux_work_plan_execution_summary(execution) &&
+              std::any_of(work_plan_telemetry.events.begin(), work_plan_telemetry.events.end(),
+                          [](const auto& event) {
+                            return event.kind == flux::RouterTelemetryEventKind::search_summary &&
+                                   event.stable_id == "work-plan-step:reroute" &&
+                                   event.detail == "Work plan step completed: reroute";
+                          }),
+          "work-plan execution must reroute on a copy, replace only exact unlocked source copper, "
+          "and commit a deterministic exact-clean checkpoint through validation");
+
+  auto preview_plan = executable_plan;
+  preview_plan.mode = flux::io::WorkPlanMode::preview;
+  const auto preview = flux::io::execute_flux_work_plan(connected, preview_plan);
+  require(preview.ok() && preview.preview && !preview.candidate_ready_for_export &&
+              preview.steps.front().selected_nets.empty() && preview.candidate &&
+              preview.candidate->tracks == connected.tracks &&
+              preview.candidate->footprints == connected.footprints,
+          "preview mode must observe an already complete selected net without replacing or "
+          "export-authorizing its source copper");
+
+  std::stop_source cancelled_source;
+  cancelled_source.request_stop();
+  const auto cancelled = flux::io::execute_flux_work_plan(
+      connected, executable_plan, cancelled_source.get_token());
+  require(!cancelled.ok() && !cancelled.steps.empty() &&
+              cancelled.steps.front().status ==
+                  flux::io::WorkPlanStepExecutionStatus::cancelled &&
+              cancelled.candidate && cancelled.candidate->tracks == connected.tracks &&
+              cancelled.candidate->footprints == connected.footprints,
+          "a pre-requested stop token must cancel before routing and preserve the source checkpoint");
 }
 
 } // namespace

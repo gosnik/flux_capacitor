@@ -187,13 +187,17 @@ void error(KicadChangeSetResult& result, std::string code, std::string message,
   return result + ")";
 }
 
-[[nodiscard]] std::optional<std::string> net_ordinal(const NetId& net, const Board& source) {
+[[nodiscard]] std::optional<std::string> net_reference(const NetId& net, const Board& source) {
   const auto found = std::find_if(source.nets.begin(), source.nets.end(),
                                   [&net](const auto& candidate) { return candidate.id == net; });
   if (found == source.nets.end()) {
     return std::nullopt;
   }
   constexpr std::string_view prefix{"kicad-net-"};
+  if (found->id.value().starts_with("kicad-net-name:")) {
+    return found->name.empty() ? std::nullopt
+                               : std::optional<std::string>{quote_string(found->name)};
+  }
   if (!found->id.value().starts_with(prefix)) {
     return std::nullopt;
   }
@@ -432,11 +436,16 @@ template <typename Item>
 [[nodiscard]] std::map<ObjectId, const SExpression*>
 source_objects(const SExpression& root, std::string_view object_head, std::string_view fallback) {
   std::map<ObjectId, const SExpression*> result;
+  std::map<std::string, std::size_t> occurrences;
   std::size_t index = 0;
   for (const auto* expression : find_children(root, object_head)) {
-    result.emplace(
-        ObjectId{stable_token(*expression, std::string(fallback) + std::to_string(index++))},
-        expression);
+    auto token = stable_token(*expression, std::string(fallback) + std::to_string(index++));
+    auto& occurrence = occurrences[token];
+    ++occurrence;
+    if (occurrence != 1U) {
+      token += "#" + std::to_string(occurrence);
+    }
+    result.emplace(ObjectId{std::move(token)}, expression);
   }
   return result;
 }
@@ -661,7 +670,7 @@ KicadExportResult export_kicad_candidate(std::string_view source_contents, const
     if (replacement == candidate_tracks.end()) {
       edits.push_back({syntax->second->location.offset, syntax->second->end_offset, {}});
     } else if (*replacement->second != *original) {
-      const auto ordinal = net_ordinal(replacement->second->net, source);
+      const auto ordinal = net_reference(replacement->second->net, source);
       if (!ordinal) {
         error(result, "unknown_route_net", "track net has no KiCad ordinal", {id.value()});
         return result;
@@ -683,7 +692,7 @@ KicadExportResult export_kicad_candidate(std::string_view source_contents, const
     if (replacement == candidate_vias.end()) {
       edits.push_back({syntax->second->location.offset, syntax->second->end_offset, {}});
     } else if (*replacement->second != *original) {
-      const auto ordinal = net_ordinal(replacement->second->net, source);
+      const auto ordinal = net_reference(replacement->second->net, source);
       const auto uuid = assign_uuid(id, source, used_uuids, result, true);
       const auto serialized =
           ordinal ? serialize_via(*replacement->second, uuid, *ordinal, source) : std::nullopt;
@@ -707,7 +716,7 @@ KicadExportResult export_kicad_candidate(std::string_view source_contents, const
     if (replacement == candidate_arcs.end()) {
       edits.push_back({syntax->second->location.offset, syntax->second->end_offset, {}});
     } else if (*replacement->second != *original) {
-      const auto ordinal = net_ordinal(replacement->second->net, source);
+      const auto ordinal = net_reference(replacement->second->net, source);
       if (!ordinal) {
         error(result, "unknown_route_net", "track arc net has no KiCad ordinal", {id.value()});
         return result;
@@ -723,7 +732,7 @@ KicadExportResult export_kicad_candidate(std::string_view source_contents, const
     if (source_tracks.contains(track.id)) {
       continue;
     }
-    const auto ordinal = net_ordinal(track.net, source);
+    const auto ordinal = net_reference(track.net, source);
     if (!ordinal) {
       error(result, "unknown_route_net", "new track net has no KiCad ordinal", {track.id.value()});
       return result;
@@ -736,7 +745,7 @@ KicadExportResult export_kicad_candidate(std::string_view source_contents, const
     if (source_vias.contains(via.id)) {
       continue;
     }
-    const auto ordinal = net_ordinal(via.net, source);
+    const auto ordinal = net_reference(via.net, source);
     const auto uuid = assign_uuid(via.id, source, used_uuids, result);
     const auto serialized = ordinal ? serialize_via(via, uuid, *ordinal, source) : std::nullopt;
     if (!serialized) {
@@ -751,7 +760,7 @@ KicadExportResult export_kicad_candidate(std::string_view source_contents, const
     if (source_arcs.contains(arc.id)) {
       continue;
     }
-    const auto ordinal = net_ordinal(arc.net, source);
+    const auto ordinal = net_reference(arc.net, source);
     if (!ordinal) {
       error(result, "unknown_route_net", "new track arc net has no KiCad ordinal",
             {arc.id.value()});

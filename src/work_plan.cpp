@@ -3,13 +3,13 @@
 #include <boost/json.hpp>
 
 #include <algorithm>
-#include <array>
 #include <cctype>
 #include <fstream>
 #include <iterator>
 #include <limits>
 #include <set>
 #include <string>
+#include <type_traits>
 #include <utility>
 
 namespace flux::io {
@@ -267,9 +267,11 @@ parse_options(const json::value* value, Loader& loader, std::string_view pointer
       result.emplace(member.key(), option.as_uint64());
     } else if (option.is_string() && option.as_string().size() <= maximum_string_bytes) {
       result.emplace(member.key(), std::string(option.as_string()));
+    } else if (option.is_array()) {
+      result.emplace(member.key(), parse_string_array(&option, loader, member_pointer));
     } else {
       loader.error("invalid_work_plan_option",
-                   "step options must be bounded boolean, integer, or string scalars",
+                   "step options must be bounded boolean, integer, string, or string-list values",
                    member_pointer);
     }
   }
@@ -387,14 +389,77 @@ void validate_semantics(const FluxWorkPlan& plan, const Board* source, Loader& l
 [[nodiscard]] json::object options_json(const std::map<std::string, WorkPlanOptionValue>& options) {
   json::object result;
   for (const auto& [name, value] : options) {
-    std::visit([&](const auto& typed) { result[name] = typed; }, value);
+    std::visit(
+        [&](const auto& typed) {
+          using Value = std::decay_t<decltype(typed)>;
+          if constexpr (std::is_same_v<Value, std::vector<std::string>>) {
+            result[name] = string_array(typed);
+          } else {
+            result[name] = typed;
+          }
+        },
+        value);
   }
   return result;
+}
+
+[[nodiscard]] bool glob_matches(std::string_view pattern, std::string_view value) {
+  std::size_t pattern_index = 0U;
+  std::size_t value_index = 0U;
+  std::size_t star_index = std::string_view::npos;
+  std::size_t star_value_index = 0U;
+  while (value_index < value.size()) {
+    if (pattern_index < pattern.size() &&
+        (pattern[pattern_index] == '?' || pattern[pattern_index] == value[value_index])) {
+      ++pattern_index;
+      ++value_index;
+    } else if (pattern_index < pattern.size() && pattern[pattern_index] == '*') {
+      star_index = pattern_index++;
+      star_value_index = value_index;
+    } else if (star_index != std::string_view::npos) {
+      pattern_index = star_index + 1U;
+      value_index = ++star_value_index;
+    } else {
+      return false;
+    }
+  }
+  while (pattern_index < pattern.size() && pattern[pattern_index] == '*') {
+    ++pattern_index;
+  }
+  return pattern_index == pattern.size();
+}
+
+template <typename IdType>
+[[nodiscard]] std::vector<IdType> sorted_ids(const std::set<IdType>& ids) {
+  return {ids.begin(), ids.end()};
+}
+
+void expansion_error(WorkPlanExpansionResult& result, std::string code, std::string message,
+                     std::string pointer) {
+  result.diagnostics.push_back(
+      {WorkPlanDiagnosticSeverity::error, std::move(code), std::move(message), std::move(pointer)});
+}
+
+[[nodiscard]] bool targets_routing_nets(WorkPlanStepKind kind) {
+  return kind == WorkPlanStepKind::route || kind == WorkPlanStepKind::fanout ||
+         kind == WorkPlanStepKind::differential_pair || kind == WorkPlanStepKind::bus ||
+         kind == WorkPlanStepKind::plane || kind == WorkPlanStepKind::tuning;
+}
+
+[[nodiscard]] bool requires_atomic_coupled_scope(WorkPlanStepKind kind) {
+  return kind == WorkPlanStepKind::route || kind == WorkPlanStepKind::differential_pair ||
+         kind == WorkPlanStepKind::bus || kind == WorkPlanStepKind::tuning;
 }
 
 } // namespace
 
 bool WorkPlanLoadResult::has_errors() const {
+  return std::any_of(diagnostics.begin(), diagnostics.end(), [](const auto& diagnostic) {
+    return diagnostic.severity == WorkPlanDiagnosticSeverity::error;
+  });
+}
+
+bool WorkPlanExpansionResult::has_errors() const {
   return std::any_of(diagnostics.begin(), diagnostics.end(), [](const auto& diagnostic) {
     return diagnostic.severity == WorkPlanDiagnosticSeverity::error;
   });
@@ -632,7 +697,343 @@ WorkPlanLoadResult load_flux_work_plan_file(const std::filesystem::path& path,
     return result;
   }
   std::string contents{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
-  return parse_flux_work_plan(contents, source);
+  auto result = parse_flux_work_plan(contents, source);
+  if (!result.plan) {
+    return result;
+  }
+  if (source != nullptr) {
+    auto policies = apply_flux_work_plan_policies(*source, *result.plan, path.parent_path());
+    result.policy_board = std::move(policies.board);
+    result.applied_policy_kinds = std::move(policies.applied_policy_kinds);
+    result.diagnostics.insert(result.diagnostics.end(),
+                              std::make_move_iterator(policies.diagnostics.begin()),
+                              std::make_move_iterator(policies.diagnostics.end()));
+  }
+  return result;
+}
+
+WorkPlanExpansionResult expand_flux_work_plan(const Board& source, const FluxWorkPlan& plan) {
+  WorkPlanExpansionResult result;
+  Loader semantic_loader;
+  validate_semantics(plan, &source, semantic_loader);
+  result.diagnostics = std::move(semantic_loader.result.diagnostics);
+
+  const auto net_by_name = [&source](std::string_view name) -> const Net* {
+    const auto found = std::find_if(source.nets.begin(), source.nets.end(), [name](const Net& net) {
+      return !net.name.empty() && net.name == name;
+    });
+    return found == source.nets.end() ? nullptr : &*found;
+  };
+  const auto named_nets = [&source]() {
+    std::set<NetId> nets;
+    for (const auto& net : source.nets) {
+      if (!net.name.empty()) {
+        nets.insert(net.id);
+      }
+    }
+    return nets;
+  }();
+
+  std::set<NetId> force_reroute_authority;
+  for (std::size_t step_index = 0U; step_index < plan.steps.size(); ++step_index) {
+    const auto& step = plan.steps[step_index];
+    const auto step_pointer = "/steps/" + std::to_string(step_index) + "/selectors";
+    WorkPlanStepExpansion expanded;
+    expanded.id = step.id;
+    expanded.kind = step.kind;
+    std::set<NetId> selected_nets;
+    std::set<NetId> non_wildcard_nets;
+    std::set<ObjectId> selected_footprints;
+
+    const auto record = [&expanded](std::string field, std::string value, bool exclusion,
+                                    const std::set<NetId>& nets,
+                                    const std::set<ObjectId>& footprints = {}) {
+      expanded.evidence.push_back({std::move(field), std::move(value), exclusion, sorted_ids(nets),
+                                   sorted_ids(footprints)});
+    };
+    if (step.selectors.all_nets) {
+      selected_nets.insert(named_nets.begin(), named_nets.end());
+      record("all_nets", "true", false, named_nets);
+    }
+    for (std::size_t index = 0U; index < step.selectors.exact_nets.size(); ++index) {
+      const auto& name = step.selectors.exact_nets[index];
+      const auto* net = net_by_name(name);
+      if (net == nullptr) {
+        expansion_error(result, "unknown_work_plan_net", "exact_nets names an unknown source net",
+                        step_pointer + "/exact_nets/" + std::to_string(index));
+        continue;
+      }
+      const std::set<NetId> match{net->id};
+      selected_nets.insert(net->id);
+      non_wildcard_nets.insert(net->id);
+      record("exact_nets", name, false, match);
+    }
+    for (std::size_t index = 0U; index < step.selectors.include_globs.size(); ++index) {
+      const auto& pattern = step.selectors.include_globs[index];
+      std::set<NetId> matches;
+      for (const auto& net : source.nets) {
+        if (!net.name.empty() && glob_matches(pattern, net.name)) {
+          matches.insert(net.id);
+        }
+      }
+      if (matches.empty()) {
+        expansion_error(result, "empty_work_plan_glob",
+                        "include_globs pattern matches no named net",
+                        step_pointer + "/include_globs/" + std::to_string(index));
+      }
+      selected_nets.insert(matches.begin(), matches.end());
+      record("include_globs", pattern, false, matches);
+    }
+    for (std::size_t index = 0U; index < step.selectors.net_classes.size(); ++index) {
+      const auto& selector = step.selectors.net_classes[index];
+      std::set<NetClassId> classes;
+      for (const auto& net_class : source.net_classes) {
+        if (net_class.name == selector || net_class.id.value() == selector) {
+          classes.insert(net_class.id);
+        }
+      }
+      if (classes.size() != 1U) {
+        expansion_error(result, "unknown_or_ambiguous_work_plan_net_class",
+                        "net_classes must identify exactly one source class",
+                        step_pointer + "/net_classes/" + std::to_string(index));
+        continue;
+      }
+      std::set<NetId> matches;
+      for (const auto& net : source.nets) {
+        if (!net.name.empty() &&
+            std::any_of(net.classes.begin(), net.classes.end(),
+                        [&classes](const NetClassId& id) { return classes.contains(id); })) {
+          matches.insert(net.id);
+        }
+      }
+      if (matches.empty()) {
+        expansion_error(result, "empty_work_plan_net_class",
+                        "selected net class has no named source-net members",
+                        step_pointer + "/net_classes/" + std::to_string(index));
+      }
+      selected_nets.insert(matches.begin(), matches.end());
+      non_wildcard_nets.insert(matches.begin(), matches.end());
+      record("net_classes", selector, false, matches);
+    }
+
+    for (std::size_t index = 0U; index < step.selectors.footprints.size(); ++index) {
+      const auto& selector = step.selectors.footprints[index];
+      std::set<ObjectId> matches;
+      for (const auto& footprint : source.footprints) {
+        if (footprint.reference == selector || footprint.id.value() == selector) {
+          matches.insert(footprint.id);
+        }
+      }
+      if (matches.size() != 1U) {
+        expansion_error(result, "unknown_or_ambiguous_work_plan_footprint",
+                        "footprints must identify exactly one source footprint",
+                        step_pointer + "/footprints/" + std::to_string(index));
+        continue;
+      }
+      selected_footprints.insert(matches.begin(), matches.end());
+      record("footprints", selector, false, {}, matches);
+    }
+    for (std::size_t index = 0U; index < step.selectors.placement_groups.size(); ++index) {
+      const auto& selector = step.selectors.placement_groups[index];
+      std::vector<const PlacementGroup*> matches;
+      for (const auto& group : source.placement_groups) {
+        if (group.name == selector || group.id.value() == selector) {
+          matches.push_back(&group);
+        }
+      }
+      if (matches.size() != 1U) {
+        expansion_error(result, "unknown_or_ambiguous_work_plan_placement_group",
+                        "placement_groups must identify exactly one source placement group",
+                        step_pointer + "/placement_groups/" + std::to_string(index));
+        continue;
+      }
+      std::set<ObjectId> group_footprints(matches.front()->footprints.begin(),
+                                          matches.front()->footprints.end());
+      selected_footprints.insert(group_footprints.begin(), group_footprints.end());
+      record("placement_groups", selector, false, {}, group_footprints);
+    }
+
+    if (!selected_footprints.empty() &&
+        step.selectors.group_scope != WorkPlanSelectorScope::selected) {
+      std::map<NetId, std::pair<std::size_t, std::size_t>> terminal_counts;
+      for (const auto& footprint : source.footprints) {
+        for (const auto& pad : footprint.pads) {
+          const auto net =
+              std::find_if(source.nets.begin(), source.nets.end(),
+                           [&pad](const Net& n) { return n.id == pad.net && !n.name.empty(); });
+          if (net == source.nets.end()) {
+            continue;
+          }
+          auto& [total, inside] = terminal_counts[pad.net];
+          ++total;
+          if (selected_footprints.contains(footprint.id)) {
+            ++inside;
+          }
+        }
+      }
+      std::set<NetId> matches;
+      for (const auto& [net, counts] : terminal_counts) {
+        const auto [total, inside] = counts;
+        if (inside > 0U &&
+            (step.selectors.group_scope == WorkPlanSelectorScope::touching || inside == total)) {
+          matches.insert(net);
+        }
+      }
+      selected_nets.insert(matches.begin(), matches.end());
+      non_wildcard_nets.insert(matches.begin(), matches.end());
+      record("group_scope", std::string(work_plan_selector_scope_name(step.selectors.group_scope)),
+             false, matches, selected_footprints);
+    }
+
+    for (std::size_t index = 0U; index < step.selectors.exclude_globs.size(); ++index) {
+      const auto& pattern = step.selectors.exclude_globs[index];
+      std::set<NetId> matches;
+      for (const auto& net : source.nets) {
+        if (!net.name.empty() && glob_matches(pattern, net.name)) {
+          matches.insert(net.id);
+        }
+      }
+      if (matches.empty()) {
+        expansion_error(result, "empty_work_plan_glob",
+                        "exclude_globs pattern matches no named net",
+                        step_pointer + "/exclude_globs/" + std::to_string(index));
+      }
+      for (const auto& net : matches) {
+        selected_nets.erase(net);
+        non_wildcard_nets.erase(net);
+      }
+      record("exclude_globs", pattern, true, matches);
+    }
+
+    if (targets_routing_nets(step.kind) && selected_nets.empty()) {
+      expansion_error(result, "empty_work_plan_net_scope",
+                      "this work-plan step requires at least one explicitly selected named net",
+                      step_pointer);
+    }
+    if (targets_routing_nets(step.kind) && !selected_footprints.empty() &&
+        step.selectors.group_scope == WorkPlanSelectorScope::selected && selected_nets.empty()) {
+      expansion_error(result, "unprojected_work_plan_footprints",
+                      "a routing step must use touching or internal to project footprints to nets",
+                      step_pointer + "/group_scope");
+    }
+    if (step.kind == WorkPlanStepKind::placement && selected_footprints.empty()) {
+      expansion_error(result, "empty_work_plan_footprint_scope",
+                      "a placement step requires at least one selected footprint", step_pointer);
+    }
+    if (requires_atomic_coupled_scope(step.kind) && !selected_nets.empty()) {
+      const auto partially_selected = [&selected_nets](const std::vector<NetId>& members) {
+        const auto selected =
+            std::count_if(members.begin(), members.end(),
+                          [&selected_nets](NetId id) { return selected_nets.contains(id); });
+        return selected != 0 && static_cast<std::size_t>(selected) != members.size();
+      };
+      for (const auto& pair : source.differential_pairs) {
+        if (partially_selected({pair.positive_net, pair.negative_net})) {
+          expansion_error(result, "split_work_plan_differential_pair",
+                          "selector expansion splits a declared differential pair", step_pointer);
+        }
+      }
+      for (const auto& bus : source.routing_buses) {
+        if (partially_selected(bus.ordered_nets)) {
+          expansion_error(result, "split_work_plan_routing_bus",
+                          "selector expansion splits a declared routing bus", step_pointer);
+        }
+      }
+    }
+
+    expanded.nets = sorted_ids(selected_nets);
+    expanded.footprints = sorted_ids(selected_footprints);
+    std::set<NetId> wildcard_only;
+    std::set_difference(selected_nets.begin(), selected_nets.end(), non_wildcard_nets.begin(),
+                        non_wildcard_nets.end(), std::inserter(wildcard_only, wildcard_only.end()));
+    expanded.wildcard_only_nets = sorted_ids(wildcard_only);
+    if (step.kind == WorkPlanStepKind::route) {
+      force_reroute_authority.insert(non_wildcard_nets.begin(), non_wildcard_nets.end());
+    }
+    result.steps.push_back(std::move(expanded));
+  }
+
+  std::set<NetId> reroutable_nets;
+  if (plan.mode == WorkPlanMode::force_reroute_selected) {
+    reroutable_nets = force_reroute_authority;
+    if (reroutable_nets.empty()) {
+      expansion_error(
+          result, "wildcard_only_force_reroute_scope",
+          "wildcards/all_nets may select work but cannot authorize pre-existing copper removal",
+          "/steps");
+    }
+  } else if (plan.mode == WorkPlanMode::allowlisted_ripup) {
+    for (std::size_t index = 0U; index < plan.ripup_allowlist.size(); ++index) {
+      const auto* net = net_by_name(plan.ripup_allowlist[index]);
+      if (net == nullptr) {
+        expansion_error(result, "unknown_work_plan_ripup_net",
+                        "ripup_allowlist must contain exact source net names",
+                        "/ripup_allowlist/" + std::to_string(index));
+      } else {
+        reroutable_nets.insert(net->id);
+      }
+    }
+  }
+  if (!reroutable_nets.empty()) {
+    const auto partially_authorized = [&reroutable_nets](const std::vector<NetId>& members) {
+      const auto count =
+          std::count_if(members.begin(), members.end(),
+                        [&reroutable_nets](NetId id) { return reroutable_nets.contains(id); });
+      return count != 0 && static_cast<std::size_t>(count) != members.size();
+    };
+    for (const auto& pair : source.differential_pairs) {
+      if (partially_authorized({pair.positive_net, pair.negative_net})) {
+        expansion_error(result, "split_work_plan_ripup_differential_pair",
+                        "pre-existing copper authority splits a declared differential pair",
+                        plan.mode == WorkPlanMode::allowlisted_ripup ? "/ripup_allowlist"
+                                                                     : "/steps");
+      }
+    }
+    for (const auto& bus : source.routing_buses) {
+      if (partially_authorized(bus.ordered_nets)) {
+        expansion_error(result, "split_work_plan_ripup_routing_bus",
+                        "pre-existing copper authority splits a declared routing bus",
+                        plan.mode == WorkPlanMode::allowlisted_ripup ? "/ripup_allowlist"
+                                                                     : "/steps");
+      }
+    }
+  }
+  result.copper_authority.reroutable_nets = sorted_ids(reroutable_nets);
+
+  const auto classify = [&reroutable_nets](const auto& copper, auto& removable, auto& immutable) {
+    for (const auto& item : copper) {
+      if (!item.locked && reroutable_nets.contains(item.net)) {
+        removable.push_back(item.id);
+      } else {
+        immutable.push_back(item.id);
+      }
+    }
+    std::sort(removable.begin(), removable.end());
+    std::sort(immutable.begin(), immutable.end());
+  };
+  classify(source.tracks, result.copper_authority.removable_tracks,
+           result.copper_authority.immutable_tracks);
+  classify(source.track_arcs, result.copper_authority.removable_track_arcs,
+           result.copper_authority.immutable_track_arcs);
+  classify(source.vias, result.copper_authority.removable_vias,
+           result.copper_authority.immutable_vias);
+  for (const auto& zone : source.zones) {
+    result.copper_authority.immutable_zones.push_back(zone.id);
+  }
+  std::sort(result.copper_authority.immutable_zones.begin(),
+            result.copper_authority.immutable_zones.end());
+
+  std::set<NetId> selected_union;
+  for (const auto& step : result.steps) {
+    selected_union.insert(step.nets.begin(), step.nets.end());
+  }
+  result.selected_net_mask.reserve(source.nets.size());
+  result.reroutable_net_mask.reserve(source.nets.size());
+  for (const auto& net : source.nets) {
+    result.selected_net_mask.push_back(selected_union.contains(net.id) ? 1U : 0U);
+    result.reroutable_net_mask.push_back(reroutable_nets.contains(net.id) ? 1U : 0U);
+  }
+  return result;
 }
 
 std::string serialize_flux_work_plan(const FluxWorkPlan& plan) {
@@ -696,6 +1097,7 @@ std::vector<std::string> required_flux_work_plan_capabilities(const FluxWorkPlan
     switch (step.kind) {
     case WorkPlanStepKind::route:
       append("routing.single-ended");
+      append("routing.scope");
       break;
     case WorkPlanStepKind::fanout:
       append("fanout.package-aware");
@@ -722,6 +1124,9 @@ std::vector<std::string> required_flux_work_plan_capabilities(const FluxWorkPlan
       append("placement.integrated");
       break;
     }
+  }
+  if (plan.mode == WorkPlanMode::allowlisted_ripup) {
+    append("routing.ripup-recovery");
   }
   return result;
 }

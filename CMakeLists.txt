@@ -28,6 +28,7 @@ set(FLUX_VIEWER_IMGUI_SOURCE_DIR "" CACHE PATH
     "Existing Dear ImGui source tree; empty fetches the pinned upstream release")
 
 find_package(Boost 1.75 REQUIRED COMPONENTS json)
+find_package(OpenSSL REQUIRED COMPONENTS Crypto)
 find_package(Threads REQUIRED)
 find_package(Vulkan REQUIRED)
 find_program(FLUX_GLSLC_EXECUTABLE NAMES glslc REQUIRED)
@@ -115,9 +116,11 @@ add_library(flux_core
   src/routing_xpbd.cpp
   src/sexpr.cpp
   src/specctra.cpp
+  src/routing_preset.cpp
   src/ph_route.cpp
   src/validation.cpp)
-target_sources(flux_core PRIVATE src/work_plan.cpp)
+target_sources(flux_core PRIVATE src/work_plan.cpp src/work_plan_executor.cpp src/work_plan_policy.cpp
+                                 src/work_plan_router.cpp)
 add_library(flux::core ALIAS flux_core)
 
 target_sources(flux_core PRIVATE src/vulkan_runtime.cpp src/hydraulic_path_vulkan.cpp src/routing_compute_vulkan.cpp
@@ -144,7 +147,7 @@ target_include_directories(
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>)
-target_link_libraries(flux_core PRIVATE Boost::headers Boost::json Threads::Threads)
+target_link_libraries(flux_core PRIVATE Boost::headers Boost::json OpenSSL::Crypto Threads::Threads)
 target_compile_definitions(flux_core PRIVATE BOOST_ERROR_CODE_HEADER_ONLY)
 
 add_library(flux_telemetry

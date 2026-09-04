@@ -13,6 +13,7 @@
 #include "flux/io/kicad_export.hpp"
 #include "flux/io/kicad_import.hpp"
 #include "flux/io/placement_move_priorities.hpp"
+#include "flux/io/work_plan.hpp"
 #include "flux/telemetry/event.hpp"
 
 #include <algorithm>
@@ -4524,6 +4525,55 @@ void same_net_vertical_features_are_reused_as_transition_portals() {
               through_hole_detailed.diagnostic);
 }
 
+void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
+  const auto board = two_pad_board();
+  auto plan = flux::io::make_flux_work_plan_template(board, "board.kicad_pcb");
+  plan.mode = flux::io::WorkPlanMode::force_reroute_selected;
+  flux::io::WorkPlanStep route;
+  route.id = "route-signals";
+  route.kind = flux::io::WorkPlanStepKind::route;
+  route.selectors.exact_nets = {"SIGNAL"};
+  route.options = {{"arcs", true},
+                   {"max_router_iterations", std::uint64_t{30U}},
+                   {"signed_test", std::int64_t{-1}},
+                   {"strategy", std::string{"scarcity"}}};
+  flux::io::WorkPlanStep validation;
+  validation.id = "validate";
+  validation.kind = flux::io::WorkPlanStepKind::validation;
+  validation.depends_on = {route.id};
+  plan.steps = {route, validation};
+
+  const auto serialized = flux::io::serialize_flux_work_plan(plan);
+  const auto parsed = flux::io::parse_flux_work_plan(serialized, &board);
+  require(parsed.ok() && parsed.plan && *parsed.plan == plan &&
+              flux::io::serialize_flux_work_plan(*parsed.plan) == serialized,
+          "FluxWorkPlan must round-trip byte-stably without changing typed options");
+  require(flux::io::required_flux_work_plan_capabilities(plan) ==
+              std::vector<std::string>{"routing.single-ended", "verification.diagnostics"},
+          "ordered step kinds must produce stable capability preflight IDs");
+
+  auto stale = board;
+  stale.source_revision += "-changed";
+  const auto stale_result = flux::io::parse_flux_work_plan(serialized, &stale);
+  require(
+      !stale_result.ok() &&
+          std::any_of(stale_result.diagnostics.begin(), stale_result.diagnostics.end(),
+                      [](const auto& diagnostic) { return diagnostic.code == "stale_work_plan"; }),
+      "a saved plan must fail closed against another source revision");
+
+  auto type_confused = serialized;
+  const auto enabled = type_confused.find("\"enabled\":true");
+  require(enabled != std::string::npos, "serialized plan must contain typed telemetry state");
+  type_confused.replace(enabled, std::string{"\"enabled\":true"}.size(), "\"enabled\":\"true\"");
+  const auto confused_result = flux::io::parse_flux_work_plan(type_confused, &board);
+  require(!confused_result.ok() &&
+              std::any_of(confused_result.diagnostics.begin(), confused_result.diagnostics.end(),
+                          [](const auto& diagnostic) {
+                            return diagnostic.code == "invalid_work_plan_boolean";
+                          }),
+          "the plan parser must reject JSON type confusion rather than coerce strings");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -4555,6 +4605,8 @@ int main(int argc, char** argv) {
        physical_copper_t_junction_is_preserved_during_ph_realization},
       {"same_net_vertical_features_are_reused_as_transition_portals",
        same_net_vertical_features_are_reused_as_transition_portals},
+      {"work_plan_round_trip_is_strict_source_bound_and_non_authoritative",
+       work_plan_round_trip_is_strict_source_bound_and_non_authoritative},
       {"integrated_placement_rejects_proxy_improvement_that_violates_copper_rules",
        integrated_placement_rejects_proxy_improvement_that_violates_copper_rules},
       {"cancellation_and_kicad_export_boundaries_fail_closed",

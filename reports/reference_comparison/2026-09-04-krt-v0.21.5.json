@@ -1,0 +1,190 @@
+{
+  "schema": "flux_reference_comparison_summary",
+  "schema_version": 1,
+  "date": "2026-09-04",
+  "reference": {
+    "project": "KiCadRoutingTools",
+    "version": "0.21.5",
+    "commit": "e239e067c204870b4ac570fc9e931a374bdfd5b4"
+  },
+  "methodology": {
+    "source_fixtures_byte_identical": true,
+    "compare_byte_identical_copper": false,
+    "compare_connectivity": true,
+    "compare_drc": true,
+    "compare_route_scope": true,
+    "compare_feature_behavior": true,
+    "flux_strict_import_precedes_routing": true
+  },
+  "tools": {
+    "python": "3.14.4",
+    "numpy": "2.3.5",
+    "scipy": "1.16.3",
+    "shapely": "2.1.2",
+    "kicad": "10.0.4",
+    "kicad_appimage_sha256": "5bdf5f5c3263fccc8aea72b3d534894770cf9a4b6f6560b73b4da874a9bd1a6a",
+    "flux_cli_sha256": "f6a2144dd325d5d5d1d5ef2214760f0c31a34e70aa1be2b4209c19b4fa31bedf"
+  },
+  "recorded_artifacts": {
+    "root": "build/reference-comparison-20260904-m0c",
+    "metadata_sha256": "c6cab49113d65fe5ca895796df93a83d523c401e41070998419a4292079b2a27",
+    "result_sha256": "9d192071ae7da938f05302c40f1141869347839fa7341639c3b067d836446bb6",
+    "inventory_entries": 35
+  },
+  "cases": [
+    {
+      "id": "cap-chain-mps-route",
+      "fixture_ids": [
+        "krt.cap-chain"
+      ],
+      "reference_status": "pass",
+      "feature_behavior": {
+        "scope": "run",
+        "ordering": "mps",
+        "routed_single": [
+          "DPA_N",
+          "DPA_P",
+          "DPB_N",
+          "DPB_P"
+        ],
+        "failed": 0,
+        "open_single": [],
+        "pad_pairs_connected": 4,
+        "pad_pairs_total": 4,
+        "total_vias": 0,
+        "total_iterations": 304,
+        "reported_route_time_seconds": 0.01,
+        "krt_drc_violations": 0,
+        "kicad_drc_violations": 0,
+        "kicad_unconnected_items": 0
+      },
+      "flux": {
+        "status": "import-blocked",
+        "import_issue_counts": {
+          "unknown_net_ordinal": 8
+        },
+        "core_validation_errors": 6
+      },
+      "comparison": "reference-pass/flux-import-blocked"
+    },
+    {
+      "id": "ac-coupled-length-match",
+      "fixture_ids": [
+        "krt.cap-chain"
+      ],
+      "reference_status": "pass",
+      "reference_test_sha256": "4b4d8f7036774efa1564cbcdc96b37836a866a4ccb7b9635837af2d5706a191b",
+      "feature_behavior": "AC-coupled XNet detection, guarded end-to-end measurement, routing, and matching passed.",
+      "flux": {
+        "status": "import-blocked",
+        "import_issue_counts": {
+          "unknown_net_ordinal": 8
+        }
+      },
+      "comparison": "reference-pass/flux-import-blocked"
+    },
+    {
+      "id": "qfn-csi-underpad-differential",
+      "fixture_ids": [
+        "krt.qfn-csi-underpad-differential"
+      ],
+      "reference_status": "pass",
+      "reference_test_sha256": "04e5ce651e20b77b6a20df0629291f1d89ecb53b7525f2a253d21b14d2baf51d",
+      "feature_behavior": "Four QFN terminals escaped to the inner layer and both coupled pairs routed fully connected and DRC-clean.",
+      "flux": {
+        "status": "import-blocked",
+        "import_issue_counts": {
+          "non_copper_pad_ignored": 9,
+          "unknown_net_ordinal": 8
+        }
+      },
+      "comparison": "reference-pass/flux-import-blocked"
+    },
+    {
+      "id": "qfn-interior-via-in-pad",
+      "fixture_ids": [
+        "krt.qfn-interior-pads"
+      ],
+      "reference_status": "pass",
+      "reference_test_sha256": "c16024b3bbb29b40034a60f07ae69670d123d195f69570c207beaeb65cb4d1ef",
+      "feature_behavior": "All 19 interior-pad classification, scope, via-in-pad, write, and DRC checks passed.",
+      "flux": {
+        "status": "import-blocked",
+        "import_issue_counts": {
+          "unknown_net_ordinal": 14
+        }
+      },
+      "comparison": "reference-pass/flux-import-blocked"
+    },
+    {
+      "id": "qfn-alternative-stagger",
+      "fixture_ids": [
+        "krt.qfn-underpad-coupling"
+      ],
+      "reference_status": "pass",
+      "reference_test_sha256": "0ff94376cd1253c3fc115f7b284e9fe4521981abe6b3c73d9df29e166e3f3423",
+      "feature_behavior": "The default stagger dropped one leg; bounded alternative search escaped all eight DRC-clean.",
+      "flux": {
+        "status": "import-blocked",
+        "import_issue_counts": {
+          "non_copper_pad_ignored": 9,
+          "unknown_net_ordinal": 9
+        }
+      },
+      "comparison": "reference-pass/flux-import-blocked"
+    },
+    {
+      "id": "qfn-boxed-via-in-pad",
+      "fixture_ids": [
+        "krt.qfn-differential-escape"
+      ],
+      "reference_status": "pass",
+      "reference_test_sha256": "fa518d07f6a8aa6789adbed496c61d03b124237f47e3e608d686d3556668a058",
+      "feature_behavior": "The boxed foreign-copper site was rejected, then both pair members escaped via-in-pad DRC-clean.",
+      "flux": {
+        "status": "import-blocked",
+        "import_issue_counts": {
+          "non_copper_pad_ignored": 9,
+          "unknown_net_ordinal": 9
+        }
+      },
+      "comparison": "reference-pass/flux-import-blocked"
+    },
+    {
+      "id": "zone-island-link-semantics",
+      "fixture_ids": [
+        "krt.two-islands-smd-stub-via",
+        "krt.two-islands-through-hole",
+        "krt.two-islands-via-only"
+      ],
+      "reference_status": "pass",
+      "reference_test_sha256": "c98175a9ff03f45646e3dac700abfb399dc90cb33807d007619cddc70524bfbb",
+      "feature_behavior": "Reference copper grading and KiCad 10 refill agreed that every two-island variant requires exactly one link, including via-only copper.",
+      "flux": {
+        "status": "import-blocked",
+        "import_issue_counts_by_fixture": {
+          "krt.two-islands-smd-stub-via": {
+            "missing_courtyard": 2,
+            "unknown_net_ordinal": 6
+          },
+          "krt.two-islands-through-hole": {
+            "missing_courtyard": 2,
+            "unknown_net_ordinal": 4
+          },
+          "krt.two-islands-via-only": {
+            "missing_courtyard": 1,
+            "unknown_net_ordinal": 4
+          }
+        }
+      },
+      "comparison": "reference-pass/flux-import-blocked"
+    }
+  ],
+  "conclusion": {
+    "reference_cases_passed": 7,
+    "reference_cases_total": 7,
+    "flux_route_comparisons_completed": 0,
+    "flux_import_blocked_cases": 7,
+    "next_gate": "Implement strict KiCad 10 string-valued net reference import before attempting like-for-like Flux routing on these fixtures."
+  }
+}

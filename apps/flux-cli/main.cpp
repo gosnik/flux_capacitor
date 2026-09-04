@@ -21,7 +21,10 @@
 #include "flux/io/relative_placement_constraints.hpp"
 #include "flux/io/routing_bus_constraints.hpp"
 #include "flux/io/specctra.hpp"
+#include "flux/io/work_plan.hpp"
 #include "flux/generated/parity_manifest.hpp"
+
+#include <boost/json.hpp>
 
 #include <algorithm>
 #include <array>
@@ -5714,6 +5717,105 @@ void print_specctra_import(const flux::io::SpecctraSesImportResult& result, bool
   return contents;
 }
 
+[[nodiscard]] bool write_new_text_file(const std::filesystem::path& path,
+                                       std::string_view contents) {
+  std::error_code error;
+  if (std::filesystem::exists(path, error) || error) {
+    return false;
+  }
+  std::ofstream output(path, std::ios::binary);
+  output.write(contents.data(), static_cast<std::streamsize>(contents.size()));
+  return static_cast<bool>(output);
+}
+
+[[nodiscard]] std::map<std::string, std::string> parity_capability_statuses() {
+  std::map<std::string, std::string> result;
+  boost::system::error_code error;
+  const auto manifest = boost::json::parse(flux::generated::parity_manifest_json, error);
+  if (error || !manifest.is_object()) {
+    return result;
+  }
+  const auto* capabilities = manifest.as_object().if_contains("capabilities");
+  if (capabilities == nullptr || !capabilities->is_array()) {
+    return result;
+  }
+  for (const auto& value : capabilities->as_array()) {
+    if (!value.is_object())
+      continue;
+    const auto* id = value.as_object().if_contains("id");
+    const auto* status = value.as_object().if_contains("status");
+    if (id != nullptr && status != nullptr && id->is_string() && status->is_string()) {
+      result.emplace(std::string(id->as_string()), std::string(status->as_string()));
+    }
+  }
+  return result;
+}
+
+[[nodiscard]] bool print_work_plan_result(const flux::io::WorkPlanLoadResult& loaded,
+                                          bool dry_run) {
+  const auto statuses = parity_capability_statuses();
+  std::vector<std::string> capabilities;
+  bool capability_preflight_ok = loaded.ok();
+  if (loaded.plan) {
+    capabilities = flux::io::required_flux_work_plan_capabilities(*loaded.plan);
+    for (const auto& capability : capabilities) {
+      const auto found = statuses.find(capability);
+      capability_preflight_ok =
+          capability_preflight_ok && found != statuses.end() &&
+          (found->second == "present" || found->second == "intentional-stronger-alternative");
+    }
+  }
+  std::cout << "{\n"
+            << "  \"ok\": " << (loaded.ok() ? "true" : "false") << ",\n"
+            << "  \"dry_run\": " << (dry_run ? "true" : "false") << ",\n"
+            << "  \"would_mutate_board\": false,\n"
+            << "  \"capability_preflight_ok\": " << (capability_preflight_ok ? "true" : "false")
+            << ",\n"
+            << "  \"required_capabilities\": [";
+  for (std::size_t index = 0U; index < capabilities.size(); ++index) {
+    const auto status = statuses.find(capabilities[index]);
+    std::cout << (index == 0U ? "" : ", ") << "{\"id\": " << json_quote(capabilities[index])
+              << ", \"status\": "
+              << json_quote(status == statuses.end() ? "unknown" : status->second) << '}';
+  }
+  std::cout << "],\n  \"diagnostics\": [";
+  for (std::size_t index = 0U; index < loaded.diagnostics.size(); ++index) {
+    const auto& diagnostic = loaded.diagnostics[index];
+    std::cout << (index == 0U ? "" : ",") << "\n    {\"severity\": "
+              << json_quote(diagnostic.severity == flux::io::WorkPlanDiagnosticSeverity::error
+                                ? "error"
+                                : "warning")
+              << ", \"code\": " << json_quote(diagnostic.code)
+              << ", \"message\": " << json_quote(diagnostic.message)
+              << ", \"json_pointer\": " << json_quote(diagnostic.json_pointer) << '}';
+  }
+  if (!loaded.diagnostics.empty()) {
+    std::cout << '\n';
+  }
+  std::cout << "  ]";
+  if (loaded.plan) {
+    const auto& plan = *loaded.plan;
+    std::cout << ",\n  \"source_revision\": " << json_quote(plan.source_revision)
+              << ",\n  \"mode\": " << json_quote(flux::io::work_plan_mode_name(plan.mode))
+              << ",\n  \"telemetry_enabled\": " << (plan.telemetry.enabled ? "true" : "false")
+              << ",\n  \"policy_count\": " << plan.policies.size()
+              << ",\n  \"step_count\": " << plan.steps.size() << ",\n  \"steps\": [";
+    for (std::size_t index = 0U; index < plan.steps.size(); ++index) {
+      const auto& step = plan.steps[index];
+      std::cout << (index == 0U ? "" : ",") << "\n    {\"id\": " << json_quote(step.id)
+                << ", \"kind\": " << json_quote(flux::io::work_plan_step_kind_name(step.kind))
+                << ", \"dependency_count\": " << step.depends_on.size()
+                << ", \"option_count\": " << step.options.size() << '}';
+    }
+    if (!plan.steps.empty()) {
+      std::cout << '\n';
+    }
+    std::cout << "  ],\n  \"canonical_plan\": " << flux::io::serialize_flux_work_plan(plan);
+  }
+  std::cout << "}\n";
+  return loaded.ok() && capability_preflight_ok;
+}
+
 void print_netclass_snapshot_result(const flux::io::KicadNetClassSnapshotResult& snapshot) {
   const auto errors = static_cast<std::size_t>(std::count_if(
       snapshot.diagnostics.begin(), snapshot.diagnostics.end(), [](const auto& diagnostic) {
@@ -7343,6 +7445,9 @@ void print_help() {
                "  flux-cli version       Print the engine version\n"
                "  flux-cli capabilities --json  Print the pinned feature-parity contract\n"
                "  flux-cli system-info --json  Print production GPU and schema identity\n"
+               "  flux-cli work-plan-template-kicad BOARD OUTPUT.flux.json\n"
+               "  flux-cli inspect-work-plan-kicad BOARD PLAN.flux.json\n"
+               "  flux-cli dry-run-work-plan-kicad BOARD PLAN.flux.json\n"
                "  flux-cli demo          Evaluate a valid built-in board\n"
                "  flux-cli demo-invalid  Evaluate an overlapping built-in board\n"
                "  flux-cli route-demo [--strict-medial] [--direct-medial] Globally route the "
@@ -7573,6 +7678,41 @@ int main(int argc, char** argv) {
               << "  \"gpu_diagnostic\": " << json_quote(device.diagnostic) << "\n"
               << "}\n";
     return device.available ? EXIT_SUCCESS : 4;
+  }
+  if (command == "work-plan-template-kicad" && argc == 4) {
+    const auto source_path = std::filesystem::path{argv[2]};
+    const auto imported = flux::io::import_kicad_pcb_file(source_path);
+    if (!imported.strict()) {
+      print_import_result(imported);
+      return 4;
+    }
+    const auto plan =
+        flux::io::make_flux_work_plan_template(*imported.board, source_path.generic_string());
+    const auto serialized = flux::io::serialize_flux_work_plan(plan);
+    const auto output_path = std::filesystem::path{argv[3]};
+    if (!write_new_text_file(output_path, serialized)) {
+      std::cerr << "work-plan template output already exists or could not be written\n";
+      return 10;
+    }
+    std::cout << "{\"ok\": true, \"output\": " << json_quote(output_path.generic_string())
+              << ", \"source_revision\": " << json_quote(plan.source_revision)
+              << ", \"step_count\": 0, \"telemetry_enabled\": true}\n";
+    return EXIT_SUCCESS;
+  }
+  if ((command == "inspect-work-plan-kicad" || command == "dry-run-work-plan-kicad") && argc == 4) {
+    const auto imported = flux::io::import_kicad_pcb_file(std::filesystem::path{argv[2]});
+    if (!imported.strict()) {
+      print_import_result(imported);
+      return 4;
+    }
+    const auto loaded =
+        flux::io::load_flux_work_plan_file(std::filesystem::path{argv[3]}, &*imported.board);
+    const bool dry_run = command == "dry-run-work-plan-kicad";
+    const bool executable = print_work_plan_result(loaded, dry_run);
+    if (!loaded.ok()) {
+      return 11;
+    }
+    return !dry_run || executable ? EXIT_SUCCESS : 12;
   }
   if ((command == "demo" || command == "demo-invalid") && argc == 2) {
     const auto result = flux::evaluate_board(make_demo_board(command == "demo-invalid"));

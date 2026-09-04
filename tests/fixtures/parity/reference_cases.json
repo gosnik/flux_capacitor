@@ -1,0 +1,135 @@
+{
+  "schema": "flux_reference_comparison_cases",
+  "schema_version": 1,
+  "reference": {
+    "project": "KiCadRoutingTools",
+    "version": "0.21.5",
+    "commit": "e239e067c204870b4ac570fc9e931a374bdfd5b4"
+  },
+  "cases": [
+    {
+      "id": "cap-chain-mps-route",
+      "kind": "route",
+      "fixture_ids": [
+        "krt.cap-chain"
+      ],
+      "capabilities": [
+        "routing.single-ended",
+        "routing.ordering"
+      ],
+      "description": "Routes all four capacitor-chain nets with MPS ordering and independently checks connectivity and DRC.",
+      "route_args": [
+        "--max-iterations",
+        "200000",
+        "--ordering",
+        "mps",
+        "--stats"
+      ],
+      "expected": {
+        "routed_single": [
+          "DPA_N",
+          "DPA_P",
+          "DPB_N",
+          "DPB_P"
+        ],
+        "failed": 0,
+        "open_single": [],
+        "pad_pairs_connected": 4,
+        "pad_pairs_total": 4,
+        "total_vias": 0,
+        "krt_drc_violations": 0,
+        "kicad_drc_violations": 0,
+        "kicad_unconnected_items": 0
+      }
+    },
+    {
+      "id": "ac-coupled-length-match",
+      "kind": "upstream-test",
+      "fixture_ids": [
+        "krt.cap-chain"
+      ],
+      "capabilities": [
+        "routing.differential-pairs",
+        "tuning.length-time"
+      ],
+      "description": "Detects the two AC-coupled pair members and verifies guarded end-to-end length matching.",
+      "test": "tests/test_ac_coupled_match.py",
+      "expected_stdout": "PASS  AC-coupled XNet detection + measurement + integration"
+    },
+    {
+      "id": "qfn-csi-underpad-differential",
+      "kind": "upstream-test",
+      "fixture_ids": [
+        "krt.qfn-csi-underpad-differential"
+      ],
+      "capabilities": [
+        "fanout.package-aware",
+        "routing.differential-pairs",
+        "vias.return-and-stitch"
+      ],
+      "description": "Fans four QFN terminals to an inner layer, routes two coupled pairs, and checks connectivity and DRC.",
+      "test": "tests/test_qfn_csi_underpad_diff.py",
+      "expected_stdout": "PASS: QFN CSI under-pad diff pairs route 2/2, fully connected, DRC-clean (#195)"
+    },
+    {
+      "id": "qfn-interior-via-in-pad",
+      "kind": "upstream-test",
+      "fixture_ids": [
+        "krt.qfn-interior-pads"
+      ],
+      "capabilities": [
+        "fanout.package-aware",
+        "vias.return-and-stitch"
+      ],
+      "description": "Classifies interior QFN pads and emits two scoped, DRC-clean via-in-pad escapes without touching guards.",
+      "test": "tests/test_qfn_interior_underpad.py",
+      "expected_stdout": "19/19 checks passed"
+    },
+    {
+      "id": "qfn-alternative-stagger",
+      "kind": "upstream-test",
+      "fixture_ids": [
+        "krt.qfn-underpad-coupling"
+      ],
+      "capabilities": [
+        "fanout.package-aware"
+      ],
+      "description": "Demonstrates that bounded alternative stagger search recovers the eighth QFN escape while retaining DRC cleanliness.",
+      "test": "tests/test_qfn_underpad_stagger_search.py",
+      "expected_stdout": "the alternative-stagger search escapes all 8, DRC-clean"
+    },
+    {
+      "id": "qfn-boxed-via-in-pad",
+      "kind": "upstream-test",
+      "fixture_ids": [
+        "krt.qfn-differential-escape"
+      ],
+      "capabilities": [
+        "fanout.package-aware",
+        "routing.differential-pairs",
+        "vias.return-and-stitch"
+      ],
+      "description": "Rejects a boxed foreign-copper via site, then legally escapes both pair members with reviewed via-in-pad behavior.",
+      "test": "tests/test_qfn_underpad_via_in_pad.py",
+      "expected_stdout": "via-in-pad escapes both DP1 halves staggered inward (DRC-clean)"
+    },
+    {
+      "id": "zone-island-link-semantics",
+      "kind": "upstream-test",
+      "fixture_ids": [
+        "krt.two-islands-smd-stub-via",
+        "krt.two-islands-through-hole",
+        "krt.two-islands-via-only"
+      ],
+      "capabilities": [
+        "planes.synthesis-repair",
+        "cleanup.copper",
+        "vias.return-and-stitch"
+      ],
+      "description": "Checks reference connectivity classification against KiCad refill for pad, stub/via, and via-only zone islands.",
+      "test": "tests/test_island_link_semantics.py",
+      "stage_fixture_directory": true,
+      "expected_stdout": "PASS: island-link semantics fixtures"
+    }
+  ]
+}

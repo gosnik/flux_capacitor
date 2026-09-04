@@ -41,7 +41,11 @@ if(Python3_Interpreter_FOUND)
             "${CMAKE_CURRENT_SOURCE_DIR}/python/verify_capabilities_manifest.py"
             --flux-cli $<TARGET_FILE:flux-cli>
             --manifest "${PROJECT_SOURCE_DIR}/docs/parity_manifest.json"
-            --fixtures "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/parity/manifest.json")
+            --fixtures "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/parity/manifest.json"
+            --reference-cases
+            "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/parity/reference_cases.json"
+            --reference-report
+            "${PROJECT_SOURCE_DIR}/reports/reference_comparison/2026-09-04-krt-v0.21.5.json")
   set_tests_properties(
     flux_cli_capabilities_manifest PROPERTIES LABELS "risk;parity-contract")
   add_test(
@@ -53,6 +57,14 @@ if(Python3_Interpreter_FOUND)
             --verifier "${CMAKE_CURRENT_SOURCE_DIR}/python/verify_routing_corpus.py")
   set_tests_properties(
     flux_routing_baseline_manifest PROPERTIES LABELS "risk;parity-contract")
+  add_test(
+    NAME flux_work_plan_cli_contract
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/python/test_work_plan_cli.py"
+            --flux-cli $<TARGET_FILE:flux-cli>
+            --board "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/minimal.kicad_pcb")
+  set_tests_properties(
+    flux_work_plan_cli_contract PROPERTIES LABELS "risk;parity-contract")
   add_test(
     NAME flux_kicad_netclass_bridge_tests
     COMMAND "${Python3_EXECUTABLE}"

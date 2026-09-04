@@ -277,14 +277,22 @@
     {
       "id": "workflow.plans-ai",
       "title": "Serializable plans and optional AI authorship",
-      "status": "missing",
+      "status": "partial",
       "reference_evidence": ["kicad_routing_plugin/ai_plan.py", "kicad_routing_plugin/ai_backend.py"],
-      "flux_evidence": [],
+      "flux_evidence": [
+        "include/flux/io/work_plan.hpp",
+        "src/work_plan.cpp",
+        "apps/flux-cli/main.cpp"
+      ],
       "focused_fixture": "flux.minimal",
       "stress_sample": "tests/fixtures/routing-corpus/pt2399_delay.kicad_pcb",
-      "public_commands": [],
+      "public_commands": [
+        "flux-cli work-plan-template-kicad",
+        "flux-cli inspect-work-plan-kicad",
+        "flux-cli dry-run-work-plan-kicad"
+      ],
       "acceptance": "A versioned source-bound work plan dry-runs, preflights, serializes, replays deterministically, and treats optional AI as an untrusted author.",
-      "gap": "No stable FluxWorkPlan schema exists."
+      "gap": "The source-bound typed schema, deterministic round trip, template, inspection, and non-mutating capability preflight exist; execution, cancellation, full CLI-option mapping, deterministic replay, and optional untrusted AI authorship remain incomplete."
     },
     {
       "id": "qualification.stress-release",

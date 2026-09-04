@@ -21,3 +21,21 @@ Run the catalog and capability-contract check through:
 ```sh
 ctest --test-dir build/dev --output-on-failure -R flux_cli_capabilities_manifest
 ```
+
+`reference_cases.json` defines the pinned outcome comparisons. Replay every case into a new
+write-once artifact directory with:
+
+```sh
+python3 tests/python/record_reference_parity.py \
+  --reference-checkout /path/to/KiCadRoutingTools \
+  --python /path/to/reference-venv/bin/python \
+  --flux-cli build/dev/flux-cli \
+  --kicad-cli /path/to/kicad-or-kicad.AppImage \
+  --fixtures tests/fixtures/parity/manifest.json \
+  --cases tests/fixtures/parity/reference_cases.json \
+  --artifacts build/reference-comparison-$(date +%Y%m%d-%H%M%S)
+```
+
+The runner verifies the upstream commit and both copies of every fixture before execution. It
+records reference connectivity, DRC, route scope, and feature behavior beside Flux's current
+strict-import result. Copper coordinates are deliberately not compared byte-for-byte.

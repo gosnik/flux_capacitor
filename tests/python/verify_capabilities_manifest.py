@@ -22,10 +22,14 @@ def main() -> int:
     parser.add_argument("--flux-cli", required=True, type=Path)
     parser.add_argument("--manifest", required=True, type=Path)
     parser.add_argument("--fixtures", required=True, type=Path)
+    parser.add_argument("--reference-cases", required=True, type=Path)
+    parser.add_argument("--reference-report", required=True, type=Path)
     args = parser.parse_args()
 
     expected = json.loads(args.manifest.read_text(encoding="utf-8"))
     fixture_catalog = json.loads(args.fixtures.read_text(encoding="utf-8"))
+    reference_cases = json.loads(args.reference_cases.read_text(encoding="utf-8"))
+    reference_report = json.loads(args.reference_report.read_text(encoding="utf-8"))
     completed = subprocess.run(
         [str(args.flux_cli), "capabilities", "--json"],
         check=False,
@@ -151,6 +155,67 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 1
+
+    case_reference = reference_cases.get("reference", {})
+    report_reference = reference_report.get("reference", {})
+    expected_commit = expected["reference"]["commit"]
+    if not (
+        case_reference.get("commit") == expected_commit
+        and report_reference.get("commit") == expected_commit
+    ):
+        print("reference cases, report, and capability contract pin different revisions", file=sys.stderr)
+        return 1
+    comparison_cases = reference_cases.get("cases", [])
+    reported_cases = reference_report.get("cases", [])
+    comparison_ids = [case.get("id") for case in comparison_cases]
+    reported_ids = [case.get("id") for case in reported_cases]
+    if not comparison_ids or len(comparison_ids) != len(set(comparison_ids)):
+        print("reference comparison case IDs must be non-empty and unique", file=sys.stderr)
+        return 1
+    if reported_ids != comparison_ids:
+        print("checked reference comparison report does not cover the case catalog", file=sys.stderr)
+        return 1
+    fixture_gate_by_id = {
+        fixture["id"]: fixture["current_gate"]["state"] for fixture in fixtures
+    }
+    for case, reported in zip(comparison_cases, reported_cases):
+        fixture_ids_for_case = case.get("fixture_ids", [])
+        if not fixture_ids_for_case or any(
+            fixture_id not in fixtures_by_id for fixture_id in fixture_ids_for_case
+        ):
+            print(f"{case.get('id')} references an unknown or empty fixture set", file=sys.stderr)
+            return 1
+        if any(capability not in ids for capability in case.get("capabilities", [])):
+            print(f"{case['id']} references an unknown capability", file=sys.stderr)
+            return 1
+        if case.get("kind") not in {"route", "upstream-test"}:
+            print(f"{case['id']} has unsupported comparison kind", file=sys.stderr)
+            return 1
+        if reported.get("fixture_ids") != fixture_ids_for_case:
+            print(f"{case['id']} report fixture coverage drifted", file=sys.stderr)
+            return 1
+        if reported.get("reference_status") != "pass":
+            print(f"{case['id']} lacks a passing recorded reference outcome", file=sys.stderr)
+            return 1
+        import_blocked = any(
+            fixture_gate_by_id[fixture_id] == "import-blocked"
+            for fixture_id in fixture_ids_for_case
+        )
+        expected_comparison = (
+            "reference-pass/flux-import-blocked"
+            if import_blocked
+            else "reference-pass/flux-import-pass"
+        )
+        if reported.get("comparison") != expected_comparison:
+            print(f"{case['id']} comparison status no longer matches fixture gates", file=sys.stderr)
+            return 1
+    conclusion = reference_report.get("conclusion", {})
+    if not (
+        conclusion.get("reference_cases_passed") == len(comparison_cases)
+        and conclusion.get("reference_cases_total") == len(comparison_cases)
+    ):
+        print("reference comparison conclusion does not match its case inventory", file=sys.stderr)
+        return 1
     return 0
 
 

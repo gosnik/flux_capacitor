@@ -231,7 +231,23 @@ Progress ledger (updated 2026-09-04):
   routing invariants, observer/contract/GPU tests, and qualified tiers; frontier adds the unlocked
   tier; release adds the full parity-fixture and progressive-corpus import inventory. Corpus CTest
   runs use disposable artifact roots while manual runs retain write-once evidence.
-- Milestone 0.6 through Milestone 12 remain open unless their individual exit gates are supported
+- Milestone 0.6 complete: the source-bound reference comparison runner replays seven pinned
+  KiCadRoutingTools cases covering MPS route scope, connectivity, DRC, AC-coupled matching, QFN
+  fanout, inner-layer differential routing, via-in-pad behavior, stagger recovery, and zone-island
+  semantics. All reference cases pass; Flux remains honestly import-blocked on the original KiCad
+  10 fixtures, making string-valued net-reference import the first Milestone 2 gap rather than
+  fabricating a like-for-like route result.
+- Milestone 1.1 complete: `FluxWorkPlan` schema 1 now carries an exact source revision, explicit
+  protected-routing mode, immutable policy identities, ordered typed workflow steps and
+  dependencies, selectors, typed scalar options, and default-on telemetry. Its bounded strict JSON
+  loader rejects unknown fields, type confusion, invalid dependency order, stale board/policy
+  revisions, unsafe rip-up modes, and malformed identities; canonical serialization round-trips
+  byte-stably.
+- Milestone 1.5 partial: write-once template, inspection, and non-mutating dry-run commands expose
+  stable required capability IDs and fail capability preflight unless each selected step is marked
+  present or an intentional stronger alternative. Selector expansion, policy-content hashing,
+  cancellation, execution, and replay remain open.
+- Remaining Milestone 1 items and Milestones 2 through 12 remain open unless their individual exit gates are supported
   by recorded qualification evidence; an implementation named in the capability inventory is not
   itself proof of qualification.
 

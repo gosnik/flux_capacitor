@@ -1698,6 +1698,21 @@ The dependency-ordered verification boundaries are executable through `run_suite
 
 Append `--preflight-only` to any suite command to validate its identities and selection without
 launching tier routing. `tests/suites.json` is the machine-readable membership contract.
+Pinned reference-router comparisons are defined by
+`tests/fixtures/parity/reference_cases.json` and replayed with
+`tests/python/record_reference_parity.py`; the checked summary under
+`reports/reference_comparison/` compares connectivity, DRC, route scope, and feature behavior
+rather than copper bytes. Current KiCad 10 reference fixtures remain honest Flux import blockers.
+
+The first versioned workflow boundary is available as `FluxWorkPlan` JSON. Create a write-once,
+source-revision-bound empty template with `flux-cli work-plan-template-kicad BOARD PLAN`, inspect it
+with `flux-cli inspect-work-plan-kicad BOARD PLAN`, and perform a non-mutating capability preflight
+with `flux-cli dry-run-work-plan-kicad BOARD PLAN`. The schema carries ordered route, fanout,
+differential-pair, bus, plane, tuning, cleanup, validation, and placement step kinds; explicit net,
+glob, class, footprint, and placement-group selectors; protected routing modes; immutable policy
+identities; typed scalar options; dependencies; and default-on telemetry. Empty templates infer no
+work. Execution/replay remains withheld until option semantics and selector expansion share the
+existing authoritative CLI/configuration path.
 Routine manual routing and application validation now uses the external Teensy CNC controller as a
 strictly read-only target. It is never an automated test dependency, generated outputs stay under
 `build/verification/teensy_cnc/`, and its machinery-safety/`DO NOT FABRICATE` rules remain binding.

@@ -1,0 +1,93 @@
+{
+  "date": "2026-09-04T07:33:59+08:00",
+  "git_revision": "a17fe406f392ac0c7e174f9bcfc559e1b46a2bbb",
+  "working_tree_dirty": true,
+  "scope": "external full-routing attempt",
+  "requested_window_seconds": 7200,
+  "source": {
+    "board": "/home/adam/blueocean/HardwareSimBoardV2/Hardware Simulation Board.kicad_pcb",
+    "project": "/home/adam/blueocean/HardwareSimBoardV2/Hardware Simulation Board.kicad_pro",
+    "board_sha256": "da789261c247fe16e38bc73ac62f2980f81887f59d01f2fed1abefb89ac97b1c",
+    "project_sha256": "7d8754e4068de5894715a8ad836aa2359ae6d1ff6b8fc973d0a3967d5d097d95"
+  },
+  "configuration": {
+    "command": "detail-kicad",
+    "max_router_iterations": 30,
+    "max_expansions": 50000,
+    "max_static_seed_workers": 8,
+    "grid_pitch_nm": 650000,
+    "direct_medial": true,
+    "crossing_safe_diagonal_grid": true,
+    "search_diversification": true,
+    "atomic_net_trees": true,
+    "xpbd_relaxation": true,
+    "xpbd_feedback": true,
+    "maximum_final_routability_feedback_passes": 3,
+    "refillable_zones": true,
+    "arc_output": true,
+    "write_incomplete_preview": true
+  },
+  "import": {
+    "strict": false,
+    "lossy": true,
+    "import_errors": 415,
+    "import_warnings": 34,
+    "core_validation_errors": 175,
+    "nets": 198,
+    "footprints": 167,
+    "layers": 26,
+    "vias": 58,
+    "zones": 4,
+    "issue_counts": {
+      "invalid_pad_dimensions": 16,
+      "missing_placement_envelope": 7,
+      "pad_outside_board": 61,
+      "placement_outside_board": 7,
+      "placement_overlap": 91,
+      "multiple_board_outlines_unsupported": 1,
+      "open_geometry": 270,
+      "invalid_keepout_polygon": 9,
+      "invalid_polygon": 1,
+      "courtyard_multiple_contours": 10,
+      "unsupported_courtyard_shape": 4
+    }
+  },
+  "attempt": {
+    "outcome": "rejected before routing",
+    "exit_status": 4,
+    "elapsed_seconds": 15.34,
+    "user_cpu_seconds": 15.29,
+    "peak_rss_kb": 143096,
+    "diagnostic": "detail-kicad requires a strict, lossless import",
+    "global_entry_point_confirmation": {
+      "exit_status": 4,
+      "elapsed_seconds": 15.38,
+      "peak_rss_kb": 142912,
+      "diagnostic": "route-kicad requires a strict, lossless import"
+    },
+    "routed_output_created": false,
+    "telemetry_created": false
+  },
+  "source_kicad_drc": {
+    "kicad_version": "9.0.8",
+    "violations": 696,
+    "unconnected_items": 408,
+    "schematic_parity_items": 0,
+    "violation_counts": {
+      "clearance": 7,
+      "hole_clearance": 4,
+      "invalid_outline": 11,
+      "lib_footprint_issues": 160,
+      "malformed_courtyard": 200,
+      "padstack": 199,
+      "silk_over_copper": 4,
+      "silk_overlap": 2,
+      "solder_mask_bridge": 29,
+      "starved_thermal": 38,
+      "text_height": 19,
+      "text_thickness": 23
+    }
+  },
+  "artifact_root": "build/hardware-sim-v2-2h-20260904",
+  "qualification": false
+}

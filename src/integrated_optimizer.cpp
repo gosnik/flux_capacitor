@@ -2,6 +2,7 @@
 #include "flux/core/regional_router.hpp"
 
 #include "flux/core/geometry.hpp"
+#include "flux/core/routing_compute.hpp"
 #include "flux/core/routing_rules.hpp"
 #include "flux/core/validation.hpp"
 
@@ -15,6 +16,7 @@
 #include <exception>
 #include <limits>
 #include <map>
+#include <numeric>
 #include <set>
 #include <stdexcept>
 #include <stop_token>
@@ -310,16 +312,17 @@ evaluate_candidate(const Board& source, Board placement, const IntegratedOptimiz
   }
 
   if (checkpoint == nullptr) {
-    result.routing_plan =
-        plan_routes(result.placement, RoutingPlannerConfig{config.global_router, {}, 2U, {}},
-                    stop_token, telemetry);
+    auto planner_config = RoutingPlannerConfig{};
+    planner_config.global = config.global_router;
+    planner_config.regional = config.regional_router;
+    result.routing_plan = plan_routes(result.placement, planner_config, stop_token, telemetry);
     result.global = result.routing_plan->coarse_global;
   } else {
     result.global = route_global_incremental(result.placement, *checkpoint, affected_nets,
                                              config.global_router, stop_token, telemetry);
     RoutingPlanResult incremental_plan;
     incremental_plan.coarse_global = result.global;
-    auto regional_config = RegionalRouterConfig{};
+    auto regional_config = config.regional_router;
     regional_config.treat_saved_zone_fills_as_refillable =
         config.global_router.treat_saved_zone_fills_as_refillable;
     incremental_plan.regional = analyze_regional_conflicts(result.placement, result.global,
@@ -898,12 +901,32 @@ physical_channel_obstacle_positions(const CandidateEvaluation& evaluation,
   const auto relative_courtyard = polygon_bounds(geometry::transform_polygon(
       footprint.courtyard, Point{}, footprint.rotation, footprint.side));
   for (const auto& impact : evaluation.global.obstacle_impacts) {
-    if (!footprint_nets.contains(impact.routed_net)) {
+    // Placement repair must attribute an obstacle to its physical owner, not only to nets
+    // electrically connected to that footprint.  A component keepout commonly blocks another
+    // net's escape while the component's own connection remains perfectly routable.
+    if (!footprint_owns_object(footprint, impact.obstacle)) {
       continue;
     }
     const auto obstacle = object_bounds(board, impact.obstacle);
     const auto centroid = other_pin_centroid(board, footprint_index, impact.routed_net);
     if (!obstacle || !centroid) {
+      continue;
+    }
+    const auto displacement_x = footprint.position.x.value() - centroid->x.value();
+    const auto displacement_y = footprint.position.y.value() - centroid->y.value();
+    const auto step = static_cast<long double>(config.move_step.value());
+    const auto escape = std::abs(displacement_x) >= std::abs(displacement_y)
+                            ? bounded_point(static_cast<long double>(footprint.position.x.value()) +
+                                                (displacement_x < 0 ? -step : step),
+                                            static_cast<long double>(footprint.position.y.value()))
+                            : bounded_point(static_cast<long double>(footprint.position.x.value()),
+                                            static_cast<long double>(footprint.position.y.value()) +
+                                                (displacement_y < 0 ? -step : step));
+    if (escape) {
+      // One perpendicular escape target avoids averaging incompatible left/right/up/down
+      // suggestions for the same blocked route.  Additional impacts may still contribute their
+      // own bounded targets below.
+      append(*escape);
       continue;
     }
     const auto margin = static_cast<long double>(config.routing_feedback_margin.value()) +
@@ -2305,6 +2328,53 @@ optimize_integrated_placement_routing(const Board& source, const IntegratedOptim
               std::max(result.peak_candidate_evaluation_workers, worker_count);
           std::vector<std::optional<IntegratedScore>> screened_scores(wave.size());
           std::vector<std::size_t> shortlist;
+          // Evaluate the immutable wave in cheap physical-feasibility order while retaining its
+          // original budget indices and reduction slots. This changes neither the comparator nor
+          // the accepted result; it only presents the most local, least disruptive candidates to
+          // the bounded worker pool first and is useful when a stop request truncates a long wave.
+          std::vector<RoutingComputeLinearCandidate> placement_probe_candidates;
+          placement_probe_candidates.reserve(wave.size());
+          for (const auto& item : wave) {
+            const auto& footprint = current.placement.footprints[item.footprint_index];
+            const auto absolute_x = std::abs(item.proposal.position.x.value() -
+                                             footprint.position.x.value());
+            const auto absolute_y = std::abs(item.proposal.position.y.value() -
+                                             footprint.position.y.value());
+            const auto displacement_units =
+                static_cast<std::uint64_t>(absolute_x / 100'000) +
+                static_cast<std::uint64_t>(absolute_y / 100'000);
+            const auto bounded = [](std::uint64_t value) {
+              return value > std::numeric_limits<std::uint32_t>::max()
+                         ? std::numeric_limits<std::uint32_t>::max()
+                         : static_cast<std::uint32_t>(value);
+            };
+            RoutingComputeLinearCandidate candidate;
+            candidate.terms = {
+                bounded(displacement_units), bounded(item.affected_nets.size()),
+                bounded(item.proposal.group_member_indices.size() +
+                        (item.proposal.swap_partner_index ? 1U : 0U)),
+                item.proposal.rotation != footprint.rotation ? 1U : 0U,
+                item.proposal.side != footprint.side ? 1U : 0U,
+                item.periodic_full_verification ? 1U : 0U,
+                bounded(static_cast<std::uint64_t>(item.proposal.kind)), bounded(item.required_tier)};
+            placement_probe_candidates.push_back(candidate);
+          }
+          const auto placement_probe_scores = score_routing_compute_candidates(
+              placement_probe_candidates, {4U, 40U, 100U, 500U, 2'000U, 50U, 1U, 250U});
+          std::vector<std::size_t> execution_order(wave.size());
+          std::iota(execution_order.begin(), execution_order.end(), 0U);
+          if (placement_probe_scores.ok() &&
+              placement_probe_scores.scores.size() == execution_order.size()) {
+            std::stable_sort(execution_order.begin(), execution_order.end(),
+                             [&](std::size_t lhs, std::size_t rhs) {
+                               return placement_probe_scores.scores[lhs] !=
+                                              placement_probe_scores.scores[rhs]
+                                          ? placement_probe_scores.scores[lhs] <
+                                                placement_probe_scores.scores[rhs]
+                                          : wave[lhs].evaluation_budget_index <
+                                                wave[rhs].evaluation_budget_index;
+                             });
+          }
           const auto consider_full_candidate = [&](std::size_t index,
                                                    CandidateEvaluation candidate) {
             if (!(candidate.score < best.score)) {
@@ -2369,7 +2439,7 @@ optimize_integrated_placement_routing(const Board& source, const IntegratedOptim
                 if (local_index >= batch_size) {
                   return;
                 }
-                const auto index = batch_start + local_index;
+                const auto index = execution_order[batch_start + local_index];
                 try {
                   auto candidate = current.placement;
                   if (!apply_proposal(candidate, wave[index].footprint_index,
@@ -2401,7 +2471,7 @@ optimize_integrated_placement_routing(const Board& source, const IntegratedOptim
             workers.clear();
 
             for (std::size_t local_index = 0U; local_index < batch_size; ++local_index) {
-              const auto index = batch_start + local_index;
+              const auto index = execution_order[batch_start + local_index];
               if (batch[local_index].failure) {
                 std::rethrow_exception(batch[local_index].failure);
               }

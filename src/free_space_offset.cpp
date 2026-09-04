@@ -143,6 +143,18 @@ struct PreparedValidationDomain {
     result.diagnostic = "free-space offset clearance and output budget are invalid";
     return false;
   }
+  if ((!config.obstacle_clearances.empty() &&
+       config.obstacle_clearances.size() != domain.obstacles.size()) ||
+      (!config.filled_obstacle_clearances.empty() &&
+       config.filled_obstacle_clearances.size() != domain.filled_obstacles.size()) ||
+      std::any_of(config.obstacle_clearances.begin(), config.obstacle_clearances.end(),
+                  [](Nanometres value) { return value.value() < 0; }) ||
+      std::any_of(config.filled_obstacle_clearances.begin(),
+                  config.filled_obstacle_clearances.end(),
+                  [](Nanometres value) { return value.value() < 0; })) {
+    result.diagnostic = "free-space offset heterogeneous clearances are invalid or misaligned";
+    return false;
+  }
   if (!geometry::is_simple_polygon(domain.outline)) {
     result.diagnostic = "free-space offset outline must be a simple polygon";
     return false;
@@ -215,28 +227,53 @@ template <typename BoostPolygonLike>
   return result;
 }
 
-[[nodiscard]] long double contour_source_clearance(const Polygon& contour,
-                                                   const FreeSpaceDomain& domain) {
-  auto clearance = geometry::polygon_boundary_distance_nm(contour, domain.outline);
+[[nodiscard]] Nanometres obstacle_clearance(const FreeSpaceOffsetConfig& config,
+                                            std::size_t index, bool filled) {
+  const auto& clearances =
+      filled ? config.filled_obstacle_clearances : config.obstacle_clearances;
+  return clearances.empty() ? config.clearance : clearances[index];
+}
+
+[[nodiscard]] bool contour_has_required_clearance(const Polygon& contour,
+                                                  const FreeSpaceDomain& domain,
+                                                  const FreeSpaceOffsetConfig& config) {
+  const auto required_outer = static_cast<long double>(config.clearance.value());
+  if (required_outer > 0.0L &&
+      geometry::polygon_boundary_distance_nm(contour, domain.outline) < required_outer) {
+    return false;
+  }
   for (const auto& cutout : domain.cutouts) {
-    clearance = std::min(clearance, geometry::polygon_boundary_distance_nm(contour, cutout));
-  }
-  for (const auto& obstacle : domain.obstacles) {
-    clearance = std::min(clearance, geometry::polygon_boundary_distance_nm(contour, obstacle));
-  }
-  for (const auto& obstacle : domain.filled_obstacles) {
-    clearance = std::min(clearance, geometry::polygon_boundary_distance_nm(contour, obstacle.area));
-    for (const auto& hole : obstacle.holes) {
-      clearance = std::min(clearance, geometry::polygon_boundary_distance_nm(contour, hole));
+    if (required_outer > 0.0L &&
+        geometry::polygon_boundary_distance_nm(contour, cutout) < required_outer) {
+      return false;
     }
   }
-  return clearance;
+  for (std::size_t index = 0U; index < domain.obstacles.size(); ++index) {
+    const auto required =
+        static_cast<long double>(obstacle_clearance(config, index, false).value());
+    if (required > 0.0L &&
+        geometry::polygon_boundary_distance_nm(contour, domain.obstacles[index]) < required) {
+      return false;
+    }
+  }
+  for (std::size_t index = 0U; index < domain.filled_obstacles.size(); ++index) {
+    const auto required =
+        static_cast<long double>(obstacle_clearance(config, index, true).value());
+    if (required <= 0.0L) continue;
+    const auto& obstacle = domain.filled_obstacles[index];
+    if (geometry::polygon_boundary_distance_nm(contour, obstacle.area) < required) return false;
+    for (const auto& hole : obstacle.holes) {
+      if (geometry::polygon_boundary_distance_nm(contour, hole) < required) return false;
+    }
+  }
+  return true;
 }
 
 [[nodiscard]] bool validate_region(const OffsetFreeSpaceRegion& region,
                                    const FreeSpaceDomain& domain,
                                    const PreparedValidationDomain& prepared_domain,
-                                   Nanometres clearance, std::string& diagnostic) {
+                                   const FreeSpaceOffsetConfig& config,
+                                   std::string& diagnostic) {
   if (!geometry::is_simple_polygon(region.area)) {
     diagnostic = "output outer contour is not simple";
     return false;
@@ -248,9 +285,7 @@ template <typename BoostPolygonLike>
   // A zero requested certificate is already implied by the exact containment/overlap checks
   // below. Computing every output-to-source segment pair in that case is pure O(n*m) work; the
   // Boost Boolean still applies its two-nanometre rounding guard before this validation.
-  if (clearance.value() > 0 &&
-      contour_source_clearance(region.area, domain) <
-          static_cast<long double>(clearance.value())) {
+  if (!contour_has_required_clearance(region.area, domain, config)) {
     diagnostic = "output outer contour violates source-boundary clearance";
     return false;
   }
@@ -291,9 +326,7 @@ template <typename BoostPolygonLike>
       diagnostic = "output hole " + std::to_string(index) + " is not strictly inside its outer";
       return false;
     }
-    if (clearance.value() > 0 &&
-        contour_source_clearance(hole, domain) <
-            static_cast<long double>(clearance.value())) {
+    if (!contour_has_required_clearance(hole, domain, config)) {
       diagnostic = "output hole " + std::to_string(index) + " violates source clearance";
       return false;
     }
@@ -334,10 +367,15 @@ FreeSpaceOffsetResult offset_polygonal_free_space(const FreeSpaceDomain& domain,
   free_space.resize(-guarded_clearance, false);
 
   BoostPolygonSet blocked;
-  for (const auto& obstacle : domain.obstacles) {
-    blocked.insert(to_boost_polygon(obstacle));
+  for (std::size_t index = 0U; index < domain.obstacles.size(); ++index) {
+    BoostPolygonSet expanded;
+    expanded.insert(to_boost_polygon(domain.obstacles[index]));
+    expanded.resize(static_cast<Coordinate>(obstacle_clearance(config, index, false).value() + 2),
+                    false);
+    blocked += expanded;
   }
-  for (const auto& obstacle : domain.filled_obstacles) {
+  for (std::size_t index = 0U; index < domain.filled_obstacles.size(); ++index) {
+    const auto& obstacle = domain.filled_obstacles[index];
     BoostPolygonSet region;
     region.insert(to_boost_polygon(obstacle.area));
     BoostPolygonSet holes;
@@ -345,10 +383,11 @@ FreeSpaceOffsetResult offset_polygonal_free_space(const FreeSpaceDomain& domain,
       holes.insert(to_boost_polygon(hole));
     }
     region -= holes;
+    region.resize(static_cast<Coordinate>(obstacle_clearance(config, index, true).value() + 2),
+                  false);
     blocked += region;
   }
   if (!domain.obstacles.empty() || !domain.filled_obstacles.empty()) {
-    blocked.resize(guarded_clearance, false);
     free_space -= blocked;
   }
 
@@ -376,7 +415,7 @@ FreeSpaceOffsetResult offset_polygonal_free_space(const FreeSpaceDomain& domain,
       return result;
     }
     std::string validation_diagnostic;
-    if (!validate_region(region, domain, prepared_domain, config.clearance,
+    if (!validate_region(region, domain, prepared_domain, config,
                          validation_diagnostic)) {
       result.diagnostic =
           "free-space offset output failed exact conservative validation: " + validation_diagnostic;

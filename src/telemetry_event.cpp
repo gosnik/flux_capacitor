@@ -90,6 +90,8 @@ Route parse_route(const ptree& tree) {
   route.state = route_state_from_string(get_or<std::string>(tree, "state", "current"));
   route.width_nm = get_or<std::uint64_t>(tree, "width_nm");
   route.cost = get_or<std::uint64_t>(tree, "cost");
+  route.family = get_or<std::string>(tree, "family");
+  route.lifecycle = get_or<std::string>(tree, "lifecycle");
   route.geometry = route_geometry_from_string(get_or<std::string>(tree, "geometry", "polyline"));
   route.spline_degree = get_or<std::uint32_t>(tree, "spline_degree");
   route.topology_signature = get_or<std::uint64_t>(tree, "topology_signature");
@@ -171,6 +173,40 @@ ResourceOccupancy parse_resource(const ptree& tree) {
   resource.channel_width_nm = get_or<std::uint64_t>(tree, "channel_width_nm");
   resource.nets = parse_ids(tree, "nets");
   return resource;
+}
+
+HydraulicField parse_hydraulic_field(const ptree& tree) {
+  HydraulicField field;
+  field.id = get_or<std::string>(tree, "id");
+  field.net = get_or<std::string>(tree, "net");
+  field.layer = get_or<std::string>(tree, "layer");
+  field.revision = get_or<std::uint64_t>(tree, "revision");
+  field.origin_x_nm = get_or<std::int64_t>(tree, "origin_x_nm");
+  field.origin_y_nm = get_or<std::int64_t>(tree, "origin_y_nm");
+  field.cell_pitch_nm = get_or<std::uint64_t>(tree, "cell_pitch_nm");
+  field.width = get_or<std::size_t>(tree, "width");
+  field.height = get_or<std::size_t>(tree, "height");
+  field.stride = get_or<std::size_t>(tree, "stride");
+  field.maximum_flow = get_or<std::uint32_t>(tree, "maximum_flow");
+  field.maximum_erosion = get_or<std::uint32_t>(tree, "maximum_erosion");
+  field.maximum_terrain_height = get_or<std::uint32_t>(tree, "maximum_terrain_height");
+  field.maximum_downstream_pressure =
+      get_or<std::uint32_t>(tree, "maximum_downstream_pressure");
+  field.maximum_success_prior = get_or<std::uint32_t>(tree, "maximum_success_prior");
+  const auto parse_values = [&](const char* name, std::vector<std::uint16_t>& values) {
+    if (const auto child = tree.get_child_optional(name)) {
+      for (const auto& item : *child) {
+        values.push_back(item.second.get_value<std::uint16_t>());
+      }
+    }
+  };
+  parse_values("flow", field.flow);
+  parse_values("erosion", field.erosion);
+  parse_values("heightmap", field.heightmap);
+  parse_values("free_space", field.free_space);
+  parse_values("downstream_pressure", field.downstream_pressure);
+  parse_values("success_prior", field.success_prior);
+  return field;
 }
 
 Priority parse_priority(const ptree& tree) {
@@ -333,6 +369,7 @@ Event parse_event(const ptree& tree) {
                                  tree.get_child_optional("vias").has_value() ||
                                  tree.get_child_optional("conflicts").has_value() ||
                                  tree.get_child_optional("resources").has_value() ||
+                                 tree.get_child_optional("hydraulic_fields").has_value() ||
                                  tree.get_child_optional("priorities").has_value();
   event.source_state_included = tree.get_child_optional("source_boards").has_value();
   if (const auto boards = tree.get_child_optional("source_boards")) {
@@ -344,6 +381,7 @@ Event parse_event(const ptree& tree) {
   parse_array("vias", event.vias, parse_via);
   parse_array("conflicts", event.conflicts, parse_conflict);
   parse_array("resources", event.resources, parse_resource);
+  parse_array("hydraulic_fields", event.hydraulic_fields, parse_hydraulic_field);
   parse_array("priorities", event.priorities, parse_priority);
 
   if (const auto metrics = tree.get_child_optional("metrics")) {
@@ -435,7 +473,9 @@ void write_route(std::ostringstream& out, const Route& route) {
   out << "{\"id\":\"" << escape_json(route.id) << "\",\"net\":\"" << escape_json(route.net)
       << "\",\"revision\":" << route.revision << ",\"state\":\"" << to_string(route.state)
       << "\",\"width_nm\":" << route.width_nm << ",\"cost\":" << route.cost << ",\"geometry\":\""
-      << to_string(route.geometry) << "\",\"spline_degree\":" << route.spline_degree
+      << to_string(route.geometry) << "\",\"family\":\"" << escape_json(route.family)
+      << "\",\"lifecycle\":\"" << escape_json(route.lifecycle)
+      << "\",\"spline_degree\":" << route.spline_degree
       << ",\"topology_signature\":" << route.topology_signature
       << ",\"topology_gate_count\":" << route.topology_gate_count
       << ",\"topology_gate_sequence_legal\":"
@@ -490,6 +530,39 @@ void write_resource(std::ostringstream& out, const ResourceOccupancy& resource) 
   out << ",\"demand\":" << resource.demand << ",\"capacity\":" << resource.capacity
       << ",\"channel_width_nm\":" << resource.channel_width_nm << ",\"nets\":";
   write_ids(out, resource.nets);
+  out << '}';
+}
+
+void write_hydraulic_field(std::ostringstream& out, const HydraulicField& field) {
+  const auto write_values = [&](const std::vector<std::uint16_t>& values) {
+    out << '[';
+    for (std::size_t index = 0U; index < values.size(); ++index) {
+      if (index != 0U) out << ',';
+      out << values[index];
+    }
+    out << ']';
+  };
+  out << "{\"id\":\"" << escape_json(field.id) << "\",\"net\":\""
+      << escape_json(field.net) << "\",\"layer\":\"" << escape_json(field.layer)
+      << "\",\"revision\":" << field.revision << ",\"origin_x_nm\":" << field.origin_x_nm
+      << ",\"origin_y_nm\":" << field.origin_y_nm << ",\"cell_pitch_nm\":"
+      << field.cell_pitch_nm << ",\"width\":" << field.width << ",\"height\":" << field.height
+      << ",\"stride\":" << field.stride << ",\"maximum_flow\":" << field.maximum_flow
+      << ",\"maximum_erosion\":" << field.maximum_erosion
+      << ",\"maximum_terrain_height\":" << field.maximum_terrain_height
+      << ",\"maximum_downstream_pressure\":" << field.maximum_downstream_pressure
+      << ",\"maximum_success_prior\":" << field.maximum_success_prior << ",\"flow\":";
+  write_values(field.flow);
+  out << ",\"erosion\":";
+  write_values(field.erosion);
+  out << ",\"heightmap\":";
+  write_values(field.heightmap);
+  out << ",\"free_space\":";
+  write_values(field.free_space);
+  out << ",\"downstream_pressure\":";
+  write_values(field.downstream_pressure);
+  out << ",\"success_prior\":";
+  write_values(field.success_prior);
   out << '}';
 }
 
@@ -626,6 +699,7 @@ std::string_view wire_kind_name(EventType type) {
                                     std::string_view{"ConflictAdded"},
                                     std::string_view{"ConflictRemoved"},
                                     std::string_view{"ResourceOccupancyUpdated"},
+                                    std::string_view{"HydraulicFieldUpdated"},
                                     std::string_view{"ResidualGroupUpdated"},
                                     std::string_view{"CheckpointSelected"},
                                     std::string_view{"BestCheckpointUpdated"},
@@ -661,11 +735,11 @@ FLUX_ENUM_STRINGS(EventType, "snapshot", "routing_started", "routing_finished", 
                   "via_candidate_rejected", "via_assigned", "via_removed",
                   "pathfinder_iteration_started", "pathfinder_iteration_completed",
                   "conflict_added", "conflict_removed", "resource_occupancy_updated",
-                  "residual_group_updated", "checkpoint_selected", "best_checkpoint_updated",
+                  "hydraulic_field_updated", "residual_group_updated", "checkpoint_selected", "best_checkpoint_updated",
                   "placement_proposal_started", "placement_proposal_accepted",
                   "placement_proposal_rejected", "search_summary", "unknown")
 FLUX_ENUM_STRINGS(RouteState, "current", "provisional", "committed", "ripped_up", "removed")
-FLUX_ENUM_STRINGS(RouteGeometry, "polyline", "cubic_bspline")
+FLUX_ENUM_STRINGS(RouteGeometry, "polyline", "quintic_ph")
 FLUX_ENUM_STRINGS(ViaState, "candidate", "selected", "contested", "rejected", "removed")
 FLUX_ENUM_STRINGS(ConflictKind, "congestion", "clearance_shadow", "regional", "physical", "unknown")
 FLUX_ENUM_STRINGS(ResourceKind, "sampled", "corridor", "physical", "via_site", "unknown")
@@ -705,6 +779,7 @@ EventType event_type_from_string(std::string_view value) {
                                     std::string_view{"conflict_added"},
                                     std::string_view{"conflict_removed"},
                                     std::string_view{"resource_occupancy_updated"},
+                                    std::string_view{"hydraulic_field_updated"},
                                     std::string_view{"residual_group_updated"},
                                     std::string_view{"checkpoint_selected"},
                                     std::string_view{"best_checkpoint_updated"},
@@ -737,6 +812,7 @@ EventType event_type_from_string(std::string_view value) {
                                          std::string_view{"ConflictAdded"},
                                          std::string_view{"ConflictRemoved"},
                                          std::string_view{"ResourceOccupancyUpdated"},
+                                         std::string_view{"HydraulicFieldUpdated"},
                                          std::string_view{"ResidualGroupUpdated"},
                                          std::string_view{"CheckpointSelected"},
                                          std::string_view{"BestCheckpointUpdated"},
@@ -756,7 +832,7 @@ RouteState route_state_from_string(std::string_view value) {
 }
 
 RouteGeometry route_geometry_from_string(std::string_view value) {
-  return enum_from_string(value, std::array<std::string_view, 2>{"polyline", "cubic_bspline"},
+  return enum_from_string(value, std::array<std::string_view, 2>{"polyline", "quintic_ph"},
                           RouteGeometry::polyline);
 }
 
@@ -848,6 +924,7 @@ std::string encode_event(const Event& event) {
   write_array(out, "vias", event.vias, first, write_via);
   write_array(out, "conflicts", event.conflicts, first, write_conflict);
   write_array(out, "resources", event.resources, first, write_resource);
+  write_array(out, "hydraulic_fields", event.hydraulic_fields, first, write_hydraulic_field);
   write_array(out, "priorities", event.priorities, first, write_priority);
   write_array(out, "source_boards", event.source_boards, first, write_source_board);
   if (event.source_state_included && event.source_boards.empty()) {
@@ -872,6 +949,7 @@ std::string encode_event(const Event& event) {
     write_empty_array("vias", event.vias.empty());
     write_empty_array("conflicts", event.conflicts.empty());
     write_empty_array("resources", event.resources.empty());
+    write_empty_array("hydraulic_fields", event.hydraulic_fields.empty());
     write_empty_array("priorities", event.priorities.empty());
   }
   if (event.metrics) {

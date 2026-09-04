@@ -2,14 +2,18 @@
 #include "flux/telemetry/event.hpp"
 #include "flux/telemetry/state.hpp"
 #include "flux/telemetry/trace.hpp"
+#include "viewer_preferences.hpp"
 
+#include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace {
 
-void require(bool condition, const char* message) {
+void require(bool condition, const std::string& message) {
   if (!condition) {
     throw std::runtime_error(message);
   }
@@ -71,27 +75,54 @@ void producer_records_decode_into_viewer_state() {
   spline.stable_id = "regional-spline:7:SIGNAL:0:0:0";
   spline.net = flux::NetId{"SIGNAL"};
   spline.route_width_nm = 180'000;
-  spline.route_geometry = flux::RouterTelemetryRouteGeometry::cubic_bspline;
-  spline.spline_degree = 3U;
+  spline.route_geometry = flux::RouterTelemetryRouteGeometry::quintic_ph;
+  spline.spline_degree = 5U;
   spline.topology_signature = 0x1a2b3c4dU;
   spline.topology_gate_count = 3U;
   spline.topology_gate_sequence_legal = true;
+  spline.route_family = "rrt_connect";
+  spline.route_lifecycle = "retained_fallback";
   spline.route_points = {{1'000'000, 1'000'000, flux::LayerId{"F.Cu"}},
                          {2'000'000, 1'500'000, flux::LayerId{"F.Cu"}},
                          {3'000'000, 1'000'000, flux::LayerId{"F.Cu"}}};
-  spline.spline_control_points = {{1'000'000, 1'000'000, flux::LayerId{"F.Cu"}},
-                                  {1'500'000, 2'000'000, flux::LayerId{"F.Cu"}},
-                                  {2'500'000, 2'000'000, flux::LayerId{"F.Cu"}},
-                                  {3'000'000, 1'000'000, flux::LayerId{"F.Cu"}}};
+  spline.spline_control_points = {
+      {1'000'000, 1'000'000, flux::LayerId{"F.Cu"}}, {1'500'000, 2'000'000, flux::LayerId{"F.Cu"}},
+      {1'900'000, 2'200'000, flux::LayerId{"F.Cu"}}, {2'100'000, 2'200'000, flux::LayerId{"F.Cu"}},
+      {2'500'000, 2'000'000, flux::LayerId{"F.Cu"}}, {3'000'000, 1'000'000, flux::LayerId{"F.Cu"}}};
+
+  flux::RouterTelemetryEvent hydraulic;
+  hydraulic.kind = flux::RouterTelemetryEventKind::hydraulic_field_updated;
+  hydraulic.sequence = 6;
+  hydraulic.stable_id = "hydraulic-field:SIGNAL:F.Cu";
+  hydraulic.net = flux::NetId{"SIGNAL"};
+  hydraulic.layer = flux::LayerId{"F.Cu"};
+  hydraulic.x_nm = 500'000;
+  hydraulic.y_nm = 750'000;
+  hydraulic.hydraulic_field_pitch_nm = 250'000U;
+  hydraulic.hydraulic_field_width = 2U;
+  hydraulic.hydraulic_field_height = 2U;
+  hydraulic.hydraulic_field_stride = 2U;
+  hydraulic.hydraulic_maximum_flow = 512U;
+  hydraulic.hydraulic_maximum_erosion = 64U;
+  hydraulic.hydraulic_maximum_terrain_height = 20'000U;
+  hydraulic.hydraulic_maximum_downstream_pressure = 19U;
+  hydraulic.hydraulic_maximum_success_prior = 5U;
+  hydraulic.hydraulic_flow_field = {0U, 4'096U, 32'768U, 65'535U};
+  hydraulic.hydraulic_erosion_field = {0U, 8'192U, 40'000U, 65'535U};
+  hydraulic.hydraulic_heightmap = {65'535U, 48'000U, 24'000U, 0U};
+  hydraulic.hydraulic_free_space_field = {65'535U, 0U, 65'535U, 65'535U};
+  hydraulic.hydraulic_downstream_pressure_field = {0U, 65'535U, 24'000U, 0U};
+  hydraulic.hydraulic_success_prior_field = {0U, 0U, 32'768U, 65'535U};
 
   const std::string jsonl = flux::serialize_router_telemetry_event(started) + "\n" +
                             flux::serialize_router_telemetry_event(iteration) + "\n" +
                             flux::serialize_router_telemetry_event(via) + "\n" +
                             flux::serialize_router_telemetry_event(conflict) + "\n" +
-                            flux::serialize_router_telemetry_event(spline) + "\n";
+                            flux::serialize_router_telemetry_event(spline) + "\n" +
+                            flux::serialize_router_telemetry_event(hydraulic) + "\n";
   const flux::telemetry::DecodeResult decoded = flux::telemetry::decode_events(jsonl);
   require(static_cast<bool>(decoded), "the viewer must decode core producer JSONL records");
-  require(decoded.events.size() == 5U, "all producer records must survive decoding");
+  require(decoded.events.size() == 6U, "all producer records must survive decoding");
   require(decoded.events[0].type == flux::telemetry::EventType::routing_started,
           "producer event kinds must map to viewer event kinds");
   require(decoded.events[1].metrics.has_value(),
@@ -107,16 +138,30 @@ void producer_records_decode_into_viewer_state() {
                   std::vector<std::string>{"SIGNAL", "CLOCK"} &&
               decoded.events[3].conflicts.front().clearance_deficit_nm == 90'000,
           "regional via and conflict producer records must retain physical diagnostic fields");
-  require(decoded.events[4].routes.size() == 1U &&
-              decoded.events[4].routes.front().geometry ==
-                  flux::telemetry::RouteGeometry::cubic_bspline &&
-              decoded.events[4].routes.front().spline_degree == 3U &&
-              decoded.events[4].routes.front().control_points.size() == 4U &&
-              decoded.events[4].routes.front().topology_signature == 0x1a2b3c4dU &&
-              decoded.events[4].routes.front().topology_gate_count == 3U &&
-              decoded.events[4].routes.front().topology_gate_sequence_legal,
-          "regional B-spline controls and their directed topology certificate must cross the "
-          "producer/viewer telemetry boundary");
+  require(
+      decoded.events[4].routes.size() == 1U &&
+          decoded.events[4].routes.front().geometry == flux::telemetry::RouteGeometry::quintic_ph &&
+          decoded.events[4].routes.front().spline_degree == 5U &&
+          decoded.events[4].routes.front().control_points.size() == 6U &&
+          decoded.events[4].routes.front().topology_signature == 0x1a2b3c4dU &&
+          decoded.events[4].routes.front().topology_gate_count == 3U &&
+          decoded.events[4].routes.front().topology_gate_sequence_legal &&
+          decoded.events[4].routes.front().family == "rrt_connect" &&
+          decoded.events[4].routes.front().lifecycle == "retained_fallback",
+      "regional quintic PH curve controls and their directed topology certificate must cross the "
+      "producer/viewer telemetry boundary");
+  require(
+      decoded.events[5].type == flux::telemetry::EventType::hydraulic_field_updated &&
+          decoded.events[5].hydraulic_fields.size() == 1U &&
+          decoded.events[5].hydraulic_fields.front().layer == "F.Cu" &&
+          decoded.events[5].hydraulic_fields.front().stride == 2U &&
+          decoded.events[5].hydraulic_fields.front().erosion.back() == 65'535U &&
+          decoded.events[5].hydraulic_fields.front().heightmap.front() == 65'535U &&
+          decoded.events[5].hydraulic_fields.front().free_space[1] == 0U &&
+          decoded.events[5].hydraulic_fields.front().downstream_pressure[1] == 65'535U &&
+          decoded.events[5].hydraulic_fields.front().success_prior.back() == 65'535U,
+      "bounded per-layer hydraulic height, obstacle, feedback, and erosion fields must cross the "
+      "producer/viewer boundary");
 
   flux::telemetry::LiveState state;
   for (const auto& event : decoded.events) {
@@ -126,6 +171,27 @@ void producer_records_decode_into_viewer_state() {
           "producer events must reduce into live state");
   require(state.source_identity() == "board-revision-a",
           "the routing-start source revision must remain observable");
+  require(state.hydraulic_fields().size() == 1U,
+          "the live viewer state must retain the latest field for each hydraulic layer proposal");
+
+  flux::RouterTelemetryEvent global_finished;
+  global_finished.kind = flux::RouterTelemetryEventKind::global_routing_finished;
+  global_finished.detail = "global routing stage completed: checkpoint retained";
+  const auto decoded_stage =
+      flux::telemetry::decode_events(flux::serialize_router_telemetry_event(global_finished));
+  require(decoded_stage &&
+              decoded_stage.events.front().type == flux::telemetry::EventType::search_summary,
+          "nested global routing completion must decode as a stage summary");
+  state.apply(decoded_stage.events.front());
+  require(state.routing_active(),
+          "a completed global stage must not mark downstream regional/detail work finished");
+
+  flux::telemetry::Event terminal_snapshot;
+  terminal_snapshot.type = flux::telemetry::EventType::snapshot;
+  terminal_snapshot.message = "Routing finished";
+  state.apply(terminal_snapshot);
+  require(!state.routing_active() && state.status() == "Routing finished",
+          "only the terminal session snapshot may mark routing finished");
 }
 
 void rich_overlay_events_round_trip_and_replay() {
@@ -176,12 +242,12 @@ void rich_overlay_events_round_trip_and_replay() {
                              180'000,
                              45,
                              {{1'000'000, 2'000'000, "F.Cu"}, {4'000'000, 2'000'000, "F.Cu"}}});
-  snapshot.routes.back().geometry = flux::telemetry::RouteGeometry::cubic_bspline;
-  snapshot.routes.back().spline_degree = 3U;
-  snapshot.routes.back().control_points = {{1'000'000, 2'000'000, "F.Cu"},
-                                           {2'000'000, 3'000'000, "F.Cu"},
-                                           {3'000'000, 3'000'000, "F.Cu"},
-                                           {4'000'000, 2'000'000, "F.Cu"}};
+  snapshot.routes.back().geometry = flux::telemetry::RouteGeometry::quintic_ph;
+  snapshot.routes.back().spline_degree = 5U;
+  snapshot.routes.back().control_points = {
+      {1'000'000, 2'000'000, "F.Cu"}, {2'000'000, 3'000'000, "F.Cu"},
+      {2'400'000, 3'200'000, "F.Cu"}, {2'600'000, 3'200'000, "F.Cu"},
+      {3'000'000, 3'000'000, "F.Cu"}, {4'000'000, 2'000'000, "F.Cu"}};
   snapshot.vias.push_back(flux::telemetry::Via{"via-signal-0",
                                                "SIGNAL",
                                                3,
@@ -241,17 +307,45 @@ void rich_overlay_events_round_trip_and_replay() {
   replay.seek(trace.events().size());
   const auto route = replay.state().routes().find("route-signal-0");
   require(route != replay.state().routes().end(), "rip-up evidence must retain route geometry");
-  require(route->second.state == flux::telemetry::RouteState::ripped_up &&
-              route->second.points.size() == 2U &&
-              route->second.geometry == flux::telemetry::RouteGeometry::cubic_bspline &&
-              route->second.control_points.size() == 4U,
-          "rip-up replay must preserve the removed path and B-spline controls for its overlay");
+  require(
+      route->second.state == flux::telemetry::RouteState::ripped_up &&
+          route->second.points.size() == 2U &&
+          route->second.geometry == flux::telemetry::RouteGeometry::quintic_ph &&
+          route->second.control_points.size() == 6U,
+      "rip-up replay must preserve the removed path and quintic PH curve controls for its overlay");
   require(replay.state().vias().at("via-signal-0").state == flux::telemetry::ViaState::contested,
           "contested via sites must remain replayable");
   require(replay.state().source_boards().at("source-board:0")->primitives.back().kind == "pad" &&
               replay.state().source_boards().at("source-board:0")->primitives.back().drill_nm ==
                   300'000U,
           "replay must retain the immutable source scene while dynamic routes change");
+
+  flux::telemetry::LiveStateHistory overlay_history;
+  overlay_history.append(trace.events()[0]);
+  overlay_history.append(trace.events()[1]);
+  require(overlay_history.size() == 2U && overlay_history.position() == 2U &&
+              overlay_history.state().routes().at("route-signal-0").state ==
+                  flux::telemetry::RouteState::ripped_up,
+          "overlay history must follow new chronological telemetry while viewing its tail");
+  overlay_history.seek(1U);
+  require(overlay_history.position() == 1U &&
+              overlay_history.state().routes().at("route-signal-0").state ==
+                  flux::telemetry::RouteState::committed &&
+              overlay_history.state().routes().at("route-signal-0").control_points.size() == 6U,
+          "the overlay timeline must reconstruct prior quintic PH curve geometry exactly");
+  flux::telemetry::Event recommit;
+  recommit.type = flux::telemetry::EventType::route_committed;
+  recommit.sequence = 12U;
+  recommit.monotonic_time_us = 3'000U;
+  recommit.routes.push_back(flux::telemetry::Route{"route-signal-0", "SIGNAL"});
+  overlay_history.append(recommit);
+  require(overlay_history.position() == 1U,
+          "incoming live events must not move a viewer that is inspecting history");
+  overlay_history.seek(overlay_history.size());
+  require(overlay_history.state().routes().at("route-signal-0").state ==
+                  flux::telemetry::RouteState::committed &&
+              overlay_history.state().routes().at("route-signal-0").control_points.size() == 6U,
+          "returning to the newest overlay must include events received during historical review");
 
   flux::RouterTelemetryState summary;
   summary.sequence = 12;
@@ -268,10 +362,102 @@ void rich_overlay_events_round_trip_and_replay() {
           "a metrics-only recovery snapshot must not erase dynamic or source geometry");
 }
 
+void trace_directories_load_chronologically_without_throwing() {
+  const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
+  const auto directory =
+      std::filesystem::temp_directory_path() / ("flux-telemetry-viewer-" + std::to_string(nonce));
+  struct Cleanup {
+    std::filesystem::path path;
+    ~Cleanup() {
+      std::error_code ignored;
+      std::filesystem::remove_all(path, ignored);
+    }
+  } cleanup{directory};
+  std::filesystem::create_directories(directory);
+
+  flux::telemetry::Event first;
+  first.type = flux::telemetry::EventType::routing_started;
+  first.sequence = 7U;
+  first.monotonic_time_us = 900U;
+  first.source_identity = "first-board";
+  flux::telemetry::Event second;
+  second.type = flux::telemetry::EventType::routing_started;
+  second.sequence = 1U;
+  second.monotonic_time_us = 10U;
+  second.source_identity = "second-board";
+  const auto first_path = directory / "first.jsonl";
+  const auto second_path = directory / "second.jsonl";
+  {
+    std::ofstream output(first_path);
+    output << flux::telemetry::encode_event(first) << '\n';
+  }
+  {
+    std::ofstream output(second_path);
+    output << flux::telemetry::encode_event(second) << '\n';
+  }
+  const auto base_time = std::filesystem::file_time_type::clock::now();
+  std::filesystem::last_write_time(first_path, base_time - std::chrono::seconds{1});
+  std::filesystem::last_write_time(second_path, base_time);
+
+  flux::telemetry::Trace trace;
+  std::string error;
+  require(trace.load(directory, error), "a telemetry directory must load as one replay");
+  require(trace.events().size() == 2U && trace.events()[0].source_identity == "first-board" &&
+              trace.events()[1].source_identity == "second-board" &&
+              trace.events()[1].sequence > trace.events()[0].sequence &&
+              trace.events()[1].monotonic_time_us > trace.events()[0].monotonic_time_us,
+          "directory traces must retain chronological file order and rebase per-run clocks");
+}
+
+void viewer_preferences_round_trip_and_clamp_unsafe_values() {
+  const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
+  const auto directory =
+      std::filesystem::temp_directory_path() / ("flux-viewer-preferences-" + std::to_string(nonce));
+  struct Cleanup {
+    std::filesystem::path path;
+    ~Cleanup() {
+      std::error_code ignored;
+      std::filesystem::remove_all(path, ignored);
+    }
+  } cleanup{directory};
+  const auto path = directory / "viewer.conf";
+  flux::viewer::ViewerPreferences written;
+  written.ui_scale = 4.5F;
+  written.activity_panel_height = 415.0F;
+  written.replay_speed = 2.5F;
+  written.endpoint = "ws://router.local:9000/telemetry";
+  written.telemetry_level = "diagnostic";
+  written.telemetry_rate_hz = 24.0;
+  written.trace_directory = directory / "traces with spaces";
+  written.record_directory = directory / "records";
+  written.overlays.grid = false;
+  written.overlays.ph_controls = true;
+  written.overlays.clearance_shadows = false;
+  written.overlays.layer = "In1.Cu";
+  std::string error;
+  require(flux::viewer::save_viewer_preferences(path, written, error),
+          "viewer preferences must save in the selected platform configuration directory: " +
+              error);
+  flux::viewer::ViewerPreferences loaded;
+  require(flux::viewer::load_viewer_preferences(path, loaded, error),
+          "viewer preferences must reload: " + error);
+  require(loaded.ui_scale == 3.0F && loaded.activity_panel_height == 415.0F &&
+              loaded.replay_speed == 2.5F && loaded.endpoint == written.endpoint &&
+              loaded.telemetry_level == "diagnostic" && loaded.telemetry_rate_hz == 24.0 &&
+              loaded.trace_directory == written.trace_directory &&
+              loaded.record_directory == written.record_directory && !loaded.overlays.grid &&
+              loaded.overlays.ph_controls && !loaded.overlays.clearance_shadows &&
+              loaded.overlays.layer == "In1.Cu",
+          "saved scale, panel size, trace locations, layer, and checked overlays must round-trip; "
+          "UI scale must clamp to the supported 3x maximum");
+}
+
 } // namespace
 
 int main() {
   producer_records_decode_into_viewer_state();
   rich_overlay_events_round_trip_and_replay();
+  trace_directories_load_chronologically_without_throwing();
+  viewer_preferences_round_trip_and_clamp_unsafe_values();
   return 0;
 }

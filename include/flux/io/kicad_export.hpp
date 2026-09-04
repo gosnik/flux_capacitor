@@ -28,6 +28,10 @@ struct KicadExportOptions {
   std::string generator{"flux_capacitor"};
   std::string generator_version{"0.101.0"};
   bool verify_round_trip{true};
+  // Write a review-only copper artifact from a lossy/invalid canonical projection. Source byte
+  // identity and supported-design-change checks remain enforced, but strict semantic round-trip
+  // qualification is deliberately unavailable in this mode.
+  bool allow_lossy_diagnostic_preview{false};
 };
 
 struct KicadExportResult {

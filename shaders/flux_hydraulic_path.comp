@@ -1,0 +1,380 @@
+#version 450
+
+// Integer-only, batch-synchronous hydraulic topology search. Obstacles are immutable mountains;
+// mode 0 relaxes the target gravity field, mode 1 clears a batch, mode 2 advances independent
+// droplets, and mode 3 commits erosion between batches. Atomics make a droplet batch commutative.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) buffer Walkable { uint walkable[]; };
+layout(std430, binding = 1) buffer PotentialA { uint potential_a[]; };
+layout(std430, binding = 2) buffer PotentialB { uint potential_b[]; };
+layout(std430, binding = 3) buffer Erosion { uint erosion[]; };
+layout(std430, binding = 4) buffer BatchFlow { uint batch_flow[]; };
+layout(std430, binding = 5) buffer AccumulatedFlow { uint accumulated_flow[]; };
+layout(std430, binding = 6) buffer Statistics { uint statistics[]; };
+layout(std430, binding = 7) buffer ObstacleClearanceA { uint obstacle_clearance_a[]; };
+layout(std430, binding = 8) readonly buffer DownstreamPressure { uint downstream_pressure[]; };
+layout(std430, binding = 9) buffer ObstacleClearanceB { uint obstacle_clearance_b[]; };
+layout(std430, binding = 10) readonly buffer PolygonSegments { uint polygon_segments[]; };
+layout(std430, binding = 11) buffer NearestObstacle { uint nearest_obstacle[]; };
+layout(std430, binding = 12) buffer CompactFields { uint compact_fields[]; };
+layout(std430, binding = 13) buffer Riverbed { uint riverbed[]; };
+layout(std430, binding = 14) readonly buffer SuccessPrior { uint success_prior[]; };
+
+layout(push_constant) uniform Push {
+  uint width;
+  uint height;
+  uint mode;
+  uint read_a;
+  uint source;
+  uint target;
+  uint droplets;
+  uint maximum_steps;
+  uint seed;
+  uint batch;
+  uint erosion_quantum;
+  uint maximum_erosion;
+  uint exploration_score_quantum;
+  uint erosion_height_scale;
+  uint lateral_erosion_divisor;
+  uint clearance_score_scale;
+  uint maximum_clearance_reward_cells;
+  uint downstream_pressure_score_scale;
+  uint maximum_downstream_pressure;
+  uint clearance_read_a;
+  uint polygon_segment_count;
+  uint raster_pitch_nm;
+  uint minimum_boundary_clearance_nm;
+  uint compact_width;
+  uint compact_height;
+  uint compact_stride;
+}
+push;
+
+const uint infinite_height = 0x3fffffffu;
+const int dx[8] = int[8](-1, 0, 1, -1, 1, -1, 0, 1);
+const int dy[8] = int[8](-1, -1, -1, 0, 0, 1, 1, 1);
+
+uint hash32(uint value) {
+  value ^= value >> 16u;
+  value *= 0x7feb352du;
+  value ^= value >> 15u;
+  value *= 0x846ca68bu;
+  value ^= value >> 16u;
+  return value;
+}
+
+uint read_potential(uint cell) { return push.read_a != 0u ? potential_a[cell] : potential_b[cell]; }
+
+uint read_clearance(uint cell) {
+  return push.clearance_read_a != 0u ? obstacle_clearance_a[cell] : obstacle_clearance_b[cell];
+}
+
+bool diagonal_is_open(int x, int y, int nx, int ny) {
+  if (x == nx || y == ny)
+    return true;
+  return walkable[uint(y) * push.width + uint(nx)] != 0u &&
+         walkable[uint(ny) * push.width + uint(x)] != 0u;
+}
+
+float point_segment_distance_local(vec2 point, vec2 first, vec2 second) {
+  vec2 delta = second - first;
+  float denominator = dot(delta, delta);
+  float amount = denominator > 0.0 ? clamp(dot(point - first, delta) / denominator, 0.0, 1.0)
+                                   : 0.0;
+  return length(point - first - amount * delta);
+}
+
+uint terrain_at(uint cell) {
+  uint potential = read_potential(cell);
+  if (potential == infinite_height || walkable[cell] == 0u)
+    return infinite_height;
+  uint reduction = (erosion[cell] * push.erosion_height_scale) / 1024u;
+  return reduction < potential ? potential - reduction : 0u;
+}
+
+void main() {
+  uint invocation = gl_GlobalInvocationID.x;
+  uint count = push.width * push.height;
+  // Direct polygon rasterization. Relative nanometre coordinates avoid loss of precision from
+  // large KiCad world coordinates. The even/odd rule covers one outline plus disjoint cutouts.
+  if (push.mode == 5u) {
+    if (invocation >= count)
+      return;
+    uint x = invocation % push.width;
+    uint y = invocation / push.width;
+    vec2 point = vec2(float(x * push.raster_pitch_nm + push.raster_pitch_nm / 2u),
+                      float(y * push.raster_pitch_nm + push.raster_pitch_nm / 2u));
+    bool inside = false;
+    float closest = 3.402823466e+38;
+    uint closest_obstacle = 0xffffffffu;
+    for (uint segment = 0u; segment < push.polygon_segment_count; ++segment) {
+      uint offset = segment * 5u;
+      vec2 first = vec2(int(polygon_segments[offset]), int(polygon_segments[offset + 1u]));
+      vec2 second = vec2(int(polygon_segments[offset + 2u]), int(polygon_segments[offset + 3u]));
+      if ((first.y > point.y) != (second.y > point.y)) {
+        float crossing = first.x + (point.y - first.y) * (second.x - first.x) /
+                                       (second.y - first.y);
+        if (point.x < crossing)
+          inside = !inside;
+      }
+      float distance = point_segment_distance_local(point, first, second);
+      if (distance < closest) {
+        closest = distance;
+        closest_obstacle = polygon_segments[offset + 4u];
+      }
+    }
+    bool legal = inside && closest >= float(push.minimum_boundary_clearance_nm);
+    walkable[invocation] = legal ? 1u : 0u;
+    uint clearance = legal ? uint(floor(closest / float(max(1u, push.raster_pitch_nm)))) : 0u;
+    obstacle_clearance_a[invocation] = clearance;
+    obstacle_clearance_b[invocation] = clearance;
+    nearest_obstacle[invocation] = closest_obstacle;
+    return;
+  }
+  // One invocation reduces one diagnostic block. Seven raw words are followed by six maxima and
+  // a total free-cell count. Mode 8 normalizes these fields in place after all blocks finish.
+  if (push.mode == 6u) {
+    uint compact_count = push.compact_width * push.compact_height;
+    if (invocation >= compact_count)
+      return;
+    uint block_x = invocation % push.compact_width;
+    uint block_y = invocation / push.compact_width;
+    uint flow_max = 0u, erosion_max = 0u, terrain_min = infinite_height;
+    uint free_count = 0u, cell_count = 0u, pressure_max = 0u, success_max = 0u;
+    uint x_begin = block_x * push.compact_stride;
+    uint y_begin = block_y * push.compact_stride;
+    for (uint y = y_begin; y < min(push.height, y_begin + push.compact_stride); ++y) {
+      for (uint x = x_begin; x < min(push.width, x_begin + push.compact_stride); ++x) {
+        uint cell = y * push.width + x;
+        ++cell_count;
+        if (walkable[cell] != 0u) ++free_count;
+        flow_max = max(flow_max, accumulated_flow[cell]);
+        erosion_max = max(erosion_max, erosion[cell]);
+        pressure_max = max(pressure_max, downstream_pressure[cell]);
+        success_max = max(success_max, success_prior[cell]);
+        terrain_min = min(terrain_min, terrain_at(cell));
+      }
+    }
+    uint base = invocation * 7u;
+    compact_fields[base] = flow_max;
+    compact_fields[base + 1u] = erosion_max;
+    compact_fields[base + 2u] = terrain_min;
+    compact_fields[base + 3u] = free_count;
+    compact_fields[base + 4u] = cell_count;
+    compact_fields[base + 5u] = pressure_max;
+    compact_fields[base + 6u] = success_max;
+    uint summary = compact_count * 7u;
+    atomicMax(compact_fields[summary], flow_max);
+    atomicMax(compact_fields[summary + 1u], erosion_max);
+    if (terrain_min != infinite_height) atomicMax(compact_fields[summary + 2u], terrain_min);
+    atomicMax(compact_fields[summary + 3u], pressure_max);
+    atomicMax(compact_fields[summary + 4u], success_max);
+    atomicAdd(compact_fields[summary + 5u], free_count);
+    return;
+  }
+  if (push.mode == 8u) {
+    uint compact_count = push.compact_width * push.compact_height;
+    if (invocation >= compact_count)
+      return;
+    uint summary = compact_count * 7u;
+    uint base = invocation * 7u;
+    uint maxima[5] = uint[5](compact_fields[summary], compact_fields[summary + 1u],
+                             compact_fields[summary + 2u], compact_fields[summary + 3u],
+                             compact_fields[summary + 4u]);
+    for (uint field = 0u; field < 3u; ++field) {
+      uint value = compact_fields[base + field];
+      if (field == 2u && value == infinite_height)
+        value = compact_fields[base + 3u] != 0u ? maxima[field] : 0u;
+      compact_fields[base + field] = maxima[field] == 0u ? 0u :
+          uint(min(65535.0, (float(value) * 65535.0) / float(maxima[field])));
+    }
+    compact_fields[base + 3u] = compact_fields[base + 4u] == 0u ? 0u :
+        uint((float(compact_fields[base + 3u]) * 65535.0) /
+             float(compact_fields[base + 4u]));
+    for (uint field = 5u; field < 7u; ++field) {
+      uint maximum = maxima[field - 2u];
+      compact_fields[base + field] = maximum == 0u ? 0u :
+          uint(min(65535.0, (float(compact_fields[base + field]) * 65535.0) /
+                            float(maximum)));
+    }
+    return;
+  }
+  // Deterministic predecessor tracing runs once on-device. The CPU sees only the selected cell
+  // sequence, not every potential/flow/erosion sample.
+  if (push.mode == 7u) {
+    if (invocation != 0u)
+      return;
+    uint cell = push.source;
+    uint length = 0u;
+    riverbed[1u + length++] = cell;
+    while (cell != push.target && length < count) {
+      int x = int(cell % push.width), y = int(cell / push.width);
+      uint selected = 0xffffffffu;
+      uvec4 selected_key = uvec4(0xffffffffu);
+      uint selected_potential = 0xffffffffu;
+      for (uint direction = 0u; direction < 8u; ++direction) {
+        int nx = x + dx[direction], ny = y + dy[direction];
+        if (nx < 0 || ny < 0 || nx >= int(push.width) || ny >= int(push.height)) continue;
+        uint neighbour = uint(ny) * push.width + uint(nx);
+        uint potential = read_potential(neighbour);
+        if (walkable[neighbour] == 0u || !diagonal_is_open(x, y, nx, ny) ||
+            potential >= read_potential(cell)) continue;
+        uvec4 key = uvec4(0xffffffffu - accumulated_flow[neighbour],
+                          0xffffffffu - erosion[neighbour],
+                          0xffffffffu - read_clearance(neighbour), potential);
+        bool less = key.x < selected_key.x ||
+                    (key.x == selected_key.x && (key.y < selected_key.y ||
+                    (key.y == selected_key.y && (key.z < selected_key.z ||
+                    (key.z == selected_key.z && (key.w < selected_key.w ||
+                    (key.w == selected_key.w && neighbour < selected)))))));
+        if (less) { selected = neighbour; selected_key = key; selected_potential = potential; }
+      }
+      if (selected == 0xffffffffu || selected_potential == 0xffffffffu) { length = 0u; break; }
+      cell = selected;
+      riverbed[1u + length++] = cell;
+    }
+    riverbed[0] = cell == push.target ? length : 0u;
+    return;
+  }
+  // Fused positive clearance wavefront. The hydraulic solver only consumes free-space clearance,
+  // so the negative half of the generic signed field never needs to leave this Vulkan context.
+  // Obstacles and the raster boundary are initialized to zero by the host; all other cells relax
+  // over four-neighbour Manhattan distance, exactly matching the CPU oracle.
+  if (push.mode == 4u) {
+    if (invocation >= count)
+      return;
+    uint value = read_clearance(invocation);
+    int x = int(invocation % push.width);
+    int y = int(invocation / push.width);
+    const int clearance_dx[4] = int[4](1, -1, 0, 0);
+    const int clearance_dy[4] = int[4](0, 0, 1, -1);
+    for (uint direction = 0u; direction < 4u; ++direction) {
+      int nx = x + clearance_dx[direction];
+      int ny = y + clearance_dy[direction];
+      if (nx < 0 || ny < 0 || nx >= int(push.width) || ny >= int(push.height))
+        continue;
+      uint neighbour = uint(ny) * push.width + uint(nx);
+      uint prior = read_clearance(neighbour);
+      if (prior != 0xffffffffu && prior < 0xfffffffeu)
+        value = min(value, prior + 1u);
+    }
+    if (push.clearance_read_a != 0u)
+      obstacle_clearance_b[invocation] = value;
+    else
+      obstacle_clearance_a[invocation] = value;
+    return;
+  }
+  if (push.mode == 0u) {
+    if (invocation >= count)
+      return;
+    uint output_value = infinite_height;
+    if (walkable[invocation] != 0u) {
+      if (invocation == push.target) {
+        output_value = 0u;
+      } else {
+        output_value = read_potential(invocation);
+        int x = int(invocation % push.width);
+        int y = int(invocation / push.width);
+        for (uint direction = 0u; direction < 8u; ++direction) {
+          int nx = x + dx[direction];
+          int ny = y + dy[direction];
+          if (nx < 0 || ny < 0 || nx >= int(push.width) || ny >= int(push.height))
+            continue;
+          uint neighbour = uint(ny) * push.width + uint(nx);
+          if (walkable[neighbour] == 0u || !diagonal_is_open(x, y, nx, ny))
+            continue;
+          uint value = read_potential(neighbour);
+          uint cost = dx[direction] != 0 && dy[direction] != 0 ? 1414u : 1000u;
+          uint pressure = min(downstream_pressure[neighbour], push.maximum_downstream_pressure);
+          // Host validation bounds this product below infinite_height. Keeping the hot relaxation
+          // arithmetic in the native 32-bit domain also avoids driver-dependent widened division.
+          uint pressure_cost = pressure * push.downstream_pressure_score_scale;
+          cost = min(infinite_height, cost + pressure_cost);
+          if (value < infinite_height - cost)
+            output_value = min(output_value, value + cost);
+        }
+      }
+    }
+    if (push.read_a != 0u)
+      potential_b[invocation] = output_value;
+    else
+      potential_a[invocation] = output_value;
+    return;
+  }
+  if (push.mode == 1u) {
+    if (invocation < count)
+      batch_flow[invocation] = 0u;
+    return;
+  }
+  if (push.mode == 3u) {
+    if (invocation >= count || invocation == push.target || walkable[invocation] == 0u)
+      return;
+    int x = int(invocation % push.width);
+    int y = int(invocation / push.width);
+    uint effective_flow = batch_flow[invocation];
+    for (uint direction = 0u; direction < 8u; ++direction) {
+      int nx = x + dx[direction];
+      int ny = y + dy[direction];
+      if (nx < 0 || ny < 0 || nx >= int(push.width) || ny >= int(push.height))
+        continue;
+      uint neighbour = uint(ny) * push.width + uint(nx);
+      if (walkable[neighbour] == 0u || !diagonal_is_open(x, y, nx, ny))
+        continue;
+      uint divisor =
+          push.lateral_erosion_divisor * (dx[direction] != 0 && dy[direction] != 0 ? 2u : 1u);
+      effective_flow += batch_flow[neighbour] / max(1u, divisor);
+    }
+    if (effective_flow == 0u)
+      return;
+    uint increment = max(1u, effective_flow / max(1u, push.erosion_quantum));
+    erosion[invocation] = min(push.maximum_erosion, erosion[invocation] + increment);
+    return;
+  }
+  if (push.mode != 2u || invocation >= push.droplets)
+    return;
+
+  uint cell = push.source;
+  atomicAdd(batch_flow[cell], 1u);
+  atomicAdd(accumulated_flow[cell], 1u);
+  for (uint step = 0u; step < push.maximum_steps && cell != push.target; ++step) {
+    int x = int(cell % push.width);
+    int y = int(cell / push.width);
+    uint current_height = read_potential(cell);
+    uint selected = 0xffffffffu;
+    uint selected_score = 0xffffffffu;
+    for (uint direction = 0u; direction < 8u; ++direction) {
+      int nx = x + dx[direction];
+      int ny = y + dy[direction];
+      if (nx < 0 || ny < 0 || nx >= int(push.width) || ny >= int(push.height))
+        continue;
+      uint neighbour = uint(ny) * push.width + uint(nx);
+      uint height = read_potential(neighbour);
+      if (walkable[neighbour] == 0u || !diagonal_is_open(x, y, nx, ny) || height >= current_height)
+        continue;
+      uint reward = min(erosion[neighbour], push.maximum_erosion) * push.erosion_height_scale;
+      uint clearance_reward = min(read_clearance(neighbour), push.maximum_clearance_reward_cells) *
+                              push.clearance_score_scale;
+      reward = reward > 0xffffffffu - clearance_reward ? 0xffffffffu : reward + clearance_reward;
+      uint height_score = height > (0xffffffffu / 1024u) ? 0xffffffffu : height * 1024u;
+      uint base = height_score > reward ? height_score - reward : 0u;
+      uint jitter = hash32(push.seed ^ (push.batch * 0x9e3779b9u) ^ (invocation * 0x85ebca6bu) ^
+                           (step * 16u) ^ direction) &
+                    0x3ffu;
+      jitter = (jitter * push.exploration_score_quantum) / (push.batch + 1u);
+      uint score = base > 0xffffffffu - jitter ? 0xffffffffu : base + jitter;
+      if (score < selected_score || (score == selected_score && neighbour < selected)) {
+        selected_score = score;
+        selected = neighbour;
+      }
+    }
+    if (selected == 0xffffffffu)
+      break;
+    cell = selected;
+    atomicAdd(batch_flow[cell], 1u);
+    atomicAdd(accumulated_flow[cell], 1u);
+    atomicAdd(statistics[1], 1u);
+  }
+  if (cell == push.target)
+    atomicAdd(statistics[0], 1u);
+}

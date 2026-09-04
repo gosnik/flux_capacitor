@@ -3,6 +3,7 @@
 #include "flux/telemetry/state.hpp"
 #include "flux/telemetry/trace.hpp"
 #include "live_client.hpp"
+#include "viewer_preferences.hpp"
 
 #include <imgui.h>
 
@@ -10,7 +11,9 @@
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <memory>
 #include <string>
+#include <vector>
 
 namespace flux::viewer {
 
@@ -21,6 +24,8 @@ struct LaunchOptions {
   std::filesystem::path replay_path;
   std::filesystem::path record_path;
   bool connect_on_start{true};
+  std::shared_ptr<ViewerPreferences> preferences;
+  std::filesystem::path preferences_path;
 };
 
 class ViewerApp {
@@ -33,26 +38,23 @@ public:
   [[nodiscard]] bool wants_exit() const { return wants_exit_; }
 
 private:
-  struct OverlaySettings {
-    bool source_board{true};
-    bool source_footprints{true};
-    bool source_copper{true};
-    bool source_zones_keepouts{true};
-    bool committed_routes{true};
-    bool current_routes{true};
-    bool bspline_curves{true};
-    bool bspline_controls{false};
-    bool rip_up_activity{true};
-    bool congestion{true};
-    bool clearance_shadows{true};
-    bool occupancy{true};
-    bool priorities{false};
-    bool via_candidates{true};
-    bool selected_vias{true};
-    bool contested_vias{true};
-    bool rejected_vias{false};
-    bool grid{true};
-    std::string layer;
+  struct FileBrowserEntry {
+    std::filesystem::path path;
+    std::string name;
+    bool directory{false};
+  };
+
+  struct FileBrowserState {
+    std::string title;
+    std::filesystem::path directory;
+    std::string directory_input;
+    std::filesystem::path selected;
+    std::vector<FileBrowserEntry> entries;
+    std::string save_name;
+    std::string status;
+    bool open{false};
+    bool open_requested{false};
+    bool save_mode{false};
   };
 
   struct CanvasView {
@@ -76,12 +78,18 @@ private:
   void draw_board_canvas();
   void draw_metrics_panel();
   void draw_activity_panel();
-  void draw_path_modal();
+  void open_file_browser(bool save_mode);
+  void refresh_file_browser();
+  void draw_file_browser();
   void draw_status_bar();
   void advance_replay(double elapsed_seconds);
+  void seek_replay(std::size_t position);
+  void update_preferences();
 
   [[nodiscard]] telemetry::LiveState& mutable_state();
   [[nodiscard]] const telemetry::LiveState& state() const;
+  [[nodiscard]] const telemetry::LiveState& overlay_state() const;
+  void sync_overlay_history_to_source();
 
   LaunchOptions options_;
   SourceMode mode_{SourceMode::live};
@@ -89,19 +97,19 @@ private:
   telemetry::LiveState live_state_;
   telemetry::Trace trace_;
   telemetry::Replay replay_;
+  telemetry::LiveStateHistory overlay_history_;
   telemetry::TraceWriter recorder_;
-  OverlaySettings overlays_;
+  OverlayPreferences overlays_;
   CanvasView view_;
   std::string endpoint_;
   std::string trace_path_;
   std::string record_path_;
   std::string ui_status_;
-  std::string path_modal_title_;
-  std::string path_modal_value_;
-  bool path_modal_open_{false};
-  bool path_modal_save_{false};
+  FileBrowserState file_browser_;
   bool replay_playing_{false};
+  bool overlay_follow_source_{true};
   float replay_speed_{1.0F};
+  float activity_panel_height_{220.0F};
   double replay_accumulator_us_{0.0};
   std::uint64_t replay_clock_us_{0};
   std::uint64_t live_connection_generation_{0};

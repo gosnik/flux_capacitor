@@ -1,0 +1,40 @@
+{
+  "date": "2026-09-02",
+  "board": "tests/fixtures/routing-corpus/bm_svf.kicad_pcb",
+  "configuration": {
+    "active_candidates_per_window": 8,
+    "active_selection_horizon_per_window": 72,
+    "fallback_candidates_per_window": 512,
+    "promoted_candidates_per_failed_window": 8
+  },
+  "measurement": {
+    "router_elapsed_seconds": 2222.838,
+    "trace_bytes": 404286327,
+    "observed_peak_rss_kib": 150128,
+    "paths": 78,
+    "unrouted_nets": 0,
+    "selected_total_overflow": 132,
+    "harness_passed": true,
+    "complete": false
+  },
+  "regional_checkpoints": [
+    {"windows": 78, "complete": 73, "generated": 1034, "active": 486, "reserve": 548, "dropped": 0, "promoted": 16, "evaluated": 483, "fallback_recovered": 1, "selected": true},
+    {"windows": 59, "complete": 50, "generated": 1151, "active": 356, "reserve": 795, "dropped": 0, "promoted": 40, "evaluated": 382, "fallback_recovered": 2, "selected": false},
+    {"windows": 74, "complete": 66, "generated": 1700, "active": 511, "reserve": 1189, "dropped": 0, "promoted": 16, "evaluated": 492, "fallback_recovered": 1, "selected": false},
+    {"windows": 109, "complete": 102, "generated": 1628, "active": 670, "reserve": 958, "dropped": 0, "promoted": 16, "evaluated": 645, "fallback_recovered": 1, "selected": false}
+  ],
+  "tier0_requalification": {
+    "board": "pt2399_delay",
+    "paths": 50,
+    "flux_exact_copper": "accepted",
+    "external_kicad_drc": "clean",
+    "copper_pngs": "build/regional-planning-final-v11/artifacts/tier-0-pt2399_delay/copper"
+  },
+  "post_benchmark_lifecycle_validation": {
+    "change": "promotion removes only selected states and carries the unpromoted reserve into later phases",
+    "unit_tests": "passed",
+    "viewer_tests": "passed",
+    "tier0": "exact copper and external KiCad DRC clean"
+  },
+  "decision": "retain the separated 72-state active horizon and 512-state compact fallback reserve; all generated complete states survived and later physical diagnoses promoted only bounded batches"
+}

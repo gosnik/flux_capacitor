@@ -1,0 +1,45 @@
+{
+  "board": "tests/fixtures/routing-corpus/bm_svf.kicad_pcb",
+  "tier": 1,
+  "configuration": {
+    "max_router_iterations": 1,
+    "max_expansions": 50000,
+    "max_static_seed_workers": 2,
+    "search_diversification": true,
+    "crossing_safe_diagonal_grid": true,
+    "direct_medial": true,
+    "atomic_net_trees": true
+  },
+  "status": "incomplete_iteration_limit",
+  "elapsed_seconds": 56.98,
+  "peak_rss_kib": 116336,
+  "global": {
+    "paths": 78,
+    "unrouted_nets": 0,
+    "total_overflow": 146,
+    "sampled_overflow": 26,
+    "clearance_shadow_overflow": 120,
+    "clearance_shadow_conflicts": 120
+  },
+  "regional": {
+    "windows": 72,
+    "eligible_windows": 72,
+    "complete_bundle_assignments": 58,
+    "failed_spline_bundle_assignments": 14,
+    "joint_repair_windows_attempted": 74,
+    "joint_repair_windows_with_expanded_portfolio": 55,
+    "joint_spline_candidates_evaluated": 205,
+    "joint_spline_candidates_legal": 121,
+    "joint_spline_windows_recovered": 15,
+    "accepted_same_layer_detours": 47,
+    "selected_alternative_templates": 59,
+    "selected_residual_conflicts": 25,
+    "quantized_clearance_conflicts": 154,
+    "spline_mutual_clearance_rejections": 17
+  },
+  "progressive_corpus_verification": {
+    "tier_0": "requalified_exact_copper_external_kicad_drc_clean_pngs_regenerated",
+    "tier_1": "30_pass_probe_timed_out_at_180_seconds_before_checkpoint"
+  },
+  "conclusion": "Spatial hand-off and multi-blocker detours are working but insufficient for Tier 1 completion; exact local diagnostics should now guide a subsequent global allocation pass."
+}

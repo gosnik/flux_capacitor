@@ -3,6 +3,7 @@
 #include "flux/core/copper_geometry.hpp"
 #include "flux/core/geometry.hpp"
 #include "flux/core/keepout_geometry.hpp"
+#include "flux/core/routing_compute.hpp"
 #include "flux/core/routing_rules.hpp"
 
 #include <algorithm>
@@ -10,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <map>
 #include <set>
 #include <string>
 #include <utility>
@@ -571,6 +573,132 @@ CopperDrcReport check_dynamic_copper_rules(const Board& board,
   const auto pads = copper_pad_shapes(board);
   const auto edge_clearance =
       static_cast<long double>(board.rules.copper_to_edge_clearance.value());
+  struct BroadphaseObject {
+    ObjectId id;
+    RoutingComputePrimitiveBounds bounds;
+  };
+  std::map<LayerId, std::uint32_t> layer_codes;
+  for (const auto& layer : board.layers)
+    if (layer.kind == LayerKind::copper)
+      layer_codes.emplace(layer.id, static_cast<std::uint32_t>(layer_codes.size()));
+  std::map<NetId, std::uint32_t> net_codes;
+  for (const auto& net : board.nets)
+    net_codes.emplace(net.id, static_cast<std::uint32_t>(net_codes.size()));
+  auto maximum_clearance = board.rules.default_clearance.value();
+  for (const auto& net_class : board.net_classes)
+    if (net_class.clearance)
+      maximum_clearance = std::max(maximum_clearance, net_class.clearance->value());
+  std::vector<BroadphaseObject> broadphase_objects;
+  const auto append_bounds = [&](const ObjectId& id, const NetId& net,
+                                 const std::vector<LayerId>& layers,
+                                 const std::vector<Point>& points, long double radius) {
+    if (points.empty())
+      return;
+    const auto expansion = static_cast<std::int64_t>(std::ceil(radius)) + maximum_clearance;
+    const auto [minimum_x, maximum_x] = std::minmax_element(
+        points.begin(), points.end(), [](Point a, Point b) { return a.x < b.x; });
+    const auto [minimum_y, maximum_y] = std::minmax_element(
+        points.begin(), points.end(), [](Point a, Point b) { return a.y < b.y; });
+    for (const auto& layer : layers) {
+      const auto layer_code = layer_codes.find(layer);
+      if (layer_code == layer_codes.end())
+        continue;
+      broadphase_objects.push_back(BroadphaseObject{
+          id, RoutingComputePrimitiveBounds{
+                  minimum_x->x.value() - expansion, minimum_y->y.value() - expansion,
+                  maximum_x->x.value() + expansion, maximum_y->y.value() + expansion,
+                  layer_code->second, net_codes.contains(net) ? net_codes.at(net) : 0xffffffffU}});
+    }
+  };
+  for (const auto& track : board.tracks)
+    append_bounds(track.id, track.net, {track.layer}, {track.start, track.end},
+                  track.width.value() / 2.0L);
+  for (const auto& arc : board.track_arcs) {
+    auto points = geometry::circular_arc_extrema(arc.start, arc.middle, arc.end);
+    points.insert(points.end(), {arc.start, arc.middle, arc.end});
+    append_bounds(arc.id, arc.net, {arc.layer}, points, arc.width.value() / 2.0L);
+  }
+  for (const auto& via : board.vias)
+    append_bounds(via.id, via.net, via.layers, {via.position}, via.diameter.value() / 2.0L);
+  for (const auto& pad : pads)
+    append_bounds(pad.id, pad.net, pad.layers, {pad.position}, pad.conservative_radius_nm);
+  std::vector<RoutingComputePrimitiveBounds> broadphase_bounds;
+  broadphase_bounds.reserve(broadphase_objects.size());
+  for (const auto& object : broadphase_objects)
+    broadphase_bounds.push_back(object.bounds);
+  const auto broadphase = discover_routing_broadphase_pairs(
+      broadphase_bounds, std::max<std::int64_t>(1'000'000, maximum_clearance * 2), 1'048'576U,
+      true);
+  std::set<std::pair<std::string, std::string>> possible_pairs;
+  if (broadphase.ok() && !broadphase.budget_exhausted) {
+    for (const auto [first, second] : broadphase.candidate_pairs) {
+      auto ids =
+          std::minmax(broadphase_objects[first].id.value(), broadphase_objects[second].id.value());
+      possible_pairs.emplace(ids.first, ids.second);
+    }
+  }
+  std::set<std::pair<std::string, std::string>> simple_copper_clear_pairs;
+  if (broadphase.ok() && !broadphase.budget_exhausted) {
+    std::vector<RoutingComputeCopperPrimitive> simple_primitives;
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> simple_pairs;
+    std::vector<std::pair<std::string, std::string>> simple_pair_ids;
+    const auto append_simple = [&](const ObjectId& id, std::uint32_t layer,
+                                   RoutingComputeCopperPrimitive& primitive) {
+      if (const auto track = std::find_if(board.tracks.begin(), board.tracks.end(),
+                                          [&](const auto& value) { return value.id == id; });
+          track != board.tracks.end()) {
+        primitive = {RoutingComputeCopperKind::segment,
+                     track->start.x.value(), track->start.y.value(), track->end.x.value(),
+                     track->end.y.value(), track->width.value() / 2, layer,
+                     net_codes.contains(track->net) ? net_codes.at(track->net) : 0xffffffffU};
+        return true;
+      }
+      if (const auto via = std::find_if(board.vias.begin(), board.vias.end(),
+                                        [&](const auto& value) { return value.id == id; });
+          via != board.vias.end()) {
+        primitive = {RoutingComputeCopperKind::circle,
+                     via->position.x.value(), via->position.y.value(), via->position.x.value(),
+                     via->position.y.value(), via->diameter.value() / 2, layer,
+                     net_codes.contains(via->net) ? net_codes.at(via->net) : 0xffffffffU};
+        return true;
+      }
+      return false;
+    };
+    for (const auto [first, second] : broadphase.candidate_pairs) {
+      RoutingComputeCopperPrimitive a, b;
+      if (!append_simple(broadphase_objects[first].id, broadphase_objects[first].bounds.layer, a) ||
+          !append_simple(broadphase_objects[second].id, broadphase_objects[second].bounds.layer, b))
+        continue;
+      const auto base = static_cast<std::uint32_t>(simple_primitives.size());
+      simple_primitives.push_back(a);
+      simple_primitives.push_back(b);
+      simple_pairs.emplace_back(base, base + 1U);
+      const auto ids =
+          std::minmax(broadphase_objects[first].id.value(), broadphase_objects[second].id.value());
+      simple_pair_ids.emplace_back(ids.first, ids.second);
+    }
+    const auto simple =
+        assess_simple_copper_pairs(simple_primitives, simple_pairs, maximum_clearance, 2'048, true);
+    if (simple.ok() && simple.pairs.size() == simple_pair_ids.size()) {
+      std::map<std::pair<std::string, std::string>, bool> all_clear;
+      for (std::size_t pair = 0U; pair < simple.pairs.size(); ++pair) {
+        const auto clear = simple.pairs[pair].possible_conflict == 0U;
+        const auto [found, inserted] = all_clear.try_emplace(simple_pair_ids[pair], clear);
+        if (!inserted)
+          found->second = found->second && clear;
+      }
+      for (const auto& [ids, clear] : all_clear)
+        if (clear)
+          simple_copper_clear_pairs.insert(ids);
+    }
+  }
+  const auto possible_interaction = [&](const ObjectId& first, const ObjectId& second) {
+    if (!broadphase.ok() || broadphase.budget_exhausted)
+      return true;
+    const auto ids = std::minmax(first.value(), second.value());
+    const auto key = std::pair{ids.first, ids.second};
+    return possible_pairs.contains(key) && !simple_copper_clear_pairs.contains(key);
+  };
 
   const auto check_track_edge = [&](const TrackSegment& track) {
     const auto required = static_cast<long double>(track.width.value()) / 2.0L + edge_clearance;
@@ -621,7 +749,8 @@ CopperDrcReport check_dynamic_copper_rules(const Board& board,
     }
     check_track_edge(lhs);
     for (const auto& rhs : board.tracks) {
-      if (lhs.id == rhs.id || lhs.net == rhs.net || lhs.layer != rhs.layer) {
+      if (lhs.id == rhs.id || lhs.net == rhs.net || lhs.layer != rhs.layer ||
+          !possible_interaction(lhs.id, rhs.id)) {
         continue;
       }
       const auto actual = geometry::segment_distance_nm(lhs.start, lhs.end, rhs.start, rhs.end);
@@ -635,7 +764,7 @@ CopperDrcReport check_dynamic_copper_rules(const Board& board,
       }
     }
     for (const auto& arc : board.track_arcs) {
-      if (lhs.net == arc.net || lhs.layer != arc.layer) {
+      if (lhs.net == arc.net || lhs.layer != arc.layer || !possible_interaction(lhs.id, arc.id)) {
         continue;
       }
       const auto actual = geometry::segment_circular_arc_distance_nm(lhs.start, lhs.end, arc.start,
@@ -650,7 +779,8 @@ CopperDrcReport check_dynamic_copper_rules(const Board& board,
       }
     }
     for (const auto& via : board.vias) {
-      if (lhs.net == via.net || !contains_layer(via.layers, lhs.layer)) {
+      if (lhs.net == via.net || !contains_layer(via.layers, lhs.layer) ||
+          !possible_interaction(lhs.id, via.id)) {
         continue;
       }
       const auto actual = geometry::point_segment_distance_nm(via.position, lhs.start, lhs.end);
@@ -664,7 +794,8 @@ CopperDrcReport check_dynamic_copper_rules(const Board& board,
       }
     }
     for (const auto& pad : pads) {
-      if (lhs.net == pad.net || !contains_layer(pad.layers, lhs.layer)) {
+      if (lhs.net == pad.net || !contains_layer(pad.layers, lhs.layer) ||
+          !possible_interaction(lhs.id, pad.id)) {
         continue;
       }
       const auto actual = segment_to_pad_copper_distance_nm(lhs.start, lhs.end, pad);
@@ -701,7 +832,8 @@ CopperDrcReport check_dynamic_copper_rules(const Board& board,
     }
     check_arc_edge(lhs);
     for (const auto& track : board.tracks) {
-      if (lhs.net == track.net || lhs.layer != track.layer) {
+      if (lhs.net == track.net || lhs.layer != track.layer ||
+          !possible_interaction(lhs.id, track.id)) {
         continue;
       }
       const auto actual = geometry::segment_circular_arc_distance_nm(
@@ -716,7 +848,8 @@ CopperDrcReport check_dynamic_copper_rules(const Board& board,
       }
     }
     for (const auto& rhs : board.track_arcs) {
-      if (lhs.id == rhs.id || lhs.net == rhs.net || lhs.layer != rhs.layer) {
+      if (lhs.id == rhs.id || lhs.net == rhs.net || lhs.layer != rhs.layer ||
+          !possible_interaction(lhs.id, rhs.id)) {
         continue;
       }
       const auto actual = geometry::circular_arcs_distance_nm(lhs.start, lhs.middle, lhs.end,
@@ -731,7 +864,8 @@ CopperDrcReport check_dynamic_copper_rules(const Board& board,
       }
     }
     for (const auto& via : board.vias) {
-      if (lhs.net == via.net || !contains_layer(via.layers, lhs.layer)) {
+      if (lhs.net == via.net || !contains_layer(via.layers, lhs.layer) ||
+          !possible_interaction(lhs.id, via.id)) {
         continue;
       }
       const auto actual =
@@ -746,7 +880,8 @@ CopperDrcReport check_dynamic_copper_rules(const Board& board,
       }
     }
     for (const auto& pad : pads) {
-      if (lhs.net == pad.net || !contains_layer(pad.layers, lhs.layer)) {
+      if (lhs.net == pad.net || !contains_layer(pad.layers, lhs.layer) ||
+          !possible_interaction(lhs.id, pad.id)) {
         continue;
       }
       const auto actual =
@@ -784,7 +919,8 @@ CopperDrcReport check_dynamic_copper_rules(const Board& board,
     }
     check_via_edge(lhs);
     for (const auto& rhs : board.vias) {
-      if (lhs.id == rhs.id || lhs.net == rhs.net || !share_layer(lhs.layers, rhs.layers)) {
+      if (lhs.id == rhs.id || lhs.net == rhs.net || !share_layer(lhs.layers, rhs.layers) ||
+          !possible_interaction(lhs.id, rhs.id)) {
         continue;
       }
       const auto actual = geometry::point_distance_nm(lhs.position, rhs.position);
@@ -798,7 +934,8 @@ CopperDrcReport check_dynamic_copper_rules(const Board& board,
       }
     }
     for (const auto& pad : pads) {
-      if (lhs.net == pad.net || !share_layer(lhs.layers, pad.layers)) {
+      if (lhs.net == pad.net || !share_layer(lhs.layers, pad.layers) ||
+          !possible_interaction(lhs.id, pad.id)) {
         continue;
       }
       const auto actual = point_to_pad_copper_distance_nm(lhs.position, pad);

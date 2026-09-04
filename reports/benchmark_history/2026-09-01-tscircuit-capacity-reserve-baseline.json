@@ -1,0 +1,33 @@
+{
+  "git_revision": "a17fe406f392ac0c7e174f9bcfc559e1b46a2bbb",
+  "date": "2026-09-01T01:19:26+08:00",
+  "experiment": "tscircuit-capacity-reserve",
+  "configuration": {
+    "tier_0": "manifest-qualified default route/detail configuration",
+    "tier_1": "manifest unlocked bm_svf configuration"
+  },
+  "runs": [
+    {
+      "board": "pt2399_delay",
+      "tier": 0,
+      "outcome": "pass",
+      "metrics": {
+        "paths": 50,
+        "final_copper": "accepted",
+        "external_kicad_drc": "pass",
+        "copper_pngs": "exported"
+      }
+    },
+    {
+      "board": "bm_svf",
+      "tier": 1,
+      "outcome": "timeout",
+      "metrics": {
+        "probe_timeout_seconds": 180,
+        "router_iterations": 30,
+        "max_expansions_per_connection": 50000,
+        "static_seed_workers": 2
+      }
+    }
+  ]
+}

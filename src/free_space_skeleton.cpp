@@ -1,6 +1,7 @@
 #include "flux/core/free_space_skeleton.hpp"
 
 #include "flux/core/geometry.hpp"
+#include "flux/core/routing_compute.hpp"
 
 #include <boost/polygon/segment_data.hpp>
 #include <boost/polygon/voronoi.hpp>
@@ -223,8 +224,13 @@ FreeSpaceSkeletonResult build_free_space_skeleton(const FreeSpaceDomain& domain,
   VoronoiDiagram diagram;
   boost::polygon::construct_voronoi(segments.begin(), segments.end(), &diagram);
 
+  struct ProposedChord {
+    std::pair<Point, Point> endpoints;
+    bool curved{false};
+  };
   std::set<std::pair<Point, Point>> accepted;
   std::set<std::pair<Point, Point>> seen_curved_chords;
+  std::vector<ProposedChord> proposals;
   for (const auto& edge : diagram.edges()) {
     if (!edge.is_primary()) {
       continue;
@@ -255,22 +261,30 @@ FreeSpaceSkeletonResult build_free_space_skeleton(const FreeSpaceDomain& domain,
     if (accepted.contains(ordered)) {
       continue;
     }
-    if (!chord_in_free_space(ordered.first, ordered.second, domain)) {
-      result.skipped_curved_edges += curved_bisector_chord ? 1U : 0U;
+    accepted.insert(ordered);
+    proposals.push_back({ordered, curved_bisector_chord});
+  }
+  std::vector<std::pair<Point, Point>> proposal_chords;
+  proposal_chords.reserve(proposals.size());
+  for (const auto& proposal : proposals)
+    proposal_chords.push_back(proposal.endpoints);
+  const auto assessments = assess_free_space_chords(domain, proposal_chords);
+  for (std::size_t proposal = 0U; proposal < proposals.size(); ++proposal) {
+    const auto& candidate = proposals[proposal];
+    if (!assessments[proposal]) {
+      result.skipped_curved_edges += candidate.curved ? 1U : 0U;
       ++result.rejected_outside_edges;
       continue;
     }
-    const auto clearance = boundary_clearance(ordered.first, ordered.second, domain);
-    if (clearance < static_cast<long double>(config.minimum_clearance.value())) {
-      result.skipped_curved_edges += curved_bisector_chord ? 1U : 0U;
+    if (assessments[proposal]->value() < config.minimum_clearance.value()) {
+      result.skipped_curved_edges += candidate.curved ? 1U : 0U;
       ++result.rejected_clearance_edges;
       continue;
     }
-    accepted.insert(ordered);
-    result.edges.push_back(FreeSpaceSkeletonEdge{
-        0U, 0U, 0U, ordered.first, ordered.second,
-        Nanometres{static_cast<std::int64_t>(std::floor(clearance))}, curved_bisector_chord});
-    result.accepted_curved_edge_chords += curved_bisector_chord ? 1U : 0U;
+    result.edges.push_back(FreeSpaceSkeletonEdge{0U, 0U, 0U, candidate.endpoints.first,
+                                                 candidate.endpoints.second, *assessments[proposal],
+                                                 candidate.curved});
+    result.accepted_curved_edge_chords += candidate.curved ? 1U : 0U;
   }
   std::sort(result.edges.begin(), result.edges.end(), [](const auto& lhs, const auto& rhs) {
     return std::tie(lhs.start, lhs.end) < std::tie(rhs.start, rhs.end);
@@ -326,12 +340,41 @@ assess_free_space_chords(const FreeSpaceDomain& domain,
   if (!valid_domain(domain, FreeSpaceSkeletonConfig{}, validation, false)) {
     return result;
   }
+  std::vector<RoutingComputeSegment> compute_chords;
+  compute_chords.reserve(chords.size());
+  for (const auto& [start, end] : chords)
+    compute_chords.push_back(RoutingComputeSegment{start.x.value(), start.y.value(), end.x.value(),
+                                                   end.y.value(), 0, 0U, 0U});
+  std::vector<RoutingComputeSegment> boundaries;
+  const auto append = [&](const Polygon& polygon) {
+    for (std::size_t index = 0U; index < polygon.vertices.size(); ++index) {
+      const auto start = polygon.vertices[index];
+      const auto end = polygon.vertices[(index + 1U) % polygon.vertices.size()];
+      boundaries.push_back(RoutingComputeSegment{start.x.value(), start.y.value(), end.x.value(),
+                                                 end.y.value(), 0, 0U, 1U});
+    }
+  };
+  append(domain.outline);
+  for (const auto& polygon : domain.cutouts)
+    append(polygon);
+  for (const auto& polygon : domain.obstacles)
+    append(polygon);
+  for (const auto& fill : domain.filled_obstacles) {
+    append(fill.area);
+    for (const auto& hole : fill.holes)
+      append(hole);
+  }
+  const auto classified = classify_routing_chords(compute_chords, boundaries, 0, 2'048, true);
   for (std::size_t index = 0U; index < chords.size(); ++index) {
     const auto [start, end] = chords[index];
     if (start == end || !chord_in_free_space(start, end, domain)) {
       continue;
     }
-    const auto clearance = boundary_clearance(start, end, domain);
+    const auto clearance =
+        classified.ok() && classified.chords[index].classification ==
+                               RoutingComputeChordClass::definitely_clear
+            ? static_cast<long double>(classified.chords[index].conservative_clearance_nm)
+            : boundary_clearance(start, end, domain);
     if (!std::isfinite(clearance) || clearance < 0.0L ||
         clearance > static_cast<long double>(std::numeric_limits<std::int64_t>::max())) {
       continue;

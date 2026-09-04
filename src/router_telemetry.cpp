@@ -280,6 +280,9 @@ make_source_board_scene(const Board& board, std::string source_path) {
     return Target::routing_started;
   case Source::routing_finished:
     return Target::routing_finished;
+  case Source::global_routing_started:
+  case Source::global_routing_finished:
+    return Target::search_summary;
   case Source::pathfinder_iteration_started:
     return Target::pathfinder_iteration_started;
   case Source::pathfinder_iteration_completed:
@@ -314,6 +317,8 @@ make_source_board_scene(const Board& board, std::string source_path) {
     return Target::conflict_added;
   case Source::conflict_removed:
     return Target::conflict_removed;
+  case Source::hydraulic_field_updated:
+    return Target::hydraulic_field_updated;
   case Source::residual_group_updated:
     return Target::residual_group_updated;
   case Source::checkpoint_selected:
@@ -389,8 +394,10 @@ make_source_board_scene(const Board& board, std::string source_path) {
   route.revision = event.route_revision;
   route.width_nm = event.route_width_nm;
   route.cost = event.candidate_cost;
-  route.geometry = event.route_geometry == RouterTelemetryRouteGeometry::cubic_bspline
-                       ? telemetry::RouteGeometry::cubic_bspline
+  route.family = event.route_family;
+  route.lifecycle = event.route_lifecycle;
+  route.geometry = event.route_geometry == RouterTelemetryRouteGeometry::quintic_ph
+                       ? telemetry::RouteGeometry::quintic_ph
                        : telemetry::RouteGeometry::polyline;
   route.spline_degree = event.spline_degree;
   route.topology_signature = event.topology_signature;
@@ -475,6 +482,32 @@ make_source_board_scene(const Board& board, std::string source_path) {
   return conflict;
 }
 
+[[nodiscard]] telemetry::HydraulicField hydraulic_field_record(const RouterTelemetryEvent& event) {
+  telemetry::HydraulicField field;
+  field.id = event.stable_id;
+  field.net = event.net.value();
+  field.layer = event.layer.value();
+  field.revision = event.route_revision;
+  field.origin_x_nm = event.x_nm;
+  field.origin_y_nm = event.y_nm;
+  field.cell_pitch_nm = event.hydraulic_field_pitch_nm;
+  field.width = event.hydraulic_field_width;
+  field.height = event.hydraulic_field_height;
+  field.stride = event.hydraulic_field_stride;
+  field.maximum_flow = event.hydraulic_maximum_flow;
+  field.maximum_erosion = event.hydraulic_maximum_erosion;
+  field.maximum_terrain_height = event.hydraulic_maximum_terrain_height;
+  field.maximum_downstream_pressure = event.hydraulic_maximum_downstream_pressure;
+  field.maximum_success_prior = event.hydraulic_maximum_success_prior;
+  field.flow = event.hydraulic_flow_field;
+  field.erosion = event.hydraulic_erosion_field;
+  field.heightmap = event.hydraulic_heightmap;
+  field.free_space = event.hydraulic_free_space_field;
+  field.downstream_pressure = event.hydraulic_downstream_pressure_field;
+  field.success_prior = event.hydraulic_success_prior_field;
+  return field;
+}
+
 [[nodiscard]] telemetry::Event canonical_event(const RouterTelemetryEvent& event,
                                                RouterTelemetryLevel level,
                                                std::uint64_t monotonic_time_us) {
@@ -496,6 +529,8 @@ make_source_board_scene(const Board& board, std::string source_path) {
   }
   if (event.kind == RouterTelemetryEventKind::routing_started ||
       event.kind == RouterTelemetryEventKind::routing_finished ||
+      event.kind == RouterTelemetryEventKind::global_routing_started ||
+      event.kind == RouterTelemetryEventKind::global_routing_finished ||
       event.kind == RouterTelemetryEventKind::pathfinder_iteration_started ||
       event.kind == RouterTelemetryEventKind::pathfinder_iteration_completed ||
       event.kind == RouterTelemetryEventKind::best_checkpoint_updated ||
@@ -520,6 +555,9 @@ make_source_board_scene(const Board& board, std::string source_path) {
   if (event.kind == RouterTelemetryEventKind::conflict_added ||
       event.kind == RouterTelemetryEventKind::conflict_removed) {
     result.conflicts.push_back(conflict_record(event));
+  }
+  if (event.kind == RouterTelemetryEventKind::hydraulic_field_updated) {
+    result.hydraulic_fields.push_back(hydraulic_field_record(event));
   }
   if (event.kind == RouterTelemetryEventKind::residual_group_updated) {
     result.metrics = iteration_metrics(event);
@@ -578,6 +616,9 @@ make_source_board_scene(const Board& board, std::string source_path) {
     }
     for (const auto& event : state.observed_conflicts) {
       snapshot.conflicts.push_back(conflict_record(event));
+    }
+    for (const auto& event : state.observed_hydraulic_fields) {
+      snapshot.hydraulic_fields.push_back(hydraulic_field_record(event));
     }
   }
   return snapshot;
@@ -848,6 +889,10 @@ std::string_view router_telemetry_event_kind_name(RouterTelemetryEventKind kind)
     return "RoutingStarted";
   case RouterTelemetryEventKind::routing_finished:
     return "RoutingFinished";
+  case RouterTelemetryEventKind::global_routing_started:
+    return "GlobalRoutingStarted";
+  case RouterTelemetryEventKind::global_routing_finished:
+    return "GlobalRoutingFinished";
   case RouterTelemetryEventKind::pathfinder_iteration_started:
     return "PathFinderIterationStarted";
   case RouterTelemetryEventKind::pathfinder_iteration_completed:
@@ -882,6 +927,8 @@ std::string_view router_telemetry_event_kind_name(RouterTelemetryEventKind kind)
     return "ConflictAdded";
   case RouterTelemetryEventKind::conflict_removed:
     return "ConflictRemoved";
+  case RouterTelemetryEventKind::hydraulic_field_updated:
+    return "HydraulicFieldUpdated";
   case RouterTelemetryEventKind::residual_group_updated:
     return "ResidualGroupUpdated";
   case RouterTelemetryEventKind::checkpoint_selected:
@@ -943,9 +990,10 @@ public:
   ~Impl() { stop(); }
 
   void stop() noexcept {
-    if (stopped_.exchange(true, std::memory_order_relaxed)) {
+    if (stopping_.exchange(true, std::memory_order_acq_rel)) {
       return;
     }
+    stopped_.store(true, std::memory_order_release);
     consumer_.request_stop();
     queue_condition_.notify_all();
     if (consumer_.joinable()) {
@@ -1024,8 +1072,11 @@ public:
     if (!board) {
       return;
     }
+    const auto source_identity = board->revision;
+    bool first_source = false;
     {
       std::lock_guard lock(state_mutex_);
+      first_source = state_.source_boards.empty();
       const auto found =
           std::find_if(state_.source_boards.begin(), state_.source_boards.end(),
                        [&](const auto& existing) { return existing && existing->id == board->id; });
@@ -1035,6 +1086,12 @@ public:
         *found = std::move(board);
       }
       state_.source_state_included = true;
+    }
+    if (first_source) {
+      RouterTelemetryEvent started;
+      started.kind = RouterTelemetryEventKind::routing_started;
+      started.detail = source_identity;
+      static_cast<void>(try_emit(std::move(started)));
     }
     source_snapshot_requested_.store(true, std::memory_order_release);
     queue_condition_.notify_one();
@@ -1073,6 +1130,8 @@ private:
     const auto summary_event =
         event.kind == RouterTelemetryEventKind::routing_started ||
         event.kind == RouterTelemetryEventKind::routing_finished ||
+        event.kind == RouterTelemetryEventKind::global_routing_started ||
+        event.kind == RouterTelemetryEventKind::global_routing_finished ||
         event.kind == RouterTelemetryEventKind::pathfinder_iteration_started ||
         event.kind == RouterTelemetryEventKind::pathfinder_iteration_completed ||
         event.kind == RouterTelemetryEventKind::best_checkpoint_updated ||
@@ -1148,6 +1207,11 @@ private:
       upsert(state_.observed_conflicts,
              [&](const auto& existing) { return existing.stable_id == event.stable_id; });
     }
+    if (event.kind == RouterTelemetryEventKind::hydraulic_field_updated) {
+      state_.dynamic_state_included = true;
+      upsert(state_.observed_hydraulic_fields,
+             [&](const auto& existing) { return existing.stable_id == event.stable_id; });
+    }
     if (event.kind == RouterTelemetryEventKind::via_candidate_generated ||
         event.kind == RouterTelemetryEventKind::via_candidate_rejected ||
         event.kind == RouterTelemetryEventKind::via_assigned ||
@@ -1174,6 +1238,7 @@ private:
       state_.observed_routes.clear();
       state_.observed_vias.clear();
       state_.observed_conflicts.clear();
+      state_.observed_hydraulic_fields.clear();
       state_.via_count = 0U;
       state_.regional_conflicts = 0U;
       state_.total_groups = 0U;
@@ -1241,6 +1306,7 @@ private:
       const auto now = std::chrono::steady_clock::now();
       const auto force_snapshot = std::any_of(events.begin(), events.end(), [](const auto& event) {
         return event.kind == RouterTelemetryEventKind::routing_finished ||
+               event.kind == RouterTelemetryEventKind::global_routing_finished ||
                event.kind == RouterTelemetryEventKind::best_checkpoint_updated ||
                event.kind == RouterTelemetryEventKind::residual_group_updated;
       });
@@ -1268,6 +1334,11 @@ private:
     // post-drain recovery point so a trace never requires those events to be lossless in order to
     // reconstruct the final observed state.
     try {
+      {
+        std::lock_guard lock(state_mutex_);
+        state_.routing_finished = true;
+        state_.active_net = NetId{};
+      }
       publish_snapshot();
     } catch (...) {
       transport_failures_.fetch_add(1U, std::memory_order_relaxed);
@@ -1294,6 +1365,7 @@ private:
   std::atomic_uint64_t transport_failures_{0};
   std::atomic_uint64_t recorder_failures_{0};
   std::atomic_bool stopped_{false};
+  std::atomic_bool stopping_{false};
   std::atomic_bool source_snapshot_requested_{false};
   const std::chrono::steady_clock::time_point started_at_{std::chrono::steady_clock::now()};
 };

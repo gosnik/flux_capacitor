@@ -16,21 +16,38 @@ with board outline/cutouts, layers/nets, footprint courtyards and pads, existing
 vias, zones, and keepouts without retransmitting the board in every dynamic snapshot. A stable
 path-plus-revision identity lets the same observer retain multiple KiCad source scenes.
 Selected global polylines are overlaid as provisional routes even when regional/detailed routing is
-incomplete. Complete local B-spline tessellations, selected regional vias, and their exact-static-
+incomplete. Complete local quintic PH tessellations, selected regional vias, and their exact-static-
 checked straight or dogleg run-ups are separate provisional overlays, so a via relocation is not
 displayed as an unconnected marker. Detailed-copper, placement, and validation events remain
 incremental follow-up coverage.
-The activity table is newest-first, and compact regional `SearchSummary` events keep long B-spline
+The activity table is newest-first, and compact regional `SearchSummary` events keep long PH
 window realization observable after the global pass has finished. Chronological trace storage and
 replay semantics are unchanged. Search-only bursts do not trigger unchanged recovery snapshots.
 
 Connected coarse topology may proceed to exact detailed materialization when every regional window
-has produced one complete atomic B-spline candidate, even if sampled PathFinder/shadow overflow
+has produced one complete atomic PH candidate, even if sampled PathFinder/shadow overflow
 remains. Exact connectivity and copper DRC still reject the complete transaction. See
 [`ADR 0153`](docs/adr/0153-exact-regional-handoff.md) and
 [`ADR 0154`](docs/adr/0154-default-websocket-telemetry.md). Dense-board observability and the
 current Freerouting control are recorded in
 [`ADR 0155`](docs/adr/0155-dense-board-observability-and-external-control.md).
+
+The active continuous route representation is now a tangent-continuous chain of quintic
+Pythagorean-hodograph Bezier segments. PH Hermite interpolation, centripetal/chord parameter
+selection, optional bounded C2 joining, polynomial speed and arc length, analytical curvature and
+inflection isolation, exact rational offsets, and bounded rational-offset intersections replace
+the former cubic B-spline implementation. XPBD and PNS move interpolation nodes and rebuild the PH
+segments; telemetry publishes flattened six-control degree-five spans. Detailed routing uses a
+resident Vulkan XPBD whole-chain precondition and candidate-major GPU polishing: every bounded
+node-move wave is sampled/ranked on the device, while only a stable four-candidate shortlist pays
+the recursive CPU shape/corridor certificate. Fine-grained certificates remain serial because
+their recursive long tails measured worse when synchronized per node. Complete same-layer route
+chains instead run as bounded parallel tasks against one immutable board snapshot; compact copper
+deltas are reduced in stable route order and exact-rechecked before commit. CPU exact geometry,
+connectivity, DRC, and commit remain authoritative, and unavailable compute restores the complete
+CPU wave. KiCad has no electrical Bézier-track primitive, so the PH Bézier remains Flux geometry
+and accepted routes are adaptively emitted as native connected track arcs/segments. See
+[`ADR 0156`](docs/adr/0156-quintic-ph-continuous-routing.md).
 Residual retry now solves only transitive fragment-owner cones, reuses unaffected assignments,
 and deterministically remaps derived channel/terminal/via identities before atomic checkpoint
 replacement. Telemetry and CLI JSON distinguish reused, recomputed, and withheld assignments.
@@ -235,9 +252,13 @@ canonical board core and negotiated-congestion routing baseline.
 
 ## Build and test
 
-Requirements: CMake 3.25+, Ninja, a C++20 compiler, and Boost 1.74+ headers. Boost.Polygon supplies
-the permissively licensed integer segment-site Voronoi builder; all resulting graph chords are
-quantized and rechecked by Flux before use.
+Requirements: CMake 3.25+, Ninja, a C++20 compiler, Boost 1.74+ headers, Vulkan headers/loader,
+`glslc`, and a Vulkan 1.1 compute-capable GPU with a working driver. GPU acceleration is a
+mandatory Flux runtime requirement: configuration fails without the Vulkan toolchain and routing
+fails closed if a compute device cannot execute the startup probe. The deterministic CPU hydraulic
+implementation is retained only as a test/oracle backend, not as a production fallback.
+Boost.Polygon supplies the permissively licensed integer segment-site Voronoi builder; all
+resulting graph chords are quantized and rechecked by Flux before use.
 
 ```sh
 cmake --preset dev
@@ -1019,8 +1040,10 @@ v0.84/schema 18 adds opt-in bounded multi-ring terminal access diversity. The de
 at the first egress-certified Chebyshev ring; `--diversify-pin-access-rings` retains later
 exact-legal access/egress portals until `--max-pin-access-nodes N`, preserving stable
 ring/distance/layer/coordinate order. Expert KiCad workflows can also set the already supported
-router lattice through `--grid-pitch-nm N`; resolved copper/via spacing and the grid-size budget
-remain hard gates, and `autoroute_v1` rejects both controls. Checkpoints are invalidated when
+router lattice through `--grid-pitch-nm N`; resolved copper spacing and the grid-size budget
+remain hard gates. Planar routing now defaults to 0.5 mm, while an omitted via-site pitch is
+independently rounded up to the smallest rule-safe multiple of that lattice. `autoroute_v1`
+rejects both controls. Checkpoints are invalidated when
 either lattice pitch or access-diversity policy changes. On Teensy, the established 1 mm grid,
 three-ring radius, 64-node cap, and twelve passes retain every connection while reducing physical
 overflow from v0.83's 35.94 mm to 8.65 mm and aggregate overflow from 482 to 181. Detailed copper
@@ -1257,6 +1280,14 @@ global allocation, connectivity, or copper DRC is incomplete; JSON marks it
 board. Width-aware physical shadows around sampled tracks, pad escapes, and vias are now enabled
 by default and negotiated as attributed edge/node conflicts by v0.112. See
 [`ADR 0121`](docs/adr/0121-fail-closed-incomplete-layout-previews-and-sampled-clearance-shadows.md).
+
+For converted or otherwise non-strict source files, `detail-kicad BOARD
+--diagnostic-lossy-preview OUTPUT` additionally permits routing a lossy canonical projection and
+implies incomplete-preview export. Import/structural/DRC findings are still measured, the source
+snapshot and supported-change checks remain enforced, export diagnostics identify the artifact as
+lossy and invalid, and the command always retains its nonzero, non-qualified result unless the
+ordinary acceptance gates independently pass. This mode is only for inspecting proposed copper;
+it must not be used as manufacturing or live-apply authority.
 
 v0.110/schema 18 keeps B-spline optimization in the core negotiated route plan. Every bounded,
 exact-reprojected spline corridor now guides subsequent PathFinder passes and weighted retries with

@@ -1,4 +1,5 @@
 #include "viewer_app.hpp"
+#include "viewer_preferences.hpp"
 
 #include <SDL.h>
 #include <SDL_opengl.h>
@@ -10,6 +11,7 @@
 #include <cmath>
 #include <exception>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -18,7 +20,7 @@ namespace {
 
 constexpr float default_ui_scale = 1.0F;
 constexpr float minimum_ui_scale = 0.75F;
-constexpr float maximum_ui_scale = 2.0F;
+constexpr float maximum_ui_scale = 3.0F;
 constexpr float ui_scale_step = 0.05F;
 
 void print_usage(const char* program) {
@@ -27,13 +29,13 @@ void print_usage(const char* program) {
             << "  --no-connect                          Start disconnected\n"
             << "  --level <normal|diagnostic|trace>     Requested detail (default normal)\n"
             << "  --rate <Hz>                           Snapshot/event batch rate (1-60)\n"
-            << "  --replay <trace.jsonl>                Open a recorded telemetry trace\n"
+            << "  --replay <trace.jsonl|directory>      Open one trace or a chronological trace directory\n"
             << "  --record <trace.jsonl>                Record incoming live events\n"
             << "  --help                                Show this help\n";
 }
 
-flux::viewer::LaunchOptions parse_options(int argc, char** argv) {
-  flux::viewer::LaunchOptions options;
+flux::viewer::LaunchOptions parse_options(int argc, char** argv,
+                                          flux::viewer::LaunchOptions options) {
   for (int index = 1; index < argc; ++index) {
     const std::string_view option = argv[index];
     const auto value = [&](const char* name) -> std::string {
@@ -162,9 +164,23 @@ bool process_ui_scale_event(const SDL_Event& event, float& ui_scale) {
 } // namespace
 
 int main(int argc, char** argv) {
+  const auto preferences_path = flux::viewer::standard_viewer_config_path();
+  auto preferences = std::make_shared<flux::viewer::ViewerPreferences>();
+  std::string preferences_warning;
+  if (!flux::viewer::load_viewer_preferences(preferences_path, *preferences,
+                                             preferences_warning)) {
+    std::cerr << "flux-viewer: " << preferences_warning << '\n';
+  } else if (!preferences_warning.empty()) {
+    std::cerr << "flux-viewer: " << preferences_warning << '\n';
+  }
   flux::viewer::LaunchOptions options;
+  options.endpoint = preferences->endpoint;
+  options.level = flux::telemetry::level_from_string(preferences->telemetry_level);
+  options.rate_hz = preferences->telemetry_rate_hz;
+  options.preferences = preferences;
+  options.preferences_path = preferences_path;
   try {
-    options = parse_options(argc, argv);
+    options = parse_options(argc, argv, std::move(options));
   } catch (const std::exception& exception) {
     std::cerr << "flux-viewer: " << exception.what() << "\n\n";
     print_usage(argv[0]);
@@ -214,13 +230,11 @@ int main(int argc, char** argv) {
   ImGui::CreateContext();
   ImGuiIO& io = ImGui::GetIO();
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-  std::string imgui_ini_path;
-  if (char* preferences = SDL_GetPrefPath("Flux", "RouterTelemetryViewer")) {
-    imgui_ini_path = std::string(preferences) + "imgui.ini";
-    SDL_free(preferences);
-  }
+  std::error_code config_error;
+  std::filesystem::create_directories(preferences_path.parent_path(), config_error);
+  const std::string imgui_ini_path = (preferences_path.parent_path() / "imgui.ini").string();
   io.IniFilename = imgui_ini_path.empty() ? nullptr : imgui_ini_path.c_str();
-  apply_flux_style(default_ui_scale);
+  apply_flux_style(preferences->ui_scale);
   ImGui_ImplSDL2_InitForOpenGL(window, context);
   ImGui_ImplOpenGL3_Init(glsl_version);
 
@@ -228,12 +242,14 @@ int main(int argc, char** argv) {
   try {
     flux::viewer::ViewerApp app(std::move(options));
     bool running = true;
-    float ui_scale = default_ui_scale;
+    float ui_scale = preferences->ui_scale;
     while (running && !app.wants_exit()) {
       SDL_Event event;
       while (SDL_PollEvent(&event) != 0) {
         if (!process_ui_scale_event(event, ui_scale)) {
           ImGui_ImplSDL2_ProcessEvent(&event);
+        } else {
+          preferences->ui_scale = ui_scale;
         }
         if (event.type == SDL_QUIT) {
           running = false;

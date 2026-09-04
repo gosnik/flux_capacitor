@@ -35,6 +35,7 @@ enum class EventType {
   conflict_added,
   conflict_removed,
   resource_occupancy_updated,
+  hydraulic_field_updated,
   residual_group_updated,
   checkpoint_selected,
   best_checkpoint_updated,
@@ -46,7 +47,7 @@ enum class EventType {
 };
 
 enum class RouteState { current, provisional, committed, ripped_up, removed };
-enum class RouteGeometry { polyline, cubic_bspline };
+enum class RouteGeometry { polyline, quintic_ph };
 enum class ViaState { candidate, selected, contested, rejected, removed };
 enum class ConflictKind { congestion, clearance_shadow, regional, physical, unknown };
 enum class ResourceKind { sampled, corridor, physical, via_site, unknown };
@@ -73,6 +74,8 @@ struct Route {
   std::uint64_t topology_signature{0};
   std::size_t topology_gate_count{0U};
   bool topology_gate_sequence_legal{false};
+  std::string family;
+  std::string lifecycle;
 
   bool operator==(const Route&) const = default;
 };
@@ -122,6 +125,34 @@ struct ResourceOccupancy {
 
   [[nodiscard]] double utilization() const;
   bool operator==(const ResourceOccupancy&) const = default;
+};
+
+// Bounded diagnostic heatmap. Values are row-major normalized 16-bit maxima over `stride`
+// prepared NavMesh cells. Geometry remains advisory and layer-specific.
+struct HydraulicField {
+  std::string id;
+  std::string net;
+  std::string layer;
+  std::uint64_t revision{0};
+  std::int64_t origin_x_nm{0};
+  std::int64_t origin_y_nm{0};
+  std::uint64_t cell_pitch_nm{0};
+  std::size_t width{0U};
+  std::size_t height{0U};
+  std::size_t stride{0U};
+  std::uint32_t maximum_flow{0U};
+  std::uint32_t maximum_erosion{0U};
+  std::uint32_t maximum_terrain_height{0U};
+  std::uint32_t maximum_downstream_pressure{0U};
+  std::uint32_t maximum_success_prior{0U};
+  std::vector<std::uint16_t> flow;
+  std::vector<std::uint16_t> erosion;
+  std::vector<std::uint16_t> heightmap;
+  std::vector<std::uint16_t> free_space;
+  std::vector<std::uint16_t> downstream_pressure;
+  std::vector<std::uint16_t> success_prior;
+
+  bool operator==(const HydraulicField&) const = default;
 };
 
 struct Priority {
@@ -250,6 +281,7 @@ struct Event {
   std::vector<Via> vias;
   std::vector<Conflict> conflicts;
   std::vector<ResourceOccupancy> resources;
+  std::vector<HydraulicField> hydraulic_fields;
   std::vector<Priority> priorities;
   std::optional<IterationMetrics> metrics;
   std::optional<Counters> counters;

@@ -17,6 +17,7 @@ namespace flux {
 
 struct IntegratedOptimizerConfig {
   GlobalRouterConfig global_router;
+  RegionalRouterConfig regional_router;
   DetailedRouterConfig detailed_router;
   GlobalPlacerConfig global_placer;
   Nanometres move_step{Nanometres::from_mm(5.0)};

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -155,65 +156,48 @@ std::vector<Point> tessellate_source_arc(const telemetry::SourcePrimitive& primi
   return result;
 }
 
-std::vector<Point> tessellate_route_bspline(const telemetry::Route& route) {
-  constexpr std::size_t degree = 3U;
+std::vector<Point> tessellate_route_quintic_ph(const telemetry::Route& route) {
+  constexpr std::size_t degree = 5U;
+  constexpr std::size_t controls_per_segment = degree + 1U;
   const auto count = route.control_points.size();
-  if (route.geometry != RouteGeometry::cubic_bspline || route.spline_degree != degree ||
-      count < degree + 1U) {
+  if (route.geometry != RouteGeometry::quintic_ph || route.spline_degree != degree ||
+      count < controls_per_segment || count % controls_per_segment != 0U) {
     return route.points;
   }
-  const auto knot = [count](std::size_t index) {
-    if (index <= degree) {
-      return 0.0L;
-    }
-    if (index >= count) {
-      return 1.0L;
-    }
-    return static_cast<long double>(index - degree) / static_cast<long double>(count - degree);
-  };
   struct Coordinate {
     long double x{0.0L};
     long double y{0.0L};
   };
-  const auto evaluate = [&](long double parameter) {
-    if (parameter >= 1.0L) {
-      return route.control_points.back();
-    }
-    std::size_t span = degree;
-    while (span + 1U < count && knot(span + 1U) <= parameter) {
-      ++span;
-    }
+  const auto evaluate_segment = [&](std::size_t segment, long double parameter) {
     std::array<Coordinate, degree + 1U> work;
     for (std::size_t index = 0U; index <= degree; ++index) {
-      const auto& control = route.control_points[span - degree + index];
+      const auto& control = route.control_points[segment * controls_per_segment + index];
       work[index] = Coordinate{static_cast<long double>(control.x_nm),
                                static_cast<long double>(control.y_nm)};
     }
-    for (std::size_t order = 1U; order <= degree; ++order) {
-      for (std::size_t index = degree + 1U; index-- > order;) {
-        const auto knot_index = span - degree + index;
-        const auto denominator = knot(knot_index + degree - order + 1U) - knot(knot_index);
-        const auto alpha = denominator > 0.0L ? (parameter - knot(knot_index)) / denominator : 0.0L;
-        work[index].x = (1.0L - alpha) * work[index - 1U].x + alpha * work[index].x;
-        work[index].y = (1.0L - alpha) * work[index - 1U].y + alpha * work[index].y;
+    for (std::size_t level = 1U; level <= degree; ++level) {
+      for (std::size_t index = 0U; index + level <= degree; ++index) {
+        work[index].x = (1.0L - parameter) * work[index].x + parameter * work[index + 1U].x;
+        work[index].y = (1.0L - parameter) * work[index].y + parameter * work[index + 1U].y;
       }
     }
     const auto low = static_cast<long double>(std::numeric_limits<std::int64_t>::min());
     const auto high = static_cast<long double>(std::numeric_limits<std::int64_t>::max());
-    return Point{static_cast<std::int64_t>(std::llround(std::clamp(work[degree].x, low, high))),
-                 static_cast<std::int64_t>(std::llround(std::clamp(work[degree].y, low, high))),
+    return Point{static_cast<std::int64_t>(std::llround(std::clamp(work[0].x, low, high))),
+                 static_cast<std::int64_t>(std::llround(std::clamp(work[0].y, low, high))),
                  route.control_points.front().layer};
   };
 
-  const auto spans = count - degree;
-  const auto segments = std::clamp<std::size_t>(spans * 16U, 32U, 256U);
+  const auto ph_segments = count / controls_per_segment;
+  const auto samples_per_segment = std::clamp<std::size_t>(256U / ph_segments, 16U, 48U);
   std::vector<Point> result;
-  result.reserve(segments + 1U);
-  for (std::size_t index = 0U; index <= segments; ++index) {
-    const auto parameter = static_cast<long double>(index) / static_cast<long double>(segments);
-    const auto point = evaluate(parameter);
-    if (result.empty() || result.back() != point) {
-      result.push_back(point);
+  result.reserve(ph_segments * samples_per_segment + 1U);
+  for (std::size_t segment = 0U; segment < ph_segments; ++segment) {
+    for (std::size_t index = segment == 0U ? 0U : 1U; index <= samples_per_segment; ++index) {
+      const auto parameter = static_cast<long double>(index) /
+                             static_cast<long double>(samples_per_segment);
+      const auto point = evaluate_segment(segment, parameter);
+      if (result.empty() || result.back() != point) result.push_back(point);
     }
   }
   return result.size() >= 2U ? result : route.points;
@@ -276,6 +260,15 @@ Bounds state_bounds(const telemetry::LiveState& state) {
     bounds.include(resource.start);
     bounds.include(resource.end);
   }
+  for (const auto& [id, field] : state.hydraulic_fields()) {
+    (void)id;
+    const auto extent_x = static_cast<std::int64_t>(
+        field.cell_pitch_nm * field.stride * field.width);
+    const auto extent_y = static_cast<std::int64_t>(
+        field.cell_pitch_nm * field.stride * field.height);
+    bounds.include(Point{field.origin_x_nm, field.origin_y_nm, field.layer});
+    bounds.include(Point{field.origin_x_nm + extent_x, field.origin_y_nm + extent_y, field.layer});
+  }
   return bounds;
 }
 
@@ -307,10 +300,19 @@ ImVec4 connection_color(ConnectionState state) {
   return {1.0F, 1.0F, 1.0F, 1.0F};
 }
 
-void metric_line(const char* label, std::uint64_t value, const char* suffix = "") {
+void metric_row(const char* label, std::uint64_t value, const char* suffix = "") {
+  ImGui::TableNextRow();
+  ImGui::TableSetColumnIndex(0);
   ImGui::TextDisabled("%s", label);
-  ImGui::SameLine(155.0F);
+  ImGui::TableSetColumnIndex(1);
   ImGui::Text("%llu%s", static_cast<unsigned long long>(value), suffix);
+}
+
+std::string lowercase(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char character) {
+    return static_cast<char>(std::tolower(character));
+  });
+  return value;
 }
 
 void draw_history_plot(const std::vector<telemetry::IterationMetrics>& history) {
@@ -338,6 +340,11 @@ void draw_history_plot(const std::vector<telemetry::IterationMetrics>& history) 
 ViewerApp::ViewerApp(LaunchOptions options)
     : options_(std::move(options)), endpoint_(options_.endpoint),
       trace_path_(options_.replay_path.string()), record_path_(options_.record_path.string()) {
+  if (options_.preferences) {
+    overlays_ = options_.preferences->overlays;
+    replay_speed_ = options_.preferences->replay_speed;
+    activity_panel_height_ = options_.preferences->activity_panel_height;
+  }
   if (!record_path_.empty()) {
     start_recording(record_path_);
   }
@@ -351,6 +358,21 @@ ViewerApp::ViewerApp(LaunchOptions options)
 ViewerApp::~ViewerApp() {
   disconnect_live();
   stop_recording();
+  update_preferences();
+}
+
+void ViewerApp::update_preferences() {
+  if (!options_.preferences) return;
+  options_.preferences->overlays = overlays_;
+  options_.preferences->activity_panel_height = activity_panel_height_;
+  options_.preferences->replay_speed = replay_speed_;
+  options_.preferences->endpoint = endpoint_;
+  options_.preferences->telemetry_level = std::string(telemetry::to_string(options_.level));
+  options_.preferences->telemetry_rate_hz = options_.rate_hz;
+  std::string error;
+  if (!save_viewer_preferences(options_.preferences_path, *options_.preferences, error)) {
+    ui_status_ = std::move(error);
+  }
 }
 
 telemetry::LiveState& ViewerApp::mutable_state() {
@@ -361,10 +383,25 @@ const telemetry::LiveState& ViewerApp::state() const {
   return mode_ == SourceMode::replay ? replay_.state() : live_state_;
 }
 
+const telemetry::LiveState& ViewerApp::overlay_state() const {
+  return overlay_history_.size() == 0U ? state() : overlay_history_.state();
+}
+
+void ViewerApp::sync_overlay_history_to_source() {
+  if (!overlay_follow_source_) {
+    return;
+  }
+  const auto source_position =
+      mode_ == SourceMode::replay ? replay_.position() : overlay_history_.size();
+  overlay_history_.seek(source_position);
+}
+
 void ViewerApp::connect_live() {
   mode_ = SourceMode::live;
   replay_playing_ = false;
   live_state_.clear();
+  overlay_history_.clear();
+  overlay_follow_source_ = true;
   (void)client_.connect(endpoint_, options_.level, options_.rate_hz);
   ui_status_ = "Connecting to live telemetry";
   view_.fit_requested = true;
@@ -382,11 +419,21 @@ void ViewerApp::load_trace(const std::filesystem::path& path) {
   disconnect_live();
   trace_ = std::move(loaded);
   replay_.set_trace(&trace_);
+  overlay_history_.clear();
+  for (const auto& event : trace_.events()) {
+    overlay_history_.append(event);
+  }
+  overlay_history_.seek(0U);
+  overlay_follow_source_ = true;
   mode_ = SourceMode::replay;
   replay_playing_ = false;
   replay_accumulator_us_ = 0.0;
   replay_clock_us_ = replay_time_us(trace_.events(), 0U);
   trace_path_ = path.string();
+  if (options_.preferences) {
+    options_.preferences->trace_directory =
+        std::filesystem::is_directory(path) ? path : path.parent_path();
+  }
   ui_status_ = "Loaded " + std::to_string(trace_.events().size()) + " telemetry events";
   view_.fit_requested = true;
 }
@@ -395,6 +442,7 @@ void ViewerApp::start_recording(const std::filesystem::path& path) {
   std::string error;
   if (recorder_.open(path, error)) {
     record_path_ = path.string();
+    if (options_.preferences) options_.preferences->record_directory = path.parent_path();
     ui_status_ = "Recording live events to " + record_path_;
   } else {
     ui_status_ = std::move(error);
@@ -417,12 +465,19 @@ void ViewerApp::tick() {
   if (connection.connection_generation != live_connection_generation_) {
     live_connection_generation_ = connection.connection_generation;
     live_state_.clear();
+    if (mode_ == SourceMode::live) {
+      overlay_history_.clear();
+      overlay_follow_source_ = true;
+    }
     view_.fit_requested = true;
     ui_status_ = live_connection_generation_ == 1U ? "Connected to Flux telemetry"
                                                    : "Connected to a new Flux telemetry instance";
   }
   for (telemetry::Event& event : client_.drain()) {
     live_state_.apply(event);
+    if (mode_ == SourceMode::live) {
+      overlay_history_.append(event);
+    }
     if (recorder_.is_open() && !recorder_.append(event)) {
       ui_status_ = recorder_.error();
     }
@@ -430,6 +485,7 @@ void ViewerApp::tick() {
   if (mode_ == SourceMode::replay && replay_playing_) {
     advance_replay(elapsed);
   }
+  sync_overlay_history_to_source();
 }
 
 void ViewerApp::advance_replay(double elapsed_seconds) {
@@ -450,6 +506,18 @@ void ViewerApp::advance_replay(double elapsed_seconds) {
   if (replay_.position() >= replay_.size()) {
     replay_playing_ = false;
   }
+  sync_overlay_history_to_source();
+}
+
+void ViewerApp::seek_replay(std::size_t position) {
+  replay_playing_ = false;
+  replay_.seek(std::min(position, replay_.size()));
+  replay_clock_us_ = replay_.position() == 0U
+                         ? replay_time_us(trace_.events(), 0U)
+                         : replay_time_us(trace_.events(), replay_.position() - 1U);
+  replay_accumulator_us_ = 0.0;
+  view_.fit_requested = true;
+  sync_overlay_history_to_source();
 }
 
 void ViewerApp::draw_menu_bar() {
@@ -458,16 +526,10 @@ void ViewerApp::draw_menu_bar() {
   }
   if (ImGui::BeginMenu("File")) {
     if (ImGui::MenuItem("Open trace...", "Ctrl+O")) {
-      path_modal_title_ = "Open telemetry trace";
-      path_modal_value_ = trace_path_;
-      path_modal_save_ = false;
-      path_modal_open_ = true;
+      open_file_browser(false);
     }
     if (ImGui::MenuItem("Record live events...", nullptr, false, !recorder_.is_open())) {
-      path_modal_title_ = "Record telemetry trace";
-      path_modal_value_ = record_path_.empty() ? "flux-telemetry.jsonl" : record_path_;
-      path_modal_save_ = true;
-      path_modal_open_ = true;
+      open_file_browser(true);
     }
     if (ImGui::MenuItem("Stop recording", nullptr, false, recorder_.is_open())) {
       stop_recording();
@@ -568,9 +630,11 @@ void ViewerApp::draw_source_panel() {
   ImGui::Spacing();
   ImGui::TextUnformatted("Trace");
   ImGui::Separator();
-  ImGui::SetNextItemWidth(-1.0F);
-  ImGui::InputTextWithHint("##trace_path", "trace.jsonl", &trace_path_);
-  if (ImGui::Button("Load trace", ImVec2(-1.0F, 0.0F))) {
+  ImGui::TextWrapped("%s", trace_path_.empty() ? "No trace selected" : trace_path_.c_str());
+  if (ImGui::Button("Browse trace...", ImVec2(-1.0F, 0.0F))) {
+    open_file_browser(false);
+  }
+  if (!trace_path_.empty() && ImGui::Button("Reload selected trace", ImVec2(-1.0F, 0.0F))) {
     load_trace(trace_path_);
   }
 
@@ -601,30 +665,37 @@ void ViewerApp::draw_source_panel() {
         }
       }
     }
-    std::uint64_t position = replay_.position();
+    const std::uint64_t original_position = replay_.position();
+    std::uint64_t position = original_position;
     const std::uint64_t maximum = replay_.size();
     const std::uint64_t minimum = 0;
-    if (ImGui::SliderScalar("Event", ImGuiDataType_U64, &position, &minimum, &maximum, "%llu")) {
-      replay_playing_ = false;
-      replay_.seek(static_cast<std::size_t>(position));
-      replay_clock_us_ =
-          position == 0U ? replay_time_us(trace_.events(), 0U)
-                         : replay_time_us(trace_.events(), static_cast<std::size_t>(position - 1U));
-      replay_accumulator_us_ = 0.0;
-      view_.fit_requested = true;
+    bool seek_requested =
+        ImGui::SliderScalar("Event", ImGuiDataType_U64, &position, &minimum, &maximum, "%llu");
+    if (ImGui::IsItemFocused()) {
+      if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow, true)) {
+        position = original_position == 0U ? 0U : original_position - 1U;
+        seek_requested = true;
+      } else if (ImGui::IsKeyPressed(ImGuiKey_RightArrow, true)) {
+        position = std::min(maximum, original_position + 1U);
+        seek_requested = true;
+      }
+    }
+    if (seek_requested) {
+      seek_replay(static_cast<std::size_t>(position));
     }
     ImGui::SliderFloat("Speed", &replay_speed_, 0.25F, 8.0F, "%.2fx");
     ImGui::TextDisabled("%zu / %zu events", replay_.position(), replay_.size());
+    sync_overlay_history_to_source();
   }
 
   ImGui::Spacing();
   ImGui::TextUnformatted("Capture");
   ImGui::Separator();
-  ImGui::SetNextItemWidth(-1.0F);
-  ImGui::InputTextWithHint("##record_path", "flux-telemetry.jsonl", &record_path_);
+  ImGui::TextWrapped("%s", record_path_.empty() ? "No recording file selected"
+                                                : record_path_.c_str());
   if (!recorder_.is_open()) {
-    if (ImGui::Button("Record incoming events", ImVec2(-1.0F, 0.0F))) {
-      start_recording(record_path_);
+    if (ImGui::Button("Select recording file...", ImVec2(-1.0F, 0.0F))) {
+      open_file_browser(true);
     }
   } else if (ImGui::Button("Stop recording", ImVec2(-1.0F, 0.0F))) {
     stop_recording();
@@ -634,6 +705,35 @@ void ViewerApp::draw_source_panel() {
 void ViewerApp::draw_overlay_panel() {
   ImGui::TextUnformatted("Overlays");
   ImGui::Separator();
+  if (overlay_history_.size() != 0U) {
+    ImGui::TextUnformatted("Overlay history");
+    bool follow = overlay_follow_source_;
+    if (ImGui::Checkbox("Follow live / replay", &follow)) {
+      overlay_follow_source_ = follow;
+      sync_overlay_history_to_source();
+    }
+    const std::uint64_t minimum = 0U;
+    const std::uint64_t maximum = overlay_history_.size();
+    std::uint64_t position = overlay_history_.position();
+    ImGui::SetNextItemWidth(-1.0F);
+    if (ImGui::SliderScalar("##overlay-timeline", ImGuiDataType_U64, &position, &minimum, &maximum,
+                            "%llu")) {
+      overlay_history_.seek(static_cast<std::size_t>(position));
+      const auto source_position =
+          mode_ == SourceMode::replay ? replay_.position() : overlay_history_.size();
+      overlay_follow_source_ = position == source_position;
+      view_.fit_requested = true;
+    }
+    if (position == 0U) {
+      ImGui::TextDisabled("Initial state (oldest -> newest)");
+    } else if (const auto* event =
+                   overlay_history_.event(static_cast<std::size_t>(position - 1U))) {
+      ImGui::TextDisabled("seq %llu  %.3fs  %s", static_cast<unsigned long long>(event->sequence),
+                          static_cast<double>(event->monotonic_time_us) / 1'000'000.0,
+                          telemetry::to_string(event->type).data());
+    }
+    ImGui::Separator();
+  }
   ImGui::Checkbox("Source board outline", &overlays_.source_board);
   ImGui::Checkbox("Source footprints / pads", &overlays_.source_footprints);
   ImGui::Checkbox("Existing source copper", &overlays_.source_copper);
@@ -641,8 +741,13 @@ void ViewerApp::draw_overlay_panel() {
   ImGui::Separator();
   ImGui::Checkbox("Committed routes", &overlays_.committed_routes);
   ImGui::Checkbox("Current / provisional", &overlays_.current_routes);
-  ImGui::Checkbox("B-spline curves", &overlays_.bspline_curves);
-  ImGui::Checkbox("B-spline control polygons", &overlays_.bspline_controls);
+  ImGui::Checkbox("Retained coarse alternatives", &overlays_.retained_coarse_routes);
+  ImGui::Checkbox("River alternatives", &overlays_.river_routes);
+  ImGui::Checkbox("RRT-Connect alternatives", &overlays_.rrt_routes);
+  ImGui::Checkbox("Hydraulic erosion alternatives", &overlays_.hydraulic_routes);
+  ImGui::Checkbox("Hydraulic erosion fields", &overlays_.hydraulic_fields);
+  ImGui::Checkbox("Quintic PH curves", &overlays_.ph_curves);
+  ImGui::Checkbox("PH Bézier control polygons", &overlays_.ph_controls);
   ImGui::Checkbox("Rip-up / reroute", &overlays_.rip_up_activity);
   ImGui::Checkbox("Congestion conflicts", &overlays_.congestion);
   ImGui::Checkbox("Clearance shadows", &overlays_.clearance_shadows);
@@ -654,8 +759,9 @@ void ViewerApp::draw_overlay_panel() {
   ImGui::Checkbox("Rejected via sites", &overlays_.rejected_vias);
   ImGui::Checkbox("Grid", &overlays_.grid);
 
+  const auto& displayed = overlay_state();
   std::set<std::string> layers;
-  for (const auto& [id, board] : state().source_boards()) {
+  for (const auto& [id, board] : displayed.source_boards()) {
     (void)id;
     if (!board) {
       continue;
@@ -664,7 +770,7 @@ void ViewerApp::draw_overlay_panel() {
       layers.insert(layer.id);
     }
   }
-  for (const auto& [id, route] : state().routes()) {
+  for (const auto& [id, route] : displayed.routes()) {
     (void)id;
     for (const Point& point : route.points) {
       if (!point.layer.empty())
@@ -675,14 +781,14 @@ void ViewerApp::draw_overlay_panel() {
         layers.insert(point.layer);
     }
   }
-  for (const auto& [id, via] : state().vias()) {
+  for (const auto& [id, via] : displayed.vias()) {
     (void)id;
     if (!via.position.layer.empty())
       layers.insert(via.position.layer);
     if (!via.to_layer.empty())
       layers.insert(via.to_layer);
   }
-  for (const auto& [id, resource] : state().resources()) {
+  for (const auto& [id, resource] : displayed.resources()) {
     (void)id;
     if (!resource.layer.empty())
       layers.insert(resource.layer);
@@ -706,6 +812,7 @@ void ViewerApp::draw_overlay_panel() {
 }
 
 void ViewerApp::draw_board_canvas() {
+  const telemetry::LiveState& displayed = overlay_state();
   const ImVec2 canvas_origin = ImGui::GetCursorScreenPos();
   ImVec2 canvas_size = ImGui::GetContentRegionAvail();
   canvas_size.x = std::max(canvas_size.x, 100.0F);
@@ -719,7 +826,7 @@ void ViewerApp::draw_board_canvas() {
   draw->AddRect(canvas_origin, canvas_end, color(0.18F, 0.25F, 0.31F));
   draw->PushClipRect(canvas_origin, canvas_end, true);
 
-  const Bounds bounds = state_bounds(state());
+  const Bounds bounds = state_bounds(displayed);
   if (view_.fit_requested && bounds.valid()) {
     const double width_mm = std::max(0.1, (bounds.maximum_x - bounds.minimum_x) / 1'000'000.0);
     const double height_mm = std::max(0.1, (bounds.maximum_y - bounds.minimum_y) / 1'000'000.0);
@@ -866,7 +973,7 @@ void ViewerApp::draw_board_canvas() {
     }
   }
 
-  for (const auto& [board_id, board] : state().source_boards()) {
+  for (const auto& [board_id, board] : displayed.source_boards()) {
     (void)board_id;
     if (!board) {
       continue;
@@ -941,7 +1048,7 @@ void ViewerApp::draw_board_canvas() {
   }
 
   if (overlays_.occupancy) {
-    for (const auto& [id, resource] : state().resources()) {
+    for (const auto& [id, resource] : displayed.resources()) {
       (void)id;
       if (!layer_visible(resource.layer)) {
         continue;
@@ -957,7 +1064,72 @@ void ViewerApp::draw_board_canvas() {
     }
   }
 
-  for (const auto& [id, conflict] : state().conflicts()) {
+  if (overlays_.hydraulic_fields) {
+    for (const auto& [id, field] : displayed.hydraulic_fields()) {
+      (void)id;
+      if (!layer_visible(field.layer) || field.width == 0U || field.height == 0U ||
+          field.stride == 0U || field.cell_pitch_nm == 0U ||
+          field.erosion.size() != field.width * field.height ||
+          field.flow.size() != field.erosion.size()) {
+        continue;
+      }
+      const bool has_heightmap = field.heightmap.size() == field.erosion.size() &&
+                                 field.free_space.size() == field.erosion.size();
+      const bool has_feedback =
+          field.downstream_pressure.size() == field.erosion.size() &&
+          field.success_prior.size() == field.erosion.size();
+      const auto cell_nm = static_cast<std::int64_t>(field.cell_pitch_nm * field.stride);
+      for (std::size_t y = 0U; y < field.height; ++y) {
+        for (std::size_t x = 0U; x < field.width; ++x) {
+          const auto index = y * field.width + x;
+          const float erosion = static_cast<float>(field.erosion[index]) / 65'535.0F;
+          const float flow = static_cast<float>(field.flow[index]) / 65'535.0F;
+          const float terrain = has_heightmap
+                                    ? static_cast<float>(field.heightmap[index]) / 65'535.0F
+                                    : 0.0F;
+          const float free_space = has_heightmap
+                                       ? static_cast<float>(field.free_space[index]) / 65'535.0F
+                                       : (std::max(erosion, flow) > 0.0F ? 1.0F : 0.0F);
+          const float pressure = has_feedback
+                                     ? static_cast<float>(field.downstream_pressure[index]) /
+                                           65'535.0F
+                                     : 0.0F;
+          const float success = has_feedback
+                                    ? static_cast<float>(field.success_prior[index]) / 65'535.0F
+                                    : 0.0F;
+          const float intensity = std::max(erosion, flow * 0.42F);
+          if (free_space <= 0.0F) continue;
+          Point first{field.origin_x_nm + static_cast<std::int64_t>(x) * cell_nm,
+                      field.origin_y_nm + static_cast<std::int64_t>(y) * cell_nm, field.layer};
+          Point last{first.x_nm + cell_nm, first.y_nm + cell_nm, field.layer};
+          const auto first_screen = screen(first);
+          const auto last_screen = screen(last);
+          // Low terrain is the target valley (blue/green); high terrain is uphill (amber).
+          // Flow and erosion brighten the carved riverbed without hiding the complete domain.
+          // Downstream failures tint the deposited terrain magenta/red. Repeatedly clean copper
+          // contributes a bounded green success prior, making learned valleys directly visible.
+          const float red = std::clamp(0.05F + terrain * 0.90F + intensity * 0.20F +
+                                           pressure * 0.70F,
+                                       0.0F, 1.0F);
+          const float green = std::clamp(0.42F + terrain * 0.28F + intensity * 0.25F +
+                                             success * 0.45F - pressure * 0.22F,
+                                         0.0F, 1.0F);
+          const float blue = std::clamp(0.88F - terrain * 0.72F + intensity * 0.08F +
+                                            pressure * 0.32F,
+                                        0.0F, 1.0F);
+          const float alpha =
+              free_space * (0.09F + intensity * 0.29F + pressure * 0.24F + success * 0.12F);
+          draw->AddRectFilled(ImVec2(std::min(first_screen.x, last_screen.x),
+                                    std::min(first_screen.y, last_screen.y)),
+                              ImVec2(std::max(first_screen.x, last_screen.x),
+                                    std::max(first_screen.y, last_screen.y)),
+                              color(red, green, blue, alpha));
+        }
+      }
+    }
+  }
+
+  for (const auto& [id, conflict] : displayed.conflicts()) {
     (void)id;
     if (!layer_visible(conflict.location.layer)) {
       continue;
@@ -978,21 +1150,30 @@ void ViewerApp::draw_board_canvas() {
                     clearance ? color(1.0F, 0.48F, 0.28F) : color(1.0F, 0.18F, 0.22F), 20, 2.0F);
   }
 
-  for (const auto& [id, route] : state().routes()) {
+  for (const auto& [id, route] : displayed.routes()) {
     (void)id;
     const bool committed = route.state == RouteState::committed;
     const bool active =
         route.state == RouteState::current || route.state == RouteState::provisional;
     const bool ripped = route.state == RouteState::ripped_up || route.state == RouteState::removed;
-    if ((committed && !overlays_.committed_routes) || (active && !overlays_.current_routes) ||
+    const bool retained = route.lifecycle == "retained_fallback";
+    if (retained &&
+        (!overlays_.retained_coarse_routes ||
+         (route.family == "river" && !overlays_.river_routes) ||
+         (route.family == "rrt_connect" && !overlays_.rrt_routes) ||
+         (route.family == "hydraulic_erosion" && !overlays_.hydraulic_routes))) {
+      continue;
+    }
+    if ((committed && !overlays_.committed_routes) ||
+        (active && !retained && !overlays_.current_routes) ||
         (ripped && !overlays_.rip_up_activity)) {
       continue;
     }
-    const bool highlighted = state().active_net() && route.net == *state().active_net();
-    const bool cubic_bspline = route.geometry == RouteGeometry::cubic_bspline &&
-                               route.spline_degree == 3U && route.control_points.size() >= 4U;
-    const auto spline_points = cubic_bspline && overlays_.bspline_curves
-                                   ? tessellate_route_bspline(route)
+    const bool highlighted = displayed.active_net() && route.net == *displayed.active_net();
+    const bool quintic_ph = route.geometry == RouteGeometry::quintic_ph &&
+                               route.spline_degree == 5U && route.control_points.size() >= 6U;
+    const auto spline_points = quintic_ph && overlays_.ph_curves
+                                   ? tessellate_route_quintic_ph(route)
                                    : std::vector<Point>{};
     const auto& display_points = spline_points.empty() ? route.points : spline_points;
     for (std::size_t index = 1; index < display_points.size(); ++index) {
@@ -1005,23 +1186,32 @@ void ViewerApp::draw_board_canvas() {
                                                       1'000'000.0 * view_.pixels_per_mm);
       const float width = std::clamp(physical_width, highlighted ? 3.5F : 2.0F, 12.0F);
       ImU32 route_color = layer_color(first.layer, ripped ? 0.35F : 0.92F);
-      if (active) {
-        route_color = cubic_bspline && overlays_.bspline_curves ? color(0.88F, 0.44F, 1.00F)
+      if (retained && route.family == "rrt_connect") {
+        route_color = color(1.00F, 0.62F, 0.20F, 0.62F);
+      } else if (retained && route.family == "hydraulic_erosion") {
+        route_color = color(0.20F, 0.95F, 0.48F, 0.70F);
+      } else if (retained && route.family == "river") {
+        route_color = color(0.20F, 0.72F, 1.00F, 0.68F);
+      } else if (retained) {
+        route_color = color(0.58F, 0.64F, 0.78F, 0.48F);
+      } else if (active) {
+        route_color = quintic_ph && overlays_.ph_curves ? color(0.88F, 0.44F, 1.00F)
                       : route.state == RouteState::provisional  ? color(0.20F, 0.94F, 0.92F)
                                                                 : color(1.0F, 0.86F, 0.25F);
       } else if (ripped) {
         route_color = color(1.0F, 0.24F, 0.22F, 0.55F);
       }
       if ((route.state == RouteState::provisional || ripped) &&
-          !(cubic_bspline && overlays_.bspline_curves)) {
+          !(quintic_ph && overlays_.ph_curves)) {
         add_dashed_line(draw, screen(first), screen(second), route_color, width);
       } else {
         draw->AddLine(screen(first), screen(second), route_color, width);
       }
     }
-    if (cubic_bspline && overlays_.bspline_controls && !route.control_points.empty()) {
+    if (quintic_ph && overlays_.ph_controls && !route.control_points.empty()) {
       const auto control_color = color(0.96F, 0.72F, 1.00F, 0.48F);
       for (std::size_t index = 1U; index < route.control_points.size(); ++index) {
+        if (index % 6U == 0U) continue;
         if (layer_visible(route.control_points[index - 1U].layer)) {
           add_dashed_line(draw, screen(route.control_points[index - 1U]),
                           screen(route.control_points[index]), control_color, 1.0F, 4.0F);
@@ -1034,8 +1224,8 @@ void ViewerApp::draw_board_canvas() {
       }
     }
     if (overlays_.priorities && !route.points.empty()) {
-      if (const auto priority = state().priorities().find(route.net);
-          priority != state().priorities().end()) {
+      if (const auto priority = displayed.priorities().find(route.net);
+          priority != displayed.priorities().end()) {
         const ImVec2 position = screen(route.points.front());
         char label[96];
         std::snprintf(label, sizeof(label), "%s  %.2f  %s", route.net.c_str(),
@@ -1046,7 +1236,7 @@ void ViewerApp::draw_board_canvas() {
     }
   }
 
-  for (const auto& [id, via] : state().vias()) {
+  for (const auto& [id, via] : displayed.vias()) {
     (void)id;
     if (!layer_visible(via.position.layer)) {
       continue;
@@ -1099,25 +1289,34 @@ void ViewerApp::draw_metrics_panel() {
   const telemetry::LiveState& current = state();
   if (current.metrics()) {
     const telemetry::IterationMetrics& metrics = *current.metrics();
-    metric_line("Iteration", metrics.iteration);
-    ImGui::TextDisabled("Nets");
-    ImGui::SameLine(155.0F);
-    ImGui::Text("%zu routed / %zu unrouted / %zu total", metrics.routed_nets, metrics.unrouted_nets,
-                metrics.total_nets);
-    metric_line("Sampled overflow", metrics.sampled_overflow);
-    metric_line("Corridor overflow", metrics.corridor_overflow);
-    metric_line("Physical overflow", metrics.physical_overflow_nm, " nm");
-    metric_line("Clearance shadows", metrics.clearance_shadow_conflicts);
-    metric_line("Regional conflicts", metrics.regional_conflicts);
-    metric_line("Route cost", metrics.route_cost);
-    metric_line("Search expansions", metrics.search_expansions);
-    metric_line("Vias", metrics.vias);
-    metric_line("Rip-ups", metrics.rip_ups);
-    ImGui::TextDisabled("Checkpoint");
-    ImGui::SameLine(155.0F);
-    ImGui::Text("%llu / best %llu%s", static_cast<unsigned long long>(metrics.selected_checkpoint),
-                static_cast<unsigned long long>(metrics.best_checkpoint),
-                metrics.selected_is_best ? " (selected)" : "");
+    if (ImGui::BeginTable("routing-metrics-grid", 2,
+                          ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH |
+                              ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp)) {
+      ImGui::TableSetupColumn("Metric", ImGuiTableColumnFlags_WidthStretch, 1.3F);
+      ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch, 1.0F);
+      metric_row("Iteration", metrics.iteration);
+      metric_row("Nets routed", metrics.routed_nets);
+      metric_row("Nets unrouted", metrics.unrouted_nets);
+      metric_row("Nets total", metrics.total_nets);
+      metric_row("Sampled overflow", metrics.sampled_overflow);
+      metric_row("Corridor overflow", metrics.corridor_overflow);
+      metric_row("Physical overflow", metrics.physical_overflow_nm, " nm");
+      metric_row("Clearance shadows", metrics.clearance_shadow_conflicts);
+      metric_row("Regional conflicts", metrics.regional_conflicts);
+      metric_row("Route cost", metrics.route_cost);
+      metric_row("Search expansions", metrics.search_expansions);
+      metric_row("Vias", metrics.vias);
+      metric_row("Rip-ups", metrics.rip_ups);
+      ImGui::TableNextRow();
+      ImGui::TableSetColumnIndex(0);
+      ImGui::TextDisabled("Checkpoint");
+      ImGui::TableSetColumnIndex(1);
+      ImGui::Text("%llu / best %llu%s",
+                  static_cast<unsigned long long>(metrics.selected_checkpoint),
+                  static_cast<unsigned long long>(metrics.best_checkpoint),
+                  metrics.selected_is_best ? " (selected)" : "");
+      ImGui::EndTable();
+    }
   } else {
     ImGui::TextDisabled("No iteration summary received.");
   }
@@ -1191,14 +1390,21 @@ void ViewerApp::draw_metrics_panel() {
 
   if (ImGui::CollapsingHeader("Telemetry integrity")) {
     const telemetry::Counters& counters = current.counters();
-    metric_line("Produced", counters.produced);
-    metric_line("Dropped", counters.dropped);
-    metric_line("Coalesced", counters.coalesced);
-    metric_line("Serialized", counters.serialized);
-    metric_line("Snapshots", counters.snapshots);
-    metric_line("Observed gaps", current.observed_sequence_gaps());
-    const ConnectionStatus connection = client_.status();
-    metric_line("Viewer drops", connection.viewer_dropped_events);
+    if (ImGui::BeginTable("telemetry-metrics-grid", 2,
+                          ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH |
+                              ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp)) {
+      ImGui::TableSetupColumn("Metric", ImGuiTableColumnFlags_WidthStretch, 1.3F);
+      ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch, 1.0F);
+      metric_row("Produced", counters.produced);
+      metric_row("Dropped", counters.dropped);
+      metric_row("Coalesced", counters.coalesced);
+      metric_row("Serialized", counters.serialized);
+      metric_row("Snapshots", counters.snapshots);
+      metric_row("Observed gaps", current.observed_sequence_gaps());
+      const ConnectionStatus connection = client_.status();
+      metric_row("Viewer drops", connection.viewer_dropped_events);
+      ImGui::EndTable();
+    }
   }
 }
 
@@ -1232,38 +1438,170 @@ void ViewerApp::draw_activity_panel() {
   }
 }
 
-void ViewerApp::draw_path_modal() {
-  if (path_modal_open_) {
-    ImGui::OpenPopup(path_modal_title_.c_str());
-    path_modal_open_ = false;
+void ViewerApp::open_file_browser(bool save_mode) {
+  file_browser_ = FileBrowserState{};
+  file_browser_.save_mode = save_mode;
+  file_browser_.title = save_mode ? "Record telemetry trace" : "Open telemetry trace";
+  std::filesystem::path initial;
+  if (options_.preferences) {
+    initial = save_mode ? options_.preferences->record_directory
+                        : options_.preferences->trace_directory;
   }
-  if (path_modal_title_.empty()) {
+  const auto& current = save_mode ? record_path_ : trace_path_;
+  std::error_code error;
+  if (initial.empty() && !current.empty()) {
+    const std::filesystem::path current_path{current};
+    initial = std::filesystem::is_directory(current_path, error) ? current_path
+                                                                 : current_path.parent_path();
+    error.clear();
+  }
+  if (initial.empty()) initial = std::filesystem::current_path(error);
+  if (initial.empty() || error) initial = std::filesystem::temp_directory_path(error);
+  file_browser_.directory = initial;
+  file_browser_.directory_input = initial.string();
+  if (save_mode) {
+    file_browser_.save_name = std::filesystem::path{record_path_}.filename().string();
+    if (file_browser_.save_name.empty()) file_browser_.save_name = "flux-telemetry.jsonl";
+  }
+  file_browser_.open = true;
+  file_browser_.open_requested = true;
+  refresh_file_browser();
+}
+
+void ViewerApp::refresh_file_browser() {
+  file_browser_.entries.clear();
+  file_browser_.selected.clear();
+  std::error_code error;
+  auto directory = std::filesystem::absolute(file_browser_.directory, error);
+  if (error || !std::filesystem::is_directory(directory, error)) {
+    file_browser_.status = "Directory is unavailable: " + file_browser_.directory.string();
     return;
   }
-  ImGui::SetNextWindowSize(ImVec2(620.0F, 0.0F), ImGuiCond_Appearing);
-  if (!ImGui::BeginPopupModal(path_modal_title_.c_str(), nullptr,
-                              ImGuiWindowFlags_AlwaysAutoResize)) {
-    return;
-  }
-  ImGui::TextWrapped("Enter a native filesystem path. Trace files use one flux.telemetry.v1 event "
-                     "per JSONL record.");
-  ImGui::SetNextItemWidth(580.0F);
-  const bool submitted =
-      ImGui::InputText("Path", &path_modal_value_, ImGuiInputTextFlags_EnterReturnsTrue);
-  if ((ImGui::Button(path_modal_save_ ? "Record" : "Open", ImVec2(120.0F, 0.0F)) || submitted) &&
-      !path_modal_value_.empty()) {
-    if (path_modal_save_) {
-      start_recording(path_modal_value_);
-    } else {
-      load_trace(path_modal_value_);
+  file_browser_.directory = directory.lexically_normal();
+  file_browser_.directory_input = file_browser_.directory.string();
+  for (std::filesystem::directory_iterator iterator(file_browser_.directory, error), end;
+       !error && iterator != end; iterator.increment(error)) {
+    const auto& entry = *iterator;
+    const bool directory_entry = entry.is_directory(error);
+    if (error) {
+      error.clear();
+      continue;
     }
-    ImGui::CloseCurrentPopup();
-    path_modal_title_.clear();
+    const auto name = entry.path().filename().string();
+    if (!directory_entry && lowercase(entry.path().extension().string()) != ".jsonl") continue;
+    file_browser_.entries.push_back(FileBrowserEntry{entry.path(), name, directory_entry});
+  }
+  if (error) {
+    file_browser_.status = "Directory listing failed: " + error.message();
+    return;
+  }
+  std::sort(file_browser_.entries.begin(), file_browser_.entries.end(),
+            [](const auto& lhs, const auto& rhs) {
+              if (lhs.directory != rhs.directory) return lhs.directory > rhs.directory;
+              return lowercase(lhs.name) < lowercase(rhs.name);
+            });
+  file_browser_.status = std::to_string(file_browser_.entries.size()) +
+                         " directories and JSONL traces";
+}
+
+void ViewerApp::draw_file_browser() {
+  if (file_browser_.open_requested) {
+    ImGui::OpenPopup(file_browser_.title.c_str());
+    file_browser_.open_requested = false;
+  }
+  if (!file_browser_.open) return;
+
+  ImGui::SetNextWindowSize(ImVec2(780.0F, 540.0F), ImGuiCond_FirstUseEver);
+  bool keep_open = true;
+  if (!ImGui::BeginPopupModal(file_browser_.title.c_str(), &keep_open,
+                              ImGuiWindowFlags_NoSavedSettings)) {
+    file_browser_.open = keep_open;
+    return;
+  }
+  std::optional<std::filesystem::path> chosen;
+  ImGui::TextUnformatted("Directory");
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(std::max(220.0F, ImGui::GetContentRegionAvail().x - 180.0F));
+  if (ImGui::InputText("##browser-directory", &file_browser_.directory_input,
+                       ImGuiInputTextFlags_EnterReturnsTrue)) {
+    file_browser_.directory = file_browser_.directory_input;
+    refresh_file_browser();
   }
   ImGui::SameLine();
-  if (ImGui::Button("Cancel", ImVec2(100.0F, 0.0F))) {
+  if (ImGui::Button("Up")) {
+    const auto parent = file_browser_.directory.parent_path();
+    if (!parent.empty()) {
+      file_browser_.directory = parent;
+      refresh_file_browser();
+    }
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Refresh")) refresh_file_browser();
+  ImGui::TextDisabled("%s", file_browser_.status.c_str());
+  ImGui::Separator();
+
+  const float footer_rows = file_browser_.save_mode ? 2.0F : 1.0F;
+  const float footer_height = ImGui::GetFrameHeightWithSpacing() * footer_rows + 18.0F;
+  ImGui::BeginChild("file-browser-list", ImVec2(0.0F, std::max(220.0F,
+                     ImGui::GetContentRegionAvail().y - footer_height)), true);
+  std::optional<std::filesystem::path> navigate_to;
+  for (const auto& entry : file_browser_.entries) {
+    const bool selected = file_browser_.selected == entry.path;
+    const std::string label = std::string(entry.directory ? "[DIR]  " : "       ") + entry.name +
+                              "##" + entry.path.string();
+    if (ImGui::Selectable(label.c_str(), selected, ImGuiSelectableFlags_AllowDoubleClick)) {
+      file_browser_.selected = entry.path;
+      if (file_browser_.save_mode && !entry.directory) file_browser_.save_name = entry.name;
+      if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+        if (entry.directory) {
+          navigate_to = entry.path;
+          break;
+        } else if (!file_browser_.save_mode) {
+          chosen = entry.path;
+          break;
+        }
+      }
+    }
+  }
+  ImGui::EndChild();
+  if (navigate_to) {
+    file_browser_.directory = *navigate_to;
+    refresh_file_browser();
+  }
+  ImGui::Separator();
+
+  if (file_browser_.save_mode) {
+    ImGui::SetNextItemWidth(-1.0F);
+    ImGui::InputText("File name", &file_browser_.save_name);
+    ImGui::BeginDisabled(file_browser_.save_name.empty());
+    if (ImGui::Button("Record here", ImVec2(140.0F, 0.0F))) {
+      chosen = file_browser_.directory / file_browser_.save_name;
+    }
+    ImGui::EndDisabled();
+  } else {
+    std::error_code selected_error;
+    const bool selected_file =
+        !file_browser_.selected.empty() &&
+        !std::filesystem::is_directory(file_browser_.selected, selected_error) && !selected_error;
+    ImGui::BeginDisabled(!selected_file);
+    if (ImGui::Button("Open trace", ImVec2(140.0F, 0.0F))) chosen = file_browser_.selected;
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ImGui::Button("Open this directory", ImVec2(170.0F, 0.0F))) {
+      chosen = file_browser_.directory;
+    }
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Cancel", ImVec2(100.0F, 0.0F))) keep_open = false;
+
+  if (chosen) {
+    if (file_browser_.save_mode) start_recording(*chosen);
+    else load_trace(*chosen);
+    keep_open = false;
+  }
+  if (!keep_open) {
+    file_browser_.open = false;
     ImGui::CloseCurrentPopup();
-    path_modal_title_.clear();
   }
   ImGui::EndPopup();
 }
@@ -1271,6 +1609,10 @@ void ViewerApp::draw_path_modal() {
 void ViewerApp::draw() {
   if (ImGui::IsKeyPressed(ImGuiKey_F, false) && !ImGui::GetIO().WantTextInput) {
     view_.fit_requested = true;
+  }
+  if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_O, false) &&
+      !ImGui::GetIO().WantTextInput) {
+    open_file_browser(false);
   }
   const ImGuiViewport* viewport = ImGui::GetMainViewport();
   ImGui::SetNextWindowPos(viewport->WorkPos);
@@ -1306,12 +1648,35 @@ void ViewerApp::draw() {
     ImGui::EndChild();
 
     ImGui::TableSetColumnIndex(1);
-    const float activity_height = std::clamp(available_height * 0.28F, 155.0F, 250.0F);
-    ImGui::BeginChild("canvas", ImVec2(0.0F, -activity_height - 5.0F), false,
+    constexpr float splitter_height = 7.0F;
+    constexpr float minimum_pane_height = 100.0F;
+    activity_panel_height_ = std::clamp(
+        activity_panel_height_, minimum_pane_height,
+        std::max(minimum_pane_height, available_height - minimum_pane_height - splitter_height));
+    const float canvas_height =
+        std::max(minimum_pane_height, available_height - activity_panel_height_ - splitter_height);
+    ImGui::BeginChild("canvas", ImVec2(0.0F, canvas_height), false,
                       ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     draw_board_canvas();
     ImGui::EndChild();
-    ImGui::BeginChild("activity", ImVec2(0.0F, activity_height));
+    const ImVec2 splitter_start = ImGui::GetCursorScreenPos();
+    ImGui::InvisibleButton("activity-panel-splitter", ImVec2(-1.0F, splitter_height));
+    ImGui::GetWindowDrawList()->AddLine(
+        ImVec2(splitter_start.x, splitter_start.y + splitter_height * 0.5F),
+        ImVec2(splitter_start.x + ImGui::GetContentRegionAvail().x,
+               splitter_start.y + splitter_height * 0.5F),
+        ImGui::IsItemHovered() || ImGui::IsItemActive() ? color(0.42F, 0.78F, 1.0F)
+                                                        : color(0.18F, 0.25F, 0.31F),
+        ImGui::IsItemHovered() || ImGui::IsItemActive() ? 2.0F : 1.0F);
+    if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
+      ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+    }
+    if (ImGui::IsItemActive()) {
+      activity_panel_height_ = std::clamp(
+          activity_panel_height_ - ImGui::GetIO().MouseDelta.y, minimum_pane_height,
+          std::max(minimum_pane_height, available_height - minimum_pane_height - splitter_height));
+    }
+    ImGui::BeginChild("activity", ImVec2(0.0F, activity_panel_height_));
     draw_activity_panel();
     ImGui::EndChild();
 
@@ -1322,7 +1687,7 @@ void ViewerApp::draw() {
     ImGui::EndTable();
   }
 
-  draw_path_modal();
+  draw_file_browser();
   ImGui::End();
 }
 

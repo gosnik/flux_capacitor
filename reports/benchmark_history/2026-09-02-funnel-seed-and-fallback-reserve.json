@@ -1,0 +1,58 @@
+{
+  "date": "2026-09-02",
+  "git_revision": "a17fe406f392ac0c7e174f9bcfc559e1b46a2bbb",
+  "working_tree": "dirty",
+  "board": "tests/fixtures/routing-corpus/bm_svf.kicad_pcb",
+  "profile": "tier_1_unlocked_global_complete_probe",
+  "configuration": {
+    "active_spline_candidates_per_window": 8,
+    "fallback_discrete_candidates_per_window": 64,
+    "promoted_candidates_per_failed_window": 8,
+    "telemetry_level": "diagnostic"
+  },
+  "measurement": {
+    "router_elapsed_seconds": 2217.30,
+    "trace_bytes": 411059840,
+    "paths": 78,
+    "unrouted_nets": 0,
+    "selected_total_overflow": 132,
+    "harness_passed": true,
+    "complete": false
+  },
+  "selected_regional_checkpoint": {
+    "windows": 78,
+    "complete_bundles": 73,
+    "incomplete_bundles": 5,
+    "generated_discrete_states": 1034,
+    "active_states_retained": 486,
+    "fallback_states_retained": 548,
+    "fallback_states_promoted": 16,
+    "spline_candidates_evaluated": 483,
+    "joint_spline_windows_recovered": 28,
+    "fallback_windows_recovered": 1,
+    "complete_via_dependent_routes": 0
+  },
+  "baseline_comparison": {
+    "complete_bundles_before": 72,
+    "complete_bundles_after": 73,
+    "joint_spline_windows_recovered_before": 26,
+    "joint_spline_windows_recovered_after": 28,
+    "incremental_feedback_affected_nets_before": 14,
+    "incremental_feedback_affected_nets_after": 7,
+    "selected_total_overflow_before": 132,
+    "selected_total_overflow_after": 132
+  },
+  "later_checkpoints": [
+    {"windows": 59, "complete_bundles": 50, "generated": 1151, "active": 356, "reserve": 470, "promoted": 40, "fallback_recovered": 2},
+    {"windows": 74, "complete_bundles": 65, "generated": 1700, "active": 511, "reserve": 865, "promoted": 16, "fallback_recovered": 0},
+    {"windows": 116, "complete_bundles": 110, "generated": 1669, "active": 742, "reserve": 706, "promoted": 16, "fallback_recovered": 1}
+  ],
+  "tier0_requalification": {
+    "board": "pt2399_delay",
+    "paths": 50,
+    "flux_exact_copper": "accepted",
+    "external_kicad_drc": "clean",
+    "copper_pngs": "build/regional-planning-final-v8/artifacts/tier-0-pt2399_delay/copper"
+  },
+  "decision": "retain and increase only compact fallback capacity to 256; keep active and promoted spline beams at 8"
+}

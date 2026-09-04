@@ -17,6 +17,10 @@ namespace flux {
 enum class ExistingRoutingPolicy { preserve, replace_unlocked_for_routed_nets };
 
 struct DetailedRouterConfig {
+  // Diagnostic-only counterpart to the global-router escape hatch. The source validation gate is
+  // bypassed so a candidate can be materialized for inspection; final validation, connectivity,
+  // and copper DRC are still measured and prevent the result from becoming complete.
+  bool allow_invalid_source_for_diagnostic_preview{false};
   Nanometres track_width{Nanometres{0}};
   Nanometres via_diameter{Nanometres{0}};
   Nanometres via_drill{Nanometres{0}};
@@ -46,20 +50,30 @@ struct DetailedRouterConfig {
   // Try the maximum legal-radius fillet first, then halve the radius this many times when exact
   // represented copper checks reject it. Zero retains one maximum-radius attempt.
   std::size_t circular_arc_backtracking_steps{8};
-  // Curved routing uses an open clamped cubic B-spline, adaptive tessellation/native arc fitting,
+  // Curved routing uses an open clamped quintic PH curve, adaptive tessellation/native arc fitting,
   // collision-envelope attribution, bounded PNS shove, and a control-corridor refit. Allocation
   // remains polyline based and every quantized result remains transactional.
   Nanometres spline_tessellation_tolerance{Nanometres::from_mm(0.02)};
   Nanometres spline_arc_fit_tolerance{Nanometres::from_mm(0.02)};
   Nanometres spline_control_corridor{Nanometres::from_mm(2.0)};
   Nanometres spline_shove_step{Nanometres::from_mm(0.1)};
-  Nanometres spline_navmesh_cell_pitch{Nanometres::from_mm(0.5)};
+  // Detailed continuous realization needs sub-global-grid corridor geometry; otherwise a legal
+  // 0.5 mm allocation jog can collapse or disconnect when represented by one equally sized cell.
+  Nanometres spline_navmesh_cell_pitch{Nanometres::from_mm(0.25)};
   Nanometres spline_minimum_bend_radius{Nanometres::from_mm(0.25)};
   std::size_t max_spline_navmesh_cells_per_run{100'000};
   std::size_t max_spline_navmesh_search_expansions_per_run{100'000};
   std::size_t spline_trajectory_samples{48};
-  std::size_t max_spline_trajectory_iterations{8};
-  std::size_t max_spline_trajectory_candidate_checks{512};
+  std::size_t max_spline_trajectory_iterations{24};
+  std::size_t max_spline_trajectory_candidate_checks{4096};
+  bool prefer_gpu_spline_trajectory{true};
+  std::size_t spline_gpu_precondition_iterations{32};
+  std::size_t spline_gpu_polish_shortlist{4};
+  // Exact candidates within one coordinate-descent wave are deliberately serial: recursive
+  // certificates have severe long-tail imbalance. Parallelism belongs at the independent route
+  // realization boundary where each task has enough work to amortize scheduling and board copies.
+  std::size_t spline_exact_candidate_workers{1};
+  std::size_t spline_route_workers{4};
   std::size_t spline_max_tessellation_depth{10};
   std::size_t max_spline_samples_per_run{4096};
   std::size_t max_spline_fitted_pieces_per_run{4096};
@@ -194,8 +208,8 @@ struct DetailedRouteResult {
   bool circular_arc_candidate_budget_exhausted{false};
   std::size_t width_aware_circular_arc_paths{0};
   std::size_t width_aware_fitted_circular_arcs{0};
-  std::size_t attempted_cubic_bspline_runs{0};
-  std::size_t fitted_cubic_bspline_runs{0};
+  std::size_t attempted_quintic_ph_runs{0};
+  std::size_t fitted_quintic_ph_runs{0};
   std::size_t adaptive_spline_tessellation_samples{0};
   std::size_t spline_fitted_track_segments{0};
   std::size_t spline_collision_envelopes{0};
@@ -203,19 +217,66 @@ struct DetailedRouteResult {
   std::size_t spline_refits{0};
   std::size_t spline_navmesh_routes{0};
   std::size_t spline_navmesh_failures{0};
+  std::size_t spline_navmesh_refined_parents{0};
+  std::size_t spline_navmesh_refined_leaves{0};
+  std::size_t spline_navmesh_rejected_leaves{0};
+  std::size_t spline_navmesh_gpu_wavefront_routes{0};
+  std::size_t spline_navmesh_gpu_wavefront_cpu_fallbacks{0};
   std::size_t spline_navmesh_certificate_fallbacks{0};
   std::size_t spline_navmesh_topology_signatures{0};
   std::size_t spline_navmesh_topology_gates{0};
   std::size_t spline_navmesh_topology_rejections{0};
   std::size_t spline_funnel_points{0};
+  std::size_t spline_seed_candidates{0};
+  std::size_t spline_seed_exact_legal{0};
+  std::size_t spline_seed_portfolio_improvements{0};
   std::size_t spline_trajectory_attempts{0};
   std::size_t spline_trajectory_accepted{0};
   std::size_t spline_trajectory_control_moves{0};
   std::size_t spline_trajectory_candidate_checks{0};
+  std::size_t spline_multistart_attempts{0};
+  std::size_t spline_multistart_recoveries{0};
+  std::size_t spline_gpu_precondition_attempts{0};
+  std::size_t spline_gpu_precondition_dispatches{0};
+  std::size_t spline_gpu_precondition_cpu_fallbacks{0};
+  std::size_t spline_gpu_precondition_accepted{0};
+  std::size_t spline_gpu_precondition_legal{0};
+  std::uint64_t spline_gpu_precondition_solve_us{0U};
+  std::size_t spline_gpu_polish_batches{0};
+  std::size_t spline_gpu_polish_dispatches{0};
+  std::size_t spline_gpu_polish_cpu_fallbacks{0};
+  std::size_t spline_gpu_polish_candidates{0};
+  std::size_t spline_gpu_polish_exact_shortlist_checks{0};
+  std::size_t spline_parallel_exact_waves{0};
+  std::size_t spline_parallel_exact_checks{0};
+  std::size_t spline_parallel_route_tasks{0};
+  std::size_t spline_parallel_route_workers{0};
+  std::size_t spline_parallel_route_candidates{0};
+  std::size_t spline_parallel_route_commits{0};
+  std::size_t spline_parallel_route_merge_rejections{0};
   std::size_t spline_trajectory_initial_violations{0};
   std::size_t spline_trajectory_final_violations{0};
+  std::size_t spline_trajectory_initial_shape_violations{0};
+  std::size_t spline_trajectory_final_shape_violations{0};
+  std::size_t spline_trajectory_final_self_intersections{0};
+  std::size_t spline_trajectory_final_cusps{0};
+  std::size_t spline_trajectory_final_control_station_reversals{0};
+  std::size_t spline_trajectory_final_station_reversals{0};
+  std::size_t spline_trajectory_final_excess_turn_violations{0};
+  std::size_t spline_trajectory_final_unintended_inflections{0};
+  std::size_t spline_trajectory_final_bend_radius_violations{0};
+  std::size_t spline_trajectory_initial_continuous_violations{0};
+  std::size_t spline_trajectory_final_continuous_violations{0};
+  std::size_t spline_continuous_hulls_checked{0};
+  std::size_t spline_continuous_envelope_rejections{0};
+  std::size_t spline_continuous_budget_exhaustions{0};
+  std::size_t spline_final_validation_rejections{0};
+  std::size_t spline_final_copper_rejections{0};
+  std::size_t spline_final_connectivity_rejections{0};
   std::string spline_navmesh_last_diagnostic;
   std::string spline_navmesh_last_topology_diagnostic;
+  std::string spline_last_materialization_diagnostic;
+  std::vector<std::string> spline_route_failure_details;
   std::size_t pns_shove_attempts{0};
   std::size_t pns_shove_candidates{0};
   std::size_t accepted_pns_shoves{0};
@@ -305,7 +366,7 @@ struct DetailedRouteResult {
 
 // Converts a completed global plan into simplified physical copper on a board copy. Optional
 // deterministic 45-degree pull-tight, bounded exact-clearance continuous centerline refinement,
-// topology-locked packed medial lanes, optional post-allocation cubic B-spline/PNS/native-arc
+// topology-locked packed medial lanes, optional post-allocation quintic PH curve/PNS/native-arc
 // fitting, and bounded polyline multi-period differential-pair skew tuning in a quantized local
 // frame are accepted only after exact validation/connectivity/DRC. Illegal candidates fall back
 // transactionally to the conventional polyline. The source is never mutated.

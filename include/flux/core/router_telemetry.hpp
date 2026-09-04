@@ -24,6 +24,8 @@ enum class RouterTelemetryLevel { normal, diagnostic, trace };
 enum class RouterTelemetryEventKind {
   routing_started,
   routing_finished,
+  global_routing_started,
+  global_routing_finished,
   pathfinder_iteration_started,
   pathfinder_iteration_completed,
   best_checkpoint_updated,
@@ -44,6 +46,7 @@ enum class RouterTelemetryEventKind {
   residual_group_updated,
   checkpoint_selected,
   search_summary,
+  hydraulic_field_updated,
   placement_proposal_started,
   placement_proposal_accepted,
   placement_proposal_rejected
@@ -57,7 +60,7 @@ struct RouterTelemetryPathPoint {
   bool operator==(const RouterTelemetryPathPoint&) const = default;
 };
 
-enum class RouterTelemetryRouteGeometry { polyline, cubic_bspline };
+enum class RouterTelemetryRouteGeometry { polyline, quintic_ph };
 
 // Compact semantic evidence copied from an authoritative algorithm boundary. Unused fields stay
 // zero/empty for that event kind. This object is diagnostic only and is never read by the router.
@@ -68,6 +71,11 @@ struct RouterTelemetryEvent {
   std::uint64_t route_revision{0};
   std::uint64_t route_width_nm{0};
   std::uint64_t candidate_cost{0};
+  // Stable diagnostic classification for retained route portfolios. Examples: shortest,
+  // diversified, rrt_connect, river, selected, regional_spline. Lifecycle distinguishes a
+  // retained fallback from the active/selected candidate without changing routing authority.
+  std::string route_family;
+  std::string route_lifecycle;
   std::vector<RouterTelemetryPathPoint> route_points;
   RouterTelemetryRouteGeometry route_geometry{RouterTelemetryRouteGeometry::polyline};
   std::uint32_t spline_degree{0};
@@ -75,6 +83,21 @@ struct RouterTelemetryEvent {
   std::uint64_t topology_signature{0};
   std::size_t topology_gate_count{0U};
   bool topology_gate_sequence_legal{false};
+  std::size_t hydraulic_field_width{0U};
+  std::size_t hydraulic_field_height{0U};
+  std::size_t hydraulic_field_stride{0U};
+  std::uint64_t hydraulic_field_pitch_nm{0U};
+  std::uint32_t hydraulic_maximum_flow{0U};
+  std::uint32_t hydraulic_maximum_erosion{0U};
+  std::uint32_t hydraulic_maximum_terrain_height{0U};
+  std::uint32_t hydraulic_maximum_downstream_pressure{0U};
+  std::uint32_t hydraulic_maximum_success_prior{0U};
+  std::vector<std::uint16_t> hydraulic_flow_field;
+  std::vector<std::uint16_t> hydraulic_erosion_field;
+  std::vector<std::uint16_t> hydraulic_heightmap;
+  std::vector<std::uint16_t> hydraulic_free_space_field;
+  std::vector<std::uint16_t> hydraulic_downstream_pressure_field;
+  std::vector<std::uint16_t> hydraulic_success_prior_field;
   std::size_t iteration{0};
   std::size_t total_nets{0};
   std::size_t routed_nets{0};
@@ -181,6 +204,7 @@ struct RouterTelemetryState {
   std::vector<RouterTelemetryEvent> observed_routes;
   std::vector<RouterTelemetryEvent> observed_vias;
   std::vector<RouterTelemetryEvent> observed_conflicts;
+  std::vector<RouterTelemetryEvent> observed_hydraulic_fields;
 
   bool operator==(const RouterTelemetryState&) const = default;
 };

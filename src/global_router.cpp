@@ -10,6 +10,7 @@
 #include "flux/core/navmesh_route.hpp"
 #include "flux/core/pns_router.hpp"
 #include "flux/core/router_telemetry.hpp"
+#include "flux/core/routing_compute.hpp"
 #include "flux/core/routing_rules.hpp"
 #include "flux/core/spline_route.hpp"
 #include "flux/core/validation.hpp"
@@ -26,6 +27,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <numeric>
 #include <optional>
 #include <queue>
 #include <set>
@@ -36,12 +38,26 @@
 #include <thread>
 #include <tuple>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace flux {
 namespace {
 
 struct Grid {
+  struct VerticalFeatureSite {
+    ObjectId id;
+    NetId net;
+    Point position;
+    std::size_t x{0};
+    std::size_t y{0};
+    std::size_t first_layer{0};
+    std::size_t last_layer{0};
+    bool component_pad{false};
+
+    auto operator<=>(const VerticalFeatureSite&) const = default;
+  };
+
   std::int64_t origin_x{0};
   std::int64_t origin_y{0};
   std::int64_t pitch{0};
@@ -54,6 +70,11 @@ struct Grid {
   std::size_t height{0};
   std::vector<LayerId> layers;
   std::vector<bool> valid_cells;
+  // Existing conductive vertical geometry is a legal, already paid-for transition portal for its
+  // own net even when it lies off the ordinary via sub-lattice. An off-grid feature is mapped to
+  // its bounded surrounding grid portals; conversion restores the exact feature position and
+  // exact-checks both access stubs before the transition can enter the search.
+  std::vector<VerticalFeatureSite> vertical_feature_sites;
 
   [[nodiscard]] std::size_t layer_size() const { return width * height; }
 
@@ -78,6 +99,61 @@ struct Grid {
 
   [[nodiscard]] bool via_site(std::size_t x, std::size_t y) const {
     return via_stride != 0U && x % via_stride == via_phase_x && y % via_stride == via_phase_y;
+  }
+
+  [[nodiscard]] const VerticalFeatureSite*
+  reusable_vertical_feature(const NetId& net, std::size_t x, std::size_t y, std::size_t first_layer,
+                            std::size_t second_layer) const {
+    const auto low = std::min(first_layer, second_layer);
+    const auto high = std::max(first_layer, second_layer);
+    const auto found = std::find_if(vertical_feature_sites.begin(), vertical_feature_sites.end(),
+                                    [&](const auto& site) {
+                                      return site.net == net && site.x == x && site.y == y &&
+                                             site.first_layer <= low && high <= site.last_layer;
+                                    });
+    return found == vertical_feature_sites.end() ? nullptr : &*found;
+  }
+
+  [[nodiscard]] bool via_transition_site(std::size_t x, std::size_t y, std::size_t first_layer,
+                                         std::size_t second_layer,
+                                         const NetId* routed_net = nullptr) const {
+    if (via_site(x, y)) {
+      return true;
+    }
+    const auto low = std::min(first_layer, second_layer);
+    const auto high = std::max(first_layer, second_layer);
+    return std::any_of(vertical_feature_sites.begin(), vertical_feature_sites.end(),
+                       [&](const auto& site) {
+                         return (routed_net == nullptr || site.net == *routed_net) && site.x == x &&
+                                site.y == y && site.first_layer <= low && high <= site.last_layer;
+                       });
+  }
+
+  [[nodiscard]] const VerticalFeatureSite*
+  reusable_vertical_feature_at(const NetId& net, Point position, std::size_t first_layer,
+                               std::size_t second_layer) const {
+    const auto low = std::min(first_layer, second_layer);
+    const auto high = std::max(first_layer, second_layer);
+    const auto found = std::find_if(vertical_feature_sites.begin(), vertical_feature_sites.end(),
+                                    [&](const auto& site) {
+                                      return site.net == net && site.position == position &&
+                                             site.first_layer <= low && high <= site.last_layer;
+                                    });
+    return found == vertical_feature_sites.end() ? nullptr : &*found;
+  }
+
+  [[nodiscard]] const VerticalFeatureSite* vertical_feature_by_id(const ObjectId& id, std::size_t x,
+                                                                  std::size_t y,
+                                                                  std::size_t first_layer,
+                                                                  std::size_t second_layer) const {
+    const auto low = std::min(first_layer, second_layer);
+    const auto high = std::max(first_layer, second_layer);
+    const auto found = std::find_if(vertical_feature_sites.begin(), vertical_feature_sites.end(),
+                                    [&](const auto& site) {
+                                      return site.id == id && site.x == x && site.y == y &&
+                                             site.first_layer <= low && high <= site.last_layer;
+                                    });
+    return found == vertical_feature_sites.end() ? nullptr : &*found;
   }
 
   [[nodiscard]] Point point(std::size_t x, std::size_t y) const {
@@ -201,6 +277,7 @@ struct RoutingOccupancy {
 // detailed validation remain authoritative.
 struct FormerRouteMemory {
   std::map<Edge, std::set<NetId>> edges;
+  std::map<std::size_t, std::set<NetId>> nodes;
   std::size_t ripped_paths{0U};
 };
 
@@ -366,6 +443,9 @@ struct SearchResult {
   std::vector<std::size_t> nodes;
   std::vector<Nanometres> segment_widths;
   std::vector<GlobalRouteSegmentWidthKind> segment_width_kinds;
+  // Aligned with node-to-node edges. A value replaces an off-grid sampled via transition with the
+  // exact source via or plated-pad location during GlobalRoutePath construction.
+  std::vector<std::optional<ObjectId>> vertical_features;
   std::uint64_t cost{0};
   bool cancelled{false};
   bool expansion_limit_reached{false};
@@ -392,6 +472,32 @@ struct SearchResult {
   std::uint64_t former_route_memory_penalty{0};
   std::size_t terminal_escape_reservation_penalty_events{0};
   std::uint64_t terminal_escape_reservation_penalty{0};
+  std::size_t terminal_escape_proximity_penalty_events{0};
+  std::uint64_t terminal_escape_proximity_penalty{0};
+  std::size_t targeted_track_spreading_edges{0};
+  std::uint64_t targeted_track_spreading_penalty{0};
+  std::size_t capacity_reserve_penalty_events{0};
+  std::size_t corridor_capacity_reserve_penalty_events{0};
+  std::size_t physical_capacity_reserve_penalty_events{0};
+  std::size_t clearance_shadow_reserve_penalty_events{0};
+  std::uint64_t capacity_reserve_penalty{0};
+  std::size_t planned_via_transitions{0};
+  std::size_t reused_existing_via_transitions{0};
+  std::size_t reused_component_pad_transitions{0};
+  std::uint64_t via_congestion_cost_discount{0};
+  std::uint64_t vertical_feature_reuse_cost_discount{0};
+};
+
+enum CapacityReserveSource : std::uint8_t {
+  capacity_reserve_none = 0U,
+  capacity_reserve_corridor = 1U << 0U,
+  capacity_reserve_physical = 1U << 1U,
+  capacity_reserve_clearance_shadow = 1U << 2U,
+};
+
+struct CapacityReserveTransition {
+  std::uint64_t penalty{0U};
+  std::uint8_t sources{capacity_reserve_none};
 };
 
 // A terminal is represented by the exact local access polylines already proven when its coarse
@@ -455,6 +561,8 @@ struct SearchCostPolicy {
   const TerminalEscapeReservation* terminal_escape_reservation{nullptr};
   const TerminalEscapeReservationAvailability* terminal_escape_availability{nullptr};
   std::uint64_t terminal_escape_reservation_cost{0};
+  std::uint64_t terminal_escape_proximity_cost{0};
+  bool spread_open_region_tracks{false};
 };
 
 struct SearchEffort {
@@ -589,7 +697,42 @@ struct VoronoiPathFinderGuidance {
   }
 };
 
+enum class GlobalSeedFamily { shortest, diversified, rrt_connect, hydraulic_erosion };
+
+[[nodiscard]] std::string_view global_seed_family_name(GlobalSeedFamily family) {
+  switch (family) {
+  case GlobalSeedFamily::shortest:
+    return "shortest";
+  case GlobalSeedFamily::diversified:
+    return "diversified";
+  case GlobalSeedFamily::rrt_connect:
+    return "rrt_connect";
+  case GlobalSeedFamily::hydraulic_erosion:
+    return "hydraulic_erosion";
+  }
+  return "unknown";
+}
+
 struct GlobalSeedCandidate {
+  struct HydraulicFieldEvidence {
+    LayerId layer;
+    Point origin;
+    Nanometres cell_pitch;
+    std::size_t width{0U};
+    std::size_t height{0U};
+    std::size_t stride{0U};
+    std::uint32_t maximum_flow{0U};
+    std::uint32_t maximum_erosion{0U};
+    std::uint32_t maximum_terrain_height{0U};
+    std::uint32_t maximum_downstream_pressure{0U};
+    std::uint32_t maximum_success_prior{0U};
+    std::vector<std::uint16_t> flow;
+    std::vector<std::uint16_t> erosion;
+    std::vector<std::uint16_t> heightmap;
+    std::vector<std::uint16_t> free_space;
+    std::vector<std::uint16_t> downstream_pressure;
+    std::vector<std::uint16_t> success_prior;
+  };
   NetId net;
   std::size_t connection_index{0};
   std::size_t tree_candidate_index{0};
@@ -602,6 +745,8 @@ struct GlobalSeedCandidate {
   std::set<std::size_t> spline_corridor_nodes;
   std::vector<RoutingGeometricCorridorRun> geometric_corridors;
   bool spline_refined{false};
+  GlobalSeedFamily family{GlobalSeedFamily::shortest};
+  std::vector<HydraulicFieldEvidence> hydraulic_fields;
 };
 
 struct StaticSeedStats {
@@ -623,10 +768,33 @@ struct StaticSeedStats {
   std::size_t navmesh_domains{0};
   std::size_t navmesh_routes{0};
   std::size_t navmesh_cells{0};
+  std::size_t navmesh_refined_parents{0};
+  std::size_t navmesh_refined_leaves{0};
+  std::size_t navmesh_rejected_leaves{0};
+  std::size_t navmesh_gpu_wavefront_routes{0};
+  std::size_t navmesh_gpu_wavefront_cpu_fallbacks{0};
   std::size_t navmesh_search_expansions{0};
   std::size_t flood_fill_routes{0};
   std::size_t flood_fill_cells_visited{0};
   std::size_t navmesh_failures{0};
+  std::size_t rrt_connect_attempts{0};
+  std::size_t rrt_connect_accepted{0};
+  std::size_t rrt_connect_failures{0};
+  std::size_t rrt_connect_iterations{0};
+  std::size_t hydraulic_attempts{0};
+  std::size_t hydraulic_accepted{0};
+  std::size_t hydraulic_failures{0};
+  std::size_t hydraulic_gpu_routes{0};
+  std::size_t hydraulic_gpu_clearance_cache_hits{0};
+  std::size_t hydraulic_gpu_peak_batch_size{0};
+  std::size_t hydraulic_gpu_buffer_reuses{0};
+  std::size_t hydraulic_gpu_buffer_growths{0};
+  std::size_t hydraulic_cpu_fallbacks{0};
+  std::size_t hydraulic_relaxation_passes{0};
+  std::size_t hydraulic_droplet_steps{0};
+  std::size_t hydraulic_discovery_cells{0};
+  std::size_t hydraulic_exact_certified_chords{0};
+  std::size_t hydraulic_projection_failures{0};
   std::size_t navmesh_certificate_domains{0};
   std::size_t funnel_points{0};
   std::size_t trajectory_attempts{0};
@@ -967,6 +1135,76 @@ struct SharedVoronoiAllocationGraph {
     return result;
   }
 
+  // Evaluate the same heterogeneous pair/bus envelope as occupied_demand(), but with one net
+  // virtually included or excluded and its demand overridden.  search_path calls this for every
+  // physical-resource transition under hard capacity; copying the complete occupant set and
+  // demand map there made a small candidate probe allocate proportional to the number of routes
+  // already sharing the resource.  The virtual predicate keeps the coupled-envelope semantics
+  // while making the common test allocation-free.
+  [[nodiscard]] std::uint64_t occupied_demand_with_virtual_net(
+      const std::set<NetId>& nets, const std::map<NetId, std::uint64_t>& selected_demand_nm_by_net,
+      const NetId& virtual_net, std::uint64_t virtual_demand, bool include_virtual_net) const {
+    const auto contains = [&](const NetId& candidate) {
+      return candidate == virtual_net ? include_virtual_net : nets.contains(candidate);
+    };
+    const auto demand_for = [&](const NetId& candidate) {
+      if (candidate == virtual_net) {
+        return virtual_demand;
+      }
+      const auto selected = selected_demand_nm_by_net.find(candidate);
+      return selected == selected_demand_nm_by_net.end() ? net_demand(candidate) : selected->second;
+    };
+    const auto contribution = [&](const NetId& candidate) -> std::uint64_t {
+      if (!contains(candidate)) {
+        return 0U;
+      }
+      if (const auto* bus = routing_bus(candidate); bus != nullptr) {
+        const auto complete =
+            std::all_of(bus->ordered_nets.begin(), bus->ordered_nets.end(), contains);
+        if (complete) {
+          // Account for a complete bus exactly once, at its declared first member.  A partial
+          // bus deliberately falls through to independent member envelopes.
+          return !bus->ordered_nets.empty() && candidate == bus->ordered_nets.front()
+                     ? bus->demand_nm
+                     : 0U;
+        }
+      }
+      if (const auto complement = differential_complement(candidate);
+          complement && contains(*complement)) {
+        // Differential-pair demand is symmetric, so stable ID order replaces a per-query
+        // "accounted" set without changing the physical envelope.
+        if (*complement < candidate) {
+          return 0U;
+        }
+        const auto key = candidate < *complement ? std::pair{candidate, *complement}
+                                                 : std::pair{*complement, candidate};
+        if (const auto paired = differential_pair_demand_nm.find(key);
+            paired != differential_pair_demand_nm.end()) {
+          return paired->second;
+        }
+      }
+      return demand_for(candidate);
+    };
+    std::uint64_t result = 0U;
+    const auto add = [&result](std::uint64_t demand) {
+      if (demand > std::numeric_limits<std::uint64_t>::max() - result) {
+        result = std::numeric_limits<std::uint64_t>::max();
+        return false;
+      }
+      result += demand;
+      return true;
+    };
+    for (const auto& candidate : nets) {
+      if (!add(contribution(candidate))) {
+        return result;
+      }
+    }
+    if (include_virtual_net && !nets.contains(virtual_net)) {
+      static_cast<void>(add(contribution(virtual_net)));
+    }
+    return result;
+  }
+
   [[nodiscard]] bool contains_complete_differential_pair(const std::set<NetId>& nets) const {
     return std::any_of(nets.begin(), nets.end(), [this, &nets](const NetId& net) {
       const auto complement = differential_complement(net);
@@ -1037,6 +1275,79 @@ struct SharedVoronoiAllocationGraph {
   return rhs > std::numeric_limits<std::uint64_t>::max() / lhs
              ? std::numeric_limits<std::uint64_t>::max()
              : lhs * rhs;
+}
+
+// This is deliberately a soft, normalized capacity reserve rather than another resource model.
+// The tscircuit capacity mesh makes low remaining capacity expensive even before a node is
+// overfull.  Flux already has better physical resources (free-space corridors, direct medial
+// cross sections, and exact clearance shadows), so apply the same negotiation signal to those
+// resources without rasterizing them back into a second mesh.  The quadratic excess term keeps
+// temporary over-capacity exploration possible while making deeper overuse progressively less
+// attractive.
+[[nodiscard]] std::uint64_t capacity_reserve_penalty(std::uint64_t capacity, std::uint64_t occupied,
+                                                     std::uint64_t candidate_demand,
+                                                     const GlobalRouterConfig& config) {
+  if (capacity == 0U || candidate_demand == 0U || config.capacity_reserve_cost == 0U ||
+      config.capacity_reserve_per_mille == 0U) {
+    return 0U;
+  }
+  // A resource that cannot hold even this one envelope has no optional reserve to preserve.
+  // Ordinary present/history overflow remains responsible for negotiating that case.
+  if (occupied == 0U && candidate_demand >= capacity) {
+    return 0U;
+  }
+  constexpr std::uint64_t per_mille = 1'000U;
+  const auto reserve_numerator =
+      saturating_multiply(capacity, static_cast<std::uint64_t>(config.capacity_reserve_per_mille));
+  auto reserve = reserve_numerator / per_mille;
+  if (reserve_numerator % per_mille != 0U) {
+    reserve = saturating_add(reserve, 1U);
+  }
+  reserve = std::max<std::uint64_t>(1U, reserve);
+  const auto planned = saturating_add(occupied, candidate_demand);
+  const auto remaining = capacity > planned ? capacity - planned : 0U;
+  if (remaining >= reserve) {
+    return 0U;
+  }
+  const auto shortage = reserve - remaining;
+  auto penalty = saturating_multiply(config.capacity_reserve_cost, shortage) / reserve;
+  if (penalty == 0U) {
+    penalty = 1U;
+  }
+  if (planned <= capacity) {
+    return penalty;
+  }
+  const auto overflow = planned - capacity;
+  const auto excess_quanta = saturating_add((overflow - 1U) / reserve, 1U);
+  return saturating_multiply(penalty, saturating_add(excess_quanta, 1U));
+}
+
+// Clearance shadows are already exact conflict detectors once the available centreline distance
+// is below the required copper envelope.  This companion only charges *positive but fragile*
+// clearance: it leaves collision attribution/history untouched and does not double-charge an
+// actual overlap.
+[[nodiscard]] std::uint64_t clearance_shadow_reserve_penalty(long double available_nm,
+                                                             long double required_nm,
+                                                             const GlobalRouterConfig& config) {
+  if (!(available_nm >= required_nm) || !(required_nm > 0.0L) ||
+      config.capacity_reserve_cost == 0U || config.capacity_reserve_per_mille == 0U) {
+    return 0U;
+  }
+  const auto reserve =
+      required_nm * static_cast<long double>(config.capacity_reserve_per_mille) / 1'000.0L;
+  if (!(reserve > 0.0L)) {
+    return 0U;
+  }
+  const auto margin = available_nm - required_nm;
+  if (margin >= reserve) {
+    return 0U;
+  }
+  const auto fraction = std::clamp((reserve - margin) / reserve, 0.0L, 1.0L);
+  const auto scaled = fraction * static_cast<long double>(config.capacity_reserve_cost);
+  if (scaled >= static_cast<long double>(std::numeric_limits<std::uint64_t>::max())) {
+    return std::numeric_limits<std::uint64_t>::max();
+  }
+  return std::max<std::uint64_t>(1U, static_cast<std::uint64_t>(std::ceil(scaled)));
 }
 
 [[nodiscard]] std::size_t voronoi_history_increment(std::uint64_t overflow_nm,
@@ -1133,14 +1444,6 @@ struct PlannedVoronoiAllocation {
   const auto& demands = demand_found == occupancy.voronoi_demand_nm_by_net.end()
                             ? empty_demands
                             : demand_found->second;
-  auto existing_nets = nets;
-  existing_nets.erase(net);
-  auto existing_demands = demands;
-  existing_demands.erase(net);
-  const auto occupied = graph.occupied_demand(existing_nets, existing_demands);
-  auto planned_nets = std::move(existing_nets);
-  planned_nets.insert(net);
-  auto planned_demands = std::move(existing_demands);
   auto planned_net_demand = candidate_demand;
   const bool direct_medial_neck_down =
       direct_resource && graph.medial_neck_down_width(resource_id, net) == selected_width;
@@ -1152,8 +1455,10 @@ struct PlannedVoronoiAllocation {
       existing != demands.end() && !direct_medial_neck_down && !existing_direct_medial_neck_down) {
     planned_net_demand = std::max(planned_net_demand, existing->second);
   }
-  planned_demands[net] = planned_net_demand;
-  return PlannedVoronoiAllocation{occupied, graph.occupied_demand(planned_nets, planned_demands)};
+  const auto occupied = graph.occupied_demand_with_virtual_net(nets, demands, net, 0U, false);
+  const auto planned =
+      graph.occupied_demand_with_virtual_net(nets, demands, net, planned_net_demand, true);
+  return PlannedVoronoiAllocation{occupied, planned};
 }
 
 [[nodiscard]] bool voronoi_allocation_edge_over_capacity(const SharedVoronoiAllocationGraph& graph,
@@ -1181,20 +1486,25 @@ struct PlannedVoronoiAllocation {
   return over_capacity;
 }
 
-[[nodiscard]] std::uint64_t voronoi_allocation_edge_cost(
+struct VoronoiAllocationEdgeCost {
+  std::uint64_t total{0U};
+  std::uint64_t capacity_reserve{0U};
+};
+
+[[nodiscard]] VoronoiAllocationEdgeCost voronoi_allocation_edge_cost(
     const SharedVoronoiAllocationGraph& graph, const RoutingOccupancy& occupancy,
     const RoutingHistory& history, const NetId& net, bool complement_allocated,
     bool routing_bus_member_allocated, const Edge& edge, Nanometres selected_width,
     const GlobalRouterConfig& config, bool use_direct_edges = true) {
-  std::uint64_t result = 0U;
+  VoronoiAllocationEdgeCost result;
   if (config.negotiate_voronoi_lane_conflicts) {
     const RoutingHistory::SelectedJunctionEdgeKey key{net, edge};
     const auto junction_history = history.selected_junction_edges.contains(key)
                                       ? history.selected_junction_edges.at(key)
                                       : 0U;
-    result =
-        saturating_add(result, saturating_multiply(static_cast<std::uint64_t>(junction_history),
-                                                   config.voronoi_lane_conflict_history_cost));
+    result.total = saturating_add(result.total,
+                                  saturating_multiply(static_cast<std::uint64_t>(junction_history),
+                                                      config.voronoi_lane_conflict_history_cost));
   }
   const auto selected_resources = graph.resources_for(edge, use_direct_edges);
   if (config.negotiate_voronoi_lane_conflicts && selected_resources.size() == 2U) {
@@ -1202,9 +1512,9 @@ struct PlannedVoronoiAllocation {
         net, Edge{selected_resources.front(), selected_resources.back()}};
     const auto junction_history =
         history.exact_junctions.contains(key) ? history.exact_junctions.at(key) : 0U;
-    result =
-        saturating_add(result, saturating_multiply(static_cast<std::uint64_t>(junction_history),
-                                                   config.voronoi_lane_conflict_history_cost));
+    result.total = saturating_add(result.total,
+                                  saturating_multiply(static_cast<std::uint64_t>(junction_history),
+                                                      config.voronoi_lane_conflict_history_cost));
   }
   for (const auto resource_id : selected_resources) {
     const auto& resource = graph.resources[resource_id];
@@ -1217,45 +1527,54 @@ struct PlannedVoronoiAllocation {
     const auto found = occupancy.voronoi_resources.find(resource_id);
     const std::set<NetId> empty;
     const auto& nets = found == occupancy.voronoi_resources.end() ? empty : found->second;
-    result = saturating_add(
-        result, saturating_multiply(allocation->occupied_nm, config.voronoi_resource_present_cost) /
-                    resource.capacity_nm);
+    result.total =
+        saturating_add(result.total, saturating_multiply(allocation->occupied_nm,
+                                                         config.voronoi_resource_present_cost) /
+                                         resource.capacity_nm);
+    const auto candidate_demand = allocation->planned_nm > allocation->occupied_nm
+                                      ? allocation->planned_nm - allocation->occupied_nm
+                                      : 0U;
+    const auto reserve = capacity_reserve_penalty(resource.capacity_nm, allocation->occupied_nm,
+                                                  candidate_demand, config);
+    result.total = saturating_add(result.total, reserve);
+    result.capacity_reserve = saturating_add(result.capacity_reserve, reserve);
     if (allocation->planned_nm > resource.capacity_nm) {
       const auto overflow = allocation->planned_nm - resource.capacity_nm;
-      result = saturating_add(result, config.voronoi_resource_present_cost);
-      result = saturating_add(result,
-                              saturating_multiply(overflow, config.voronoi_resource_present_cost) /
-                                  resource.capacity_nm);
+      result.total = saturating_add(result.total, config.voronoi_resource_present_cost);
+      result.total = saturating_add(
+          result.total, saturating_multiply(overflow, config.voronoi_resource_present_cost) /
+                            resource.capacity_nm);
     }
     const auto resource_history = history.voronoi_resources.contains(resource_id)
                                       ? history.voronoi_resources.at(resource_id)
                                       : 0U;
-    result =
-        saturating_add(result, saturating_multiply(static_cast<std::uint64_t>(resource_history),
-                                                   config.voronoi_resource_history_cost));
+    result.total = saturating_add(result.total,
+                                  saturating_multiply(static_cast<std::uint64_t>(resource_history),
+                                                      config.voronoi_resource_history_cost));
     if (config.negotiate_voronoi_lane_conflicts) {
       const RoutingHistory::LaneConflictResourceKey key{net, resource_id};
       const auto conflict_history = history.lane_conflict_resources.contains(key)
                                         ? history.lane_conflict_resources.at(key)
                                         : 0U;
-      result =
-          saturating_add(result, saturating_multiply(static_cast<std::uint64_t>(conflict_history),
-                                                     config.voronoi_lane_conflict_history_cost));
+      result.total = saturating_add(
+          result.total, saturating_multiply(static_cast<std::uint64_t>(conflict_history),
+                                            config.voronoi_lane_conflict_history_cost));
     }
     if (direct_resource && config.negotiate_voronoi_lane_conflicts) {
       for (const auto portal_node : {edge.first, edge.second}) {
         const RoutingHistory::DirectPortalKey key{net, resource_id, portal_node};
         const auto portal_history =
             history.direct_portals.contains(key) ? history.direct_portals.at(key) : 0U;
-        result =
-            saturating_add(result, saturating_multiply(static_cast<std::uint64_t>(portal_history),
-                                                       config.voronoi_lane_conflict_history_cost));
+        result.total = saturating_add(
+            result.total, saturating_multiply(static_cast<std::uint64_t>(portal_history),
+                                              config.voronoi_lane_conflict_history_cost));
       }
     }
     if (complement_allocated) {
       const auto complement = graph.differential_complement(net);
       if (complement && !nets.contains(*complement)) {
-        result = saturating_add(result, config.differential_pair_resource_separation_cost);
+        result.total =
+            saturating_add(result.total, config.differential_pair_resource_separation_cost);
       }
     }
     if (routing_bus_member_allocated) {
@@ -1264,7 +1583,7 @@ struct PlannedVoronoiAllocation {
                                          [&nets, &net](const NetId& member) {
                                            return member != net && nets.contains(member);
                                          })) {
-        result = saturating_add(result, config.routing_bus_resource_separation_cost);
+        result.total = saturating_add(result.total, config.routing_bus_resource_separation_cost);
       }
     }
   }
@@ -2008,12 +2327,58 @@ private:
           config.present_congestion_multiplier_per_mille;
   const bool invalid_diagonal_policy =
       config.allow_diagonal_grid_edges && config.allow_crossing_safe_diagonal_grid_edges;
-  const bool invalid_static_seed = config.max_static_seed_candidates_per_connection == 0U ||
-                                   config.max_static_seed_searches == 0U ||
-                                   config.max_static_seed_reprojection_searches == 0U ||
-                                   config.static_seed_alternative_edge_penalty == 0U ||
-                                   config.static_seed_corridor_departure_penalty == 0U ||
-                                   config.max_static_seed_corridor_cells == 0U;
+  const bool rrt_seed_family_slots_overflow =
+      config.max_static_seed_rrt_connect_candidates > std::numeric_limits<std::size_t>::max() - 2U;
+  const bool static_seed_family_slots_overflow =
+      rrt_seed_family_slots_overflow || config.max_static_seed_hydraulic_candidates >
+                                            std::numeric_limits<std::size_t>::max() - 2U -
+                                                config.max_static_seed_rrt_connect_candidates;
+  const auto required_static_seed_family_slots =
+      static_seed_family_slots_overflow ? std::numeric_limits<std::size_t>::max()
+                                        : 2U +
+                                              (config.use_static_seed_rrt_connect_alternatives
+                                                   ? config.max_static_seed_rrt_connect_candidates
+                                                   : 0U) +
+                                              config.max_static_seed_hydraulic_candidates;
+  const bool hydraulic_gpu_available = hydraulic_gpu_compute_available();
+  if (!hydraulic_gpu_available) {
+    diagnostic = "Flux routing requires a working Vulkan compute device; the mandatory startup "
+                 "probe could not initialize and dispatch the hydraulic kernel";
+    return std::nullopt;
+  }
+  if (!config.static_seed_hydraulic_flow.prefer_gpu) {
+    diagnostic = "Flux production routing cannot disable mandatory GPU hydraulic discovery; the "
+                 "CPU implementation is reserved for deterministic tests and oracle comparisons";
+    return std::nullopt;
+  }
+  const bool invalid_static_seed =
+      static_seed_family_slots_overflow ||
+      config.max_static_seed_candidates_per_connection < required_static_seed_family_slots ||
+      config.max_static_seed_searches == 0U || config.max_static_seed_reprojection_searches == 0U ||
+      (config.use_static_seed_rrt_connect_alternatives &&
+       (config.max_static_seed_rrt_connect_candidates == 0U ||
+        config.max_static_seed_rrt_connect_iterations == 0U)) ||
+      (config.max_static_seed_hydraulic_candidates == 0U ||
+       config.static_seed_hydraulic_flow.relaxation_iterations == 0U ||
+       config.static_seed_hydraulic_flow.droplet_batches == 0U ||
+       config.static_seed_hydraulic_flow.droplets_per_batch == 0U ||
+       config.static_seed_hydraulic_flow.maximum_steps_per_droplet == 0U ||
+       config.static_seed_hydraulic_flow.erosion_per_flow_quantum == 0U ||
+       config.static_seed_hydraulic_flow.maximum_erosion == 0U ||
+       config.static_seed_hydraulic_flow.exploration_score_quantum == 0U ||
+       config.static_seed_hydraulic_flow.erosion_height_scale == 0U ||
+       config.static_seed_hydraulic_flow.clearance_score_scale == 0U ||
+       config.static_seed_hydraulic_flow.maximum_clearance_reward_cells == 0U ||
+       config.static_seed_hydraulic_flow.downstream_pressure_score_scale == 0U ||
+       config.static_seed_hydraulic_flow.maximum_downstream_pressure == 0U ||
+       static_cast<std::uint64_t>(
+           config.static_seed_hydraulic_flow.downstream_pressure_score_scale) *
+               config.static_seed_hydraulic_flow.maximum_downstream_pressure >
+           static_cast<std::uint64_t>(hydraulic_unreachable_height - 1'414U) ||
+       config.static_seed_hydraulic_flow.lateral_erosion_divisor == 0U) ||
+      config.static_seed_alternative_edge_penalty == 0U ||
+      config.static_seed_corridor_departure_penalty == 0U ||
+      config.max_static_seed_corridor_cells == 0U;
   const bool invalid_spline_refinement =
       config.global_spline_tessellation_tolerance.value() <= 0 ||
       config.global_spline_control_corridor.value() <= 0 ||
@@ -2037,7 +2402,7 @@ private:
       invalid_via_pitch || invalid_diagonal_policy || invalid_static_seed ||
       invalid_spline_refinement || config.max_pin_access_nodes_per_terminal == 0U ||
       config.max_free_space_edges == 0U || config.clearance_shadow_cost_quantum.value() < 0 ||
-      config.terminal_neck_down_width.value() < 0 ||
+      config.capacity_reserve_per_mille > 1'000U || config.terminal_neck_down_width.value() < 0 ||
       config.max_terminal_neck_down_length.value() < 0 ||
       config.medial_neck_down_width.value() < 0 || config.max_medial_neck_down_length.value() < 0 ||
       config.corridor_neck_down_width.value() < 0 ||
@@ -2059,7 +2424,7 @@ private:
                  "grid pitch and its X/Y phases must lie within that stride; checkerboard and "
                  "crossing-safe diagonal policies are mutually exclusive; enabled early "
                  "spline/PNS guidance requires positive costs, geometry bounds, and effort "
-                 "budgets";
+                 "budgets; capacity reserve must be no greater than 1000 per mille";
     return std::nullopt;
   }
   if (local_pin_escape_enabled) {
@@ -2180,8 +2545,22 @@ private:
       account_rules(resolve_net_routing_rules(board, net.id), pair_member);
     }
   }
-  const auto resolved_via_pitch =
-      explicit_via_pitch ? config.via_site_pitch.value() : config.grid_pitch.value();
+  const auto resolved_via_pitch = [&]() {
+    if (explicit_via_pitch) {
+      return config.via_site_pitch.value();
+    }
+    // Planar route resolution and via placement resolution are separate physical decisions.  A
+    // fine topology grid must not make every node a via site when adjacent vias would violate the
+    // resolved rules.  Round the required spacing upward to an exact grid stride so deterministic
+    // integer site phases remain unchanged.
+    const auto pitch = config.grid_pitch.value();
+    if (pitch <= 0) {
+      return pitch;
+    }
+    const auto required = static_cast<std::int64_t>(std::ceil(minimum_via_pitch));
+    const auto strides = std::max<std::int64_t>(1, (required + pitch - 1) / pitch);
+    return strides * pitch;
+  }();
   const auto required_planar_pitch =
       config.allow_diagonal_grid_edges || config.allow_crossing_safe_diagonal_grid_edges
           ? minimum_planar_pitch * std::sqrt(2.0L)
@@ -2257,6 +2636,69 @@ private:
           geometry::PointLocation::outside;
     }
   }
+
+  const auto register_vertical_feature = [&](const ObjectId& id, const NetId& net, Point position,
+                                             const std::vector<LayerId>& feature_layers,
+                                             bool component_pad) {
+    if (net.value().empty()) {
+      return;
+    }
+    const auto relative_x = position.x.value() - grid.origin_x;
+    const auto relative_y = position.y.value() - grid.origin_y;
+    if (relative_x < 0 || relative_y < 0) {
+      return;
+    }
+    std::vector<std::size_t> layer_indices;
+    for (const auto& layer : feature_layers) {
+      const auto found = std::find(grid.layers.begin(), grid.layers.end(), layer);
+      if (found != grid.layers.end()) {
+        layer_indices.push_back(static_cast<std::size_t>(found - grid.layers.begin()));
+      }
+    }
+    std::sort(layer_indices.begin(), layer_indices.end());
+    layer_indices.erase(std::unique(layer_indices.begin(), layer_indices.end()),
+                        layer_indices.end());
+    if (layer_indices.size() < 2U || layer_indices.front() == layer_indices.back()) {
+      return;
+    }
+    const auto floor_x = static_cast<std::size_t>(relative_x / grid.pitch);
+    const auto floor_y = static_cast<std::size_t>(relative_y / grid.pitch);
+    std::vector<std::size_t> x_candidates{floor_x};
+    std::vector<std::size_t> y_candidates{floor_y};
+    if (relative_x % grid.pitch != 0 && floor_x + 1U < grid.width) {
+      x_candidates.push_back(floor_x + 1U);
+    }
+    if (relative_y % grid.pitch != 0 && floor_y + 1U < grid.height) {
+      y_candidates.push_back(floor_y + 1U);
+    }
+    for (const auto x : x_candidates) {
+      for (const auto y : y_candidates) {
+        if (!grid.valid(x, y)) {
+          continue;
+        }
+        grid.vertical_feature_sites.push_back(Grid::VerticalFeatureSite{
+            id, net, position, x, y, layer_indices.front(), layer_indices.back(), component_pad});
+      }
+    }
+  };
+  for (const auto& via : board.vias) {
+    register_vertical_feature(via.id, via.net, via.position, via.layers, false);
+  }
+  for (const auto& footprint : board.footprints) {
+    for (const auto& pad : footprint.pads) {
+      if (!pad.plated || pad.drill.value() <= 0) {
+        continue;
+      }
+      register_vertical_feature(pad.id, pad.net,
+                                geometry::transform_point(pad.local_position, footprint.position,
+                                                          footprint.rotation, footprint.side),
+                                pad.layers, true);
+    }
+  }
+  std::sort(grid.vertical_feature_sites.begin(), grid.vertical_feature_sites.end());
+  grid.vertical_feature_sites.erase(
+      std::unique(grid.vertical_feature_sites.begin(), grid.vertical_feature_sites.end()),
+      grid.vertical_feature_sites.end());
   return grid;
 }
 
@@ -2772,6 +3214,7 @@ search_same_net_terminal_fanout(const NetId& net, std::size_t layer, Point start
   constexpr auto no_parent = std::numeric_limits<std::size_t>::max();
   std::vector<std::uint64_t> distances(static_cast<std::size_t>(state_count), infinity);
   std::vector<std::size_t> parents(static_cast<std::size_t>(state_count), no_parent);
+  std::map<std::size_t, std::uint64_t> seed_costs;
   std::priority_queue<QueueEntry, std::vector<QueueEntry>, std::greater<QueueEntry>> open;
   const auto start_x = rounded_coordinate(start.x);
   const auto start_y = rounded_coordinate(start.y);
@@ -2792,6 +3235,7 @@ search_same_net_terminal_fanout(const NetId& net, std::size_t layer, Point start
       if (cost < distances[index]) {
         distances[index] = cost;
         parents[index] = index;
+        seed_costs[index] = cost;
         open.push(QueueEntry{cost, index});
       }
     }
@@ -2819,6 +3263,71 @@ search_same_net_terminal_fanout(const NetId& net, std::size_t layer, Point start
 
   static constexpr std::array<std::pair<std::int64_t, std::int64_t>, 8> offsets{
       {{-1, 0}, {0, -1}, {1, 0}, {0, 1}, {-1, -1}, {1, -1}, {1, 1}, {-1, 1}}};
+  if (state_count >= 4'096U && state_count <= 250'000U && routing_compute_gpu_available()) {
+    RoutingComputeBatchedGraphWavefrontInput graph;
+    graph.node_count = static_cast<std::size_t>(state_count);
+    graph.offsets.reserve(graph.node_count + 1U);
+    graph.offsets.push_back(0U);
+    for (std::size_t index = 0U; index < graph.node_count; ++index) {
+      const auto [x, y] = coordinate(index);
+      const auto current_point = point(x, y);
+      for (const auto [dx, dy] : offsets) {
+        const auto nx = x + dx, ny = y + dy;
+        if (!in_bounds(nx, ny))
+          continue;
+        const auto next_point = point(nx, ny);
+        if (!obstacles.pin_access_blocked(net, layer, current_point, next_point, width))
+          graph.edges.push_back(RoutingComputeGraphEdge{
+              static_cast<std::uint32_t>(state(nx, ny)),
+              static_cast<std::uint32_t>(std::min<std::uint64_t>(
+                  std::numeric_limits<std::uint32_t>::max(),
+                  geometry::segment_length_nm(current_point, next_point)))});
+      }
+      graph.offsets.push_back(static_cast<std::uint32_t>(graph.edges.size()));
+    }
+    graph.source_groups.emplace_back(goals.begin(), goals.end());
+    graph.maximum_passes = std::min<std::size_t>(
+        maximum_expansions, static_cast<std::size_t>(width_states + height_states + 16U));
+    const auto field = compute_batched_routing_graph_wavefront(graph, true);
+    if (field.ok() && field.distance.size() == 1U) {
+      std::optional<std::pair<std::uint64_t, std::size_t>> selected_seed;
+      for (const auto& [seed, access_cost] : seed_costs) {
+        if (field.distance[0][seed] == std::numeric_limits<std::uint32_t>::max())
+          continue;
+        const auto candidate = std::pair{access_cost + field.distance[0][seed], seed};
+        if (!selected_seed || candidate < *selected_seed)
+          selected_seed = candidate;
+      }
+      if (selected_seed) {
+        std::vector<Point> points{start};
+        auto current = selected_seed->second;
+        points.push_back(point(coordinate(current).first, coordinate(current).second));
+        while (!goals.contains(current)) {
+          std::optional<std::size_t> next;
+          for (auto edge = graph.offsets[current]; edge < graph.offsets[current + 1U]; ++edge) {
+            const auto& candidate = graph.edges[edge];
+            if (field.distance[0][candidate.node] != std::numeric_limits<std::uint32_t>::max() &&
+                static_cast<std::uint64_t>(field.distance[0][candidate.node]) + candidate.cost ==
+                    field.distance[0][current] &&
+                (!next || candidate.node < *next))
+              next = candidate.node;
+          }
+          if (!next) {
+            points.clear();
+            break;
+          }
+          current = *next;
+          const auto [cx, cy] = coordinate(current);
+          points.push_back(point(cx, cy));
+        }
+        if (!points.empty()) {
+          points.push_back(goal);
+          points.erase(std::unique(points.begin(), points.end()), points.end());
+          return SameNetFanoutSearch{std::move(points), graph.node_count};
+        }
+      }
+    }
+  }
   std::optional<std::size_t> reached;
   std::size_t expansions = 0U;
   while (!open.empty() && expansions < maximum_expansions) {
@@ -2975,13 +3484,12 @@ filter_pin_access(std::vector<NetTask>& tasks, const Grid& grid, RoutingObstacle
         }
         const auto [x, y, layer] = grid.decode(node);
         auto adjacent = sampled_planar_neighbors(grid, node);
-        if (grid.via_site(x, y)) {
-          if (layer > 0U) {
-            adjacent.push_back(grid.node(x, y, layer - 1U));
-          }
-          if (layer + 1U < grid.layers.size()) {
-            adjacent.push_back(grid.node(x, y, layer + 1U));
-          }
+        if (layer > 0U && grid.via_transition_site(x, y, layer, layer - 1U, &task.net)) {
+          adjacent.push_back(grid.node(x, y, layer - 1U));
+        }
+        if (layer + 1U < grid.layers.size() &&
+            grid.via_transition_site(x, y, layer, layer + 1U, &task.net)) {
+          adjacent.push_back(grid.node(x, y, layer + 1U));
         }
         if (config.use_direct_voronoi_resource_edges) {
           const auto& direct = voronoi_allocation.direct_neighbors(node);
@@ -3632,7 +4140,22 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
                                                      {},
                                                      {},
                                                      {},
-                                                     false});
+                                                     false,
+                                                     GlobalSeedFamily::shortest,
+                                                     {}});
+              const auto rrt_first = std::size_t{2U};
+              const auto rrt_last = rrt_first + task_config.max_static_seed_rrt_connect_candidates;
+              const auto hydraulic_first = rrt_last;
+              const auto hydraulic_last =
+                  hydraulic_first + task_config.max_static_seed_hydraulic_candidates;
+              branches.back().family =
+                  task_config.use_static_seed_rrt_connect_alternatives &&
+                          tree_candidate >= rrt_first && tree_candidate < rrt_last
+                      ? GlobalSeedFamily::rrt_connect
+                  : tree_candidate >= hydraulic_first && tree_candidate < hydraulic_last
+                      ? GlobalSeedFamily::hydraulic_erosion
+                  : tree_candidate == 0U ? GlobalSeedFamily::shortest
+                                         : GlobalSeedFamily::diversified;
               branches.back().goals = {branches.back().route.nodes.back()};
               local_stats.tree_joins =
                   saturating_count_add(local_stats.tree_joins, joins_existing_tree ? 1U : 0U);
@@ -3645,15 +4168,28 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
               ++local_stats.partial_trees;
               break;
             }
-            if (std::find(retained_trees.begin(), retained_trees.end(), topology) !=
-                retained_trees.end()) {
+            const auto duplicate = std::find(retained_trees.begin(), retained_trees.end(),
+                                             topology) != retained_trees.end();
+            const auto externally_diversified =
+                !branches.empty() &&
+                (branches.front().family == GlobalSeedFamily::rrt_connect ||
+                 branches.front().family == GlobalSeedFamily::hydraulic_erosion);
+            if (duplicate) {
               ++local_stats.deduplicated_candidates;
-              break;
+              // A duplicate carrier graph is still useful to an independent topology generator:
+              // RRT-Connect or hydraulic erosion can replace each layer run before exact graph
+              // reprojection. Ordinary duplicates are skipped, but no longer prune later route
+              // families from the portfolio.
+              if (!externally_diversified) {
+                continue;
+              }
             }
             ++local_stats.complete_trees;
             local_stats.alternative_trees =
                 saturating_count_add(local_stats.alternative_trees, tree_candidate == 0U ? 0U : 1U);
-            retained_trees.push_back(std::move(topology));
+            if (!duplicate) {
+              retained_trees.push_back(std::move(topology));
+            }
             if (tree_candidate == 0U) {
               for (const auto& branch : branches) {
                 for (std::size_t index = 1U; index < branch.route.nodes.size(); ++index) {
@@ -3875,6 +4411,63 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
     }
     return result;
   };
+  const auto make_guarded_spline = [](const std::vector<Point>& source,
+                                      Nanometres guard) -> std::optional<QuinticPHRoute> {
+    if (source.size() < 3U || guard.value() <= 0) {
+      return make_quintic_ph_route(source);
+    }
+    const auto interpolate = [](Point first, Point second, long double parameter) {
+      return Point{Nanometres{static_cast<std::int64_t>(std::llround(
+                       static_cast<long double>(first.x.value()) +
+                       parameter * static_cast<long double>(second.x.value() - first.x.value())))},
+                   Nanometres{static_cast<std::int64_t>(std::llround(
+                       static_cast<long double>(first.y.value()) +
+                       parameter * static_cast<long double>(second.y.value() - first.y.value())))}};
+    };
+    std::vector<Point> guarded{source.front()};
+    guarded.reserve(source.size() * 3U);
+    const auto append = [&](Point point) {
+      if (guarded.back() != point) {
+        guarded.push_back(point);
+      }
+    };
+    for (std::size_t corner = 1U; corner + 1U < source.size(); ++corner) {
+      const auto incoming = geometry::segment_length_nm(source[corner - 1U], source[corner]);
+      const auto outgoing = geometry::segment_length_nm(source[corner], source[corner + 1U]);
+      const auto before = incoming > 0U
+                              ? std::min(0.25L, static_cast<long double>(guard.value()) / incoming)
+                              : 0.0L;
+      const auto after = outgoing > 0U
+                             ? std::min(0.25L, static_cast<long double>(guard.value()) / outgoing)
+                             : 0.0L;
+      if (before > 0.0L) {
+        append(interpolate(source[corner], source[corner - 1U], before));
+      }
+      append(source[corner]);
+      if (after > 0.0L) {
+        append(interpolate(source[corner], source[corner + 1U], after));
+      }
+    }
+    append(source.back());
+    return make_quintic_ph_route(guarded);
+  };
+  const auto spline_preserves_navmesh_topology = [](const NavMeshRouteResult& navigation,
+                                                    const std::vector<SplineSample>& samples) {
+    if (!navigation.topology_signature.valid) {
+      return false;
+    }
+    std::vector<Point> polyline;
+    polyline.reserve(samples.size());
+    for (const auto& sample : samples) {
+      const auto point =
+          Point{Nanometres{static_cast<std::int64_t>(std::llround(sample.position.x))},
+                Nanometres{static_cast<std::int64_t>(std::llround(sample.position.y))}};
+      if (polyline.empty() || polyline.back() != point) {
+        polyline.push_back(point);
+      }
+    }
+    return validate_navmesh_topology_signature(navigation.topology_signature, polyline).preserved;
+  };
 
   struct NavigationDomain {
     std::vector<OffsetFreeSpaceRegion> regions;
@@ -4031,11 +4624,208 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
                     domain.prepared_regions[region_index] =
                         prepare_navmesh_domain(region, navmesh_config);
                   }
-                  auto routed =
-                      route_prepared_navmesh(*domain.prepared_regions[region_index], points.front(),
-                                             points.back(), navmesh_config);
+                  NavMeshRouteResult routed;
+                  if (candidate.family == GlobalSeedFamily::rrt_connect) {
+                    ++stats.rrt_connect_attempts;
+                    const auto rrt_seed =
+                        static_cast<std::uint64_t>(task_index) * 1'000'003ULL +
+                        static_cast<std::uint64_t>(candidate.connection_index) * 1'009ULL +
+                        static_cast<std::uint64_t>(candidate.tree_candidate_index) * 17ULL +
+                        static_cast<std::uint64_t>(layer) +
+                        static_cast<std::uint64_t>(config.feedback_epoch_index) *
+                            0x9e3779b97f4a7c15ULL;
+                    routed = route_prepared_navmesh_rrt_connect(
+                        *domain.prepared_regions[region_index], points.front(), points.back(),
+                        navmesh_config,
+                        NavMeshRrtConnectConfig{config.max_static_seed_rrt_connect_iterations,
+                                                rrt_seed, 0U, 8U});
+                    stats.rrt_connect_iterations = saturating_count_add(
+                        stats.rrt_connect_iterations, routed.rrt_connect_iterations);
+                    if (routed.ok()) {
+                      ++stats.rrt_connect_accepted;
+                    } else {
+                      ++stats.rrt_connect_failures;
+                      // The RRT family is an additional topology source.  Preserve the ordinary
+                      // diversified candidate as a fallback when its bounded trees do not meet.
+                      candidate.family = GlobalSeedFamily::diversified;
+                      routed =
+                          route_prepared_navmesh(*domain.prepared_regions[region_index],
+                                                 points.front(), points.back(), navmesh_config);
+                    }
+                  } else if (candidate.family == GlobalSeedFamily::hydraulic_erosion) {
+                    // Every same-layer run is evaluated against that copper layer's independently
+                    // extracted static obstacles and clearance-expanded domain. Multi-layer paths
+                    // therefore carry separate erosion fields joined only at planned vias.
+                    ++stats.hydraulic_attempts;
+                    auto flow = config.static_seed_hydraulic_flow;
+                    flow.deterministic_seed ^=
+                        static_cast<std::uint64_t>(task_index) * 1'000'003ULL +
+                        static_cast<std::uint64_t>(candidate.connection_index) * 1'009ULL +
+                        static_cast<std::uint64_t>(candidate.tree_candidate_index) * 17ULL +
+                        static_cast<std::uint64_t>(layer) * 65'537ULL +
+                        static_cast<std::uint64_t>(config.feedback_epoch_index) *
+                            0x9e3779b97f4a7c15ULL;
+                    NavMeshHydraulicConfig hydraulic_config;
+                    hydraulic_config.flow = flow;
+                    hydraulic_config.opened_guard_rings = 1U;
+                    for (const auto& entry : config.routability_history) {
+                      const auto layer_matches = entry.resource.layer.value().empty() ||
+                                                 entry.resource.layer == grid.layers[layer];
+                      const auto net_matches =
+                          entry.resource.nets.empty() ||
+                          std::find(entry.resource.nets.begin(), entry.resource.nets.end(),
+                                    candidate.net) != entry.resource.nets.end();
+                      if (!layer_matches || !net_matches || entry.pressure == 0U)
+                        continue;
+                      std::uint64_t weight = 1U;
+                      switch (entry.kind) {
+                      case RoutabilityFailureKind::packing_capacity_exceeded:
+                        weight = 2U;
+                        break;
+                      case RoutabilityFailureKind::terminal_escape_ordering:
+                      case RoutabilityFailureKind::curvature_infeasible:
+                        weight = 3U;
+                        break;
+                      case RoutabilityFailureKind::shove_deadlock:
+                      case RoutabilityFailureKind::topological_trap:
+                        weight = 4U;
+                        break;
+                      case RoutabilityFailureKind::via_site_exhausted:
+                      case RoutabilityFailureKind::layer_transition_conflict:
+                        weight = 5U;
+                        break;
+                      case RoutabilityFailureKind::quantization_clearance:
+                        weight = 6U;
+                        break;
+                      }
+                      if (entry.stage == RoutabilityFailureStage::final_validation)
+                        weight *= 2U;
+                      const auto bounds = entry.resource.bounds;
+                      const auto span_x = bounds.maximum.x.value() - bounds.minimum.x.value();
+                      const auto span_y = bounds.maximum.y.value() - bounds.minimum.y.value();
+                      const auto center =
+                          Point{Nanometres{std::midpoint(bounds.minimum.x.value(),
+                                                         bounds.maximum.x.value())},
+                                Nanometres{std::midpoint(bounds.minimum.y.value(),
+                                                         bounds.maximum.y.value())}};
+                      auto deposit_start = bounds.minimum;
+                      auto deposit_end = bounds.maximum;
+                      // Lane/corridor failures are directional. Deposit along the bottleneck's
+                      // major axis rather than across its diagonal so the next hydraulic epoch
+                      // preserves which passage orientation actually failed.
+                      if (entry.suggested_relaxation == RoutabilityRelaxation::change_corridor ||
+                          entry.suggested_relaxation == RoutabilityRelaxation::change_lane_order ||
+                          entry.suggested_relaxation ==
+                              RoutabilityRelaxation::change_layer_sequence) {
+                        if (span_x >= span_y) {
+                          deposit_start = Point{bounds.minimum.x, center.y};
+                          deposit_end = Point{bounds.maximum.x, center.y};
+                        } else {
+                          deposit_start = Point{center.x, bounds.minimum.y};
+                          deposit_end = Point{center.x, bounds.maximum.y};
+                        }
+                      } else if (entry.suggested_relaxation ==
+                                     RoutabilityRelaxation::change_via_site ||
+                                 entry.suggested_relaxation ==
+                                     RoutabilityRelaxation::change_terminal_order) {
+                        deposit_start = center;
+                        deposit_end = center;
+                      }
+                      const auto weighted =
+                          entry.pressure > std::numeric_limits<std::uint64_t>::max() / weight
+                              ? std::numeric_limits<std::uint64_t>::max()
+                              : entry.pressure * weight;
+                      hydraulic_config.downstream_feedback.push_back(NavMeshHydraulicTerrainDeposit{
+                          entry.resource.bounds, deposit_start, deposit_end,
+                          deposit_start != deposit_end,
+                          static_cast<std::uint32_t>(std::min<std::uint64_t>(
+                              weighted, std::numeric_limits<std::uint32_t>::max())),
+                          0U});
+                    }
+                    for (const auto& entry : config.hydraulic_success_history) {
+                      const auto layer_matches = entry.resource.layer.value().empty() ||
+                                                 entry.resource.layer == grid.layers[layer];
+                      const auto net_matches =
+                          entry.resource.nets.empty() ||
+                          std::find(entry.resource.nets.begin(), entry.resource.nets.end(),
+                                    candidate.net) != entry.resource.nets.end();
+                      if (!layer_matches || !net_matches || entry.strength == 0U)
+                        continue;
+                      hydraulic_config.downstream_feedback.push_back(NavMeshHydraulicTerrainDeposit{
+                          entry.resource.bounds, entry.start, entry.end, true, 0U,
+                          static_cast<std::uint32_t>(std::min<std::uint64_t>(
+                              entry.strength, std::numeric_limits<std::uint32_t>::max()))});
+                    }
+                    routed = route_prepared_navmesh_hydraulic(
+                        *domain.prepared_regions[region_index], points.front(), points.back(),
+                        navmesh_config, hydraulic_config);
+                    if (!routed.hydraulic_erosion_field.empty()) {
+                      candidate.hydraulic_fields.push_back(
+                          GlobalSeedCandidate::HydraulicFieldEvidence{
+                              grid.layers[layer], routed.hydraulic_field_origin,
+                              routed.hydraulic_field_cell_pitch, routed.hydraulic_field_width,
+                              routed.hydraulic_field_height, routed.hydraulic_field_stride,
+                              routed.hydraulic_maximum_flow, routed.hydraulic_maximum_erosion,
+                              routed.hydraulic_maximum_terrain_height,
+                              routed.hydraulic_maximum_downstream_pressure,
+                              routed.hydraulic_maximum_success_prior, routed.hydraulic_flow_field,
+                              routed.hydraulic_erosion_field, routed.hydraulic_heightmap,
+                              routed.hydraulic_free_space_field,
+                              routed.hydraulic_downstream_pressure_field,
+                              routed.hydraulic_success_prior_field});
+                    }
+                    stats.hydraulic_relaxation_passes = saturating_count_add(
+                        stats.hydraulic_relaxation_passes, routed.hydraulic_relaxation_passes);
+                    stats.hydraulic_droplet_steps = saturating_count_add(
+                        stats.hydraulic_droplet_steps, routed.hydraulic_droplet_steps);
+                    stats.hydraulic_discovery_cells = saturating_count_add(
+                        stats.hydraulic_discovery_cells, routed.hydraulic_discovery_cells);
+                    stats.hydraulic_exact_certified_chords =
+                        saturating_count_add(stats.hydraulic_exact_certified_chords,
+                                             routed.hydraulic_exact_certified_chords);
+                    stats.hydraulic_gpu_routes = saturating_count_add(
+                        stats.hydraulic_gpu_routes, routed.used_hydraulic_gpu ? 1U : 0U);
+                    stats.hydraulic_gpu_clearance_cache_hits =
+                        saturating_count_add(stats.hydraulic_gpu_clearance_cache_hits,
+                                             routed.hydraulic_gpu_clearance_cache_hit ? 1U : 0U);
+                    stats.hydraulic_gpu_peak_batch_size = std::max(
+                        stats.hydraulic_gpu_peak_batch_size, routed.hydraulic_gpu_batch_size);
+                    stats.hydraulic_gpu_buffer_reuses = saturating_count_add(
+                        stats.hydraulic_gpu_buffer_reuses, routed.hydraulic_gpu_buffer_reuses);
+                    stats.hydraulic_gpu_buffer_growths = saturating_count_add(
+                        stats.hydraulic_gpu_buffer_growths, routed.hydraulic_gpu_buffer_growths);
+                    stats.hydraulic_cpu_fallbacks = saturating_count_add(
+                        stats.hydraulic_cpu_fallbacks, routed.hydraulic_cpu_fallback ? 1U : 0U);
+                    if (routed.ok()) {
+                      ++stats.hydraulic_accepted;
+                    } else {
+                      ++stats.hydraulic_failures;
+                      if (routed.hydraulic_direct_polygon_discovery &&
+                          !routed.hydraulic_heightmap.empty()) {
+                        ++stats.hydraulic_projection_failures;
+                      }
+                      candidate.family = GlobalSeedFamily::diversified;
+                      routed =
+                          route_prepared_navmesh(*domain.prepared_regions[region_index],
+                                                 points.front(), points.back(), navmesh_config);
+                    }
+                  } else {
+                    routed = route_prepared_navmesh(*domain.prepared_regions[region_index],
+                                                    points.front(), points.back(), navmesh_config);
+                  }
                   stats.navmesh_cells =
                       saturating_count_add(stats.navmesh_cells, routed.cells.size());
+                  stats.navmesh_refined_parents = saturating_count_add(
+                      stats.navmesh_refined_parents, routed.adaptive_refined_parent_cells);
+                  stats.navmesh_refined_leaves = saturating_count_add(
+                      stats.navmesh_refined_leaves, routed.adaptive_refined_leaf_cells);
+                  stats.navmesh_rejected_leaves = saturating_count_add(
+                      stats.navmesh_rejected_leaves, routed.adaptive_rejected_leaf_cells);
+                  stats.navmesh_gpu_wavefront_routes = saturating_count_add(
+                      stats.navmesh_gpu_wavefront_routes, routed.used_gpu_wavefront ? 1U : 0U);
+                  stats.navmesh_gpu_wavefront_cpu_fallbacks =
+                      saturating_count_add(stats.navmesh_gpu_wavefront_cpu_fallbacks,
+                                           routed.gpu_wavefront_cpu_fallback ? 1U : 0U);
                   stats.navmesh_search_expansions = saturating_count_add(
                       stats.navmesh_search_expansions, routed.search_expansions);
                   if (routed.ok()) {
@@ -4076,7 +4866,42 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
                         Nanometres{points.front().y.value() +
                                    (points.back().y.value() - points.front().y.value()) / 2}});
             }
-            if (auto spline = make_cubic_bspline_route(points)) {
+            if (auto spline = make_quintic_ph_route(points)) {
+              std::optional<QuinticPHRoute> topology_safe_spline;
+              if (navmesh_route) {
+                auto initial_samples = adaptive_tessellate_quintic_ph(
+                    *spline, config.global_spline_tessellation_tolerance,
+                    config.global_spline_max_tessellation_depth,
+                    config.max_global_spline_samples_per_seed);
+                if (!spline_preserves_navmesh_topology(*navmesh_route, initial_samples) ||
+                    !certify_quintic_ph_shape(*spline).legal) {
+                  bool recovered = false;
+                  for (const auto divisor : {4, 8, 16, 32, 64, 128}) {
+                    const auto guarded = make_guarded_spline(
+                        points, Nanometres{std::max<std::int64_t>(1, grid.pitch / divisor)});
+                    if (!guarded || !certify_quintic_ph_shape(*guarded).legal) {
+                      continue;
+                    }
+                    const auto guarded_samples = adaptive_tessellate_quintic_ph(
+                        *guarded, config.global_spline_tessellation_tolerance,
+                        config.global_spline_max_tessellation_depth,
+                        config.max_global_spline_samples_per_seed);
+                    if (!spline_preserves_navmesh_topology(*navmesh_route, guarded_samples)) {
+                      continue;
+                    }
+                    *spline = *guarded;
+                    recovered = true;
+                    break;
+                  }
+                  if (!recovered) {
+                    ++stats.trajectory_rejected;
+                    all_runs_refined = false;
+                    first = last;
+                    continue;
+                  }
+                }
+                topology_safe_spline = *spline;
+              }
               if (navmesh_route && selected_region != nullptr &&
                   selected_prepared_region != nullptr) {
                 const auto point_bounds_distance = [](Point point,
@@ -4159,8 +4984,8 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
                                  static_cast<long double>(points.back().y.value() -
                                                           points[points.size() - 2U].y.value())};
                 ++stats.trajectory_attempts;
-                const auto optimized = optimize_cubic_bspline_trajectory(*spline, trajectory_config,
-                                                                         clearance_evaluator);
+                const auto optimized =
+                    optimize_quintic_ph_trajectory(*spline, trajectory_config, clearance_evaluator);
                 stats.trajectory_control_moves = saturating_count_add(
                     stats.trajectory_control_moves, optimized.accepted_control_moves);
                 stats.trajectory_candidate_checks = saturating_count_add(
@@ -4172,8 +4997,19 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
                   continue;
                 }
                 ++stats.trajectory_accepted;
+                const auto optimized_samples = adaptive_tessellate_quintic_ph(
+                    *spline, config.global_spline_tessellation_tolerance,
+                    config.global_spline_max_tessellation_depth,
+                    config.max_global_spline_samples_per_seed);
+                if (topology_safe_spline &&
+                    !spline_preserves_navmesh_topology(*navmesh_route, optimized_samples)) {
+                  // The continuous objective improved inside the broad cell union but crossed a
+                  // directed portal differently.  Keep the known valid realization and leave
+                  // topology changes to an explicit alternate NavMesh seed.
+                  *spline = *topology_safe_spline;
+                }
               }
-              auto samples = adaptive_tessellate_cubic_bspline(
+              auto samples = adaptive_tessellate_quintic_ph(
                   *spline, config.global_spline_tessellation_tolerance,
                   config.global_spline_max_tessellation_depth,
                   config.max_global_spline_samples_per_seed);
@@ -4196,6 +5032,20 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
                   if (topology_legal && index > 0U) {
                     topology_legal = certificates[index - 1U].has_value();
                   }
+                }
+                if (topology_legal) {
+                  std::vector<Point> topology_polyline;
+                  topology_polyline.reserve(samples.size());
+                  for (const auto& sample : samples) {
+                    const auto point = quantize(sample.position);
+                    if (topology_polyline.empty() || topology_polyline.back() != point) {
+                      topology_polyline.push_back(point);
+                    }
+                  }
+                  topology_legal = navmesh_route->topology_signature.valid &&
+                                   validate_navmesh_topology_signature(
+                                       navmesh_route->topology_signature, topology_polyline)
+                                       .preserved;
                 }
                 if (!topology_legal) {
                   ++stats.trajectory_rejected;
@@ -4237,6 +5087,7 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
                 RoutingGeometricCorridorRun run;
                 run.layer = grid.layers[layer];
                 run.portals = navmesh_route->portals;
+                run.topology_signature = navmesh_route->topology_signature;
                 run.lane_centerline.reserve(samples.size());
                 for (const auto& sample : samples) {
                   const auto point = quantize(sample.position);
@@ -4328,24 +5179,45 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
                       auto best_blocked = blocked_chords(samples);
                       for (const auto direction : {1.0L, -1.0L}) {
                         auto shoved = *spline;
-                        const auto moved = shove_cubic_bspline_control_corridor(
+                        SplineTrajectoryOptimizationConfig shove_config;
+                        shove_config.minimum_bend_radius = config.global_spline_minimum_bend_radius;
+                        shove_config.control_step = config.global_spline_shove_step;
+                        shove_config.gradient_probe_step = Nanometres{
+                            std::max<std::int64_t>(1, config.global_spline_shove_step.value() / 5)};
+                        shove_config.maximum_corridor_displacement =
+                            config.global_spline_control_corridor;
+                        // This is an iteration-zero feasibility probe, not detailed routing. Keep
+                        // the mandatory post-shove refit deliberately small so static portfolio
+                        // construction cannot multiply the complete trajectory budget per
+                        // collision candidate.
+                        shove_config.samples =
+                            std::min<std::size_t>(16U, config.global_spline_trajectory_samples);
+                        shove_config.maximum_iterations = 1U;
+                        shove_config.maximum_candidate_checks = 16U;
+                        const auto refit = deform_quintic_ph_elastic_at(
                             shoved, parameter,
                             SplineVector{direction * -tangent_y, direction * tangent_x},
-                            config.global_spline_shove_step, config.global_spline_control_corridor);
-                        if (moved == 0U) {
+                            config.global_spline_shove_step, shove_config,
+                            [](SplineVector) { return SplineClearanceProbe{1.0e12L, {}, true}; });
+                        if (!refit.accepted || refit.elastic_predeformed_controls == 0U) {
                           continue;
                         }
-                        auto refitted = adaptive_tessellate_cubic_bspline(
+                        auto refitted = adaptive_tessellate_quintic_ph(
                             shoved, config.global_spline_tessellation_tolerance,
                             config.global_spline_max_tessellation_depth,
                             config.max_global_spline_samples_per_seed);
+                        if (navmesh_route &&
+                            !spline_preserves_navmesh_topology(*navmesh_route, refitted)) {
+                          continue;
+                        }
                         stats.spline_samples =
                             saturating_count_add(stats.spline_samples, refitted.size());
                         const auto blocked = blocked_chords(refitted);
                         if (blocked < best_blocked) {
                           best_blocked = blocked;
                           best_samples = std::move(refitted);
-                          stats.control_shoves = saturating_count_add(stats.control_shoves, moved);
+                          stats.control_shoves = saturating_count_add(
+                              stats.control_shoves, refit.elastic_predeformed_controls);
                           ++stats.refits;
                         }
                       }
@@ -4590,6 +5462,16 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
     stats.navmesh_domains = saturating_count_add(stats.navmesh_domains, local.navmesh_domains);
     stats.navmesh_routes = saturating_count_add(stats.navmesh_routes, local.navmesh_routes);
     stats.navmesh_cells = saturating_count_add(stats.navmesh_cells, local.navmesh_cells);
+    stats.navmesh_refined_parents =
+        saturating_count_add(stats.navmesh_refined_parents, local.navmesh_refined_parents);
+    stats.navmesh_refined_leaves =
+        saturating_count_add(stats.navmesh_refined_leaves, local.navmesh_refined_leaves);
+    stats.navmesh_rejected_leaves =
+        saturating_count_add(stats.navmesh_rejected_leaves, local.navmesh_rejected_leaves);
+    stats.navmesh_gpu_wavefront_routes = saturating_count_add(stats.navmesh_gpu_wavefront_routes,
+                                                              local.navmesh_gpu_wavefront_routes);
+    stats.navmesh_gpu_wavefront_cpu_fallbacks = saturating_count_add(
+        stats.navmesh_gpu_wavefront_cpu_fallbacks, local.navmesh_gpu_wavefront_cpu_fallbacks);
     stats.navmesh_search_expansions =
         saturating_count_add(stats.navmesh_search_expansions, local.navmesh_search_expansions);
     stats.flood_fill_routes =
@@ -4597,6 +5479,42 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
     stats.flood_fill_cells_visited =
         saturating_count_add(stats.flood_fill_cells_visited, local.flood_fill_cells_visited);
     stats.navmesh_failures = saturating_count_add(stats.navmesh_failures, local.navmesh_failures);
+    stats.rrt_connect_attempts =
+        saturating_count_add(stats.rrt_connect_attempts, local.rrt_connect_attempts);
+    stats.rrt_connect_accepted =
+        saturating_count_add(stats.rrt_connect_accepted, local.rrt_connect_accepted);
+    stats.rrt_connect_failures =
+        saturating_count_add(stats.rrt_connect_failures, local.rrt_connect_failures);
+    stats.rrt_connect_iterations =
+        saturating_count_add(stats.rrt_connect_iterations, local.rrt_connect_iterations);
+    stats.hydraulic_attempts =
+        saturating_count_add(stats.hydraulic_attempts, local.hydraulic_attempts);
+    stats.hydraulic_accepted =
+        saturating_count_add(stats.hydraulic_accepted, local.hydraulic_accepted);
+    stats.hydraulic_failures =
+        saturating_count_add(stats.hydraulic_failures, local.hydraulic_failures);
+    stats.hydraulic_gpu_routes =
+        saturating_count_add(stats.hydraulic_gpu_routes, local.hydraulic_gpu_routes);
+    stats.hydraulic_gpu_clearance_cache_hits = saturating_count_add(
+        stats.hydraulic_gpu_clearance_cache_hits, local.hydraulic_gpu_clearance_cache_hits);
+    stats.hydraulic_gpu_peak_batch_size =
+        std::max(stats.hydraulic_gpu_peak_batch_size, local.hydraulic_gpu_peak_batch_size);
+    stats.hydraulic_gpu_buffer_reuses =
+        saturating_count_add(stats.hydraulic_gpu_buffer_reuses, local.hydraulic_gpu_buffer_reuses);
+    stats.hydraulic_gpu_buffer_growths = saturating_count_add(stats.hydraulic_gpu_buffer_growths,
+                                                              local.hydraulic_gpu_buffer_growths);
+    stats.hydraulic_cpu_fallbacks =
+        saturating_count_add(stats.hydraulic_cpu_fallbacks, local.hydraulic_cpu_fallbacks);
+    stats.hydraulic_relaxation_passes =
+        saturating_count_add(stats.hydraulic_relaxation_passes, local.hydraulic_relaxation_passes);
+    stats.hydraulic_droplet_steps =
+        saturating_count_add(stats.hydraulic_droplet_steps, local.hydraulic_droplet_steps);
+    stats.hydraulic_discovery_cells =
+        saturating_count_add(stats.hydraulic_discovery_cells, local.hydraulic_discovery_cells);
+    stats.hydraulic_exact_certified_chords = saturating_count_add(
+        stats.hydraulic_exact_certified_chords, local.hydraulic_exact_certified_chords);
+    stats.hydraulic_projection_failures = saturating_count_add(stats.hydraulic_projection_failures,
+                                                               local.hydraulic_projection_failures);
     stats.navmesh_certificate_domains =
         saturating_count_add(stats.navmesh_certificate_domains, local.navmesh_certificate_domains);
     stats.funnel_points = saturating_count_add(stats.funnel_points, local.funnel_points);
@@ -4690,16 +5608,15 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
 }
 [[nodiscard]] std::vector<std::size_t>
 neighbors(const Grid& grid, const SharedVoronoiAllocationGraph& voronoi_allocation,
-          std::size_t node, bool use_direct_edges) {
+          std::size_t node, bool use_direct_edges, const NetId* routed_net = nullptr) {
   const auto [x, y, layer] = grid.decode(node);
   auto result = sampled_planar_neighbors(grid, node);
-  if (grid.via_site(x, y)) {
-    if (layer > 0U) {
-      result.push_back(grid.node(x, y, layer - 1U));
-    }
-    if (layer + 1U < grid.layers.size()) {
-      result.push_back(grid.node(x, y, layer + 1U));
-    }
+  if (layer > 0U && grid.via_transition_site(x, y, layer, layer - 1U, routed_net)) {
+    result.push_back(grid.node(x, y, layer - 1U));
+  }
+  if (layer + 1U < grid.layers.size() &&
+      grid.via_transition_site(x, y, layer, layer + 1U, routed_net)) {
+    result.push_back(grid.node(x, y, layer + 1U));
   }
   if (use_direct_edges) {
     const auto& direct = voronoi_allocation.direct_neighbors(node);
@@ -4876,8 +5793,9 @@ terminal_escape_reservation_availability(const TerminalEscapeReservation& reserv
 [[nodiscard]] std::uint64_t terminal_escape_reservation_penalty(
     const Grid& grid, const TerminalEscapeReservation& reservation,
     const TerminalEscapeReservationAvailability& availability, const NetId& net, const Edge& edge,
-    bool is_direct, std::uint64_t reservation_cost, std::size_t* protected_terminals) {
-  if (reservation_cost == 0U) {
+    bool is_direct, std::uint64_t reservation_cost, std::uint64_t proximity_cost,
+    std::size_t* protected_terminals, std::uint64_t* proximity_penalty) {
+  if (reservation_cost == 0U && proximity_cost == 0U) {
     return 0U;
   }
   std::set<std::size_t> impacted;
@@ -4926,17 +5844,32 @@ terminal_escape_reservation_availability(const TerminalEscapeReservation& reserv
         saturating_count_add(impacted_viable_by_terminal[candidate.terminal], 1U);
   }
   std::size_t count = 0U;
+  std::uint64_t graded_penalty = 0U;
   for (const auto& [terminal, impacted_count] : impacted_viable_by_terminal) {
     const auto available = availability.viable_by_terminal.find(terminal);
     if (available != availability.viable_by_terminal.end() &&
         impacted_count == available->second.size()) {
       count = saturating_count_add(count, 1U);
+    } else if (available != availability.viable_by_terminal.end() && !available->second.empty() &&
+               proximity_cost > 0U) {
+      // Charge the fraction of still-viable escapes consumed by this transition. The full-cost
+      // last-escape guard remains separate and strictly dominates this graded preference.
+      const auto numerator =
+          saturating_multiply(static_cast<std::uint64_t>(impacted_count), proximity_cost);
+      graded_penalty = saturating_add(
+          graded_penalty,
+          saturating_add(numerator, static_cast<std::uint64_t>(available->second.size() - 1U)) /
+              static_cast<std::uint64_t>(available->second.size()));
     }
   }
   if (protected_terminals != nullptr) {
     *protected_terminals = count;
   }
-  return saturating_multiply(static_cast<std::uint64_t>(count), reservation_cost);
+  if (proximity_penalty != nullptr) {
+    *proximity_penalty = graded_penalty;
+  }
+  return saturating_add(saturating_multiply(static_cast<std::uint64_t>(count), reservation_cost),
+                        graded_penalty);
 }
 
 struct PreparedRoutabilityHistory {
@@ -5014,7 +5947,11 @@ prepare_routability_history(const Grid& grid,
             // A diagnosed via-site conflict should move the layer transition, not repel the
             // complete planar run from an otherwise useful corridor. Restrict that feedback to
             // via edges; other diagnosis classes retain their conservative all-edge pressure.
-            if (entry.kind == RoutabilityFailureKind::via_site_exhausted && layer == next_layer) {
+            if ((entry.kind == RoutabilityFailureKind::via_site_exhausted ||
+                 entry.kind == RoutabilityFailureKind::layer_transition_conflict ||
+                 entry.suggested_relaxation == RoutabilityRelaxation::change_via_site ||
+                 entry.suggested_relaxation == RoutabilityRelaxation::change_layer_sequence) &&
+                layer == next_layer) {
               continue;
             }
             const geometry::AxisAlignedBounds edge_bounds{
@@ -5675,8 +6612,13 @@ build_voronoi_pathfinder_guidance(const Grid& grid, const VoronoiCorridorEvidenc
                          : static_cast<std::uint64_t>(delta_x + delta_y);
     const auto layer_distance =
         static_cast<std::uint64_t>(layer > goal_layer ? layer - goal_layer : goal_layer - layer);
+    // Negotiated routing may discount a transition down to one planar step when it escapes more
+    // congestion than it creates, or when it reuses existing same-net vertical copper. Use that
+    // lower bound here so A* does not overestimate layer-changing solutions.
+    const auto minimum_via_cost =
+        std::min(config.via_cost, std::max<std::uint64_t>(1U, config.step_cost));
     const auto estimate = saturating_add(saturating_multiply(xy_distance, config.step_cost),
-                                         saturating_multiply(layer_distance, config.via_cost));
+                                         saturating_multiply(layer_distance, minimum_via_cost));
     best = std::min(best, estimate);
   }
   return best;
@@ -5716,6 +6658,81 @@ build_voronoi_pathfinder_guidance(const Grid& grid, const VoronoiCorridorEvidenc
           ? std::numeric_limits<std::uint64_t>::max()
           : static_cast<std::uint64_t>(floating_steps);
   return saturating_multiply(steps, config.step_cost);
+}
+
+// Compare a layer transition with the least-pressured legal planar exit available at the same
+// location. This is deliberately local and bounded: it gives a transition credit only for
+// congestion already represented by PathFinder occupancy/history, and cannot authorize geometry.
+[[nodiscard]] std::optional<std::uint64_t>
+local_planar_escape_pressure(const Grid& grid, std::size_t node, const RoutingOccupancy& occupancy,
+                             const RoutingHistory& history, const CorridorGraph& corridors,
+                             RoutingObstacleIndex& obstacles, const NetTask& task,
+                             const GlobalRouterConfig& config) {
+  std::optional<std::uint64_t> best;
+  for (const auto next : sampled_planar_neighbors(grid, node)) {
+    const Edge edge{node, next};
+    if (obstacles.edge_blocked(task.net, edge)) {
+      continue;
+    }
+    const auto sampled_edge = sampled_capacity_edge(grid, edge);
+    std::uint64_t pressure = 0U;
+    const auto other_owners = [&task](const auto& owners) {
+      return static_cast<std::uint64_t>(owners.size() - owners.count(task.net));
+    };
+    if (const auto found = occupancy.edges.find(sampled_edge); found != occupancy.edges.end()) {
+      pressure = saturating_add(pressure, saturating_multiply(other_owners(found->second),
+                                                              config.present_congestion_cost));
+    }
+    if (const auto found = occupancy.nodes.find(next); found != occupancy.nodes.end()) {
+      pressure = saturating_add(pressure, saturating_multiply(other_owners(found->second),
+                                                              config.present_congestion_cost));
+    }
+    if (const auto found = history.edges.find(sampled_edge); found != history.edges.end()) {
+      pressure =
+          saturating_add(pressure, saturating_multiply(static_cast<std::uint64_t>(found->second),
+                                                       config.history_congestion_cost));
+    }
+    if (const auto found = history.nodes.find(next); found != history.nodes.end()) {
+      pressure =
+          saturating_add(pressure, saturating_multiply(static_cast<std::uint64_t>(found->second),
+                                                       config.history_congestion_cost));
+    }
+    if (const auto found = history.routability_edges.find({task.net, edge});
+        found != history.routability_edges.end()) {
+      pressure =
+          saturating_add(pressure, saturating_multiply(static_cast<std::uint64_t>(found->second),
+                                                       config.routability_history_cost));
+    }
+    const auto clearance_pressure = [&task](const auto& resources, const auto& key) {
+      const auto found = resources.find(key);
+      if (found == resources.end()) {
+        return std::uint64_t{0};
+      }
+      return static_cast<std::uint64_t>(
+          std::count_if(found->second.begin(), found->second.end(),
+                        [&](const auto& item) { return item.first != task.net; }));
+    };
+    pressure = saturating_add(
+        pressure, saturating_multiply(clearance_pressure(occupancy.clearance_edges, sampled_edge),
+                                      config.present_congestion_cost));
+    pressure = saturating_add(
+        pressure, saturating_multiply(clearance_pressure(occupancy.clearance_nodes, next),
+                                      config.present_congestion_cost));
+    if (const auto corridor = corridors.corridor_for(edge)) {
+      if (const auto found = occupancy.corridors.find(*corridor);
+          found != occupancy.corridors.end()) {
+        pressure = saturating_add(pressure, saturating_multiply(other_owners(found->second),
+                                                                config.corridor_present_cost));
+      }
+      if (const auto found = history.corridors.find(*corridor); found != history.corridors.end()) {
+        pressure =
+            saturating_add(pressure, saturating_multiply(static_cast<std::uint64_t>(found->second),
+                                                         config.corridor_history_cost));
+      }
+    }
+    best = best ? std::min(*best, pressure) : pressure;
+  }
+  return best;
 }
 
 struct BidirectionalMeetingSearch {
@@ -5759,6 +6776,53 @@ struct BidirectionalMeetingSearch {
   if (start_frontier.empty() || goal_frontier.empty()) {
     return result;
   }
+  if (node_count >= 4'096U && node_count <= 100'000U && routing_compute_gpu_available()) {
+    RoutingComputeBatchedGraphWavefrontInput wavefront;
+    wavefront.node_count = node_count;
+    wavefront.offsets.reserve(node_count + 1U);
+    wavefront.offsets.push_back(0U);
+    for (std::size_t node = 0U; node < node_count; ++node) {
+      const auto [unused_x, unused_y, layer] = grid.decode(node);
+      static_cast<void>(unused_x);
+      static_cast<void>(unused_y);
+      for (const auto next :
+           neighbors(grid, voronoi_allocation, node, use_direct_edges, &task.net)) {
+        const auto [nx, ny, next_layer] = grid.decode(next);
+        static_cast<void>(nx);
+        static_cast<void>(ny);
+        const Edge edge{node, next};
+        if (layer == next_layer && config.require_voronoi_topological_transitions &&
+            !voronoi_allocation.edge_topologically_supported(edge, use_direct_edges))
+          continue;
+        if (!obstacles.edge_blocked(task.net, edge))
+          wavefront.edges.push_back(RoutingComputeGraphEdge{static_cast<std::uint32_t>(next), 1U});
+      }
+      wavefront.offsets.push_back(static_cast<std::uint32_t>(wavefront.edges.size()));
+    }
+    wavefront.source_groups.emplace_back(starts.begin(), starts.end());
+    wavefront.source_groups.emplace_back(goals.begin(), goals.end());
+    wavefront.maximum_passes =
+        std::min<std::size_t>(2'048U, grid.width + grid.height + grid.layers.size() * 4U + 32U);
+    const auto fields = compute_batched_routing_graph_wavefront(wavefront, true);
+    if (fields.ok() && fields.distance.size() == 2U) {
+      std::vector<std::pair<std::uint64_t, std::size_t>> candidates;
+      for (std::size_t node = 0U; node < node_count; ++node) {
+        if (fields.distance[0][node] != unseen && fields.distance[1][node] != unseen)
+          candidates.emplace_back(static_cast<std::uint64_t>(fields.distance[0][node]) +
+                                      fields.distance[1][node],
+                                  node);
+      }
+      std::sort(candidates.begin(), candidates.end());
+      candidates.resize(std::min(config.max_bidirectional_meeting_nodes, candidates.size()));
+      for (const auto& [distance, node] : candidates) {
+        static_cast<void>(distance);
+        result.nodes.push_back(node);
+      }
+      result.expansions = node_count;
+      if (!result.nodes.empty())
+        return result;
+    }
+  }
   std::map<std::size_t, std::uint64_t> meetings;
   const auto record_meeting = [&](std::size_t node) {
     if (from_start[node] == unseen || from_goal[node] == unseen) {
@@ -5781,7 +6845,7 @@ struct BidirectionalMeetingSearch {
     const auto [unused_x, unused_y, layer] = grid.decode(node);
     static_cast<void>(unused_x);
     static_cast<void>(unused_y);
-    for (const auto next : neighbors(grid, voronoi_allocation, node, use_direct_edges)) {
+    for (const auto next : neighbors(grid, voronoi_allocation, node, use_direct_edges, &task.net)) {
       const auto [next_x, next_y, next_layer] = grid.decode(next);
       static_cast<void>(next_x);
       static_cast<void>(next_y);
@@ -5873,6 +6937,95 @@ search_path(const Grid& grid, const std::vector<std::size_t>& starts,
     const auto relative = state - node_count;
     return std::tuple{relative / max_narrow_steps, true, relative % max_narrow_steps + 1U};
   };
+  std::vector<std::uint32_t> product_cost_to_go;
+  if (corridor_neck_down_eligible && state_count >= 4'096U && state_count <= 1'000'000U &&
+      routing_compute_gpu_available()) {
+    constexpr std::size_t maximum_product_edges = 4'000'000U;
+    std::vector<std::vector<RoutingComputeGraphEdge>> reverse(state_count);
+    std::size_t product_edges = 0U;
+    for (std::size_t state = 0U; state < state_count && product_edges <= maximum_product_edges;
+         ++state) {
+      const auto [node, narrow, steps] = decode_state(state);
+      const auto [x, y, layer] = grid.decode(node);
+      for (const auto next :
+           neighbors(grid, voronoi_allocation, node, use_direct_edges, &task.net)) {
+        const auto [next_x, next_y, next_layer] = grid.decode(next);
+        const Edge edge{node, next};
+        const bool is_via = layer != next_layer;
+        const bool is_direct =
+            use_direct_edges && voronoi_allocation.direct_resource(edge).has_value();
+        if (!is_via && config.require_voronoi_topological_transitions &&
+            !voronoi_allocation.edge_topologically_supported(edge, use_direct_edges))
+          continue;
+        const auto direct_resource =
+            is_direct ? voronoi_allocation.direct_resource(edge) : std::nullopt;
+        const auto medial_neck_down =
+            direct_resource ? voronoi_allocation.medial_neck_down_width(*direct_resource, net)
+                            : std::nullopt;
+        const bool nominal_exit = !narrow || !obstacles.pin_access_blocked(
+                                                 net, layer, grid.point(x, y), grid.point(x, y));
+        const auto* reusable_feature =
+            is_via ? grid.reusable_vertical_feature(net, x, y, layer, next_layer) : nullptr;
+        const bool reusable_feature_legal =
+            reusable_feature != nullptr &&
+            !obstacles.pin_access_blocked(net, layer, grid.point(x, y), reusable_feature->position,
+                                          task.nominal_track_width) &&
+            !obstacles.pin_access_blocked(net, next_layer, reusable_feature->position,
+                                          grid.point(next_x, next_y), task.nominal_track_width);
+        const bool ordinary_transition_legal = !obstacles.edge_blocked(net, edge);
+        const bool nominal_blocked = is_via ? !ordinary_transition_legal && !reusable_feature_legal
+                                            : !ordinary_transition_legal;
+        const auto add_reverse = [&](std::size_t target) {
+          if (target < state_count && product_edges++ < maximum_product_edges)
+            reverse[target].push_back(
+                RoutingComputeGraphEdge{static_cast<std::uint32_t>(state), 1U});
+        };
+        if (medial_neck_down) {
+          if (nominal_exit &&
+              !obstacles.pin_access_blocked(net, next_layer, grid.point(next_x, next_y),
+                                            grid.point(next_x, next_y)) &&
+              !obstacles.edge_blocked(net, edge, *medial_neck_down))
+            add_reverse(next);
+        } else if (!nominal_blocked && nominal_exit) {
+          add_reverse(next);
+        }
+        if (!is_via && !is_direct && corridor_neck_downs.corridor_for(edge) &&
+            (narrow || nominal_blocked) && (narrow || nominal_exit) && steps < max_narrow_steps &&
+            !obstacles.edge_blocked(net, edge, config.corridor_neck_down_width))
+          add_reverse(narrow_state(next, narrow ? steps + 1U : 1U));
+      }
+    }
+    if (product_edges <= maximum_product_edges) {
+      RoutingComputeBatchedGraphWavefrontInput product;
+      product.node_count = state_count;
+      product.offsets.reserve(state_count + 1U);
+      product.offsets.push_back(0U);
+      for (const auto& edges : reverse) {
+        product.edges.insert(product.edges.end(), edges.begin(), edges.end());
+        product.offsets.push_back(static_cast<std::uint32_t>(product.edges.size()));
+      }
+      auto& product_goals = product.source_groups.emplace_back();
+      for (const auto goal : goals) {
+        product_goals.push_back(goal);
+        for (std::size_t steps = 1U; steps <= max_narrow_steps; ++steps)
+          product_goals.push_back(narrow_state(goal, steps));
+      }
+      product.maximum_passes = std::min<std::size_t>(
+          4'096U, grid.width + grid.height + max_narrow_steps + grid.layers.size() * 4U + 32U);
+      const auto field = compute_batched_routing_graph_wavefront(product, true);
+      if (field.ok() && field.distance.size() == 1U)
+        product_cost_to_go = field.distance.front();
+    }
+  }
+  const auto state_heuristic = [&](std::size_t state, std::size_t node,
+                                   std::uint32_t weight_per_mille) {
+    auto estimate = weighted_heuristic(heuristic(grid, node, goals, config, use_direct_edges),
+                                       weight_per_mille);
+    if (state < product_cost_to_go.size() && product_cost_to_go[state] != 0xffffffffU)
+      estimate =
+          std::max(estimate, weighted_heuristic(product_cost_to_go[state], weight_per_mille));
+    return estimate;
+  };
   std::vector<std::uint64_t> distances(state_count, infinity);
   std::vector<std::size_t> parent(state_count, state_count);
   std::vector<GlobalRouteSegmentWidthKind> parent_width_kind(state_count,
@@ -5880,13 +7033,21 @@ search_path(const Grid& grid, const std::vector<std::size_t>& starts,
   std::vector<std::uint64_t> parent_river_following_discount(state_count, 0U);
   std::vector<std::uint64_t> parent_former_route_memory_penalty(state_count, 0U);
   std::vector<std::uint64_t> parent_terminal_escape_reservation_penalty(state_count, 0U);
+  std::vector<std::uint64_t> parent_terminal_escape_proximity_penalty(state_count, 0U);
+  std::vector<std::uint64_t> parent_track_spreading_penalty(state_count, 0U);
+  std::vector<CapacityReserveTransition> parent_capacity_reserve(state_count);
+  std::vector<std::uint64_t> parent_via_congestion_discount(state_count, 0U);
+  std::vector<std::uint64_t> parent_vertical_feature_reuse_discount(state_count, 0U);
+  // 0 = not reused, 1 = existing via, 2 = plated component pad.
+  std::vector<std::uint8_t> parent_vertical_feature_kind(state_count, 0U);
+  std::vector<std::optional<ObjectId>> parent_vertical_feature(state_count);
+  std::vector<bool> parent_is_via(state_count, false);
+  std::map<std::size_t, std::optional<std::uint64_t>> planar_pressure_cache;
   std::priority_queue<QueueEntry, std::vector<QueueEntry>, std::greater<>> open;
 
   for (const auto start : starts) {
     distances[start] = 0;
-    open.push(QueueEntry{weighted_heuristic(heuristic(grid, start, goals, config, use_direct_edges),
-                                            heuristic_weight_per_mille),
-                         0, start});
+    open.push(QueueEntry{state_heuristic(start, start, heuristic_weight_per_mille), 0, start});
   }
 
   std::size_t expansions = 0;
@@ -5972,6 +7133,7 @@ search_path(const Grid& grid, const std::vector<std::size_t>& starts,
         if (states.size() > 1U) {
           result.segment_widths.reserve(states.size() - 1U);
           result.segment_width_kinds.reserve(states.size() - 1U);
+          result.vertical_features.reserve(states.size() - 1U);
         }
         for (std::size_t index = 0U; index < states.size(); ++index) {
           const auto [node, narrow, steps] = decode_state(states[index]);
@@ -5983,6 +7145,7 @@ search_path(const Grid& grid, const std::vector<std::size_t>& starts,
           }
           const auto kind = parent_width_kind[states[index]];
           result.segment_width_kinds.push_back(kind);
+          result.vertical_features.push_back(parent_vertical_feature[states[index]]);
           if (parent_river_following_discount[states[index]] > 0U) {
             result.river_following_edges = saturating_count_add(result.river_following_edges, 1U);
             result.river_following_cost_discount =
@@ -6002,6 +7165,55 @@ search_path(const Grid& grid, const std::vector<std::size_t>& starts,
             result.terminal_escape_reservation_penalty =
                 saturating_add(result.terminal_escape_reservation_penalty,
                                parent_terminal_escape_reservation_penalty[states[index]]);
+          }
+          if (parent_terminal_escape_proximity_penalty[states[index]] > 0U) {
+            result.terminal_escape_proximity_penalty_events =
+                saturating_count_add(result.terminal_escape_proximity_penalty_events, 1U);
+            result.terminal_escape_proximity_penalty =
+                saturating_add(result.terminal_escape_proximity_penalty,
+                               parent_terminal_escape_proximity_penalty[states[index]]);
+          }
+          if (parent_track_spreading_penalty[states[index]] > 0U) {
+            result.targeted_track_spreading_edges =
+                saturating_count_add(result.targeted_track_spreading_edges, 1U);
+            result.targeted_track_spreading_penalty =
+                saturating_add(result.targeted_track_spreading_penalty,
+                               parent_track_spreading_penalty[states[index]]);
+          }
+          if (parent_is_via[states[index]]) {
+            result.planned_via_transitions =
+                saturating_count_add(result.planned_via_transitions, 1U);
+            result.via_congestion_cost_discount = saturating_add(
+                result.via_congestion_cost_discount, parent_via_congestion_discount[states[index]]);
+            result.vertical_feature_reuse_cost_discount =
+                saturating_add(result.vertical_feature_reuse_cost_discount,
+                               parent_vertical_feature_reuse_discount[states[index]]);
+            if (parent_vertical_feature_kind[states[index]] == 1U) {
+              result.reused_existing_via_transitions =
+                  saturating_count_add(result.reused_existing_via_transitions, 1U);
+            } else if (parent_vertical_feature_kind[states[index]] == 2U) {
+              result.reused_component_pad_transitions =
+                  saturating_count_add(result.reused_component_pad_transitions, 1U);
+            }
+          }
+          const auto& reserve = parent_capacity_reserve[states[index]];
+          if (reserve.penalty > 0U) {
+            result.capacity_reserve_penalty_events =
+                saturating_count_add(result.capacity_reserve_penalty_events, 1U);
+            result.capacity_reserve_penalty =
+                saturating_add(result.capacity_reserve_penalty, reserve.penalty);
+            if ((reserve.sources & capacity_reserve_corridor) != 0U) {
+              result.corridor_capacity_reserve_penalty_events =
+                  saturating_count_add(result.corridor_capacity_reserve_penalty_events, 1U);
+            }
+            if ((reserve.sources & capacity_reserve_physical) != 0U) {
+              result.physical_capacity_reserve_penalty_events =
+                  saturating_count_add(result.physical_capacity_reserve_penalty_events, 1U);
+            }
+            if ((reserve.sources & capacity_reserve_clearance_shadow) != 0U) {
+              result.clearance_shadow_reserve_penalty_events =
+                  saturating_count_add(result.clearance_shadow_reserve_penalty_events, 1U);
+            }
           }
           if (kind == GlobalRouteSegmentWidthKind::corridor_neck_down) {
             result.segment_widths.push_back(config.corridor_neck_down_width);
@@ -6099,7 +7311,8 @@ search_path(const Grid& grid, const std::vector<std::size_t>& starts,
       ++expansions;
       ++phase_expansions;
 
-      for (const auto next : neighbors(grid, voronoi_allocation, current_node, use_direct_edges)) {
+      for (const auto next :
+           neighbors(grid, voronoi_allocation, current_node, use_direct_edges, &task.net)) {
         const auto [next_x, next_y, next_layer] = grid.decode(next);
         const Edge edge{current_node, next};
         const bool is_via = layer != next_layer;
@@ -6115,7 +7328,17 @@ search_path(const Grid& grid, const std::vector<std::size_t>& starts,
         const auto medial_neck_down =
             direct_resource ? voronoi_allocation.medial_neck_down_width(*direct_resource, net)
                             : std::nullopt;
-        const bool nominal_blocked = obstacles.edge_blocked(net, edge);
+        const auto* reusable_feature =
+            is_via ? grid.reusable_vertical_feature(net, x, y, layer, next_layer) : nullptr;
+        const bool reusable_feature_legal =
+            reusable_feature != nullptr &&
+            !obstacles.pin_access_blocked(net, layer, grid.point(x, y), reusable_feature->position,
+                                          task.nominal_track_width) &&
+            !obstacles.pin_access_blocked(net, next_layer, reusable_feature->position,
+                                          grid.point(next_x, next_y), task.nominal_track_width);
+        const bool ordinary_transition_legal = !obstacles.edge_blocked(net, edge);
+        const bool nominal_blocked = is_via ? !ordinary_transition_legal && !reusable_feature_legal
+                                            : !ordinary_transition_legal;
 
         struct Transition {
           std::size_t state{0};
@@ -6204,7 +7427,24 @@ search_path(const Grid& grid, const std::vector<std::size_t>& starts,
             }
             return blockers;
           };
+          const auto clearance_reserve_for = [&net, required_from_occupied_copper,
+                                              &config](const auto& resources, const auto& key) {
+            std::uint64_t penalty = 0U;
+            const auto found = resources.find(key);
+            if (found == resources.end()) {
+              return penalty;
+            }
+            for (const auto& [occupant, certificate] : found->second) {
+              if (occupant != net) {
+                penalty = saturating_add(
+                    penalty, clearance_shadow_reserve_penalty(
+                                 certificate.available_nm, required_from_occupied_copper, config));
+              }
+            }
+            return penalty;
+          };
           std::map<NetId, std::size_t> physical_shadow_blockers;
+          std::uint64_t clearance_reserve_penalty = 0U;
           if (config.reserve_sampled_route_clearance) {
             const auto merge_blockers = [&physical_shadow_blockers](const auto& blockers) {
               for (const auto& [blocker, pressure] : blockers) {
@@ -6214,8 +7454,16 @@ search_path(const Grid& grid, const std::vector<std::size_t>& starts,
             };
             merge_blockers(clearance_blockers(occupancy.clearance_edges, sampled_edge));
             merge_blockers(clearance_blockers(occupancy.clearance_nodes, next));
+            clearance_reserve_penalty =
+                saturating_add(clearance_reserve_penalty,
+                               clearance_reserve_for(occupancy.clearance_edges, sampled_edge));
+            clearance_reserve_penalty = saturating_add(
+                clearance_reserve_penalty, clearance_reserve_for(occupancy.clearance_nodes, next));
             if (is_via || current_is_search_start) {
               merge_blockers(clearance_blockers(occupancy.clearance_nodes, current_node));
+              clearance_reserve_penalty =
+                  saturating_add(clearance_reserve_penalty,
+                                 clearance_reserve_for(occupancy.clearance_nodes, current_node));
             }
           }
           if (enforce_hard_capacity) {
@@ -6301,17 +7549,68 @@ search_path(const Grid& grid, const std::vector<std::size_t>& starts,
               continue;
             }
           }
-          auto edge_cost = is_via ? config.via_cost : direct_edge_base_cost(grid, edge, config);
+          std::uint64_t via_congestion_discount = 0U;
+          std::uint64_t vertical_feature_reuse_discount = 0U;
+          std::uint8_t vertical_feature_kind = 0U;
+          auto edge_cost = direct_edge_base_cost(grid, edge, config);
+          if (is_via) {
+            const auto minimum_via_cost =
+                std::min(config.via_cost, std::max<std::uint64_t>(1U, config.step_cost));
+            edge_cost = config.via_cost;
+            if (reusable_feature_legal) {
+              const auto* feature = reusable_feature;
+              vertical_feature_reuse_discount = edge_cost - minimum_via_cost;
+              edge_cost = minimum_via_cost;
+              vertical_feature_kind = feature->component_pad ? 2U : 1U;
+            } else if (cost_policy.kind == SearchCostPolicyKind::negotiated &&
+                       edge_cost > minimum_via_cost) {
+              const auto pressure_for = [&](std::size_t pressure_node) {
+                if (const auto found = planar_pressure_cache.find(pressure_node);
+                    found != planar_pressure_cache.end()) {
+                  return found->second;
+                }
+                auto pressure = local_planar_escape_pressure(
+                    grid, pressure_node, occupancy, history, corridors, obstacles, task, config);
+                planar_pressure_cache.emplace(pressure_node, pressure);
+                return pressure;
+              };
+              const auto source_pressure = pressure_for(current_node);
+              const auto destination_pressure = pressure_for(next);
+              if (source_pressure && destination_pressure &&
+                  *source_pressure > *destination_pressure) {
+                via_congestion_discount = std::min(edge_cost - minimum_via_cost,
+                                                   *source_pressure - *destination_pressure);
+                edge_cost -= via_congestion_discount;
+              }
+            }
+          }
+          CapacityReserveTransition capacity_reserve;
+          if (clearance_reserve_penalty > 0U) {
+            edge_cost = saturating_add(edge_cost, clearance_reserve_penalty);
+            capacity_reserve.penalty = clearance_reserve_penalty;
+            capacity_reserve.sources = capacity_reserve_clearance_shadow;
+          }
           std::uint64_t river_following_discount = 0U;
           std::uint64_t former_route_memory_penalty = 0U;
           std::uint64_t terminal_escape_penalty = 0U;
+          std::uint64_t terminal_escape_proximity_penalty = 0U;
+          std::uint64_t track_spreading_penalty = 0U;
           if (cost_policy.kind != SearchCostPolicyKind::static_seed && !is_via &&
               cost_policy.former_route_memory != nullptr &&
               cost_policy.former_route_memory_cost > 0U) {
-            if (const auto former = cost_policy.former_route_memory->edges.find(sampled_edge);
-                former != cost_policy.former_route_memory->edges.end() &&
-                std::any_of(former->second.begin(), former->second.end(),
-                            [&net](const NetId& owner) { return owner != net; })) {
+            const auto owned_by_other = [&net](const auto& owners) {
+              return std::any_of(owners.begin(), owners.end(),
+                                 [&net](const NetId& owner) { return owner != net; });
+            };
+            const auto former_edge = cost_policy.former_route_memory->edges.find(sampled_edge);
+            const auto former_next = cost_policy.former_route_memory->nodes.find(next);
+            const auto former_current = cost_policy.former_route_memory->nodes.find(current_node);
+            if ((former_edge != cost_policy.former_route_memory->edges.end() &&
+                 owned_by_other(former_edge->second)) ||
+                (former_next != cost_policy.former_route_memory->nodes.end() &&
+                 owned_by_other(former_next->second)) ||
+                (former_current != cost_policy.former_route_memory->nodes.end() &&
+                 owned_by_other(former_current->second))) {
               former_route_memory_penalty = cost_policy.former_route_memory_cost;
               edge_cost = saturating_add(edge_cost, former_route_memory_penalty);
             }
@@ -6323,8 +7622,17 @@ search_path(const Grid& grid, const std::vector<std::size_t>& starts,
             terminal_escape_penalty = terminal_escape_reservation_penalty(
                 grid, *cost_policy.terminal_escape_reservation,
                 *cost_policy.terminal_escape_availability, net, edge, is_direct,
-                cost_policy.terminal_escape_reservation_cost, nullptr);
+                cost_policy.terminal_escape_reservation_cost,
+                cost_policy.terminal_escape_proximity_cost, nullptr,
+                &terminal_escape_proximity_penalty);
             edge_cost = saturating_add(edge_cost, terminal_escape_penalty);
+          }
+          if (cost_policy.spread_open_region_tracks && !is_via &&
+              config.targeted_track_spreading_cost > 0U && !corridors.corridor_for(edge) &&
+              !corridor_neck_downs.corridor_for(edge) &&
+              has_parallel_river_neighbor(grid, occupancy, net, edge)) {
+            track_spreading_penalty = config.targeted_track_spreading_cost;
+            edge_cost = saturating_add(edge_cost, track_spreading_penalty);
           }
           if (const auto found =
                   history.routability_edges.find(RoutingHistory::ClearanceEdgeKey{net, edge});
@@ -6458,6 +7766,20 @@ search_path(const Grid& grid, const std::vector<std::size_t>& starts,
                     selected_corridors.corridor_for(Edge{previous_node, current_node});
                 entering = !previous || *previous != *corridor_id;
               }
+              if (entering) {
+                const bool current_net_already_claims =
+                    found != selected_occupancy.end() && found->second.contains(net);
+                const auto reserve =
+                    capacity_reserve_penalty(static_cast<std::uint64_t>(corridor.capacity),
+                                             static_cast<std::uint64_t>(occupied),
+                                             current_net_already_claims ? 0U : 1U, config);
+                if (reserve > 0U) {
+                  edge_cost = saturating_add(edge_cost, reserve);
+                  capacity_reserve.penalty = saturating_add(capacity_reserve.penalty, reserve);
+                  capacity_reserve.sources = static_cast<std::uint8_t>(capacity_reserve.sources |
+                                                                       capacity_reserve_corridor);
+                }
+              }
               const auto* future_demand = narrow ? cost_policy.residual_corridor_neck_down_demand
                                                  : cost_policy.residual_corridor_demand;
               if (cost_policy.residual_corridor_demand_cost > 0U && future_demand != nullptr) {
@@ -6516,11 +7838,16 @@ search_path(const Grid& grid, const std::vector<std::size_t>& starts,
               edge_cost = saturating_add(
                   edge_cost, voronoi_guidance.edge_cost(net, edge, config.voronoi_centering_cost));
             }
-            edge_cost = saturating_add(
-                edge_cost,
-                voronoi_allocation_edge_cost(voronoi_allocation, occupancy, history, net,
-                                             complement_allocated, routing_bus_member_allocated,
-                                             edge, selected_width, config, use_direct_edges));
+            const auto voronoi_cost = voronoi_allocation_edge_cost(
+                voronoi_allocation, occupancy, history, net, complement_allocated,
+                routing_bus_member_allocated, edge, selected_width, config, use_direct_edges);
+            edge_cost = saturating_add(edge_cost, voronoi_cost.total);
+            if (voronoi_cost.capacity_reserve > 0U) {
+              capacity_reserve.penalty =
+                  saturating_add(capacity_reserve.penalty, voronoi_cost.capacity_reserve);
+              capacity_reserve.sources =
+                  static_cast<std::uint8_t>(capacity_reserve.sources | capacity_reserve_physical);
+            }
           }
           if (river_following_discount > 0U) {
             edge_cost -= river_following_discount;
@@ -6532,11 +7859,25 @@ search_path(const Grid& grid, const std::vector<std::size_t>& starts,
             parent_width_kind[transition.state] = transition.width_kind;
             parent_river_following_discount[transition.state] = river_following_discount;
             parent_former_route_memory_penalty[transition.state] = former_route_memory_penalty;
-            parent_terminal_escape_reservation_penalty[transition.state] = terminal_escape_penalty;
-            const auto estimate = saturating_add(
-                candidate,
-                weighted_heuristic(heuristic(grid, next, goals, config, use_direct_edges),
-                                   active_heuristic_weight_per_mille));
+            parent_terminal_escape_reservation_penalty[transition.state] =
+                terminal_escape_penalty >= terminal_escape_proximity_penalty
+                    ? terminal_escape_penalty - terminal_escape_proximity_penalty
+                    : 0U;
+            parent_terminal_escape_proximity_penalty[transition.state] =
+                terminal_escape_proximity_penalty;
+            parent_track_spreading_penalty[transition.state] = track_spreading_penalty;
+            parent_capacity_reserve[transition.state] = capacity_reserve;
+            parent_is_via[transition.state] = is_via;
+            parent_via_congestion_discount[transition.state] = via_congestion_discount;
+            parent_vertical_feature_reuse_discount[transition.state] =
+                vertical_feature_reuse_discount;
+            parent_vertical_feature_kind[transition.state] = vertical_feature_kind;
+            parent_vertical_feature[transition.state] =
+                reusable_feature_legal ? std::optional<ObjectId>{reusable_feature->id}
+                                       : std::nullopt;
+            const auto estimate =
+                saturating_add(candidate, state_heuristic(transition.state, next,
+                                                          active_heuristic_weight_per_mille));
             open.push(QueueEntry{estimate, candidate, transition.state});
           }
         }
@@ -6581,8 +7922,8 @@ search_path(const Grid& grid, const std::vector<std::size_t>& starts,
         static_cast<void>(narrow);
         static_cast<void>(narrow_steps);
         const auto estimate = saturating_add(
-            entry.cost, weighted_heuristic(heuristic(grid, node, goals, config, use_direct_edges),
-                                           config.expansion_retry_heuristic_weight_per_mille));
+            entry.cost,
+            state_heuristic(entry.state, node, config.expansion_retry_heuristic_weight_per_mille));
         rekeyed.push(QueueEntry{estimate, entry.cost, entry.state});
         ++weighted_frontier_states_reused;
       }
@@ -6779,42 +8120,101 @@ void add_clearance_segment_occupancy(const NetId& net, std::size_t layer, Point 
   return grid.valid(x, y) ? std::optional{grid.node(x, y, layer)} : std::nullopt;
 }
 
-void remember_ripped_path(const GlobalRoutePath& path, const Grid& grid,
+void remember_ripped_path(const GlobalRoutePath& path, const NetTask& task, const Grid& grid,
                           FormerRouteMemory& memory) {
   if (path.points.size() < 2U) {
     return;
   }
   bool remembered = false;
+  const auto clamp_index = [](long double coordinate, std::int64_t origin, std::int64_t pitch,
+                              std::size_t extent, bool upper) {
+    const auto unbounded =
+        upper
+            ? static_cast<std::int64_t>(std::ceil((coordinate - static_cast<long double>(origin)) /
+                                                  static_cast<long double>(pitch)))
+            : static_cast<std::int64_t>(std::floor((coordinate - static_cast<long double>(origin)) /
+                                                   static_cast<long double>(pitch)));
+    if (unbounded < 0) {
+      return std::size_t{0};
+    }
+    return std::min(static_cast<std::size_t>(unbounded), extent - 1U);
+  };
+  const auto remember_envelope = [&](std::size_t layer, Point start, Point end,
+                                     long double radius_nm) {
+    if (grid.width == 0U || grid.height == 0U || layer >= grid.layers.size()) {
+      return;
+    }
+    const auto lower_x =
+        clamp_index(static_cast<long double>(std::min(start.x.value(), end.x.value())) - radius_nm,
+                    grid.origin_x, grid.pitch, grid.width, false);
+    const auto upper_x =
+        clamp_index(static_cast<long double>(std::max(start.x.value(), end.x.value())) + radius_nm,
+                    grid.origin_x, grid.pitch, grid.width, true);
+    const auto lower_y =
+        clamp_index(static_cast<long double>(std::min(start.y.value(), end.y.value())) - radius_nm,
+                    grid.origin_y, grid.pitch, grid.height, false);
+    const auto upper_y =
+        clamp_index(static_cast<long double>(std::max(start.y.value(), end.y.value())) + radius_nm,
+                    grid.origin_y, grid.pitch, grid.height, true);
+    for (std::size_t y = lower_y; y <= upper_y; ++y) {
+      for (std::size_t x = lower_x; x <= upper_x; ++x) {
+        if (!grid.valid(x, y)) {
+          continue;
+        }
+        const auto node = grid.node(x, y, layer);
+        const auto point = grid.point(x, y);
+        if (geometry::point_segment_distance_nm(point, start, end) <= radius_nm) {
+          memory.nodes[node].insert(path.net);
+          remembered = true;
+        }
+        for (const auto next : sampled_planar_neighbors(grid, node)) {
+          if (next <= node) {
+            continue;
+          }
+          const auto [next_x, next_y, next_layer] = grid.decode(next);
+          if (next_layer == layer &&
+              geometry::segment_distance_nm(point, grid.point(next_x, next_y), start, end) <=
+                  radius_nm) {
+            memory.edges[sampled_capacity_edge(grid, Edge{node, next})].insert(path.net);
+            remembered = true;
+          }
+        }
+      }
+    }
+  };
+  const auto competing_radius_nm =
+      static_cast<long double>(
+          std::max(task.nominal_track_width.value(), task.via_diameter.value())) /
+      2.0L;
   for (std::size_t index = 1U; index < path.points.size(); ++index) {
     const auto& first = path.points[index - 1U];
     const auto& second = path.points[index];
-    if (first.layer != second.layer) {
+    const auto first_layer = std::find(grid.layers.begin(), grid.layers.end(), first.layer);
+    const auto second_layer = std::find(grid.layers.begin(), grid.layers.end(), second.layer);
+    if (first_layer == grid.layers.end() || second_layer == grid.layers.end()) {
       continue;
     }
-    const auto layer = std::find(grid.layers.begin(), grid.layers.end(), first.layer);
-    if (layer == grid.layers.end()) {
-      continue;
+    const auto first_layer_index = static_cast<std::size_t>(first_layer - grid.layers.begin());
+    const auto second_layer_index = static_cast<std::size_t>(second_layer - grid.layers.begin());
+    if (first.layer == second.layer) {
+      const auto width =
+          index - 1U < path.segment_widths.size() && path.segment_widths[index - 1U].value() > 0
+              ? path.segment_widths[index - 1U]
+              : task.nominal_track_width;
+      const auto radius_nm = static_cast<long double>(width.value()) / 2.0L +
+                             static_cast<long double>(task.physical_clearance.value()) +
+                             competing_radius_nm;
+      remember_envelope(first_layer_index, first.position, second.position, radius_nm);
+    } else if (first.position == second.position) {
+      const auto via_radius_nm = static_cast<long double>(task.via_diameter.value()) / 2.0L +
+                                 static_cast<long double>(task.physical_clearance.value()) +
+                                 competing_radius_nm;
+      const auto lower = std::min(first_layer_index, second_layer_index);
+      const auto upper = std::max(first_layer_index, second_layer_index);
+      for (std::size_t layer = lower; layer <= upper; ++layer) {
+        remember_envelope(layer, first.position, first.position, via_radius_nm);
+      }
     }
-    const auto first_node = exact_grid_node(grid, first.position,
-                                            static_cast<std::size_t>(layer - grid.layers.begin()));
-    const auto second_node = exact_grid_node(grid, second.position,
-                                             static_cast<std::size_t>(layer - grid.layers.begin()));
-    if (!first_node || !second_node || *first_node == *second_node) {
-      continue;
-    }
-    const auto [first_x, first_y, first_layer] = grid.decode(*first_node);
-    const auto [second_x, second_y, second_layer] = grid.decode(*second_node);
-    const auto adjacent_or_same = [](std::size_t lhs, std::size_t rhs) {
-      return lhs >= rhs ? lhs - rhs <= 1U : rhs - lhs <= 1U;
-    };
-    if (first_layer != second_layer || !adjacent_or_same(first_x, second_x) ||
-        !adjacent_or_same(first_y, second_y)) {
-      // Pad stubs and direct medial chords are not sampled graph resources.  Keeping them out
-      // of this tiny memory avoids inventing a second occupancy representation.
-      continue;
-    }
-    memory.edges[sampled_capacity_edge(grid, Edge{*first_node, *second_node})].insert(path.net);
-    remembered = true;
   }
   if (remembered) {
     memory.ripped_paths = saturating_count_add(memory.ripped_paths, 1U);
@@ -6954,6 +8354,68 @@ void add_path_occupancy(const NetId& net, const std::vector<std::size_t>& nodes,
       }
     }
   }
+}
+
+[[nodiscard]] std::map<NetId, std::size_t> soft_capacity_route_blockers(
+    const NetId& net, const std::vector<std::size_t>& nodes, const Grid& grid,
+    const CorridorGraph& corridors, const CorridorGraph& corridor_neck_downs,
+    const SharedVoronoiAllocationGraph& allocation, const RoutingOccupancy& occupancy) {
+  std::map<NetId, std::size_t> blockers;
+  const auto add_owners = [&blockers, &net](const auto& owners) {
+    for (const auto& owner : owners) {
+      if (owner != net) {
+        blockers[owner] = saturating_count_add(blockers[owner], 1U);
+      }
+    }
+  };
+  const auto add_clearance_owners = [&blockers, &net](const auto& owners) {
+    for (const auto& [owner, certificate] : owners) {
+      static_cast<void>(certificate);
+      if (owner != net) {
+        blockers[owner] = saturating_count_add(blockers[owner], 1U);
+      }
+    }
+  };
+  for (const auto node : nodes) {
+    if (const auto found = occupancy.nodes.find(node); found != occupancy.nodes.end()) {
+      add_owners(found->second);
+    }
+    if (const auto found = occupancy.clearance_nodes.find(node);
+        found != occupancy.clearance_nodes.end()) {
+      add_clearance_owners(found->second);
+    }
+  }
+  for (std::size_t index = 1U; index < nodes.size(); ++index) {
+    const Edge edge{nodes[index - 1U], nodes[index]};
+    const auto sampled =
+        allocation.direct_resource(edge) ? edge : sampled_capacity_edge(grid, edge);
+    if (const auto found = occupancy.edges.find(sampled); found != occupancy.edges.end()) {
+      add_owners(found->second);
+    }
+    if (const auto found = occupancy.clearance_edges.find(sampled);
+        found != occupancy.clearance_edges.end()) {
+      add_clearance_owners(found->second);
+    }
+    if (const auto corridor = corridors.corridor_for(edge)) {
+      if (const auto found = occupancy.corridors.find(*corridor);
+          found != occupancy.corridors.end()) {
+        add_owners(found->second);
+      }
+    }
+    if (const auto corridor = corridor_neck_downs.corridor_for(edge)) {
+      if (const auto found = occupancy.corridor_neck_downs.find(*corridor);
+          found != occupancy.corridor_neck_downs.end()) {
+        add_owners(found->second);
+      }
+    }
+    for (const auto resource : allocation.resources_for(edge, true)) {
+      if (const auto found = occupancy.voronoi_resources.find(resource);
+          found != occupancy.voronoi_resources.end()) {
+        add_owners(found->second);
+      }
+    }
+  }
+  return blockers;
 }
 
 [[nodiscard]] GlobalRoutePoint route_point(const Grid& grid, std::size_t node) {
@@ -7650,8 +9112,43 @@ void populate_voronoi_resource_usage(GlobalRouteResult& result, const Grid& grid
       continue;
     }
     orientation_states += states;
+    RoutingComputeOrientationInput orientation_compute;
+    orientation_compute.bit_count = component_resource_vector.size();
+    orientation_compute.top_k = states;
+    orientation_compute.bit_flip_costs.assign(component_resource_vector.size(), 1U);
+    // Static resource legality is unary and therefore an ideal precomputed clause. Junction
+    // miters and mutual copper remain exact higher-order checks below.
+    for (std::size_t bit = 0U; bit < component_resource_vector.size(); ++bit) {
+      const auto resource = component_resource_vector[bit];
+      for (std::uint32_t value = 0U; value < 2U; ++value) {
+        bool unary_valid = true;
+        for (const auto& [net, lane] : lanes_by_resource.at(resource)) {
+          const auto points = oriented_lane_points(resource, *lane, value != 0U);
+          if (!points || !obstacles.static_segment_free(
+                             net, graph.resources[resource].layer, points->first, points->second,
+                             static_cast<long double>(lane->track_width.value()) / 2.0L,
+                             static_cast<long double>(graph.clearance_nm_by_net.at(net)))) {
+            unary_valid = false;
+            break;
+          }
+        }
+        if (!unary_valid)
+          orientation_compute.forbidden_clauses.emplace_back(
+              static_cast<std::uint32_t>(1U << bit), static_cast<std::uint32_t>(value << bit));
+      }
+    }
+    const auto accelerated_orientations = evaluate_routing_orientations(orientation_compute, true);
+    std::vector<std::uint32_t> orientation_candidates;
+    if (accelerated_orientations.ok())
+      orientation_candidates = accelerated_orientations.states;
+    if (orientation_candidates.empty()) {
+      orientation_candidates.resize(states);
+      std::iota(orientation_candidates.begin(), orientation_candidates.end(), 0U);
+    }
     bool solved = false;
-    for (std::size_t state = 0U; state < states && !solved; ++state) {
+    for (const auto state : orientation_candidates) {
+      if (solved)
+        break;
       const auto orientation = [&](std::size_t resource) {
         const auto found = std::lower_bound(component_resource_vector.begin(),
                                             component_resource_vector.end(), resource);
@@ -7659,21 +9156,6 @@ void populate_voronoi_resource_usage(GlobalRouteResult& result, const Grid& grid
         return ((state >> bit) & 1U) != 0U;
       };
       bool valid = true;
-      for (const auto resource : component_resource_vector) {
-        for (const auto& [net, lane] : lanes_by_resource.at(resource)) {
-          const auto points = oriented_lane_points(resource, *lane, orientation(resource));
-          if (!points || !obstacles.static_segment_free(
-                             net, graph.resources[resource].layer, points->first, points->second,
-                             static_cast<long double>(lane->track_width.value()) / 2.0L,
-                             static_cast<long double>(graph.clearance_nm_by_net.at(net)))) {
-            valid = false;
-            break;
-          }
-        }
-        if (!valid) {
-          break;
-        }
-      }
       for (const auto junction_index : component) {
         if (valid && !junction_valid(orientation_junctions[junction_index], orientation)) {
           valid = false;
@@ -8025,6 +9507,19 @@ void populate_corridor_usage(GlobalRouteResult& result, const Grid& grid,
       width = search.segment_widths[node_index - 1U];
       width_kind = search.segment_width_kinds[node_index - 1U];
     }
+    if (node_index > 0U && search.vertical_features.size() + 1U == nodes.size() &&
+        search.vertical_features[node_index - 1U]) {
+      const auto [previous_x, previous_y, previous_layer] = grid.decode(nodes[node_index - 1U]);
+      static_cast<void>(previous_x);
+      static_cast<void>(previous_y);
+      if (const auto* feature = grid.vertical_feature_by_id(
+              *search.vertical_features[node_index - 1U], x, y, previous_layer, layer)) {
+        append_point(GlobalRoutePoint{feature->position, grid.layers[previous_layer]},
+                     Nanometres{0}, GlobalRouteSegmentWidthKind::nominal);
+        append_point(GlobalRoutePoint{feature->position, grid.layers[layer]}, Nanometres{0},
+                     GlobalRouteSegmentWidthKind::nominal);
+      }
+    }
     append_point(GlobalRoutePoint{grid.point(x, y), grid.layers[layer]}, width, width_kind);
   }
   constexpr auto no_resource = std::numeric_limits<std::size_t>::max();
@@ -8344,27 +9839,46 @@ void account_routing_occupancy(GlobalRouteResult& result, const Board& board, co
       }
     }
   }
+  std::vector<RoutingComputeNegotiatedResource> sampled_resources;
+  std::vector<std::variant<Edge, std::size_t>> sampled_keys;
+  sampled_resources.reserve(occupancy.edges.size() + occupancy.nodes.size());
+  sampled_keys.reserve(sampled_resources.capacity());
   for (const auto& [edge, nets] : occupancy.edges) {
-    if ((allocation.direct_resource(edge) && !config.single_lane_direct_voronoi_resources) ||
-        nets.size() <= config.edge_capacity) {
-      continue;
-    }
-    const auto overflow = nets.size() - config.edge_capacity;
-    result.total_overflow = saturating_count_add(result.total_overflow, overflow);
-    result.sampled_overflow = saturating_count_add(result.sampled_overflow, overflow);
-    if (history != nullptr) {
-      history->edges[edge] = saturating_count_add(history->edges[edge], overflow);
-    }
+    const auto exempt =
+        allocation.direct_resource(edge) && !config.single_lane_direct_voronoi_resources;
+    const auto prior =
+        history != nullptr && history->edges.contains(edge) ? history->edges.at(edge) : 0U;
+    sampled_resources.push_back(RoutingComputeNegotiatedResource{
+        static_cast<std::uint32_t>(nets.size()),
+        static_cast<std::uint32_t>(exempt ? nets.size() : config.edge_capacity),
+        static_cast<std::uint32_t>(
+            std::min<std::size_t>(prior, std::numeric_limits<std::uint32_t>::max())),
+        1U});
+    sampled_keys.emplace_back(edge);
   }
   for (const auto& [node, nets] : occupancy.nodes) {
-    if (nets.size() <= config.edge_capacity) {
-      continue;
-    }
-    const auto overflow = nets.size() - config.edge_capacity;
-    result.total_overflow = saturating_count_add(result.total_overflow, overflow);
-    result.sampled_overflow = saturating_count_add(result.sampled_overflow, overflow);
-    if (history != nullptr) {
-      history->nodes[node] = saturating_count_add(history->nodes[node], overflow);
+    const auto prior =
+        history != nullptr && history->nodes.contains(node) ? history->nodes.at(node) : 0U;
+    sampled_resources.push_back(RoutingComputeNegotiatedResource{
+        static_cast<std::uint32_t>(nets.size()), static_cast<std::uint32_t>(config.edge_capacity),
+        static_cast<std::uint32_t>(
+            std::min<std::size_t>(prior, std::numeric_limits<std::uint32_t>::max())),
+        1U});
+    sampled_keys.emplace_back(node);
+  }
+  const auto sampled_reduction = reduce_negotiated_routing_resources(sampled_resources, true);
+  if (sampled_reduction.ok()) {
+    for (std::size_t index = 0U; index < sampled_keys.size(); ++index) {
+      const auto overflow = sampled_reduction.overflow[index];
+      result.total_overflow = saturating_count_add(result.total_overflow, overflow);
+      result.sampled_overflow = saturating_count_add(result.sampled_overflow, overflow);
+      if (history == nullptr || overflow == 0U)
+        continue;
+      if (const auto* edge = std::get_if<Edge>(&sampled_keys[index]))
+        history->edges[*edge] = saturating_count_add(history->edges[*edge], overflow);
+      else
+        history->nodes[std::get<std::size_t>(sampled_keys[index])] = saturating_count_add(
+            history->nodes[std::get<std::size_t>(sampled_keys[index])], overflow);
     }
   }
   const auto account_corridors = [&](const auto& selected, const CorridorGraph& graph,
@@ -8591,6 +10105,8 @@ pathfinder_group_membership(const Board& board) {
 
 struct StagedIterationZeroOrder {
   std::vector<NetTask> tasks;
+  std::vector<NetTask> mps_forward_tasks;
+  std::vector<NetTask> mps_reverse_tasks;
   std::vector<RoutingSeedPriorityEvidence> evidence;
 };
 
@@ -8705,6 +10221,10 @@ staged_iteration_zero_order(const Board& board, const Grid& grid, const std::vec
       ++groups.at(lhs.group).evidence.terminal_crossing_pressure;
       ++groups.at(rhs.group).evidence.terminal_crossing_pressure;
     }
+  }
+  for (const auto& [first, second] : terminal_crossing_pairs) {
+    ++groups.at(first).evidence.mps_conflict_degree;
+    ++groups.at(second).evidence.mps_conflict_degree;
   }
 
   const auto route_layer_sequence = [&](const GlobalSeedCandidate& candidate) {
@@ -9078,14 +10598,81 @@ staged_iteration_zero_order(const Board& board, const Grid& grid, const std::vec
         return lhs.evidence.group < rhs.evidence.group;
       });
 
+  // Build deterministic maximal non-crossing subsets over the actual group conflict graph. The
+  // ordinary staged order remains an independent baseline; these two schedules create different
+  // occupancy-aware layer/via decisions without weakening coupled-group or explicit-priority
+  // ordering. Reversing whole rounds allocates the most mutually constrained remainder first.
+  const auto groups_conflict = [&terminal_crossing_pairs](const std::string& lhs,
+                                                          const std::string& rhs) {
+    const auto pair = std::minmax(lhs, rhs);
+    return terminal_crossing_pairs.contains({pair.first, pair.second});
+  };
+  std::vector<std::vector<std::size_t>> mps_rounds;
+  std::vector<std::size_t> remaining(ordered_groups.size());
+  std::iota(remaining.begin(), remaining.end(), 0U);
+  std::stable_sort(remaining.begin(), remaining.end(),
+                   [&ordered_groups](const auto lhs, const auto rhs) {
+                     const auto& left = ordered_groups[lhs].evidence;
+                     const auto& right = ordered_groups[rhs].evidence;
+                     if (left.explicit_priority != right.explicit_priority) {
+                       return left.explicit_priority > right.explicit_priority;
+                     }
+                     if (left.mps_conflict_degree != right.mps_conflict_degree) {
+                       return left.mps_conflict_degree < right.mps_conflict_degree;
+                     }
+                     return lhs < rhs;
+                   });
+  while (!remaining.empty()) {
+    std::vector<std::size_t> round;
+    const auto priority = ordered_groups[remaining.front()].evidence.explicit_priority;
+    for (const auto index : remaining) {
+      if (ordered_groups[index].evidence.explicit_priority != priority) {
+        continue;
+      }
+      const auto compatible = std::none_of(round.begin(), round.end(), [&](const auto selected) {
+        return groups_conflict(ordered_groups[index].evidence.group,
+                               ordered_groups[selected].evidence.group);
+      });
+      if (compatible) {
+        round.push_back(index);
+      }
+    }
+    if (round.empty()) {
+      round.push_back(remaining.front());
+    }
+    const std::set<std::size_t> selected(round.begin(), round.end());
+    std::erase_if(remaining, [&](const auto index) { return selected.contains(index); });
+    mps_rounds.push_back(std::move(round));
+  }
+  for (std::size_t round = 0U; round < mps_rounds.size(); ++round) {
+    for (const auto index : mps_rounds[round]) {
+      ordered_groups[index].evidence.mps_round = round;
+    }
+  }
+
   StagedIterationZeroOrder result;
   result.tasks.reserve(tasks.size());
+  result.mps_forward_tasks.reserve(tasks.size());
+  result.mps_reverse_tasks.reserve(tasks.size());
   result.evidence.reserve(ordered_groups.size());
   for (auto& group : ordered_groups) {
     result.evidence.push_back(group.evidence);
     for (auto& ordered : group.tasks) {
-      result.tasks.push_back(std::move(ordered.task));
+      result.tasks.push_back(ordered.task);
     }
+  }
+  const auto append_round = [&ordered_groups](const auto& round, auto& destination) {
+    for (const auto index : round) {
+      for (const auto& ordered : ordered_groups[index].tasks) {
+        destination.push_back(ordered.task);
+      }
+    }
+  };
+  for (const auto& round : mps_rounds) {
+    append_round(round, result.mps_forward_tasks);
+  }
+  for (auto round = mps_rounds.rbegin(); round != mps_rounds.rend(); ++round) {
+    append_round(*round, result.mps_reverse_tasks);
   }
   return result;
 }
@@ -9593,7 +11180,23 @@ void populate_neck_down_obstacle_impacts(GlobalRouteResult& result, const Board&
     } else {
       const auto first_node = route_node(grid, first);
       const auto second_node = route_node(grid, second);
-      if (!first_node || !second_node || first.position != second.position ||
+      if (first.position != second.position) {
+        return false;
+      }
+      const auto first_layer = std::find(grid.layers.begin(), grid.layers.end(), first.layer);
+      const auto second_layer = std::find(grid.layers.begin(), grid.layers.end(), second.layer);
+      if (first_layer == grid.layers.end() || second_layer == grid.layers.end()) {
+        return false;
+      }
+      const auto first_layer_index = static_cast<std::size_t>(first_layer - grid.layers.begin());
+      const auto second_layer_index = static_cast<std::size_t>(second_layer - grid.layers.begin());
+      const bool reuses_vertical_feature =
+          grid.reusable_vertical_feature_at(path.net, first.position, first_layer_index,
+                                            second_layer_index) != nullptr;
+      if ((!first_node || !second_node) && !reuses_vertical_feature) {
+        return false;
+      }
+      if (first_node && second_node && !reuses_vertical_feature &&
           obstacles.edge_blocked(path.net, Edge{*first_node, *second_node})) {
         return false;
       }
@@ -9639,6 +11242,8 @@ prepare_reuse(const GlobalRouteResult& checkpoint, const std::vector<NetId>& req
            config.max_clearance_shadow_conflict_resources ||
        checkpoint.configured_clearance_shadow_cost_quantum !=
            config.clearance_shadow_cost_quantum ||
+       checkpoint.configured_capacity_reserve_per_mille != config.capacity_reserve_per_mille ||
+       checkpoint.configured_capacity_reserve_cost != config.capacity_reserve_cost ||
        checkpoint.configured_single_lane_direct_voronoi_resources !=
            config.single_lane_direct_voronoi_resources ||
        checkpoint.configured_max_static_seed_candidates_per_connection !=
@@ -9646,13 +11251,28 @@ prepare_reuse(const GlobalRouteResult& checkpoint, const std::vector<NetId>& req
        checkpoint.configured_max_static_seed_searches != config.max_static_seed_searches ||
        checkpoint.configured_max_static_seed_reprojection_searches !=
            config.max_static_seed_reprojection_searches ||
+       checkpoint.configured_static_seed_rrt_connect_alternatives !=
+           config.use_static_seed_rrt_connect_alternatives ||
+       checkpoint.configured_max_static_seed_rrt_connect_candidates !=
+           config.max_static_seed_rrt_connect_candidates ||
+       checkpoint.configured_max_static_seed_rrt_connect_iterations !=
+           config.max_static_seed_rrt_connect_iterations ||
+       checkpoint.configured_max_static_seed_hydraulic_candidates !=
+           config.max_static_seed_hydraulic_candidates ||
+       checkpoint.configured_static_seed_hydraulic_flow != config.static_seed_hydraulic_flow ||
        checkpoint.configured_static_seed_alternative_edge_penalty !=
            config.static_seed_alternative_edge_penalty ||
        checkpoint.configured_static_seed_corridor_departure_penalty !=
            config.static_seed_corridor_departure_penalty ||
+       checkpoint.configured_targeted_track_spreading_cost !=
+           config.targeted_track_spreading_cost ||
        checkpoint.configured_former_route_memory_cost != config.former_route_memory_cost ||
        checkpoint.configured_terminal_escape_reservation_cost !=
            config.terminal_escape_reservation_cost ||
+       checkpoint.configured_terminal_escape_proximity_cost !=
+           config.terminal_escape_proximity_cost ||
+       checkpoint.configured_max_soft_capacity_cut_probe_expansions !=
+           config.max_soft_capacity_cut_probe_expansions ||
        checkpoint.configured_max_terminal_escape_reservation_resources !=
            config.max_terminal_escape_reservation_resources ||
        checkpoint.configured_global_spline_tessellation_tolerance !=
@@ -9872,9 +11492,17 @@ prepare_reuse(const GlobalRouteResult& checkpoint, const std::vector<NetId>& req
             result.occupancy.corridor_neck_downs[*corridor].insert(net);
           }
         }
-        auto edge_cost = usage.kind == RoutingResourceKind::via_edge
-                             ? config.via_cost
-                             : direct_edge_base_cost(grid, edge, config);
+        auto edge_cost = direct_edge_base_cost(grid, edge, config);
+        if (usage.kind == RoutingResourceKind::via_edge) {
+          const auto [x, y, first_layer] = grid.decode(*first);
+          const auto [unused_x, unused_y, second_layer] = grid.decode(*second);
+          static_cast<void>(unused_x);
+          static_cast<void>(unused_y);
+          edge_cost =
+              grid.reusable_vertical_feature(net, x, y, first_layer, second_layer) != nullptr
+                  ? std::min(config.via_cost, std::max<std::uint64_t>(1U, config.step_cost))
+                  : config.via_cost;
+        }
         if (usage.kind == RoutingResourceKind::planar_edge ||
             usage.kind == RoutingResourceKind::medial_edge) {
           const auto& selected_corridors = corridor_neck_down ? corridor_neck_downs : corridors;
@@ -9918,7 +11546,8 @@ prepare_reuse(const GlobalRouteResult& checkpoint, const std::vector<NetId>& req
               edge_cost,
               voronoi_allocation_edge_cost(voronoi_allocation, result.occupancy, empty_history, net,
                                            complement_allocated, routing_bus_member_allocated, edge,
-                                           selected_width, config));
+                                           selected_width, config)
+                  .total);
           const auto selected_demand = voronoi_allocation.demand_for_width(net, selected_width);
           for (const auto resource : voronoi_allocation.resources_for(edge)) {
             const bool direct_resource = voronoi_allocation.direct_resource(edge) == resource;
@@ -9990,7 +11619,7 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
     }
   };
   const auto validation = validate_board(board);
-  if (!validation.ok()) {
+  if (!validation.ok() && !config.allow_invalid_source_for_diagnostic_preview) {
     invalid.diagnostic = "board failed structural/placement validation";
     return invalid;
   }
@@ -10055,9 +11684,10 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
   }
   auto tasks = make_tasks(board, *grid, config);
   RouterTelemetryEvent started;
-  started.kind = RouterTelemetryEventKind::routing_started;
+  started.kind = RouterTelemetryEventKind::global_routing_started;
   started.total_nets = tasks.size();
-  started.detail = board.source_revision;
+  started.stable_id = "global-routing-stage";
+  started.detail = "global routing stage started: source_revision=" + board.source_revision;
   emit_telemetry(std::move(started));
   if (tasks.empty()) {
     invalid.stop_reason = GlobalRouterStopReason::complete;
@@ -10075,11 +11705,22 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
     invalid.configured_max_clearance_shadow_conflict_resources =
         config.max_clearance_shadow_conflict_resources;
     invalid.configured_clearance_shadow_cost_quantum = config.clearance_shadow_cost_quantum;
+    invalid.configured_capacity_reserve_per_mille = config.capacity_reserve_per_mille;
+    invalid.configured_capacity_reserve_cost = config.capacity_reserve_cost;
     invalid.configured_max_static_seed_candidates_per_connection =
         config.max_static_seed_candidates_per_connection;
     invalid.configured_max_static_seed_searches = config.max_static_seed_searches;
     invalid.configured_max_static_seed_reprojection_searches =
         config.max_static_seed_reprojection_searches;
+    invalid.configured_static_seed_rrt_connect_alternatives =
+        config.use_static_seed_rrt_connect_alternatives;
+    invalid.configured_max_static_seed_rrt_connect_candidates =
+        config.max_static_seed_rrt_connect_candidates;
+    invalid.configured_max_static_seed_rrt_connect_iterations =
+        config.max_static_seed_rrt_connect_iterations;
+    invalid.configured_max_static_seed_hydraulic_candidates =
+        config.max_static_seed_hydraulic_candidates;
+    invalid.configured_static_seed_hydraulic_flow = config.static_seed_hydraulic_flow;
     invalid.configured_max_static_seed_workers = config.max_static_seed_workers;
     invalid.configured_static_seed_alternative_edge_penalty =
         config.static_seed_alternative_edge_penalty;
@@ -10090,7 +11731,11 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
     invalid.configured_critical_cut_minimum_future_demand =
         config.critical_cut_minimum_future_demand;
     invalid.configured_former_route_memory_cost = config.former_route_memory_cost;
+    invalid.configured_targeted_track_spreading_cost = config.targeted_track_spreading_cost;
     invalid.configured_terminal_escape_reservation_cost = config.terminal_escape_reservation_cost;
+    invalid.configured_terminal_escape_proximity_cost = config.terminal_escape_proximity_cost;
+    invalid.configured_max_soft_capacity_cut_probe_expansions =
+        config.max_soft_capacity_cut_probe_expansions;
     invalid.configured_max_terminal_escape_reservation_resources =
         config.max_terminal_escape_reservation_resources;
     invalid.configured_global_spline_tessellation_tolerance =
@@ -10163,9 +11808,10 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
         config.protect_recovered_hard_capacity_ripup_nets;
     invalid.diagnostic = "no multi-terminal nets require global routing";
     RouterTelemetryEvent finished;
-    finished.kind = RouterTelemetryEventKind::routing_finished;
+    finished.kind = RouterTelemetryEventKind::global_routing_finished;
     finished.total_nets = 0U;
-    finished.detail = "no incomplete named nets";
+    finished.stable_id = "global-routing-stage";
+    finished.detail = "global routing stage completed: no incomplete named nets";
     emit_telemetry(std::move(finished));
     return invalid;
   }
@@ -10244,6 +11890,76 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
     invalid.stop_reason = GlobalRouterStopReason::cancelled;
     invalid.diagnostic = "global routing cancelled during static seed corridor planning";
     return invalid;
+  }
+  // Publish every retained coarse alternative, not only the eventual winner.  Diagnostic
+  // consumers can therefore inspect long/RRT fallbacks that remain available for later
+  // congestion resolution; the event stream is non-authoritative and cannot affect selection.
+  for (const auto& candidate : static_seed_plan.candidates) {
+    const auto task = std::find_if(tasks.begin(), tasks.end(),
+                                   [&](const auto& value) { return value.net == candidate.net; });
+    if (task == tasks.end()) {
+      continue;
+    }
+    const auto path =
+        convert_path(*grid, *task, candidate.terminal_index, candidate.connected_terminals,
+                     candidate.route, *voronoi_allocation);
+    RouterTelemetryEvent route;
+    route.kind = RouterTelemetryEventKind::route_candidate_selected;
+    route.minimum_level = RouterTelemetryLevel::diagnostic;
+    route.stable_id = "coarse:" + std::string(global_seed_family_name(candidate.family)) + ':' +
+                      candidate.net.value() + ':' + std::to_string(candidate.connection_index) +
+                      ':' + std::to_string(candidate.tree_candidate_index);
+    route.net = candidate.net;
+    route.route_revision = 0U;
+    route.candidate_cost = candidate.route.cost;
+    route.route_family = std::string(global_seed_family_name(candidate.family));
+    route.route_lifecycle = "retained_fallback";
+    route.route_width_nm = static_cast<std::uint64_t>(std::max<std::int64_t>(
+        0, resolve_net_routing_rules(board, candidate.net).track_width.value()));
+    route.route_points.reserve(path.points.size());
+    for (const auto& point : path.points) {
+      route.route_points.push_back(RouterTelemetryPathPoint{point.position.x.value(),
+                                                            point.position.y.value(), point.layer});
+    }
+    route.detail = "retained coarse route alternative; family=" + route.route_family +
+                   ", lifecycle=retained_fallback";
+    emit_telemetry(std::move(route));
+    for (std::size_t field_index = 0U; field_index < candidate.hydraulic_fields.size();
+         ++field_index) {
+      const auto& evidence = candidate.hydraulic_fields[field_index];
+      RouterTelemetryEvent field;
+      field.kind = RouterTelemetryEventKind::hydraulic_field_updated;
+      field.minimum_level = RouterTelemetryLevel::diagnostic;
+      // One latest heatmap per copper layer keeps recovery snapshots bounded. The chronological
+      // event/timeline still retains each net/candidate update and its active-net attribution.
+      field.stable_id = "hydraulic-field:" + evidence.layer.value();
+      field.net = candidate.net;
+      field.layer = evidence.layer;
+      field.route_revision = 0U;
+      field.x_nm = evidence.origin.x.value();
+      field.y_nm = evidence.origin.y.value();
+      field.hydraulic_field_pitch_nm =
+          static_cast<std::uint64_t>(std::max<std::int64_t>(0, evidence.cell_pitch.value()));
+      field.hydraulic_field_width = evidence.width;
+      field.hydraulic_field_height = evidence.height;
+      field.hydraulic_field_stride = evidence.stride;
+      field.hydraulic_maximum_flow = evidence.maximum_flow;
+      field.hydraulic_maximum_erosion = evidence.maximum_erosion;
+      field.hydraulic_maximum_terrain_height = evidence.maximum_terrain_height;
+      field.hydraulic_maximum_downstream_pressure = evidence.maximum_downstream_pressure;
+      field.hydraulic_maximum_success_prior = evidence.maximum_success_prior;
+      field.hydraulic_flow_field = evidence.flow;
+      field.hydraulic_erosion_field = evidence.erosion;
+      field.hydraulic_heightmap = evidence.heightmap;
+      field.hydraulic_free_space_field = evidence.free_space;
+      field.hydraulic_downstream_pressure_field = evidence.downstream_pressure;
+      field.hydraulic_success_prior_field = evidence.success_prior;
+      field.detail = "direct-polygon per-layer hydraulic discovery terrain; connection=" +
+                     std::to_string(candidate.connection_index) +
+                     ", tree=" + std::to_string(candidate.tree_candidate_index) +
+                     ", field=" + std::to_string(field_index);
+      emit_telemetry(std::move(field));
+    }
   }
   const auto physical_envelope_metrics =
       pathfinder_physical_envelope_metrics(board, tasks, *voronoi_allocation);
@@ -10392,6 +12108,8 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
       queued.detail =
           "routing_freedom_score=" + std::to_string(evidence.routing_freedom_score) +
           "; terminal_crossing_pressure=" + std::to_string(evidence.terminal_crossing_pressure) +
+          "; mps_conflict_degree=" + std::to_string(evidence.mps_conflict_degree) +
+          "; mps_round=" + std::to_string(evidence.mps_round) +
           "; smaller nonzero freedom values are more constrained";
       emit_telemetry(std::move(queued));
     }
@@ -10455,6 +12173,9 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
   std::size_t hard_capacity_conflict_set_states = 0U;
   std::size_t hard_capacity_joint_ripup_attempts = 0U;
   std::size_t hard_capacity_conflict_sets_withheld = 0U;
+  std::size_t hard_capacity_soft_cut_probes = 0U;
+  std::size_t hard_capacity_soft_cut_routes = 0U;
+  std::size_t hard_capacity_soft_cut_blockers = 0U;
   std::size_t hard_capacity_failed_retry_rollbacks = 0U;
   std::size_t hard_capacity_tail_deferred_victims = 0U;
   std::size_t hard_capacity_protected_recoveries = 0U;
@@ -10504,8 +12225,10 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
   // the hard pass that exercised it.
   std::size_t former_route_memory_ripped_paths = 0U;
   std::size_t former_route_memory_edges_peak = 0U;
+  std::size_t former_route_memory_nodes_peak = 0U;
   std::size_t former_route_memory_penalty_events = 0U;
   std::uint64_t former_route_memory_penalty = 0U;
+  std::vector<NetId> initial_pathfinder_order;
   RoutingHistory history = prepared_routability_history.history;
   const auto finalize = [&](GlobalRouteResult result) {
     result.configured_selected_nets = config.selected_nets;
@@ -10521,6 +12244,13 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
     result.configured_max_clearance_shadow_conflict_resources =
         config.max_clearance_shadow_conflict_resources;
     result.configured_clearance_shadow_cost_quantum = config.clearance_shadow_cost_quantum;
+    result.configured_capacity_reserve_per_mille = config.capacity_reserve_per_mille;
+    result.configured_capacity_reserve_cost = config.capacity_reserve_cost;
+    if (result.selected_iteration == 0U) {
+      // Iteration-zero portfolios use the unscaled configuration directly.  Later negotiated
+      // passes publish their escalated effective value when they become the selected checkpoint.
+      result.selected_effective_capacity_reserve_cost = config.capacity_reserve_cost;
+    }
     result.routability_history_entries = prepared_routability_history.entries;
     result.routability_history_edges = prepared_routability_history.edges;
     result.routability_history_pressure = prepared_routability_history.pressure;
@@ -10534,6 +12264,15 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
     result.configured_max_static_seed_searches = config.max_static_seed_searches;
     result.configured_max_static_seed_reprojection_searches =
         config.max_static_seed_reprojection_searches;
+    result.configured_static_seed_rrt_connect_alternatives =
+        config.use_static_seed_rrt_connect_alternatives;
+    result.configured_max_static_seed_rrt_connect_candidates =
+        config.max_static_seed_rrt_connect_candidates;
+    result.configured_max_static_seed_rrt_connect_iterations =
+        config.max_static_seed_rrt_connect_iterations;
+    result.configured_max_static_seed_hydraulic_candidates =
+        config.max_static_seed_hydraulic_candidates;
+    result.configured_static_seed_hydraulic_flow = config.static_seed_hydraulic_flow;
     result.configured_max_static_seed_workers = config.max_static_seed_workers;
     result.configured_static_seed_alternative_edge_penalty =
         config.static_seed_alternative_edge_penalty;
@@ -10544,12 +12283,19 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
     result.configured_critical_cut_minimum_future_demand =
         config.critical_cut_minimum_future_demand;
     result.configured_river_following_cost = config.river_following_cost;
+    result.configured_targeted_track_spreading_cost = config.targeted_track_spreading_cost;
     result.configured_former_route_memory_cost = config.former_route_memory_cost;
     result.configured_terminal_escape_reservation_cost = config.terminal_escape_reservation_cost;
+    result.configured_terminal_escape_proximity_cost = config.terminal_escape_proximity_cost;
+    result.configured_max_soft_capacity_cut_probe_expansions =
+        config.max_soft_capacity_cut_probe_expansions;
     result.configured_max_terminal_escape_reservation_resources =
         config.max_terminal_escape_reservation_resources;
     result.former_route_memory_ripped_paths = former_route_memory_ripped_paths;
     result.former_route_memory_edges = former_route_memory_edges_peak;
+    // Edge and node counts describe the peak pass-local clearance envelope retained after
+    // destructive repair; they are diagnostic and never become authoritative occupancy.
+    result.former_route_memory_nodes = former_route_memory_nodes_peak;
     result.former_route_memory_penalty_events = former_route_memory_penalty_events;
     result.former_route_memory_penalty = former_route_memory_penalty;
     result.residual_corridor_demand_nets = residual_corridor_demand_by_net.size();
@@ -10607,10 +12353,42 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
     result.static_seed_navmesh_domains = static_seed_plan.stats.navmesh_domains;
     result.static_seed_navmesh_routes = static_seed_plan.stats.navmesh_routes;
     result.static_seed_navmesh_cells = static_seed_plan.stats.navmesh_cells;
+    result.static_seed_navmesh_refined_parents = static_seed_plan.stats.navmesh_refined_parents;
+    result.static_seed_navmesh_refined_leaves = static_seed_plan.stats.navmesh_refined_leaves;
+    result.static_seed_navmesh_rejected_leaves = static_seed_plan.stats.navmesh_rejected_leaves;
+    result.static_seed_navmesh_gpu_wavefront_routes =
+        static_seed_plan.stats.navmesh_gpu_wavefront_routes;
+    result.static_seed_navmesh_gpu_wavefront_cpu_fallbacks =
+        static_seed_plan.stats.navmesh_gpu_wavefront_cpu_fallbacks;
     result.static_seed_navmesh_search_expansions = static_seed_plan.stats.navmesh_search_expansions;
     result.static_seed_flood_fill_routes = static_seed_plan.stats.flood_fill_routes;
     result.static_seed_flood_fill_cells_visited = static_seed_plan.stats.flood_fill_cells_visited;
     result.static_seed_navmesh_failures = static_seed_plan.stats.navmesh_failures;
+    result.static_seed_rrt_connect_attempts = static_seed_plan.stats.rrt_connect_attempts;
+    result.static_seed_rrt_connect_accepted = static_seed_plan.stats.rrt_connect_accepted;
+    result.static_seed_rrt_connect_failures = static_seed_plan.stats.rrt_connect_failures;
+    result.static_seed_rrt_connect_iterations = static_seed_plan.stats.rrt_connect_iterations;
+    result.static_seed_hydraulic_attempts = static_seed_plan.stats.hydraulic_attempts;
+    result.static_seed_hydraulic_accepted = static_seed_plan.stats.hydraulic_accepted;
+    result.static_seed_hydraulic_failures = static_seed_plan.stats.hydraulic_failures;
+    result.static_seed_hydraulic_gpu_routes = static_seed_plan.stats.hydraulic_gpu_routes;
+    result.static_seed_hydraulic_gpu_clearance_cache_hits =
+        static_seed_plan.stats.hydraulic_gpu_clearance_cache_hits;
+    result.static_seed_hydraulic_gpu_peak_batch_size =
+        static_seed_plan.stats.hydraulic_gpu_peak_batch_size;
+    result.static_seed_hydraulic_gpu_buffer_reuses =
+        static_seed_plan.stats.hydraulic_gpu_buffer_reuses;
+    result.static_seed_hydraulic_gpu_buffer_growths =
+        static_seed_plan.stats.hydraulic_gpu_buffer_growths;
+    result.static_seed_hydraulic_cpu_fallbacks = static_seed_plan.stats.hydraulic_cpu_fallbacks;
+    result.static_seed_hydraulic_relaxation_passes =
+        static_seed_plan.stats.hydraulic_relaxation_passes;
+    result.static_seed_hydraulic_droplet_steps = static_seed_plan.stats.hydraulic_droplet_steps;
+    result.static_seed_hydraulic_discovery_cells = static_seed_plan.stats.hydraulic_discovery_cells;
+    result.static_seed_hydraulic_exact_certified_chords =
+        static_seed_plan.stats.hydraulic_exact_certified_chords;
+    result.static_seed_hydraulic_projection_failures =
+        static_seed_plan.stats.hydraulic_projection_failures;
     result.static_seed_navmesh_certificate_domains =
         static_seed_plan.stats.navmesh_certificate_domains;
     result.static_seed_funnel_points = static_seed_plan.stats.funnel_points;
@@ -10760,6 +12538,11 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
     result.hard_capacity_ripup_records = hard_capacity_ripup_records;
     result.configured_max_hard_capacity_conflict_set_states_per_attempt =
         config.max_hard_capacity_conflict_set_states_per_attempt;
+    result.configured_max_soft_capacity_cut_probe_expansions =
+        config.max_soft_capacity_cut_probe_expansions;
+    result.hard_capacity_soft_cut_probes = hard_capacity_soft_cut_probes;
+    result.hard_capacity_soft_cut_routes = hard_capacity_soft_cut_routes;
+    result.hard_capacity_soft_cut_blockers = hard_capacity_soft_cut_blockers;
     result.hard_capacity_conflict_set_states = hard_capacity_conflict_set_states;
     result.hard_capacity_joint_ripup_attempts = hard_capacity_joint_ripup_attempts;
     result.hard_capacity_conflict_sets_withheld = hard_capacity_conflict_sets_withheld;
@@ -10875,6 +12658,7 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
     result.configured_physical_envelope_ordering = config.order_routing_groups_by_physical_envelope;
     result.peak_net_routing_envelope_nm = physical_envelope_metrics.peak_net_nm;
     result.peak_routing_group_envelope_nm = physical_envelope_metrics.peak_group_nm;
+    result.initial_pathfinder_order = initial_pathfinder_order;
     result.last_pathfinder_reroute_order = last_reroute_order;
     result.configured_search_diversification = config.enable_search_diversification;
     result.configured_global_route_beam_width = config.global_route_beam_width;
@@ -11008,6 +12792,8 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
           "global-route:" + path.net.value() + ':' + std::to_string(path.connection_index);
       route.net = path.net;
       route.route_revision = result.selected_iteration;
+      route.route_family = "selected";
+      route.route_lifecycle = "active";
       const auto rules = resolve_net_routing_rules(board, path.net);
       route.route_width_nm =
           static_cast<std::uint64_t>(std::max<std::int64_t>(0, rules.track_width.value()));
@@ -11020,7 +12806,8 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
       emit_telemetry(std::move(route));
     }
     RouterTelemetryEvent finished;
-    finished.kind = RouterTelemetryEventKind::routing_finished;
+    finished.kind = RouterTelemetryEventKind::global_routing_finished;
+    finished.stable_id = "global-routing-stage";
     finished.iteration = result.selected_iteration;
     finished.total_nets = tasks.size();
     finished.routed_nets = tasks.size() >= result.unrouted_nets.size()
@@ -11034,12 +12821,13 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
     finished.ripup_count = result.hard_capacity_ripped_nets;
     finished.route_cost = result.total_cost;
     finished.search_expansions = result.path_search_expansions;
-    finished.detail = result.diagnostic;
+    finished.detail = "global routing stage completed: " + result.diagnostic;
     emit_telemetry(std::move(finished));
     return result;
   };
 
   GlobalRouteResult best;
+  std::vector<NetTask> initial_negotiated_tasks;
   struct BeamCheckpoint {
     std::uint64_t signature{0};
     GlobalRouteResult result;
@@ -11078,12 +12866,17 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
       std::size_t candidate_index{0};
       bool occupancy_aware{false};
       bool staged_priority{false};
+      bool mps_order{false};
+      std::vector<NetTask> routing_order;
+      std::string family;
     };
     std::optional<SeedPortfolio> selected_portfolio;
     for (std::size_t candidate_index = 0U;
          candidate_index < config.max_static_seed_candidates_per_connection; ++candidate_index) {
       SeedPortfolio portfolio;
       portfolio.candidate_index = candidate_index;
+      portfolio.routing_order = all_tasks;
+      portfolio.family = "fixed-candidate";
       std::set<std::size_t> selected_shove_ids;
       for (const auto& task : all_tasks) {
         std::vector<const GlobalSeedCandidate*> selected(
@@ -11148,12 +12941,21 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
       }
     }
     const auto build_occupancy_aware_portfolio = [&](const std::vector<NetTask>& ordered_tasks,
-                                                     bool staged_priority) {
+                                                     bool staged_priority, bool mps_order,
+                                                     std::string family) {
       SeedPortfolio occupancy_aware;
-      occupancy_aware.candidate_index = config.max_static_seed_candidates_per_connection +
-                                        static_cast<std::size_t>(staged_priority);
+      occupancy_aware.candidate_index =
+          config.max_static_seed_candidates_per_connection + iteration_zero_portfolios_evaluated;
       occupancy_aware.occupancy_aware = true;
       occupancy_aware.staged_priority = staged_priority;
+      occupancy_aware.mps_order = mps_order;
+      occupancy_aware.routing_order = ordered_tasks;
+      occupancy_aware.family = std::move(family);
+      // Same-layer crossing and via-site contention are dense-board portfolio discriminators.
+      // Applying them to the small-board qualification corpus can replace an already detailed-
+      // clean seed without providing a packing benefit; use the same measured scale boundary as
+      // the MPS portfolios below.
+      const bool physical_alternative_rescoring = ordered_tasks.size() > 20U;
       std::set<std::size_t> occupancy_aware_shove_ids;
       for (std::size_t task_index = 0U; task_index < ordered_tasks.size(); ++task_index) {
         const auto& task = ordered_tasks[task_index];
@@ -11189,8 +12991,15 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
           }
         }
         const auto current_reservation = residual_corridor_demand_by_net.find(task.net);
-        using TreeChoice = std::tuple<std::size_t, std::uint64_t, std::uint64_t, std::uint64_t,
-                                      std::size_t, std::vector<const GlobalSeedCandidate*>>;
+        // Keep an occupancy-aware seed from consuming the last usable portion of a real
+        // corridor/cross-section merely because its conventional sampled resources are still
+        // empty.  This is intentionally a soft tie-breaker after direct occupancy and the
+        // existing future-demand/critical-cut reservations: it gives iteration zero the same
+        // physical-capacity signal as negotiated PathFinder without turning a seed into a hard
+        // rejection.
+        using TreeChoice =
+            std::tuple<std::size_t, std::uint64_t, std::uint64_t, std::uint64_t, std::uint64_t,
+                       std::size_t, std::vector<const GlobalSeedCandidate*>>;
         std::optional<TreeChoice> best_tree;
         for (std::size_t candidate_index = 0U;
              candidate_index < config.max_static_seed_candidates_per_connection;
@@ -11253,6 +13062,45 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
                 if (const auto found = occupancy_aware.occupancy.voronoi_resources.find(resource);
                     found != occupancy_aware.occupancy.voronoi_resources.end()) {
                   pressure = saturating_count_add(pressure, found->second.size());
+                }
+              }
+              const auto [first_x, first_y, first_layer] = grid->decode(route_edge.first);
+              const auto [second_x, second_y, second_layer] = grid->decode(route_edge.second);
+              if (physical_alternative_rescoring && first_layer == second_layer) {
+                const auto start = grid->point(first_x, first_y);
+                const auto end = grid->point(second_x, second_y);
+                for (const auto& [occupied_edge, occupants] : occupancy_aware.occupancy.edges) {
+                  if (occupants.contains(task.net)) {
+                    continue;
+                  }
+                  const auto [occupied_first_x, occupied_first_y, occupied_first_layer] =
+                      grid->decode(occupied_edge.first);
+                  const auto [occupied_second_x, occupied_second_y, occupied_second_layer] =
+                      grid->decode(occupied_edge.second);
+                  if (occupied_first_layer != first_layer || occupied_second_layer != first_layer ||
+                      route_edge.first == occupied_edge.first ||
+                      route_edge.first == occupied_edge.second ||
+                      route_edge.second == occupied_edge.first ||
+                      route_edge.second == occupied_edge.second) {
+                    continue;
+                  }
+                  if (geometry::segments_intersect(
+                          start, end, grid->point(occupied_first_x, occupied_first_y),
+                          grid->point(occupied_second_x, occupied_second_y))) {
+                    // Crossing an already selected same-layer tree is a direct MPS conflict.
+                    // Weight it above a shared endpoint so a retained alternative layer/via
+                    // chain wins before ordinary length tie-breaking.
+                    pressure = saturating_count_add(pressure, 4U);
+                  }
+                }
+              } else if (physical_alternative_rescoring && first_x == second_x &&
+                         first_y == second_y) {
+                for (std::size_t layer = 0U; layer < grid->layers.size(); ++layer) {
+                  const auto via_node = grid->node(first_x, first_y, layer);
+                  if (const auto found = occupancy_aware.occupancy.clearance_nodes.find(via_node);
+                      found != occupancy_aware.occupancy.clearance_nodes.end()) {
+                    pressure = saturating_count_add(pressure, found->second.size());
+                  }
                 }
               }
             }
@@ -11324,8 +13172,77 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
               critical_penalty,
               critical_penalty_for(selected_corridors.neck_downs, critical_neck_down_demand,
                                    corridor_neck_downs, current_neck_down_reservation));
-          TreeChoice choice{pressure, critical_penalty, residual_penalty,
-                            cost,     candidate_index,  std::move(selected)};
+          const auto corridor_reserve_penalty_for = [&](const auto& selected_ids,
+                                                        const CorridorGraph& graph,
+                                                        const auto& occupancy_by_resource) {
+            std::uint64_t penalty = 0U;
+            for (const auto corridor_id : selected_ids) {
+              if (corridor_id >= graph.corridors.size()) {
+                continue;
+              }
+              const auto found = occupancy_by_resource.find(corridor_id);
+              const auto occupied = found == occupancy_by_resource.end()
+                                        ? 0U
+                                        : static_cast<std::uint64_t>(found->second.size());
+              penalty = saturating_add(
+                  penalty, capacity_reserve_penalty(graph.corridors[corridor_id].capacity, occupied,
+                                                    1U, config));
+            }
+            return penalty;
+          };
+          auto seed_capacity_reserve_penalty = corridor_reserve_penalty_for(
+              selected_corridors.corridors, *corridors, occupancy_aware.occupancy.corridors);
+          seed_capacity_reserve_penalty = saturating_add(
+              seed_capacity_reserve_penalty,
+              corridor_reserve_penalty_for(selected_corridors.neck_downs, corridor_neck_downs,
+                                           occupancy_aware.occupancy.corridor_neck_downs));
+
+          // A shared medial resource carries actual copper-envelope demand in nanometres.  The
+          // selected tree may touch a resource more than once, but it still reserves one lane for
+          // this net, so score its maximum selected width only once.
+          std::map<std::size_t, std::pair<Nanometres, bool>> selected_physical_resources;
+          for (const auto* candidate : selected) {
+            for (std::size_t edge_index = 1U; edge_index < candidate->route.nodes.size();
+                 ++edge_index) {
+              const Edge route_edge{candidate->route.nodes[edge_index - 1U],
+                                    candidate->route.nodes[edge_index]};
+              const auto selected_width = edge_index - 1U < candidate->route.segment_widths.size()
+                                              ? candidate->route.segment_widths[edge_index - 1U]
+                                              : Nanometres{0};
+              for (const auto resource_id : voronoi_allocation->resources_for(
+                       route_edge, config.use_direct_voronoi_resource_edges)) {
+                const bool direct_resource =
+                    voronoi_allocation->direct_resource(route_edge) == resource_id;
+                auto [entry, inserted] = selected_physical_resources.try_emplace(
+                    resource_id, std::pair{selected_width, direct_resource});
+                if (!inserted) {
+                  entry->second.first = std::max(entry->second.first, selected_width);
+                  entry->second.second = entry->second.second || direct_resource;
+                }
+              }
+            }
+          }
+          for (const auto& [resource_id, selected_resource] : selected_physical_resources) {
+            if (resource_id >= voronoi_allocation->resources.size()) {
+              continue;
+            }
+            const auto allocation = planned_voronoi_allocation(
+                *voronoi_allocation, occupancy_aware.occupancy, task.net, resource_id,
+                selected_resource.first, selected_resource.second);
+            if (!allocation) {
+              continue;
+            }
+            const auto candidate_demand = allocation->planned_nm > allocation->occupied_nm
+                                              ? allocation->planned_nm - allocation->occupied_nm
+                                              : 0U;
+            seed_capacity_reserve_penalty = saturating_add(
+                seed_capacity_reserve_penalty,
+                capacity_reserve_penalty(voronoi_allocation->resources[resource_id].capacity_nm,
+                                         allocation->occupied_nm, candidate_demand, config));
+          }
+          TreeChoice choice{
+              pressure, critical_penalty, residual_penalty,   seed_capacity_reserve_penalty,
+              cost,     candidate_index,  std::move(selected)};
           if (!best_tree || choice < *best_tree) {
             best_tree = std::move(choice);
           }
@@ -11334,7 +13251,18 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
           occupancy_aware.result.unrouted_nets.push_back(task.net);
           continue;
         }
-        for (const auto* candidate : std::get<5>(*best_tree)) {
+        if (std::get<3>(*best_tree) > 0U) {
+          occupancy_aware.result.capacity_reserve_penalty_events =
+              saturating_count_add(occupancy_aware.result.capacity_reserve_penalty_events, 1U);
+          occupancy_aware.result.capacity_reserve_penalty = saturating_add(
+              occupancy_aware.result.capacity_reserve_penalty, std::get<3>(*best_tree));
+          // A seed score may combine corridor and medial evidence.  Preserve only the combined
+          // event here rather than misattribute it; negotiated searches retain exact source
+          // attribution per transition.
+          occupancy_aware.result.total_cost =
+              saturating_add(occupancy_aware.result.total_cost, std::get<3>(*best_tree));
+        }
+        for (const auto* candidate : std::get<6>(*best_tree)) {
           occupancy_aware_shove_ids.insert(candidate->shove_proposal_ids.begin(),
                                            candidate->shove_proposal_ids.end());
           add_path_occupancy(task.net, candidate->route.nodes, *grid, *corridors,
@@ -11374,15 +13302,27 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
       occupancy_aware.result.selected_iteration = 0U;
       occupancy_aware.result.iterations = 0U;
       occupancy_aware.result.diagnostic =
-          staged_priority
-              ? "staged weak-occupancy static seed portfolio assembled as iteration zero"
-              : "baseline weak-occupancy static seed portfolio assembled as iteration zero";
+          occupancy_aware.family +
+          " weak-occupancy static seed portfolio assembled as iteration zero";
       return occupancy_aware;
     };
-    auto baseline_occupancy_aware = build_occupancy_aware_portfolio(all_tasks, false);
-    auto staged_occupancy_aware = build_occupancy_aware_portfolio(staged_seed_order.tasks, true);
-    iteration_zero_portfolios_evaluated =
-        saturating_count_add(iteration_zero_portfolios_evaluated, 2U);
+    auto baseline_occupancy_aware =
+        build_occupancy_aware_portfolio(all_tasks, false, false, "baseline");
+    auto staged_occupancy_aware =
+        build_occupancy_aware_portfolio(staged_seed_order.tasks, true, false, "staged");
+    constexpr std::size_t staged_seed_large_board_group_threshold = 20U;
+    const bool mps_board_scale_qualified =
+        staged_seed_order.evidence.size() > staged_seed_large_board_group_threshold;
+    std::optional<SeedPortfolio> mps_forward_occupancy_aware;
+    std::optional<SeedPortfolio> mps_reverse_occupancy_aware;
+    if (mps_board_scale_qualified) {
+      mps_forward_occupancy_aware = build_occupancy_aware_portfolio(
+          staged_seed_order.mps_forward_tasks, false, true, "mps-forward");
+      mps_reverse_occupancy_aware = build_occupancy_aware_portfolio(
+          staged_seed_order.mps_reverse_tasks, false, true, "mps-reverse");
+    }
+    iteration_zero_portfolios_evaluated = saturating_count_add(iteration_zero_portfolios_evaluated,
+                                                               mps_board_scale_qualified ? 4U : 2U);
     iteration_zero_baseline_unrouted_nets = baseline_occupancy_aware.result.unrouted_nets.size();
     iteration_zero_staged_unrouted_nets = staged_occupancy_aware.result.unrouted_nets.size();
     iteration_zero_baseline_total_overflow = baseline_occupancy_aware.result.total_overflow;
@@ -11409,7 +13349,6 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
     // seed is only qualified when it already completes. This is the measured baseline fallback,
     // not a legality exception. Large conflict diagnostics can still exercise staged allocation
     // without doubling the complete PathFinder run.
-    constexpr std::size_t staged_seed_large_board_group_threshold = 20U;
     const auto qualification_scale_safe =
         staged_seed_order.evidence.size() > staged_seed_large_board_group_threshold ||
         !staged_changes_small_checkpoint || staged_occupancy_aware.result.complete();
@@ -11425,11 +13364,21 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
                                         config.checkpoint_objective))) {
       selected_portfolio = std::move(staged_occupancy_aware);
     }
+    for (auto* mps : {&mps_forward_occupancy_aware, &mps_reverse_occupancy_aware}) {
+      if (mps->has_value() &&
+          (!selected_portfolio ||
+           global_route_checkpoint_better((*mps)->result, selected_portfolio->result,
+                                          config.checkpoint_objective))) {
+        selected_portfolio = std::move(**mps);
+      }
+    }
     if (selected_portfolio) {
       best = std::move(selected_portfolio->result);
       iteration_zero_candidate_index = selected_portfolio->candidate_index;
       iteration_zero_occupancy_aware_portfolio_selected = selected_portfolio->occupancy_aware;
       iteration_zero_staged_priority_portfolio_selected = selected_portfolio->staged_priority;
+      initial_negotiated_tasks = selected_portfolio->mps_order ? selected_portfolio->routing_order
+                                                               : staged_seed_order.tasks;
       GlobalRouteResult history_evidence;
       account_routing_occupancy(history_evidence, board, *grid, *corridors, corridor_neck_downs,
                                 *voronoi_allocation, selected_portfolio->occupancy, obstacles,
@@ -11467,6 +13416,9 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
     best.total_overflow = std::numeric_limits<std::size_t>::max();
     best.total_cost = std::numeric_limits<std::uint64_t>::max();
   }
+  if (initial_negotiated_tasks.empty()) {
+    initial_negotiated_tasks = staged_seed_order.tasks.empty() ? tasks : staged_seed_order.tasks;
+  }
   retain_checkpoint(best);
   // Keep every exact-reprojected spline corridor active during negotiated routing. The static
   // portfolio is the first checkpoint, not a disposable warm-up: later PathFinder passes may
@@ -11476,6 +13428,7 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
   std::map<std::pair<NetId, std::size_t>, std::vector<RoutingGeometricCorridorRun>>
       geometric_corridors_by_connection;
   std::map<NetId, std::vector<RoutingGeometricCorridorRun>> geometric_corridors_by_net;
+  std::size_t retained_river_candidate_ordinal = 0U;
   for (const auto& candidate : static_seed_plan.candidates) {
     if (!candidate.spline_refined || candidate.spline_corridor_nodes.empty()) {
       continue;
@@ -11497,10 +13450,25 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
   std::uint64_t present_congestion_scale_per_mille = 1'000U;
 
   for (std::size_t iteration = 1; iteration <= config.max_iterations; ++iteration) {
+    // The staged order is the initial allocation decision, not an in-pass reprioritization.
+    // Later changes retain the existing pressure-driven policy and occur only between incomplete
+    // PathFinder passes.  This keeps paired/bus members contiguous while ensuring the terminal,
+    // corridor, via, and physical-envelope evidence is effective even when the separate static
+    // portfolio comparator keeps the baseline seed checkpoint.
+    const auto& pass_tasks =
+        iteration == 1U && checkpoint == nullptr && !initial_negotiated_tasks.empty()
+            ? initial_negotiated_tasks
+            : tasks;
+    if (iteration == 1U && initial_pathfinder_order.empty()) {
+      initial_pathfinder_order.reserve(pass_tasks.size());
+      for (const auto& task : pass_tasks) {
+        initial_pathfinder_order.push_back(task.net);
+      }
+    }
     RouterTelemetryEvent iteration_started;
     iteration_started.kind = RouterTelemetryEventKind::pathfinder_iteration_started;
     iteration_started.iteration = iteration;
-    iteration_started.total_nets = tasks.size();
+    iteration_started.total_nets = pass_tasks.size();
     emit_telemetry(std::move(iteration_started));
     const bool enforce_hard_capacity = config.hard_capacity_start_iteration > 0U &&
                                        iteration >= config.hard_capacity_start_iteration;
@@ -11509,8 +13477,8 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
     }
     std::vector<NetId> attempted_hard_capacity_order;
     if (enforce_hard_capacity) {
-      attempted_hard_capacity_order.reserve(tasks.size());
-      for (const auto& task : tasks) {
+      attempted_hard_capacity_order.reserve(pass_tasks.size());
+      for (const auto& task : pass_tasks) {
         attempted_hard_capacity_order.push_back(task.net);
       }
     }
@@ -11527,6 +13495,8 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
         scale_per_mille(config.corridor_present_cost, present_congestion_scale_per_mille);
     iteration_config.voronoi_resource_present_cost =
         scale_per_mille(config.voronoi_resource_present_cost, present_congestion_scale_per_mille);
+    iteration_config.capacity_reserve_cost =
+        scale_per_mille(config.capacity_reserve_cost, present_congestion_scale_per_mille);
     auto occupancy = reuse.occupancy;
     std::map<std::pair<NetId, NetId>, std::size_t> iteration_hard_capacity_blockers;
     GlobalRouteResult current;
@@ -11546,6 +13516,8 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
     current.configured_max_clearance_shadow_conflict_resources =
         config.max_clearance_shadow_conflict_resources;
     current.configured_clearance_shadow_cost_quantum = config.clearance_shadow_cost_quantum;
+    current.configured_capacity_reserve_per_mille = config.capacity_reserve_per_mille;
+    current.configured_capacity_reserve_cost = config.capacity_reserve_cost;
     current.configured_single_lane_direct_voronoi_resources =
         config.single_lane_direct_voronoi_resources;
     current.configured_max_static_seed_candidates_per_connection =
@@ -11553,13 +13525,26 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
     current.configured_max_static_seed_searches = config.max_static_seed_searches;
     current.configured_max_static_seed_reprojection_searches =
         config.max_static_seed_reprojection_searches;
+    current.configured_static_seed_rrt_connect_alternatives =
+        config.use_static_seed_rrt_connect_alternatives;
+    current.configured_max_static_seed_rrt_connect_candidates =
+        config.max_static_seed_rrt_connect_candidates;
+    current.configured_max_static_seed_rrt_connect_iterations =
+        config.max_static_seed_rrt_connect_iterations;
+    current.configured_max_static_seed_hydraulic_candidates =
+        config.max_static_seed_hydraulic_candidates;
+    current.configured_static_seed_hydraulic_flow = config.static_seed_hydraulic_flow;
     current.configured_max_static_seed_workers = config.max_static_seed_workers;
     current.configured_static_seed_alternative_edge_penalty =
         config.static_seed_alternative_edge_penalty;
     current.configured_static_seed_corridor_departure_penalty =
         config.static_seed_corridor_departure_penalty;
     current.configured_former_route_memory_cost = config.former_route_memory_cost;
+    current.configured_targeted_track_spreading_cost = config.targeted_track_spreading_cost;
     current.configured_terminal_escape_reservation_cost = config.terminal_escape_reservation_cost;
+    current.configured_terminal_escape_proximity_cost = config.terminal_escape_proximity_cost;
+    current.configured_max_soft_capacity_cut_probe_expansions =
+        config.max_soft_capacity_cut_probe_expansions;
     current.configured_max_terminal_escape_reservation_resources =
         config.max_terminal_escape_reservation_resources;
     current.configured_global_spline_tessellation_tolerance =
@@ -11614,6 +13599,7 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
     current.selected_effective_corridor_present_cost = iteration_config.corridor_present_cost;
     current.selected_effective_voronoi_resource_present_cost =
         iteration_config.voronoi_resource_present_cost;
+    current.selected_effective_capacity_reserve_cost = iteration_config.capacity_reserve_cost;
     current.total_cost = reuse.cost;
     current.paths = reuse.paths;
     current.reused_paths = checkpoint_reused_paths;
@@ -11621,10 +13607,11 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
     current.rerouted_nets = checkpoint_rerouted_nets;
     current.invalidated_reuse_nets = checkpoint_invalidated_nets;
 
-    std::deque<NetTask> pending_tasks(tasks.begin(), tasks.end());
+    std::deque<NetTask> pending_tasks(pass_tasks.begin(), pass_tasks.end());
     std::set<NetId> routed_this_pass;
     std::map<NetId, std::uint64_t> routed_cost_this_pass;
-    std::set<NetId> hard_ripup_attempted_nets;
+    std::map<NetId, std::size_t> hard_ripup_attempts_by_net;
+    std::map<NetId, std::set<std::vector<NetId>>> hard_ripup_victim_sets_by_net;
     std::set<NetId> hard_ripup_retry_nets;
     std::set<NetId> hard_ripup_protected_nets;
     std::map<NetId, std::size_t> hard_ripup_record_by_net;
@@ -11800,11 +13787,15 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
           negotiated_spline_policy.former_route_memory = &former_route_memory;
           negotiated_spline_policy.former_route_memory_cost =
               iteration_config.former_route_memory_cost;
+          negotiated_spline_policy.spread_open_region_tracks =
+              hard_ripup_retry_nets.contains(task.net);
           if (terminal_escape_reservation && terminal_escape_availability) {
             negotiated_spline_policy.terminal_escape_reservation = &*terminal_escape_reservation;
             negotiated_spline_policy.terminal_escape_availability = &*terminal_escape_availability;
             negotiated_spline_policy.terminal_escape_reservation_cost =
                 iteration_config.terminal_escape_reservation_cost;
+            negotiated_spline_policy.terminal_escape_proximity_cost =
+                iteration_config.terminal_escape_proximity_cost;
           }
           const std::set<std::size_t>* spline_corridor = nullptr;
           if (multisource) {
@@ -11843,6 +13834,19 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
               current.residual_corridor_demand_penalty =
                   saturating_add(current.residual_corridor_demand_penalty,
                                  result.residual_corridor_demand_penalty);
+              current.capacity_reserve_penalty_events = saturating_count_add(
+                  current.capacity_reserve_penalty_events, result.capacity_reserve_penalty_events);
+              current.corridor_capacity_reserve_penalty_events =
+                  saturating_count_add(current.corridor_capacity_reserve_penalty_events,
+                                       result.corridor_capacity_reserve_penalty_events);
+              current.physical_capacity_reserve_penalty_events =
+                  saturating_count_add(current.physical_capacity_reserve_penalty_events,
+                                       result.physical_capacity_reserve_penalty_events);
+              current.clearance_shadow_reserve_penalty_events =
+                  saturating_count_add(current.clearance_shadow_reserve_penalty_events,
+                                       result.clearance_shadow_reserve_penalty_events);
+              current.capacity_reserve_penalty =
+                  saturating_add(current.capacity_reserve_penalty, result.capacity_reserve_penalty);
               current.former_route_memory_penalty_events =
                   saturating_count_add(current.former_route_memory_penalty_events,
                                        result.former_route_memory_penalty_events);
@@ -11858,6 +13862,17 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
               current.terminal_escape_reservation_penalty =
                   saturating_add(current.terminal_escape_reservation_penalty,
                                  result.terminal_escape_reservation_penalty);
+              current.terminal_escape_proximity_penalty_events =
+                  saturating_count_add(current.terminal_escape_proximity_penalty_events,
+                                       result.terminal_escape_proximity_penalty_events);
+              current.terminal_escape_proximity_penalty =
+                  saturating_add(current.terminal_escape_proximity_penalty,
+                                 result.terminal_escape_proximity_penalty);
+              current.targeted_track_spreading_edges = saturating_count_add(
+                  current.targeted_track_spreading_edges, result.targeted_track_spreading_edges);
+              current.targeted_track_spreading_penalty =
+                  saturating_add(current.targeted_track_spreading_penalty,
+                                 result.targeted_track_spreading_penalty);
               critical_cut_penalty_events = saturating_count_add(
                   critical_cut_penalty_events, result.critical_cut_penalty_events);
               critical_cut_penalty_total =
@@ -11966,9 +13981,24 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
                 combined.hard_voronoi_capacity_rejected_transitions =
                     saturating_count_add(from_terminal.hard_voronoi_capacity_rejected_transitions,
                                          from_tree.hard_voronoi_capacity_rejected_transitions);
+                combined.planned_via_transitions = saturating_count_add(
+                    from_terminal.planned_via_transitions, from_tree.planned_via_transitions);
+                combined.reused_existing_via_transitions =
+                    saturating_count_add(from_terminal.reused_existing_via_transitions,
+                                         from_tree.reused_existing_via_transitions);
+                combined.reused_component_pad_transitions =
+                    saturating_count_add(from_terminal.reused_component_pad_transitions,
+                                         from_tree.reused_component_pad_transitions);
+                combined.via_congestion_cost_discount =
+                    saturating_add(from_terminal.via_congestion_cost_discount,
+                                   from_tree.via_congestion_cost_discount);
+                combined.vertical_feature_reuse_cost_discount =
+                    saturating_add(from_terminal.vertical_feature_reuse_cost_discount,
+                                   from_tree.vertical_feature_reuse_cost_discount);
                 combined.nodes = std::move(from_terminal.nodes);
                 combined.segment_widths = std::move(from_terminal.segment_widths);
                 combined.segment_width_kinds = std::move(from_terminal.segment_width_kinds);
+                combined.vertical_features = std::move(from_terminal.vertical_features);
                 // If the exact halves rediscover a channel, retain the simple connection rather
                 // than materializing a same-net loop around their meeting point.
                 for (std::size_t reverse = 0U; reverse < from_tree.segment_widths.size();
@@ -11983,12 +14013,17 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
                     combined.nodes.resize(retained_nodes);
                     combined.segment_widths.resize(retained_nodes - 1U);
                     combined.segment_width_kinds.resize(retained_nodes - 1U);
+                    combined.vertical_features.resize(retained_nodes - 1U);
                     continue;
                   }
                   combined.nodes.push_back(from_tree.nodes[node_index]);
                   combined.segment_widths.push_back(from_tree.segment_widths[segment_index]);
                   combined.segment_width_kinds.push_back(
                       from_tree.segment_width_kinds[segment_index]);
+                  combined.vertical_features.push_back(
+                      from_tree.vertical_features.empty()
+                          ? std::nullopt
+                          : from_tree.vertical_features[segment_index]);
                 }
                 if (!best_meeting_route ||
                     std::tie(combined.cost, combined.nodes) <
@@ -12055,6 +14090,56 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
             search = std::move(fallback);
           }
           if (search.nodes.empty()) {
+            if (enforce_hard_capacity && config.max_soft_capacity_cut_probe_expansions > 0U &&
+                !starts.empty() && !tree.empty()) {
+              ++hard_capacity_soft_cut_probes;
+              auto probe_config = iteration_config;
+              probe_config.max_expansions_per_connection =
+                  std::min(probe_config.max_expansions_per_connection,
+                           config.max_soft_capacity_cut_probe_expansions);
+              auto probe = search_path(*grid, starts, tree, occupancy, history, *corridors,
+                                       corridor_neck_downs, *voronoi_guidance, *voronoi_allocation,
+                                       obstacles, task, probe_config, attempt_direct, false, 1'000U,
+                                       negotiated_spline_policy, stop_token);
+              if (probe.nodes.empty() && attempt_direct && !probe.cancelled) {
+                probe = search_path(*grid, starts, tree, occupancy, history, *corridors,
+                                    corridor_neck_downs, *voronoi_guidance, *voronoi_allocation,
+                                    obstacles, task, probe_config, false, false, 1'000U,
+                                    negotiated_spline_policy, stop_token);
+              }
+              if (!probe.cancelled && !probe.nodes.empty()) {
+                ++hard_capacity_soft_cut_routes;
+                const auto cut = soft_capacity_route_blockers(task.net, probe.nodes, *grid,
+                                                              *corridors, corridor_neck_downs,
+                                                              *voronoi_allocation, occupancy);
+                hard_capacity_soft_cut_blockers =
+                    saturating_count_add(hard_capacity_soft_cut_blockers, cut.size());
+                std::vector<NetId> cut_set;
+                cut_set.reserve(cut.size());
+                for (const auto& [blocker, observations] : cut) {
+                  task_hard_capacity_blockers[blocker] =
+                      saturating_count_add(task_hard_capacity_blockers[blocker], observations);
+                  cut_set.push_back(blocker);
+                }
+                if (!cut_set.empty()) {
+                  std::sort(cut_set.begin(), cut_set.end());
+                  task_hard_capacity_blocker_sets[cut_set] =
+                      saturating_count_add(task_hard_capacity_blocker_sets[cut_set], 1U);
+                  RouterTelemetryEvent cut_event;
+                  cut_event.kind = RouterTelemetryEventKind::search_summary;
+                  cut_event.minimum_level = RouterTelemetryLevel::diagnostic;
+                  cut_event.iteration = iteration;
+                  cut_event.net = task.net;
+                  cut_event.stable_id = "hard-capacity-soft-cut:" + task.net.value() + ':' +
+                                        std::to_string(fixed_terminal);
+                  cut_event.search_expansions = probe.expansions;
+                  cut_event.detail = "non-committing soft-capacity cut probe found " +
+                                     std::to_string(cut.size()) +
+                                     " routed blockers for progressive rip-up";
+                  emit_telemetry(std::move(cut_event));
+                }
+              }
+            }
             const auto reason = starts.empty() || tree.empty()
                                     ? RoutingConnectionFailureReason::no_access_nodes
                                 : search.expansion_limit_reached
@@ -12112,6 +14197,17 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
                              search.segment_widths, search.segment_width_kinds, *voronoi_allocation,
                              occupancy);
           current.total_cost = saturating_add(current.total_cost, search.cost);
+          current.planned_via_transitions =
+              saturating_count_add(current.planned_via_transitions, search.planned_via_transitions);
+          current.reused_existing_via_transitions = saturating_count_add(
+              current.reused_existing_via_transitions, search.reused_existing_via_transitions);
+          current.reused_component_pad_transitions = saturating_count_add(
+              current.reused_component_pad_transitions, search.reused_component_pad_transitions);
+          current.via_congestion_cost_discount = saturating_add(
+              current.via_congestion_cost_discount, search.via_congestion_cost_discount);
+          current.vertical_feature_reuse_cost_discount =
+              saturating_add(current.vertical_feature_reuse_cost_discount,
+                             search.vertical_feature_reuse_cost_discount);
           current.river_following_edges =
               saturating_count_add(current.river_following_edges, search.river_following_edges);
           current.river_following_cost_discount = saturating_add(
@@ -12145,6 +14241,39 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
               path_width_reduction_penalty(path, task.nominal_track_width, config,
                                            GlobalRouteSegmentWidthKind::terminal_neck_down)
                   .cost);
+          if (search.river_following_edges > 0U) {
+            // Retain the complete river-bearing topology as future soft corridor evidence.  It is
+            // deliberately recorded before the current path is committed so a later rip-up does
+            // not erase the useful alternative discovered during this pass.
+            auto& river_connection =
+                spline_corridors_by_connection[{task.net, path.connection_index}];
+            river_connection.insert(search.nodes.begin(), search.nodes.end());
+            auto& river_net = spline_corridors_by_net[task.net];
+            river_net.insert(search.nodes.begin(), search.nodes.end());
+            RouterTelemetryEvent river;
+            river.kind = RouterTelemetryEventKind::route_candidate_selected;
+            river.minimum_level = RouterTelemetryLevel::diagnostic;
+            river.stable_id = "coarse:river:" + task.net.value() + ':' +
+                              std::to_string(path.connection_index) + ':' +
+                              std::to_string(iteration) + ':' +
+                              std::to_string(retained_river_candidate_ordinal++);
+            river.net = task.net;
+            river.route_revision = iteration;
+            river.route_width_nm =
+                static_cast<std::uint64_t>(std::max<std::int64_t>(0, rules.track_width.value()));
+            river.candidate_cost = search.cost;
+            river.route_family = "river";
+            river.route_lifecycle = "retained_fallback";
+            river.route_points.reserve(path.points.size());
+            for (const auto& point : path.points) {
+              river.route_points.push_back(RouterTelemetryPathPoint{
+                  point.position.x.value(), point.position.y.value(), point.layer});
+            }
+            river.detail = "retained same-layer river alternative; following_edges=" +
+                           std::to_string(search.river_following_edges) +
+                           ", discount=" + std::to_string(search.river_following_cost_discount);
+            emit_telemetry(std::move(river));
+          }
           current.paths.push_back(std::move(path));
           // The initial terminal contributes several alternative access portals as search goals,
           // but only the goal selected by the first path has physical access copper. Retaining the
@@ -12296,6 +14425,7 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
         current.total_cost = pending_hard_ripup_rollback->total_cost_before;
         current.former_route_memory_ripped_paths = former_route_memory.ripped_paths;
         current.former_route_memory_edges = former_route_memory.edges.size();
+        current.former_route_memory_nodes = former_route_memory.nodes.size();
         routed_this_pass = std::move(pending_hard_ripup_rollback->routed_nets_before);
         routed_cost_this_pass = std::move(pending_hard_ripup_rollback->routed_costs_before);
         for (const auto& victim : pending_hard_ripup_rollback->queued_victims) {
@@ -12317,8 +14447,10 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
       if (status == TaskRouteStatus::incomplete && enforce_hard_capacity &&
           config.max_hard_capacity_ripup_attempts_per_pass > 0U &&
           pass_hard_ripup_attempts < config.max_hard_capacity_ripup_attempts_per_pass &&
-          !hard_ripup_group_membership.contains(task.net) &&
-          !hard_ripup_attempted_nets.contains(task.net)) {
+          !hard_ripup_group_membership.contains(task.net)) {
+        const auto prior_attempts = hard_ripup_attempts_by_net[task.net];
+        const auto progressive_victim_bound =
+            std::min(config.max_hard_capacity_ripup_nets_per_attempt, prior_attempts + 1U);
         std::vector<std::pair<NetId, std::size_t>> eligible_blockers;
         for (const auto& [blocker, rejected_transitions] : task_hard_capacity_blockers) {
           const bool ordinarily_eligible =
@@ -12348,8 +14480,8 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
           std::size_t evaluated_states = 0U;
           for (const auto& [candidate, candidate_observations] : task_hard_capacity_blocker_sets) {
             static_cast<void>(candidate_observations);
-            if (candidate.empty() ||
-                candidate.size() > config.max_hard_capacity_ripup_nets_per_attempt ||
+            if (candidate.empty() || candidate.size() > progressive_victim_bound ||
+                hard_ripup_victim_sets_by_net[task.net].contains(candidate) ||
                 !std::all_of(
                     candidate.begin(), candidate.end(),
                     [&eligible_nets](const NetId& net) { return eligible_nets.contains(net); })) {
@@ -12388,13 +14520,17 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
           joint_victims_selected = victims.size() > 1U;
         }
         if (victims.empty()) {
-          const auto victim_count =
-              std::min(eligible_blockers.size(), config.max_hard_capacity_ripup_nets_per_attempt);
+          const auto victim_count = std::min(eligible_blockers.size(), progressive_victim_bound);
           victims.reserve(victim_count);
+          const auto offset =
+              eligible_blockers.empty() ? 0U : prior_attempts % eligible_blockers.size();
           for (std::size_t index = 0U; index < victim_count; ++index) {
-            victims.push_back(eligible_blockers[index].first);
+            victims.push_back(eligible_blockers[(offset + index) % eligible_blockers.size()].first);
           }
           std::sort(victims.begin(), victims.end());
+          if (hard_ripup_victim_sets_by_net[task.net].contains(victims)) {
+            victims.clear();
+          }
         }
         if (!victims.empty()) {
           if (joint_victims_selected) {
@@ -12411,7 +14547,7 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
             for (const auto& path : current.paths) {
               if (path.net == victim) {
                 const auto ripped_paths_before = former_route_memory.ripped_paths;
-                remember_ripped_path(path, *grid, former_route_memory);
+                remember_ripped_path(path, task_by_net.at(victim), *grid, former_route_memory);
                 former_route_memory_ripped_paths =
                     saturating_count_add(former_route_memory_ripped_paths,
                                          former_route_memory.ripped_paths - ripped_paths_before);
@@ -12440,8 +14576,11 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
           }
           current.former_route_memory_ripped_paths = former_route_memory.ripped_paths;
           current.former_route_memory_edges = former_route_memory.edges.size();
+          current.former_route_memory_nodes = former_route_memory.nodes.size();
           former_route_memory_edges_peak =
               std::max(former_route_memory_edges_peak, former_route_memory.edges.size());
+          former_route_memory_nodes_peak =
+              std::max(former_route_memory_nodes_peak, former_route_memory.nodes.size());
           current.connection_failures.resize(task_failure_count_before);
           if (config.defer_hard_capacity_ripup_victims_to_pass_tail) {
             for (const auto& victim : victims) {
@@ -12455,7 +14594,8 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
             }
           }
           pending_tasks.push_front(task);
-          hard_ripup_attempted_nets.insert(task.net);
+          hard_ripup_victim_sets_by_net[task.net].insert(victims);
+          hard_ripup_attempts_by_net[task.net] = prior_attempts + 1U;
           hard_ripup_retry_nets.insert(task.net);
           ++pass_hard_ripup_attempts;
           hard_capacity_ripup_attempts = saturating_count_add(hard_capacity_ripup_attempts, 1U);
@@ -12702,6 +14842,51 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
     iteration_completed.search_expansions = current.path_search_expansions;
     emit_telemetry(std::move(iteration_completed));
 
+    if (telemetry != nullptr && telemetry->accepts(RouterTelemetryLevel::diagnostic)) {
+      const auto resource_kind_name = [](RoutingResourceKind kind) -> std::string_view {
+        switch (kind) {
+        case RoutingResourceKind::node:
+          return "node";
+        case RoutingResourceKind::planar_edge:
+          return "planar_edge";
+        case RoutingResourceKind::via_edge:
+          return "via_edge";
+        case RoutingResourceKind::medial_edge:
+          return "medial_edge";
+        }
+        return "unknown";
+      };
+      std::size_t congested_index = 0U;
+      for (const auto& usage : current.resource_usage) {
+        if (!usage.congested()) {
+          continue;
+        }
+        RouterTelemetryEvent resource_event;
+        resource_event.kind = RouterTelemetryEventKind::search_summary;
+        resource_event.minimum_level = RouterTelemetryLevel::diagnostic;
+        resource_event.iteration = iteration;
+        resource_event.stable_id = "sampled-overflow:" + std::to_string(iteration) + ':' +
+                                   std::to_string(congested_index++);
+        resource_event.detail =
+            "sampled overflow resource: kind=" + std::string(resource_kind_name(usage.kind)) +
+            ", first=" + usage.first.layer.value() + "@(" +
+            std::to_string(usage.first.position.x.value()) + ',' +
+            std::to_string(usage.first.position.y.value()) +
+            "), second=" + usage.second.layer.value() + "@(" +
+            std::to_string(usage.second.position.x.value()) + ',' +
+            std::to_string(usage.second.position.y.value()) +
+            "), demand=" + std::to_string(usage.demand) +
+            ", capacity=" + std::to_string(usage.capacity) + ", nets=";
+        for (std::size_t net_index = 0U; net_index < usage.nets.size(); ++net_index) {
+          if (net_index != 0U) {
+            resource_event.detail += '|';
+          }
+          resource_event.detail += usage.nets[net_index].value();
+        }
+        emit_telemetry(std::move(resource_event));
+      }
+    }
+
     if (global_route_checkpoint_better(current, best, config.checkpoint_objective)) {
       best = current;
       unchanged_iterations = 0;
@@ -12856,9 +15041,9 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
         randomized.reserve(all_tasks.size());
         for (const auto& candidate : all_tasks) {
           randomized.emplace_back(
-              stable_pathfinder_group_rank(candidate.net.value(),
-                                           large_neighborhood_attempts ^
-                                               config.routing_order_diversification_seed),
+              stable_pathfinder_group_rank(
+                  candidate.net.value(), large_neighborhood_attempts ^ config.feedback_epoch_index ^
+                                             config.routing_order_diversification_seed),
               candidate.net);
         }
         std::sort(randomized.begin(), randomized.end());
@@ -13021,10 +15206,11 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
                   next_iteration >= config.hard_capacity_start_iteration
               ? next_iteration - config.hard_capacity_start_iteration + 1U
               : 0U;
-      const auto route_order_variant =
-          config.enable_search_diversification
-              ? ((next_iteration - 1U) % config.max_routing_order_variants) + 1U
-              : 0U;
+      const auto route_order_variant = config.enable_search_diversification
+                                           ? ((next_iteration - 1U + config.feedback_epoch_index) %
+                                              config.max_routing_order_variants) +
+                                                 1U
+                                           : 0U;
       routing_order_variants_attempted = saturating_count_add(routing_order_variants_attempted,
                                                               route_order_variant > 0U ? 1U : 0U);
       const auto moved = reorder_pathfinder_tasks(

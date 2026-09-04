@@ -43,6 +43,10 @@ void error(KicadExportResult& result, std::string code, std::string message,
                  std::move(object_ids));
 }
 
+void warning(KicadExportResult& result, std::string code, std::string message) {
+  add_diagnostic(result, ExportSeverity::warning, std::move(code), std::move(message));
+}
+
 void error(KicadChangeSetResult& result, std::string code, std::string message,
            std::vector<std::string> object_ids = {}) {
   result.diagnostics.push_back(ExportDiagnostic{ExportSeverity::error, std::move(code),
@@ -550,9 +554,17 @@ KicadExportResult export_kicad_candidate(std::string_view source_contents, const
     return result;
   }
   const auto source_import = import_kicad_pcb(source_contents);
-  if (!source_import.strict()) {
+  if (!source_import.board) {
+    error(result, "source_import_failed", "source board could not be imported for patching");
+    return result;
+  }
+  if (!source_import.strict() && !options.allow_lossy_diagnostic_preview) {
     error(result, "source_not_strict", "source board must have a strict, lossless import");
     return result;
+  }
+  if (!source_import.strict()) {
+    warning(result, "lossy_diagnostic_preview",
+            "review-only artifact was exported from a lossy source projection");
   }
   if (source_import.board->source_revision != source.source_revision) {
     error(result, "stale_source_snapshot",
@@ -564,13 +576,18 @@ KicadExportResult export_kicad_candidate(std::string_view source_contents, const
           "canonical source board differs from a fresh import of its source contents");
     return result;
   }
-  if (!validate_board(source).ok()) {
+  if (!validate_board(source).ok() && !options.allow_lossy_diagnostic_preview) {
     error(result, "invalid_source_snapshot", "canonical source board fails structural validation");
     return result;
   }
-  if (!validate_board(candidate).ok()) {
+  if (!validate_board(candidate).ok() && !options.allow_lossy_diagnostic_preview) {
     error(result, "invalid_candidate", "candidate fails canonical structural validation");
     return result;
+  }
+  if (options.allow_lossy_diagnostic_preview &&
+      (!validate_board(source).ok() || !validate_board(candidate).ok())) {
+    warning(result, "invalid_diagnostic_preview",
+            "review-only artifact contains a structurally invalid source or candidate projection");
   }
   if (!compatible_design(source, candidate, result)) {
     return result;
@@ -756,7 +773,7 @@ KicadExportResult export_kicad_candidate(std::string_view source_contents, const
   if (!apply_edits(source_contents, std::move(edits), output, result)) {
     return result;
   }
-  if (options.verify_round_trip) {
+  if (options.verify_round_trip && !options.allow_lossy_diagnostic_preview) {
     const auto round_trip = import_kicad_pcb(output);
     if (!round_trip.strict() ||
         !equivalent_after_round_trip(candidate, *round_trip.board, remapped_ids)) {

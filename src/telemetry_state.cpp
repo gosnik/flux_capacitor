@@ -1,6 +1,7 @@
 #include "flux/telemetry/state.hpp"
 
 #include <algorithm>
+#include <iterator>
 #include <sstream>
 
 namespace flux::telemetry {
@@ -57,6 +58,7 @@ void LiveState::apply_snapshot(const Event& event) {
   vias_.clear();
   conflicts_.clear();
   resources_.clear();
+  hydraulic_fields_.clear();
   priorities_.clear();
 
   for (const Route& route : event.routes) {
@@ -74,6 +76,10 @@ void LiveState::apply_snapshot(const Event& event) {
   for (const ResourceOccupancy& resource : event.resources) {
     if (!resource.id.empty())
       resources_.insert_or_assign(resource.id, resource);
+  }
+  for (const HydraulicField& field : event.hydraulic_fields) {
+    if (!field.id.empty())
+      hydraulic_fields_.insert_or_assign(field.id, field);
   }
   for (const Priority& priority : event.priorities) {
     if (!priority.net.empty())
@@ -199,6 +205,10 @@ void LiveState::apply(const Event& event) {
       if (!resource.id.empty())
         resources_.insert_or_assign(resource.id, resource);
     }
+    for (const HydraulicField& field : event.hydraulic_fields) {
+      if (!field.id.empty())
+        hydraulic_fields_.insert_or_assign(field.id, field);
+    }
     for (const Priority& priority : event.priorities) {
       if (!priority.net.empty())
         priorities_.insert_or_assign(priority.net, priority);
@@ -223,6 +233,14 @@ void LiveState::apply(const Event& event) {
   }
 
   switch (event.type) {
+  case EventType::snapshot:
+    if (event.message == "Routing finished") {
+      routing_active_ = false;
+      active_net_.reset();
+      active_group_.reset();
+      status_ = event.message;
+    }
+    break;
   case EventType::routing_started:
     routing_active_ = true;
     status_ = event.message.empty() ? "Routing" : event.message;
@@ -259,6 +277,50 @@ void LiveState::apply(const Event& event) {
   }
 
   append_activity(event);
+}
+
+void LiveStateHistory::clear() { *this = LiveStateHistory{}; }
+
+void LiveStateHistory::append(const Event& event) {
+  const bool followed_tail = position_ == events_.size();
+  events_.push_back(event);
+  tail_state_.apply(event);
+  if (events_.size() % checkpoint_interval == 0U || event.type == EventType::snapshot) {
+    if (!checkpoints_.empty() && checkpoints_.back().position == events_.size()) {
+      checkpoints_.back().state = tail_state_;
+    } else {
+      checkpoints_.push_back(Checkpoint{events_.size(), tail_state_});
+    }
+  }
+  if (followed_tail) {
+    state_ = tail_state_;
+    position_ = events_.size();
+  }
+}
+
+void LiveStateHistory::seek(std::size_t event_count) {
+  event_count = std::min(event_count, events_.size());
+  if (event_count == events_.size()) {
+    state_ = tail_state_;
+    position_ = event_count;
+    return;
+  }
+  const auto checkpoint = std::upper_bound(checkpoints_.begin(), checkpoints_.end(), event_count,
+                                           [](const auto position, const Checkpoint& candidate) {
+                                             return position < candidate.position;
+                                           });
+  std::size_t replay_position = 0U;
+  state_.clear();
+  if (checkpoint != checkpoints_.begin()) {
+    const auto& selected = *std::prev(checkpoint);
+    state_ = selected.state;
+    replay_position = selected.position;
+  }
+  while (replay_position < event_count) {
+    state_.apply(events_[replay_position]);
+    ++replay_position;
+  }
+  position_ = event_count;
 }
 
 } // namespace flux::telemetry

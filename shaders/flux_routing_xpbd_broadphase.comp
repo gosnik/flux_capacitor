@@ -1,0 +1,92 @@
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer Positions { vec4 positions[]; };
+layout(std430, binding = 1) readonly buffer Segments { uint segment_words[]; };
+// One counter per cell followed by one global cell-overflow flag.
+layout(std430, binding = 2) buffer CellCounts { uint cell_counts[]; };
+layout(std430, binding = 3) buffer CellEntries { uint cell_entries[]; };
+// pair_meta[0] is the emitted count and pair_meta[1] is the output-overflow flag.
+layout(std430, binding = 4) buffer PairMeta { uint pair_meta[]; };
+layout(std430, binding = 5) buffer CandidatePairs { uvec2 candidate_pairs[]; };
+
+layout(push_constant) uniform Push {
+  uint mode;
+  uint particle_count;
+  uint segment_count;
+  uint grid_width;
+  uint grid_height;
+  uint maximum_cell_occupancy;
+  uint maximum_pair_emissions;
+  uint cell_count;
+  float origin_x;
+  float origin_y;
+  float cell_pitch;
+  float guard_nm;
+} push;
+
+ivec2 cell_of(vec2 position) {
+  return ivec2(floor((position - vec2(push.origin_x, push.origin_y)) / push.cell_pitch));
+}
+
+void main() {
+  uint invocation = gl_GlobalInvocationID.x;
+  if (push.mode == 0u) {
+    if (invocation <= push.cell_count) cell_counts[invocation] = 0u;
+    if (invocation < 2u) pair_meta[invocation] = 0u;
+    return;
+  }
+  if (push.mode == 1u) {
+    if (invocation >= push.segment_count) return;
+    uint offset = invocation * 8u;
+    uint first_index = segment_words[offset];
+    uint second_index = segment_words[offset + 1u];
+    if (first_index >= push.particle_count || second_index >= push.particle_count) {
+      atomicOr(cell_counts[push.cell_count], 1u);
+      return;
+    }
+    float expansion = max(0.0, uintBitsToFloat(segment_words[offset + 4u])) +
+                      max(0.0, uintBitsToFloat(segment_words[offset + 6u])) +
+                      max(0.0, uintBitsToFloat(segment_words[offset + 7u])) + push.guard_nm;
+    vec2 first = positions[first_index].xy;
+    vec2 second = positions[second_index].xy;
+    ivec2 minimum_cell = clamp(cell_of(min(first, second) - vec2(expansion)), ivec2(0),
+                               ivec2(push.grid_width - 1u, push.grid_height - 1u));
+    ivec2 maximum_cell = clamp(cell_of(max(first, second) + vec2(expansion)), ivec2(0),
+                               ivec2(push.grid_width - 1u, push.grid_height - 1u));
+    for (int y = minimum_cell.y; y <= maximum_cell.y; ++y) {
+      for (int x = minimum_cell.x; x <= maximum_cell.x; ++x) {
+        uint cell = uint(y) * push.grid_width + uint(x);
+        uint slot = atomicAdd(cell_counts[cell], 1u);
+        if (slot < push.maximum_cell_occupancy) {
+          cell_entries[cell * push.maximum_cell_occupancy + slot] = invocation;
+        } else {
+          atomicOr(cell_counts[push.cell_count], 1u);
+        }
+      }
+    }
+    return;
+  }
+  if (push.mode != 2u || invocation >= push.cell_count) return;
+  uint count = min(cell_counts[invocation], push.maximum_cell_occupancy);
+  uint base = invocation * push.maximum_cell_occupancy;
+  for (uint first_slot = 0u; first_slot < count; ++first_slot) {
+    uint first = cell_entries[base + first_slot];
+    uint first_offset = first * 8u;
+    for (uint second_slot = first_slot + 1u; second_slot < count; ++second_slot) {
+      uint second = cell_entries[base + second_slot];
+      if (first == second) continue;
+      uint second_offset = second * 8u;
+      if (segment_words[first_offset + 2u] == segment_words[second_offset + 2u] ||
+          segment_words[first_offset + 3u] != segment_words[second_offset + 3u]) continue;
+      uvec2 ordered = first < second ? uvec2(first, second) : uvec2(second, first);
+      uint output_index = atomicAdd(pair_meta[0], 1u);
+      if (output_index < push.maximum_pair_emissions) {
+        candidate_pairs[output_index] = ordered;
+      } else {
+        atomicOr(pair_meta[1], 1u);
+      }
+    }
+  }
+}

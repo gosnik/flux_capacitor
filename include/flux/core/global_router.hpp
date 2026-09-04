@@ -17,15 +17,22 @@ class RouterTelemetrySink;
 enum class GlobalRouteCheckpointObjective { aggregate_overflow, dimensioned_physical_overflow };
 
 struct GlobalRouterConfig {
+  // Diagnostic artifact generation may route a lossy KiCad projection whose unrelated
+  // placement/courtyard defects fail canonical validation. This never changes geometric route
+  // checks or the result's completion criteria and must remain false for qualified routing.
+  bool allow_invalid_source_for_diagnostic_preview{false};
   // Empty routes every incomplete named net. A non-empty exact ID set scopes routing and treats
   // all other source copper as immutable obstacles. Coupled pairs/buses must be selected whole.
   std::vector<NetId> selected_nets;
   // Explicit first-to-last scheduling tier. Listed nets remain ahead of ordinary dynamic
   // pressure ordering; every hard routing and acceptance gate remains unchanged.
   std::vector<NetId> priority_nets;
-  Nanometres grid_pitch{Nanometres::from_mm(1.0)};
-  // Zero uses every planar node as a via site. An explicit value must be an exact multiple of
-  // grid_pitch and large enough for resolved via-to-via spacing.
+  // The sampled topology lattice is deliberately finer than the ordinary via-site lattice.  The
+  // continuous PH realization is not constrained to these coordinates, but a 0.5 mm seed avoids
+  // encoding avoidable 1 mm staircases into its selected corridor.
+  Nanometres grid_pitch{Nanometres::from_mm(0.5)};
+  // Zero derives the smallest exact grid multiple that preserves resolved via-to-via spacing. An
+  // explicit value must be an exact multiple of grid_pitch and satisfy the same physical gate.
   Nanometres via_site_pitch{Nanometres{0}};
   std::size_t via_site_phase_x{0};
   std::size_t via_site_phase_y{0};
@@ -45,8 +52,19 @@ struct GlobalRouterConfig {
   // Zero retains one pressure unit per conflict. Conflict count remains a separate feasibility
   // dimension; this option only distinguishes a near miss from a deep overlap during negotiation.
   Nanometres clearance_shadow_cost_quantum{Nanometres{0}};
+  // Keep an advisory reserve in every multi-lane physical resource.  This is the capacity-mesh
+  // lesson applied to Flux's existing representations: consuming the last useful fraction of a
+  // corridor or medial cross section is made progressively unattractive before it overflows.
+  // Zero in either field disables the preference.  It is never a legality gate: sampled hard
+  // capacity, detailed copper validation, and KiCad DRC remain authoritative.
+  std::uint32_t capacity_reserve_per_mille{250};
+  std::uint64_t capacity_reserve_cost{600};
   std::size_t edge_capacity{1};
   std::size_t max_iterations{30};
+  // Deterministic outer physical-feedback epoch. Ordinary callers leave this at zero; the
+  // integrated planner advances it so retained RRT/hydraulic/order/LNS families explore a new
+  // bounded variant rather than replaying identical tie-breaks after the terrain changes.
+  std::size_t feedback_epoch_index{0U};
   std::size_t max_expansions_per_connection{500'000};
   // Zero disables selective weighted-A* retry. Enabled values are per-mille and must exceed 1000.
   std::uint32_t expansion_retry_heuristic_weight_per_mille{0};
@@ -94,6 +112,7 @@ struct GlobalRouterConfig {
   // Non-authoritative physical-routing diagnoses from an earlier outer-loop pass. These are
   // rasterized once into net-scoped graph-edge costs; they cannot block or authorize copper.
   std::vector<RoutabilityHistoryEntry> routability_history;
+  std::vector<RoutabilitySuccessEntry> hydraulic_success_history;
   std::uint64_t routability_history_cost{500};
   std::size_t max_routability_history_edges{500'000};
   std::uint64_t corridor_present_cost{400};
@@ -103,10 +122,14 @@ struct GlobalRouterConfig {
   // cost, so it cannot make a path cheaper than its physical base length or relax capacity/DRC.
   // Zero disables generic river-following while retaining declared bus/pair cohesion policies.
   std::uint64_t river_following_cost{200};
-  // Pass-scoped soft memory left by a hard-capacity rip-up.  It discourages the failed net from
-  // immediately claiming a victim's former sampled edge while the victim is being rebuilt.  This
-  // is neither occupancy nor history: it expires with the PathFinder pass and cannot reject a
-  // legal transition.  Zero disables the memory cost.
+  // During a hard-capacity recovery, prefer open-region alternatives that do not run beside
+  // unrelated same-layer copper. This is deliberately disabled inside represented multi-lane
+  // corridors, where ordered lane packing and river cohesion are the better model.
+  std::uint64_t targeted_track_spreading_cost{200};
+  // Pass-scoped soft memory left by a hard-capacity rip-up. It rasterizes the victim's complete
+  // track/via width-plus-clearance envelope onto nearby sampled nodes and edges so the failed net
+  // cannot cheaply take over the space needed to rebuild the victim. This is neither occupancy
+  // nor history: it expires with the PathFinder pass and cannot reject a legal transition.
   std::uint64_t former_route_memory_cost{1'000};
   // Preserve the final currently viable coarse-portal/local-stub option for an unrouted
   // terminal.  The reservation is a bounded, non-authoritative future-demand cue: it charges a
@@ -114,6 +137,9 @@ struct GlobalRouterConfig {
   // available access candidate.  It never blocks a graph transition or replaces exact terminal
   // access, detailed routing, connectivity, or DRC validation.  Zero disables the cue.
   std::uint64_t terminal_escape_reservation_cost{5'000};
+  // A smaller graded cost for consuming some, but not all, of an unrouted terminal's currently
+  // viable access envelopes. The full reservation cost above still protects the last escape.
+  std::uint64_t terminal_escape_proximity_cost{0};
   std::size_t max_terminal_escape_reservation_resources{200'000};
   // Forward-looking, non-authoritative cost.  A candidate pays when taking a corridor would
   // leave less capacity than the conservative demand that remains unavoidable for unrouted
@@ -130,9 +156,20 @@ struct GlobalRouterConfig {
   std::uint64_t corridor_centering_cost{20};
   // Before negotiated allocation, retain bounded exact hybrid-graph topology alternatives for
   // every ordinary connection. These are mandatory planning evidence, not copper.
-  std::size_t max_static_seed_candidates_per_connection{2};
+  // Retain a compact topology portfolio rather than only the two independently shortest paths.
+  // Candidate zero is the shortest family, candidate one is edge-diversified, and the remaining
+  // bounded slots may use deterministic bidirectional RRT-Connect and per-copper-layer hydraulic
+  // erosion NavMesh corridors.
+  std::size_t max_static_seed_candidates_per_connection{4};
   std::size_t max_static_seed_searches{200'000};
   std::size_t max_static_seed_reprojection_searches{200'000};
+  bool use_static_seed_rrt_connect_alternatives{true};
+  std::size_t max_static_seed_rrt_connect_candidates{1};
+  std::size_t max_static_seed_rrt_connect_iterations{2'048};
+  // Hydraulic erosion is a mandatory per-layer topology family. It has no disable switch: every
+  // static portfolio must reserve and evaluate at least one bounded hydraulic candidate.
+  std::size_t max_static_seed_hydraulic_candidates{1};
+  HydraulicPathConfig static_seed_hydraulic_flow{};
   // Zero selects min(hardware concurrency, eligible NetTasks). A positive value is a runtime-only
   // cap; stable task slots and ordered reduction keep routing results independent of this value.
   std::size_t max_static_seed_workers{0};
@@ -205,6 +242,9 @@ struct GlobalRouterConfig {
   // Zero retains individual blocker ranking. A positive value bounds jointly sufficient victim
   // sets retained and scored for each failed-net repair attempt.
   std::size_t max_hard_capacity_conflict_set_states_per_attempt{0};
+  // A failed hard-capacity search may run one bounded, non-committing soft-capacity probe. The
+  // routed owners crossed by that least-pressure path are a min-cut-style victim hint only.
+  std::size_t max_soft_capacity_cut_probe_expansions{50'000};
   // Restore the exact pre-rip-up route state when the failed net's immediate retry is still
   // incomplete. Victims are deferred only after a successful retry.
   bool rollback_failed_hard_capacity_ripup{false};
@@ -291,12 +331,17 @@ enum class GlobalRouteSegmentWidthKind {
 };
 
 // Continuous free-space evidence retained from one selected NavMesh corridor. The cell polygons
-// and portals are the topology guard; lane_centerline is the optimized B-spline tessellation, not
-// a rasterized PathFinder surrogate. Widths describe conservative source-space copper envelopes.
+// and portals are the topology guard; lane_centerline is the optimized quintic PH curve
+// tessellation, not a rasterized PathFinder surrogate. Widths describe conservative source-space
+// copper envelopes.
 struct RoutingGeometricCorridorRun {
   LayerId layer;
   std::vector<Polygon> topology_cells;
   std::vector<NavMeshPortal> portals;
+  // Immutable directed portal crossings selected by the NavMesh/funnel stage.  A regional or
+  // detailed continuous realization must retain this sequence unless it explicitly replaces the
+  // complete corridor template with another NavMesh route.
+  NavMeshTopologySignature topology_signature;
   std::vector<Point> lane_centerline;
   Nanometres required_envelope_width;
   Nanometres minimum_physical_cross_section_width;
@@ -661,6 +706,8 @@ struct RoutingSeedPriorityEvidence {
   // forest. This is a topology-pressure estimate used only to order initial seed allocation;
   // it neither reserves capacity nor establishes a routing conflict.
   std::size_t terminal_crossing_pressure{0};
+  std::size_t mps_conflict_degree{0};
+  std::size_t mps_round{0};
   std::size_t estimated_interference{0};
   std::uint64_t physical_envelope_nm{0};
   std::size_t primary_route_steps{0};
@@ -687,10 +734,41 @@ struct GlobalRouteResult {
   bool configured_sampled_route_clearance_reservations{false};
   std::size_t configured_max_clearance_shadow_conflict_resources{0};
   Nanometres configured_clearance_shadow_cost_quantum;
+  std::uint32_t configured_capacity_reserve_per_mille{0};
+  std::uint64_t configured_capacity_reserve_cost{0};
+  std::uint64_t selected_effective_capacity_reserve_cost{0};
+  std::size_t capacity_reserve_penalty_events{0};
+  std::size_t corridor_capacity_reserve_penalty_events{0};
+  std::size_t physical_capacity_reserve_penalty_events{0};
+  std::size_t clearance_shadow_reserve_penalty_events{0};
+  std::uint64_t capacity_reserve_penalty{0};
   bool configured_single_lane_direct_voronoi_resources{false};
   std::size_t configured_max_static_seed_candidates_per_connection{0};
   std::size_t configured_max_static_seed_searches{0};
   std::size_t configured_max_static_seed_reprojection_searches{0};
+  bool configured_static_seed_rrt_connect_alternatives{false};
+  std::size_t configured_max_static_seed_rrt_connect_candidates{0};
+  std::size_t configured_max_static_seed_rrt_connect_iterations{0};
+  std::size_t static_seed_rrt_connect_attempts{0};
+  std::size_t static_seed_rrt_connect_accepted{0};
+  std::size_t static_seed_rrt_connect_failures{0};
+  std::size_t static_seed_rrt_connect_iterations{0};
+  std::size_t configured_max_static_seed_hydraulic_candidates{0};
+  HydraulicPathConfig configured_static_seed_hydraulic_flow{};
+  std::size_t static_seed_hydraulic_attempts{0};
+  std::size_t static_seed_hydraulic_accepted{0};
+  std::size_t static_seed_hydraulic_failures{0};
+  std::size_t static_seed_hydraulic_gpu_routes{0};
+  std::size_t static_seed_hydraulic_gpu_clearance_cache_hits{0};
+  std::size_t static_seed_hydraulic_gpu_peak_batch_size{0};
+  std::size_t static_seed_hydraulic_gpu_buffer_reuses{0};
+  std::size_t static_seed_hydraulic_gpu_buffer_growths{0};
+  std::size_t static_seed_hydraulic_cpu_fallbacks{0};
+  std::size_t static_seed_hydraulic_relaxation_passes{0};
+  std::size_t static_seed_hydraulic_droplet_steps{0};
+  std::size_t static_seed_hydraulic_discovery_cells{0};
+  std::size_t static_seed_hydraulic_exact_certified_chords{0};
+  std::size_t static_seed_hydraulic_projection_failures{0};
   std::size_t configured_max_static_seed_workers{0};
   std::uint64_t configured_static_seed_alternative_edge_penalty{0};
   std::uint64_t configured_static_seed_corridor_departure_penalty{0};
@@ -700,12 +778,17 @@ struct GlobalRouteResult {
   std::uint64_t configured_river_following_cost{0};
   std::size_t river_following_edges{0};
   std::uint64_t river_following_cost_discount{0};
+  std::uint64_t configured_targeted_track_spreading_cost{0};
+  std::size_t targeted_track_spreading_edges{0};
+  std::uint64_t targeted_track_spreading_penalty{0};
   std::uint64_t configured_former_route_memory_cost{0};
   std::size_t former_route_memory_ripped_paths{0};
   std::size_t former_route_memory_edges{0};
+  std::size_t former_route_memory_nodes{0};
   std::size_t former_route_memory_penalty_events{0};
   std::uint64_t former_route_memory_penalty{0};
   std::uint64_t configured_terminal_escape_reservation_cost{0};
+  std::uint64_t configured_terminal_escape_proximity_cost{0};
   std::size_t configured_max_terminal_escape_reservation_resources{0};
   std::size_t terminal_escape_reservation_terminals{0};
   std::size_t terminal_escape_reservation_candidates{0};
@@ -713,6 +796,8 @@ struct GlobalRouteResult {
   std::size_t terminal_escape_reservation_withheld_candidates{0};
   std::size_t terminal_escape_reservation_penalty_events{0};
   std::uint64_t terminal_escape_reservation_penalty{0};
+  std::size_t terminal_escape_proximity_penalty_events{0};
+  std::uint64_t terminal_escape_proximity_penalty{0};
   std::size_t residual_corridor_demand_nets{0};
   std::size_t residual_corridor_demand_resources{0};
   std::size_t residual_corridor_demand_penalty_events{0};
@@ -757,6 +842,11 @@ struct GlobalRouteResult {
   std::size_t static_seed_navmesh_domains{0};
   std::size_t static_seed_navmesh_routes{0};
   std::size_t static_seed_navmesh_cells{0};
+  std::size_t static_seed_navmesh_refined_parents{0};
+  std::size_t static_seed_navmesh_refined_leaves{0};
+  std::size_t static_seed_navmesh_rejected_leaves{0};
+  std::size_t static_seed_navmesh_gpu_wavefront_routes{0};
+  std::size_t static_seed_navmesh_gpu_wavefront_cpu_fallbacks{0};
   std::size_t static_seed_navmesh_search_expansions{0};
   std::size_t static_seed_flood_fill_routes{0};
   std::size_t static_seed_flood_fill_cells_visited{0};
@@ -850,6 +940,11 @@ struct GlobalRouteResult {
   std::uint32_t configured_expansion_retry_heuristic_weight_per_mille{0};
   std::size_t path_search_invocations{0};
   std::size_t path_search_expansions{0};
+  std::size_t planned_via_transitions{0};
+  std::size_t reused_existing_via_transitions{0};
+  std::size_t reused_component_pad_transitions{0};
+  std::uint64_t via_congestion_cost_discount{0};
+  std::uint64_t vertical_feature_reuse_cost_discount{0};
   std::size_t expansion_limited_searches{0};
   std::size_t weighted_search_retries{0};
   std::size_t weighted_search_recoveries{0};
@@ -929,6 +1024,10 @@ struct GlobalRouteResult {
   std::size_t hard_capacity_conflict_set_states{0};
   std::size_t hard_capacity_joint_ripup_attempts{0};
   std::size_t hard_capacity_conflict_sets_withheld{0};
+  std::size_t configured_max_soft_capacity_cut_probe_expansions{0};
+  std::size_t hard_capacity_soft_cut_probes{0};
+  std::size_t hard_capacity_soft_cut_routes{0};
+  std::size_t hard_capacity_soft_cut_blockers{0};
   bool configured_rollback_failed_hard_capacity_ripup{false};
   std::size_t hard_capacity_failed_retry_rollbacks{0};
   bool configured_defer_hard_capacity_ripup_victims_to_pass_tail{false};
@@ -1059,6 +1158,10 @@ struct GlobalRouteResult {
   std::uint64_t peak_net_routing_envelope_nm{0};
   std::uint64_t peak_routing_group_envelope_nm{0};
   std::size_t reused_paths{0};
+  // The immutable iteration-one order derived from the static terminal/corridor/via portfolio.
+  // It is distinct from later PathFinder pressure reorders, which are only permitted between
+  // incomplete passes.
+  std::vector<NetId> initial_pathfinder_order;
   std::vector<NetId> last_pathfinder_reroute_order;
   bool configured_search_diversification{false};
   std::size_t configured_global_route_beam_width{0};

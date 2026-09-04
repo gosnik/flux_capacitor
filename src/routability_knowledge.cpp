@@ -52,11 +52,26 @@ namespace {
   return saturating_add(1U, value / static_cast<std::uint64_t>(quantum));
 }
 
+// Every physical-feedback severity is expressed in the same clearance quantum.  A raw
+// nanometre deficit is geometry, not a dimensionless PathFinder multiplier: feeding it directly
+// into routability history made a 0.63 mm medial short worth 630,000 cost units instead of the
+// roughly 13 physical-clearance quanta it represents.
+[[nodiscard]] std::uint64_t physical_overflow_severity(std::uint64_t overflow_nm,
+                                                       const RoutabilityProbeConfig& config) {
+  const auto bounded = std::min<std::uint64_t>(
+      overflow_nm, static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()));
+  return clearance_severity(Nanometres{static_cast<std::int64_t>(bounded)}, config);
+}
+
 struct CoalescingKey {
   RoutabilityFailureKind kind{RoutabilityFailureKind::topological_trap};
+  RoutabilityFailureStage stage{RoutabilityFailureStage::global_probe};
+  RoutabilityRelaxation relaxation{RoutabilityRelaxation::replan_global_topology};
   LayerId layer;
   std::int64_t x{0};
   std::int64_t y{0};
+  bool contributes_to_history{true};
+  std::vector<NetId> nets;
 
   auto operator<=>(const CoalescingKey&) const = default;
 };
@@ -78,13 +93,16 @@ public:
     const auto center_y = std::midpoint(diagnosis.resource.bounds.minimum.y.value(),
                                         diagnosis.resource.bounds.maximum.y.value());
     const CoalescingKey key{diagnosis.kind,
+                            diagnosis.stage,
+                            diagnosis.suggested_relaxation,
                             diagnosis.resource.layer,
                             floor_divide(center_x, config_.coalescing_pitch.value()),
-                            floor_divide(center_y, config_.coalescing_pitch.value())};
+                            floor_divide(center_y, config_.coalescing_pitch.value()),
+                            diagnosis.contributes_to_history,
+                            nets};
     if (const auto found = diagnoses_.find(key); found != diagnoses_.end()) {
       auto& retained = found->second;
-      retained.resource.bounds =
-          union_bounds(retained.resource.bounds, diagnosis.resource.bounds);
+      retained.resource.bounds = union_bounds(retained.resource.bounds, diagnosis.resource.bounds);
       retained.resource.nets.insert(retained.resource.nets.end(), nets.begin(), nets.end());
       std::sort(retained.resource.nets.begin(), retained.resource.nets.end());
       retained.resource.nets.erase(
@@ -94,12 +112,12 @@ public:
       retained.clearance_deficit =
           std::max(retained.clearance_deficit, diagnosis.clearance_deficit);
       if (diagnosis.planned_capacity) {
-        retained.planned_capacity = saturating_add(retained.planned_capacity.value_or(0U),
-                                                   *diagnosis.planned_capacity);
+        retained.planned_capacity =
+            saturating_add(retained.planned_capacity.value_or(0U), *diagnosis.planned_capacity);
       }
       if (diagnosis.observed_capacity) {
-        retained.observed_capacity = saturating_add(retained.observed_capacity.value_or(0U),
-                                                    *diagnosis.observed_capacity);
+        retained.observed_capacity =
+            saturating_add(retained.observed_capacity.value_or(0U), *diagnosis.observed_capacity);
       }
       ++coalesced_;
       return;
@@ -108,10 +126,9 @@ public:
       ++dropped_;
       return;
     }
-    diagnosis.resource.stable_id =
-        "routability:" + std::string(to_string(diagnosis.kind)) + ':' +
-        diagnosis.resource.layer.value() + ':' + std::to_string(key.x) + ':' +
-        std::to_string(key.y);
+    diagnosis.resource.stable_id = "routability:" + std::string(to_string(diagnosis.kind)) + ':' +
+                                   diagnosis.resource.layer.value() + ':' + std::to_string(key.x) +
+                                   ':' + std::to_string(key.y);
     diagnoses_.emplace(key, std::move(diagnosis));
   }
 
@@ -135,17 +152,18 @@ private:
   std::size_t dropped_{0U};
 };
 
-[[nodiscard]] const RegionalRoutingWindow*
-find_window(const RegionalRouteResult& regional, std::size_t id) {
+[[nodiscard]] const RegionalRoutingWindow* find_window(const RegionalRouteResult& regional,
+                                                       std::size_t id) {
   const auto found = std::find_if(regional.windows.begin(), regional.windows.end(),
                                   [id](const auto& window) { return window.id == id; });
   return found == regional.windows.end() ? nullptr : &*found;
 }
 
-[[nodiscard]] RoutabilityDiagnosis regional_diagnosis(
-    const RegionalRoutingWindow& window, RoutabilityFailureKind kind,
-    RoutabilityFailureStage stage, RoutabilityRelaxation relaxation, std::uint64_t severity,
-    std::string detail) {
+[[nodiscard]] RoutabilityDiagnosis regional_diagnosis(const RegionalRoutingWindow& window,
+                                                      RoutabilityFailureKind kind,
+                                                      RoutabilityFailureStage stage,
+                                                      RoutabilityRelaxation relaxation,
+                                                      std::uint64_t severity, std::string detail) {
   const auto layer = window.layers.empty() ? LayerId{} : window.layers.front();
   return RoutabilityDiagnosis{kind,
                               stage,
@@ -231,8 +249,8 @@ std::string_view to_string(RoutabilityRelaxation relaxation) {
   return "replan_global_topology";
 }
 
-std::vector<RoutabilityDiagnosis>
-probe_global_routability(const GlobalRouteResult& global, const RoutabilityProbeConfig& config) {
+std::vector<RoutabilityDiagnosis> probe_global_routability(const GlobalRouteResult& global,
+                                                           const RoutabilityProbeConfig& config) {
   DiagnosisBuilder builder{config};
   for (const auto& conflict : global.clearance_shadow_conflicts) {
     auto bounds = segment_bounds(conflict.first.position, conflict.second.position);
@@ -243,17 +261,12 @@ probe_global_routability(const GlobalRouteResult& global, const RoutabilityProbe
       bounds = union_bounds(bounds, point_bounds(conflict.shadow_owner_second->position));
     }
     builder.add(RoutabilityDiagnosis{
-        RoutabilityFailureKind::packing_capacity_exceeded,
-        RoutabilityFailureStage::global_probe,
-        RoutabilityResourceReference{"", conflict.first.layer, bounds,
-                                     {conflict.first_net, conflict.second_net}},
-        clearance_severity(conflict.clearance_deficit, config),
-        conflict.clearance_deficit,
-        2U,
-        1U,
+        RoutabilityFailureKind::packing_capacity_exceeded, RoutabilityFailureStage::global_probe,
+        RoutabilityResourceReference{
+            "", conflict.first.layer, bounds, {conflict.first_net, conflict.second_net}},
+        clearance_severity(conflict.clearance_deficit, config), conflict.clearance_deficit, 2U, 1U,
         RoutabilityRelaxation::change_corridor,
-        "selected copper envelopes overlap despite sampled-resource compatibility",
-        false});
+        "selected copper envelopes overlap despite sampled-resource compatibility", false});
   }
   for (const auto& resource : global.resource_usage) {
     if (!resource.congested()) {
@@ -262,10 +275,9 @@ probe_global_routability(const GlobalRouteResult& global, const RoutabilityProbe
     builder.add(RoutabilityDiagnosis{
         RoutabilityFailureKind::packing_capacity_exceeded,
         RoutabilityFailureStage::global_probe,
-        RoutabilityResourceReference{"", resource.first.layer,
-                                     segment_bounds(resource.first.position,
-                                                    resource.second.position),
-                                     resource.nets},
+        RoutabilityResourceReference{
+            "", resource.first.layer,
+            segment_bounds(resource.first.position, resource.second.position), resource.nets},
         static_cast<std::uint64_t>(resource.demand - resource.capacity),
         {},
         static_cast<std::uint64_t>(resource.demand),
@@ -281,10 +293,10 @@ probe_global_routability(const GlobalRouteResult& global, const RoutabilityProbe
     builder.add(RoutabilityDiagnosis{
         RoutabilityFailureKind::packing_capacity_exceeded,
         RoutabilityFailureStage::global_probe,
-        RoutabilityResourceReference{"", corridor.layer,
-                                     segment_bounds(corridor.sampled_medial_start,
-                                                    corridor.sampled_medial_end),
-                                     corridor.nets},
+        RoutabilityResourceReference{
+            "", corridor.layer,
+            segment_bounds(corridor.sampled_medial_start, corridor.sampled_medial_end),
+            corridor.nets},
         static_cast<std::uint64_t>(corridor.demand - corridor.capacity),
         {},
         static_cast<std::uint64_t>(corridor.demand),
@@ -302,12 +314,48 @@ probe_global_routability(const GlobalRouteResult& global, const RoutabilityProbe
         RoutabilityFailureStage::global_probe,
         RoutabilityResourceReference{"", resource.layer,
                                      segment_bounds(resource.start, resource.end), resource.nets},
-        std::max<std::uint64_t>(1U, resource.demand_nm - resource.capacity_nm),
+        physical_overflow_severity(resource.demand_nm - resource.capacity_nm, config),
         {},
         resource.demand_nm,
         resource.capacity_nm,
         RoutabilityRelaxation::change_corridor,
         "physical corridor envelope demand exceeds certified width",
+        false});
+  }
+  // A packed medial bridge can fail even where its individual resource envelopes have no
+  // overflow or clearance shadow.  Attribute that topological failure to every occupant of the
+  // two participating resources so an incremental feedback pass expands from the transition net
+  // to the real local lane cone.  This is deliberately diagnostic evidence rather than a second
+  // generic-history penalty: selected-lane transition history, exact bridge checks, and detailed
+  // DRC remain the authorities on legality.
+  for (const auto& transition : global.voronoi_lane_transitions) {
+    if (transition.static_clearance_checked && transition.mutual_clearance_checked) {
+      continue;
+    }
+    std::vector<NetId> nets{transition.net};
+    for (const auto resource_id : {transition.first_resource_id, transition.second_resource_id}) {
+      const auto resource =
+          std::find_if(global.voronoi_resource_usage.begin(), global.voronoi_resource_usage.end(),
+                       [resource_id](const auto& usage) { return usage.id == resource_id; });
+      if (resource != global.voronoi_resource_usage.end()) {
+        nets.insert(nets.end(), resource->nets.begin(), resource->nets.end());
+      }
+    }
+    std::sort(nets.begin(), nets.end());
+    nets.erase(std::unique(nets.begin(), nets.end()), nets.end());
+    auto bounds = segment_bounds(transition.first_lane_endpoint, transition.second_lane_endpoint);
+    bounds = union_bounds(bounds, point_bounds(transition.medial_junction));
+    builder.add(RoutabilityDiagnosis{
+        RoutabilityFailureKind::packing_capacity_exceeded,
+        RoutabilityFailureStage::global_probe,
+        RoutabilityResourceReference{"", transition.layer, bounds, std::move(nets)},
+        1U,
+        {},
+        std::nullopt,
+        std::nullopt,
+        RoutabilityRelaxation::change_lane_order,
+        "selected physical-medial lane bridge has no exact static/mutual realization",
+        false,
         false});
   }
   for (const auto& failure : global.pin_escape_failures) {
@@ -362,6 +410,27 @@ diagnose_regional_routability(const RegionalRouteResult& regional,
       builder.add(diagnosis);
     }
   }
+  if (regional.configured.enable_xpbd_feedback) {
+    for (const auto& invocation : regional.xpbd_invocations) {
+      if (invocation.accepted && invocation.final_violations == 0U)
+        continue;
+      const auto* window = find_window(regional, invocation.window_id);
+      if (window == nullptr)
+        continue;
+      auto diagnosis = regional_diagnosis(
+          *window, RoutabilityFailureKind::shove_deadlock, RoutabilityFailureStage::local_pns,
+          invocation.topology_escape_required ? RoutabilityRelaxation::change_corridor
+                                              : RoutabilityRelaxation::change_lane_order,
+          std::max<std::uint64_t>(1U, invocation.final_violations),
+          "joint XPBD relaxation retained physical constraint stress; peak residual " +
+              std::to_string(invocation.final_peak_residual.value()) + " nm");
+      diagnosis.clearance_deficit = invocation.final_peak_residual;
+      // Per-cell diagnoses already carry the spatial history charge. Retain this invocation-wide
+      // summary for attribution without double-counting the same physical stress.
+      diagnosis.contributes_to_history = false;
+      builder.add(std::move(diagnosis));
+    }
+  }
   for (const auto& assignment : regional.bundle_assignments) {
     if (assignment.complete()) {
       continue;
@@ -372,16 +441,16 @@ diagnose_regional_routability(const RegionalRouteResult& regional,
     }
     for (const auto& blocker : assignment.partial_access_blockers) {
       const auto via = blocker.kind == RegionalAccessBlockerKind::via_pair;
-      builder.add(regional_diagnosis(
-          *window,
-          via ? RoutabilityFailureKind::via_site_exhausted
-              : RoutabilityFailureKind::layer_transition_conflict,
-          RoutabilityFailureStage::regional_discrete,
-          via ? RoutabilityRelaxation::change_via_site
-              : RoutabilityRelaxation::change_layer_sequence,
-          blocker.observations,
-          via ? "joint access assignment exhausted compatible via pairs"
-              : "terminal and via run-up choices are mutually incompatible"));
+      builder.add(
+          regional_diagnosis(*window,
+                             via ? RoutabilityFailureKind::via_site_exhausted
+                                 : RoutabilityFailureKind::layer_transition_conflict,
+                             RoutabilityFailureStage::regional_discrete,
+                             via ? RoutabilityRelaxation::change_via_site
+                                 : RoutabilityRelaxation::change_layer_sequence,
+                             blocker.observations,
+                             via ? "joint access assignment exhausted compatible via pairs"
+                                 : "terminal and via run-up choices are mutually incompatible"));
     }
     switch (assignment.stop_reason) {
     case RegionalBundleStopReason::complete:
@@ -430,8 +499,8 @@ diagnose_regional_routability(const RegionalRouteResult& regional,
       }
       if (mutual > 0U) {
         builder.add(regional_diagnosis(
-            *window, RoutabilityFailureKind::shove_deadlock,
-            RoutabilityFailureStage::local_pns, RoutabilityRelaxation::change_lane_order, mutual,
+            *window, RoutabilityFailureKind::shove_deadlock, RoutabilityFailureStage::local_pns,
+            RoutabilityRelaxation::change_lane_order, mutual,
             "bounded elastic/PNS optimization retained mutual copper-envelope conflicts"));
       }
       if (quantization > 0U && topology == 0U && mutual == 0U) {
@@ -441,19 +510,18 @@ diagnose_regional_routability(const RegionalRouteResult& regional,
             RoutabilityRelaxation::increase_local_clearance_margin, quantization,
             "quantized spline polylines violate an otherwise continuous route envelope"));
       }
-      const auto has_local_unresolved = std::any_of(
-          regional.local_routability_diagnoses.begin(),
-          regional.local_routability_diagnoses.end(), [&](const auto& diagnosis) {
-            return !diagnosis.locally_resolved &&
-                   diagnosis.resource.stable_id.starts_with(
-                       "regional-window:" + std::to_string(window->id) + ":");
-          });
+      const auto has_local_unresolved =
+          std::any_of(regional.local_routability_diagnoses.begin(),
+                      regional.local_routability_diagnoses.end(), [&](const auto& diagnosis) {
+                        return !diagnosis.locally_resolved &&
+                               diagnosis.resource.stable_id.starts_with(
+                                   "regional-window:" + std::to_string(window->id) + ":");
+                      });
       if (topology == 0U && mutual == 0U && quantization == 0U && !has_local_unresolved) {
         builder.add(regional_diagnosis(
             *window, RoutabilityFailureKind::curvature_infeasible,
-            RoutabilityFailureStage::spline_realization,
-            RoutabilityRelaxation::change_corridor, 1U,
-            "selected regional state could not produce a complete cubic B-spline realization"));
+            RoutabilityFailureStage::spline_realization, RoutabilityRelaxation::change_corridor, 1U,
+            "selected regional state could not produce a complete quintic PH realization"));
       }
       break;
     }
@@ -475,8 +543,8 @@ diagnose_detailed_routability(const DetailedRouteResult& detailed,
     bool has_bounds = false;
     bool has_layer = false;
     const auto add = [&](Point point, const LayerId& layer, const NetId& net) {
-      resource.bounds = has_bounds ? union_bounds(resource.bounds, point_bounds(point))
-                                   : point_bounds(point);
+      resource.bounds =
+          has_bounds ? union_bounds(resource.bounds, point_bounds(point)) : point_bounds(point);
       has_bounds = true;
       if (!has_layer) {
         resource.layer = layer;
@@ -521,8 +589,8 @@ diagnose_detailed_routability(const DetailedRouteResult& detailed,
           if (!selected(pad.id, pad.net)) {
             continue;
           }
-          const auto position = geometry::transform_point(
-              pad.local_position, footprint.position, footprint.rotation, footprint.side);
+          const auto position = geometry::transform_point(pad.local_position, footprint.position,
+                                                          footprint.rotation, footprint.side);
           if (pad.layers.empty()) {
             add(position, {}, pad.net);
           } else {
@@ -624,9 +692,13 @@ void accumulate_routability_knowledge(RoutabilityKnowledge& knowledge,
     } else {
       knowledge.dropped_diagnoses = saturating_count_add(knowledge.dropped_diagnoses, 1U);
     }
-    const auto found = std::find_if(
-        knowledge.history.begin(), knowledge.history.end(), [&](const auto& entry) {
-          return entry.kind == diagnosis.kind &&
+    if (!diagnosis.contributes_to_history) {
+      continue;
+    }
+    const auto found =
+        std::find_if(knowledge.history.begin(), knowledge.history.end(), [&](const auto& entry) {
+          return entry.kind == diagnosis.kind && entry.stage == diagnosis.stage &&
+                 entry.suggested_relaxation == diagnosis.suggested_relaxation &&
                  entry.resource.stable_id == diagnosis.resource.stable_id;
         });
     if (found != knowledge.history.end()) {
@@ -639,8 +711,7 @@ void accumulate_routability_knowledge(RoutabilityKnowledge& knowledge,
       found->resource.nets.erase(
           std::unique(found->resource.nets.begin(), found->resource.nets.end()),
           found->resource.nets.end());
-      knowledge.coalesced_diagnoses =
-          saturating_count_add(knowledge.coalesced_diagnoses, 1U);
+      knowledge.coalesced_diagnoses = saturating_count_add(knowledge.coalesced_diagnoses, 1U);
       continue;
     }
     if (knowledge.history.size() >= config.max_history_entries) {
@@ -648,19 +719,82 @@ void accumulate_routability_knowledge(RoutabilityKnowledge& knowledge,
           saturating_count_add(knowledge.dropped_history_entries, 1U);
       continue;
     }
-    knowledge.history.push_back(
-        RoutabilityHistoryEntry{diagnosis.kind, diagnosis.resource, 1U, diagnosis.severity});
+    knowledge.history.push_back(RoutabilityHistoryEntry{diagnosis.kind, diagnosis.resource, 1U,
+                                                        diagnosis.severity, diagnosis.stage,
+                                                        diagnosis.suggested_relaxation});
   }
-  std::sort(knowledge.diagnoses.begin(), knowledge.diagnoses.end(), [](const auto& lhs,
-                                                                      const auto& rhs) {
-    return std::tie(lhs.stage, lhs.kind, lhs.resource.stable_id, lhs.detail) <
-           std::tie(rhs.stage, rhs.kind, rhs.resource.stable_id, rhs.detail);
-  });
-  std::sort(knowledge.history.begin(), knowledge.history.end(), [](const auto& lhs,
-                                                                  const auto& rhs) {
-    return std::tie(lhs.kind, lhs.resource.stable_id) <
-           std::tie(rhs.kind, rhs.resource.stable_id);
-  });
+  std::sort(knowledge.diagnoses.begin(), knowledge.diagnoses.end(),
+            [](const auto& lhs, const auto& rhs) {
+              return std::tie(lhs.stage, lhs.kind, lhs.resource.stable_id, lhs.detail) <
+                     std::tie(rhs.stage, rhs.kind, rhs.resource.stable_id, rhs.detail);
+            });
+  std::sort(
+      knowledge.history.begin(), knowledge.history.end(), [](const auto& lhs, const auto& rhs) {
+        return std::tie(lhs.stage, lhs.kind, lhs.suggested_relaxation, lhs.resource.stable_id) <
+               std::tie(rhs.stage, rhs.kind, rhs.suggested_relaxation, rhs.resource.stable_id);
+      });
+}
+
+void accumulate_clean_copper_knowledge(RoutabilityKnowledge& knowledge,
+                                       const DetailedRouteResult& detailed,
+                                       const RoutabilityProbeConfig& config) {
+  if (!detailed.candidate || config.max_history_entries == 0U ||
+      config.coalescing_pitch.value() <= 0) {
+    return;
+  }
+  std::set<std::string> rejected_objects;
+  for (const auto& violation : detailed.copper_drc.violations) {
+    rejected_objects.insert(violation.object_ids.begin(), violation.object_ids.end());
+  }
+  const auto add = [&](LayerId layer, NetId net, Point start, Point end) {
+    const auto bounds = segment_bounds(start, end);
+    auto first_x = floor_divide(start.x.value(), config.coalescing_pitch.value());
+    auto first_y = floor_divide(start.y.value(), config.coalescing_pitch.value());
+    auto last_x = floor_divide(end.x.value(), config.coalescing_pitch.value());
+    auto last_y = floor_divide(end.y.value(), config.coalescing_pitch.value());
+    if (std::tie(last_x, last_y) < std::tie(first_x, first_y)) {
+      std::swap(first_x, last_x);
+      std::swap(first_y, last_y);
+    }
+    const auto stable_id = "clean-copper:" + layer.value() + ':' + net.value() + ':' +
+                           std::to_string(first_x) + ':' + std::to_string(first_y) + ':' +
+                           std::to_string(last_x) + ':' + std::to_string(last_y);
+    const auto found =
+        std::find_if(knowledge.success_history.begin(), knowledge.success_history.end(),
+                     [&](const auto& entry) { return entry.resource.stable_id == stable_id; });
+    if (found != knowledge.success_history.end()) {
+      found->observations = saturating_count_add(found->observations, 1U);
+      // Successful corridors accumulate deliberately slowly and remain capped by the hydraulic
+      // solver's maximum erosion when rasterized.
+      found->strength = saturating_add(found->strength, 1U);
+      found->resource.bounds = union_bounds(found->resource.bounds, bounds);
+      found->start = start;
+      found->end = end;
+      return;
+    }
+    if (knowledge.success_history.size() >= config.max_history_entries) {
+      knowledge.dropped_history_entries =
+          saturating_count_add(knowledge.dropped_history_entries, 1U);
+      return;
+    }
+    knowledge.success_history.push_back(RoutabilitySuccessEntry{
+        RoutabilityResourceReference{stable_id, layer, bounds, {net}}, start, end, 1U, 1U});
+  };
+  for (const auto& track : detailed.candidate->tracks) {
+    if (!rejected_objects.contains(track.id.value())) {
+      add(track.layer, track.net, track.start, track.end);
+    }
+  }
+  for (const auto& arc : detailed.candidate->track_arcs) {
+    if (rejected_objects.contains(arc.id.value()))
+      continue;
+    add(arc.layer, arc.net, arc.start, arc.middle);
+    add(arc.layer, arc.net, arc.middle, arc.end);
+  }
+  std::sort(knowledge.success_history.begin(), knowledge.success_history.end(),
+            [](const auto& lhs, const auto& rhs) {
+              return lhs.resource.stable_id < rhs.resource.stable_id;
+            });
 }
 
 } // namespace flux

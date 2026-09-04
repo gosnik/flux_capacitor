@@ -1,0 +1,73 @@
+{
+  "date": "2026-09-02",
+  "git_revision": "a17fe406f392ac0c7e174f9bcfc559e1b46a2bbb",
+  "working_tree": "dirty; benchmarked binary build/dev/flux-cli built 2026-09-02T02:38:11+08:00",
+  "board": "tests/fixtures/routing-corpus/bm_svf.kicad_pcb",
+  "qualification": "tier_1_unlocked_global_complete_probe",
+  "command": [
+    "python3",
+    "tests/python/verify_routing_corpus.py",
+    "--flux-cli", "build/dev/flux-cli",
+    "--corpus", "tests/fixtures/routing-corpus",
+    "--board", "bm_svf",
+    "--artifacts", "build/regional-planning-final-v7/artifacts",
+    "--telemetry-level", "diagnostic",
+    "--telemetry-record-dir", "build/regional-planning-final-v7/telemetry"
+  ],
+  "measurement": {
+    "router_elapsed_seconds": 2147.64,
+    "trace_bytes": 346118323,
+    "paths": 78,
+    "unrouted_nets": 0,
+    "selected_total_overflow": 132,
+    "result": "incomplete_as_expected_iteration_limit",
+    "harness_passed": true
+  },
+  "selected_regional_checkpoint": {
+    "windows": 78,
+    "complete_bundles": 72,
+    "incomplete_bundles": 6,
+    "lane_cross_sections": 165,
+    "joint_spline_candidates_evaluated": 467,
+    "joint_spline_candidates_legal": 265,
+    "joint_spline_windows_recovered": 26,
+    "residual_retry_reused_assignments": 71,
+    "residual_retry_recomputed_assignments": 2,
+    "residual_retry_stub_fragments": 4,
+    "complete_via_dependent_routes": 0,
+    "planned_layer_runs": 0,
+    "planned_via_transitions": 0
+  },
+  "later_regional_checkpoints": [
+    {"windows": 59, "complete_bundles": 48, "selected": false},
+    {"windows": 73, "complete_bundles": 63, "selected": false},
+    {"windows": 125, "complete_bundles": 112, "selected": false}
+  ],
+  "smallest_selected_residual": {
+    "window_ids": [0, 30, 40, 63, 65, 66],
+    "count": 6,
+    "mechanisms": [
+      "frozen endpoint continuation ownership",
+      "directed NavMesh gate omission or repetition",
+      "mutual and quantized clearance"
+    ]
+  },
+  "retained_changes": [
+    "one-hop residual endpoint-owner import",
+    "ordinary transitive owner closure over actual member fragments",
+    "two-non-improving-pass physical-feedback stagnation cutoff",
+    "known-good raw topology-preserving cubic guard sequence"
+  ],
+  "rejected_experiments": [
+    {"name": "expanded_pns_128", "result": "1308 attempts and zero accepts"},
+    {"name": "eight_topology_guard_attempts", "result": "15 minute prefix timeout"},
+    {"name": "simplified_guard_seed", "result": "68 of 78 complete bundles"},
+    {"name": "non_monotonic_string_pull", "result": "mixed-width high-risk regression"},
+    {"name": "recursive_endpoint_owner_expansion", "result": "broad cones and timeout"}
+  ],
+  "next_hypothesis": {
+    "topology_seed": "retain the immutable NavMesh funnel centerline separately from spline control anchors",
+    "search": "retain compact pruned joint states as a bounded fallback reserve and promote conflict-directed alternatives after physical failure",
+    "telemetry": "separate generated, pruned, active, reserve, promoted, and physically evaluated counts"
+  }
+}

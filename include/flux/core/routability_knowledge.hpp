@@ -67,6 +67,10 @@ struct RoutabilityDiagnosis {
   std::string detail;
   // A local/regional alternative discharged this observation before upstream escalation.
   bool locally_resolved{false};
+  // Some observations are already negotiated by a more specific PathFinder history (for example
+  // an exact packed-lane bridge).  Retain them for attribution, telemetry, and affected-cone
+  // expansion without charging the same failure a second time through generic physical history.
+  bool contributes_to_history{true};
 
   bool operator==(const RoutabilityDiagnosis&) const = default;
 };
@@ -76,13 +80,31 @@ struct RoutabilityHistoryEntry {
   RoutabilityResourceReference resource;
   std::size_t observations{0U};
   std::uint64_t pressure{0U};
+  RoutabilityFailureStage stage{RoutabilityFailureStage::global_probe};
+  // Retain the corrective action selected by the stage which produced this pressure.  Earlier
+  // aggregation discarded it, so a later epoch knew that a region was expensive but not whether
+  // to change its lane order, via site, layer sequence, or complete topology.
+  RoutabilityRelaxation suggested_relaxation{RoutabilityRelaxation::replan_global_topology};
 
   bool operator==(const RoutabilityHistoryEntry&) const = default;
+};
+
+// Positive evidence is deliberately separate from failure history. It may attract hydraulic
+// discovery but never discounts PathFinder congestion, capacity, clearance, or DRC costs.
+struct RoutabilitySuccessEntry {
+  RoutabilityResourceReference resource;
+  Point start;
+  Point end;
+  std::size_t observations{0U};
+  std::uint64_t strength{0U};
+
+  bool operator==(const RoutabilitySuccessEntry&) const = default;
 };
 
 struct RoutabilityKnowledge {
   std::vector<RoutabilityDiagnosis> diagnoses;
   std::vector<RoutabilityHistoryEntry> history;
+  std::vector<RoutabilitySuccessEntry> success_history;
   std::size_t coalesced_diagnoses{0U};
   std::size_t dropped_diagnoses{0U};
   std::size_t dropped_history_entries{0U};
@@ -126,5 +148,11 @@ diagnose_detailed_routability(const DetailedRouteResult& detailed,
 void accumulate_routability_knowledge(RoutabilityKnowledge& knowledge,
                                       const std::vector<RoutabilityDiagnosis>& diagnoses,
                                       const RoutabilityProbeConfig& config = {});
+
+// Retains bounded positive terrain evidence for candidate copper objects that survived exact
+// quantization and represented DRC. Repeated observations deepen the same coalesced prior slowly.
+void accumulate_clean_copper_knowledge(RoutabilityKnowledge& knowledge,
+                                       const DetailedRouteResult& detailed,
+                                       const RoutabilityProbeConfig& config = {});
 
 } // namespace flux

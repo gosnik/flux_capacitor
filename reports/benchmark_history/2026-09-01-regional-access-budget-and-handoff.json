@@ -1,0 +1,70 @@
+{
+  "git_revision": "a17fe406f392ac0c7e174f9bcfc559e1b46a2bbb",
+  "date": "2026-09-01T02:10:00+08:00",
+  "experiment": "regional-access-budget-and-handoff",
+  "implementation": {
+    "access_assignment_budget": "shared across one bundle-template portfolio",
+    "regional_handoff": "only after complete coarse topology and within the configured local conflict-cone net bound",
+    "authoritative_legality": "unchanged; exact detailed copper, connectivity, and external KiCad DRC"
+  },
+  "runs": [
+    {
+      "board": "pt2399_delay",
+      "tier": 0,
+      "outcome": "pass",
+      "metrics": {
+        "final_copper": "accepted",
+        "external_kicad_drc_violations": 0,
+        "external_kicad_drc_unconnected_items": 0,
+        "copper_pngs": "exported"
+      }
+    },
+    {
+      "board": "bm_svf",
+      "tier": 1,
+      "configuration": "one global iteration; 1000 expansions per connection",
+      "outcome": "diagnostic completed",
+      "before": {
+        "elapsed_seconds": 78.1,
+        "note": "shared access budget applied; regional analysis still entered despite an oversized cone"
+      },
+      "after": {
+        "elapsed_seconds": 38.55,
+        "paths": 75,
+        "unrouted_nets": 2,
+        "total_overflow": 524,
+        "clearance_shadow_conflicts": 402,
+        "peak_residual_conflict_group_nets": 22,
+        "regional_realization": "deferred"
+      }
+    },
+    {
+      "board": "bm_svf",
+      "tier": 1,
+      "configuration": "one valid global iteration; 50000 expansions per connection",
+      "outcome": "incomplete diagnostic completed",
+      "after": {
+        "paths": 78,
+        "unrouted_nets": 0,
+        "total_overflow": 179,
+        "sampled_overflow": 16,
+        "clearance_shadow_conflicts": 161,
+        "peak_residual_conflict_group_nets": 21,
+        "regional_realization": "deferred"
+      }
+    },
+    {
+      "board": "bm_svf",
+      "tier": 1,
+      "configuration": "manifest standard; 30 iterations; 50000 expansions per connection",
+      "outcome": "timeout",
+      "timeout_seconds": 180
+    }
+  ],
+  "focused_regression": {
+    "command": "build/dev/tests/flux_unit_tests",
+    "outcome": "pass",
+    "passed": 7,
+    "total": 7
+  }
+}

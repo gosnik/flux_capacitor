@@ -1,0 +1,33 @@
+{
+  "date": "2026-09-02",
+  "board": "tests/fixtures/routing-corpus/bm_svf.kicad_pcb",
+  "configuration": {
+    "active_candidates_per_window": 8,
+    "fallback_candidates_per_window": 256,
+    "promoted_candidates_per_failed_window": 8
+  },
+  "measurement": {
+    "router_elapsed_seconds": 2442.765,
+    "trace_bytes": 390556794,
+    "observed_peak_rss_kib": 136992,
+    "paths": 78,
+    "unrouted_nets": 0,
+    "selected_total_overflow": 132,
+    "harness_passed": true,
+    "complete": false
+  },
+  "regional_checkpoints": [
+    {"windows": 78, "complete": 73, "generated": 1034, "active": 486, "reserve": 548, "dropped": 0, "promoted": 16, "evaluated": 483, "fallback_recovered": 1, "selected": true},
+    {"windows": 59, "complete": 50, "generated": 1151, "active": 356, "reserve": 788, "dropped": 7, "promoted": 40, "evaluated": 382, "fallback_recovered": 2, "selected": false},
+    {"windows": 74, "complete": 66, "generated": 1700, "active": 511, "reserve": 1057, "dropped": 132, "promoted": 8, "evaluated": 484, "fallback_recovered": 0, "selected": false},
+    {"windows": 109, "complete": 102, "generated": 1658, "active": 633, "reserve": 1025, "dropped": 0, "promoted": 32, "evaluated": 609, "fallback_recovered": 2, "selected": false}
+  ],
+  "tier0_requalification": {
+    "board": "pt2399_delay",
+    "paths": 50,
+    "flux_exact_copper": "accepted",
+    "external_kicad_drc": "clean",
+    "copper_pngs": "build/regional-planning-final-v9/artifacts/tier-0-pt2399_delay/copper"
+  },
+  "decision": "separate a fixed 72-state active-selection horizon from a 512-state compact fallback reserve"
+}

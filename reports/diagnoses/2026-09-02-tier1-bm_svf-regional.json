@@ -1,0 +1,27 @@
+{
+  "date": "2026-09-02",
+  "board": "bm_svf",
+  "first_infeasible_stage": "regional continuous realization",
+  "global_state": {
+    "paths": 78,
+    "unrouted_nets": 0,
+    "total_overflow": 132,
+    "sampled_overflow": 17,
+    "corridor_overflow": 0,
+    "clearance_shadow_conflicts": 112
+  },
+  "smallest_authoritative_residual": [
+    {"window": 0, "nets": ["kicad-net-17", "kicad-net-20", "kicad-net-24", "kicad-net-26"], "mechanism": "mixed topology and mutual-clearance failure"},
+    {"window": 30, "nets": ["kicad-net-16", "kicad-net-3"], "mechanism": "frozen boundary continuation crossing; no complete joint candidate"},
+    {"window": 40, "nets": ["kicad-net-24", "kicad-net-26"], "mechanism": "shared endpoint clearance deficit; no complete joint candidate"},
+    {"window": 63, "nets": ["kicad-net-1", "kicad-net-13"], "mechanism": "directed NavMesh topology gate failure"},
+    {"window": 65, "nets": ["kicad-net-24", "kicad-net-8"], "mechanism": "directed NavMesh topology gate failure"},
+    {"window": 66, "nets": ["kicad-net-1", "kicad-net-24"], "mechanism": "directed NavMesh topology gate failure"}
+  ],
+  "earliest_information_loss": [
+    "the source NavMesh funnel centerline is converted to generic spline controls",
+    "later topology fallback incorrectly treats the control polygon as the raw route certificate",
+    "joint states outside the active spline shortlist are discarded before physical failure attribution"
+  ],
+  "acceptance": "incomplete; no copper materialization or KiCad DRC claim"
+}

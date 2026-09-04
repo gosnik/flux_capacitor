@@ -1,0 +1,422 @@
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) buffer PositionsA { vec4 positions_a[]; };
+layout(std430, binding = 1) buffer PositionsB { vec4 positions_b[]; };
+layout(std430, binding = 2) readonly buffer ParticleMeta { uvec4 particle_meta[]; };
+layout(std430, binding = 3) readonly buffer Anchors { vec4 anchors[]; };
+layout(std430, binding = 4) readonly buffer Segments { uint segment_words[]; };
+layout(std430, binding = 5) readonly buffer Obstacles { uint obstacle_words[]; };
+layout(std430, binding = 6) readonly buffer Pairs { uvec2 pairs[]; };
+layout(std430, binding = 7) readonly buffer Terrain { float terrain[]; };
+layout(std430, binding = 8) buffer PressureA { uint pressure_a[]; };
+layout(std430, binding = 9) buffer PressureB { uint pressure_b[]; };
+// obstacle, trace/trace, stretch+bend, corridor/via stress in nanometres.
+layout(std430, binding = 10) buffer Stress { vec4 particle_stress[]; };
+// Four uints per diagnostic iteration: violation count, peak nm, total nm, reserved.
+layout(std430, binding = 11) buffer IterationResiduals { uint iteration_residuals[]; };
+
+layout(push_constant) uniform Push {
+  uint particle_count;
+  uint segment_count;
+  uint obstacle_count;
+  uint pair_count;
+  uint terrain_width;
+  uint terrain_height;
+  uint terrain_layer_count;
+  uint pressure_layer_count;
+  uint read_state;
+  uint iteration;
+  uint solver_iterations;
+  float terrain_origin_x;
+  float terrain_origin_y;
+  float terrain_pitch;
+  float maximum_step;
+  float guard_nm;
+  float stretch_weight;
+  float bend_weight;
+  float clearance_weight;
+  float corridor_weight;
+  float terrain_gain;
+  uint mode;
+  uint pressure_width;
+  uint pressure_height;
+  uint pressure_read_state;
+  float pressure_origin_x;
+  float pressure_origin_y;
+  float pressure_pitch;
+  float pressure_diffusion;
+  float pressure_scale;
+} push;
+
+vec4 read_position(uint index) {
+  return push.read_state == 0u ? positions_a[index] : positions_b[index];
+}
+
+void write_position(uint index, vec4 value) {
+  if (push.read_state == 0u) positions_b[index] = value;
+  else positions_a[index] = value;
+}
+
+vec2 closest_on_segment(vec2 point, vec2 first, vec2 second) {
+  vec2 delta = second - first;
+  float denominator = dot(delta, delta);
+  float amount = denominator > 0.0 ? clamp(dot(point - first, delta) / denominator, 0.0, 1.0)
+                                   : 0.0;
+  return first + delta * amount;
+}
+
+// Returns closest parameters in xy and closest points in zw through the out arguments.
+vec2 closest_segments(vec2 p1, vec2 q1, vec2 p2, vec2 q2, out vec2 c1, out vec2 c2) {
+  const float epsilon = 1.0e-12;
+  vec2 d1 = q1 - p1;
+  vec2 d2 = q2 - p2;
+  vec2 r = p1 - p2;
+  float a = dot(d1, d1);
+  float e = dot(d2, d2);
+  float f = dot(d2, r);
+  float s = 0.0;
+  float t = 0.0;
+  if (a <= epsilon && e <= epsilon) {
+    c1 = p1; c2 = p2; return vec2(0.0);
+  }
+  if (a <= epsilon) {
+    t = clamp(f / e, 0.0, 1.0);
+  } else {
+    float c = dot(d1, r);
+    if (e <= epsilon) {
+      s = clamp(-c / a, 0.0, 1.0);
+    } else {
+      float b = dot(d1, d2);
+      float denominator = a * e - b * b;
+      if (abs(denominator) > epsilon) s = clamp((b * f - c * e) / denominator, 0.0, 1.0);
+      t = (b * s + f) / e;
+      if (t < 0.0) { t = 0.0; s = clamp(-c / a, 0.0, 1.0); }
+      else if (t > 1.0) { t = 1.0; s = clamp((b - c) / a, 0.0, 1.0); }
+    }
+  }
+  c1 = p1 + d1 * s;
+  c2 = p2 + d2 * t;
+  return vec2(s, t);
+}
+
+float terrain_at(vec2 position, uint layer) {
+  if (push.terrain_width < 2u || push.terrain_height < 2u ||
+      layer >= push.terrain_layer_count || !(push.terrain_pitch > 0.0)) return 0.0;
+  vec2 cell = (position - vec2(push.terrain_origin_x, push.terrain_origin_y)) / push.terrain_pitch;
+  ivec2 base = ivec2(floor(cell));
+  if (base.x < 0 || base.y < 0 || base.x + 1 >= int(push.terrain_width) ||
+      base.y + 1 >= int(push.terrain_height)) return 0.0;
+  vec2 amount = cell - vec2(base);
+  uint plane = push.terrain_width * push.terrain_height;
+  uint i00 = layer * plane + uint(base.y) * push.terrain_width + uint(base.x);
+  uint i10 = i00 + 1u;
+  uint i01 = i00 + push.terrain_width;
+  uint i11 = i01 + 1u;
+  return mix(mix(terrain[i00], terrain[i10], amount.x),
+             mix(terrain[i01], terrain[i11], amount.x), amount.y);
+}
+
+void accumulate(inout vec2 correction, inout float weight_sum, vec2 value, float weight) {
+  if (weight > 0.0 && !any(isnan(value)) && !any(isinf(value))) {
+    correction += value * weight;
+    // Average simultaneous Jacobi proposals by count. Including stiffness in this divisor would
+    // cancel compliance whenever only one constraint acts on the particle.
+    weight_sum += 1.0;
+  }
+}
+
+void main() {
+  uint particle = gl_GlobalInvocationID.x;
+  if (push.mode == 1u) {
+    uint cell_count = push.pressure_width * push.pressure_height * push.pressure_layer_count;
+    if (particle < cell_count) {
+      pressure_a[particle] = 0u;
+      pressure_b[particle] = 0u;
+    }
+    return;
+  }
+  if (push.mode == 2u) {
+    if (particle >= push.particle_count || push.pressure_width == 0u ||
+        push.pressure_height == 0u || particle_meta[particle].y >= push.pressure_layer_count ||
+        !(push.pressure_pitch > 0.0)) return;
+    vec2 position = read_position(particle).xy;
+    ivec2 cell = ivec2(floor((position - vec2(push.pressure_origin_x, push.pressure_origin_y)) /
+                             push.pressure_pitch));
+    if (cell.x < 0 || cell.y < 0 || cell.x >= int(push.pressure_width) ||
+        cell.y >= int(push.pressure_height)) return;
+    float normalized_stress = dot(max(particle_stress[particle], vec4(0.0)), vec4(1.0)) /
+                              push.pressure_pitch;
+    uint encoded = uint(clamp(round(normalized_stress * push.pressure_scale),
+                              0.0, 4294967295.0));
+    uint plane = push.pressure_width * push.pressure_height;
+    uint index = particle_meta[particle].y * plane + uint(cell.y) * push.pressure_width + uint(cell.x);
+    atomicAdd(pressure_a[index], encoded);
+    return;
+  }
+  if (push.mode == 3u) {
+    uint plane = push.pressure_width * push.pressure_height;
+    uint cell_count = plane * push.pressure_layer_count;
+    if (particle >= cell_count) return;
+    uint local_cell = particle % plane;
+    uint x = local_cell % push.pressure_width;
+    uint y = local_cell / push.pressure_width;
+    float centre = float(push.pressure_read_state == 0u ? pressure_a[particle]
+                                                        : pressure_b[particle]);
+    float sum = 0.0;
+    uint neighbours = 0u;
+    if (x > 0u) {
+      sum += float(push.pressure_read_state == 0u ? pressure_a[particle - 1u]
+                                                  : pressure_b[particle - 1u]);
+      ++neighbours;
+    }
+    if (x + 1u < push.pressure_width) {
+      sum += float(push.pressure_read_state == 0u ? pressure_a[particle + 1u]
+                                                  : pressure_b[particle + 1u]);
+      ++neighbours;
+    }
+    if (y > 0u) {
+      sum += float(push.pressure_read_state == 0u ? pressure_a[particle - push.pressure_width]
+                                                  : pressure_b[particle - push.pressure_width]);
+      ++neighbours;
+    }
+    if (y + 1u < push.pressure_height) {
+      sum += float(push.pressure_read_state == 0u ? pressure_a[particle + push.pressure_width]
+                                                  : pressure_b[particle + push.pressure_width]);
+      ++neighbours;
+    }
+    float diffused = neighbours == 0u
+                         ? centre
+                         : (1.0 - push.pressure_diffusion * float(neighbours)) * centre +
+                               push.pressure_diffusion * sum;
+    uint encoded = uint(clamp(round(diffused), 0.0, 4294967295.0));
+    if (push.pressure_read_state == 0u) pressure_b[particle] = encoded;
+    else pressure_a[particle] = encoded;
+    return;
+  }
+  if (push.mode == 4u) {
+    if (particle >= push.particle_count) return;
+    uint violations = 0u;
+    float maximum_residual = 0.0;
+    float total_residual = 0.0;
+    for (uint segment = 0u; segment < push.segment_count; ++segment) {
+      uint segment_offset = segment * 8u;
+      uint first_particle = segment_words[segment_offset];
+      uint second_particle = segment_words[segment_offset + 1u];
+      if (first_particle != particle || second_particle >= push.particle_count) continue;
+      for (uint obstacle = 0u; obstacle < push.obstacle_count; ++obstacle) {
+        uint obstacle_offset = obstacle * 12u;
+        if (obstacle_words[obstacle_offset + 5u] != segment_words[segment_offset + 3u] ||
+            (obstacle_words[obstacle_offset + 6u] != 0xffffffffu &&
+             obstacle_words[obstacle_offset + 6u] != segment_words[segment_offset + 2u])) continue;
+        vec2 route_closest;
+        vec2 obstacle_closest;
+        closest_segments(read_position(first_particle).xy, read_position(second_particle).xy,
+                         vec2(uintBitsToFloat(obstacle_words[obstacle_offset]),
+                              uintBitsToFloat(obstacle_words[obstacle_offset + 1u])),
+                         vec2(uintBitsToFloat(obstacle_words[obstacle_offset + 2u]),
+                              uintBitsToFloat(obstacle_words[obstacle_offset + 3u])),
+                         route_closest, obstacle_closest);
+        float required = uintBitsToFloat(segment_words[segment_offset + 4u]) +
+                         uintBitsToFloat(segment_words[segment_offset + 6u]) +
+                         uintBitsToFloat(obstacle_words[obstacle_offset + 4u]) + push.guard_nm;
+        float residual = required - length(route_closest - obstacle_closest);
+        if (residual > 0.5) {
+          ++violations; maximum_residual = max(maximum_residual, residual);
+          total_residual += residual;
+        }
+      }
+    }
+    for (uint pair_index = 0u; pair_index < push.pair_count; ++pair_index) {
+      uvec2 pair = pairs[pair_index];
+      uint first_offset = pair.x * 8u;
+      uint second_offset = pair.y * 8u;
+      uvec2 first_indices = uvec2(segment_words[first_offset], segment_words[first_offset + 1u]);
+      uvec2 second_indices = uvec2(segment_words[second_offset], segment_words[second_offset + 1u]);
+      if (first_indices.x != particle || first_indices.y >= push.particle_count ||
+          second_indices.x >= push.particle_count || second_indices.y >= push.particle_count)
+        continue;
+      vec2 first_closest;
+      vec2 second_closest;
+      closest_segments(read_position(first_indices.x).xy, read_position(first_indices.y).xy,
+                       read_position(second_indices.x).xy, read_position(second_indices.y).xy,
+                       first_closest, second_closest);
+      float required = uintBitsToFloat(segment_words[first_offset + 4u]) +
+                       uintBitsToFloat(segment_words[second_offset + 4u]) +
+                       max(uintBitsToFloat(segment_words[first_offset + 6u]),
+                           uintBitsToFloat(segment_words[second_offset + 6u])) + push.guard_nm;
+      float residual = required - length(first_closest - second_closest);
+      if (residual > 0.5) {
+        ++violations; maximum_residual = max(maximum_residual, residual);
+        total_residual += residual;
+      }
+    }
+    vec4 anchor = anchors[particle];
+    if (anchor.z > 0.0) {
+      float residual = length(read_position(particle).xy - anchor.xy) - anchor.z;
+      if (residual > 0.5) {
+        ++violations; maximum_residual = max(maximum_residual, residual);
+        total_residual += residual;
+      }
+    }
+    uint base = push.iteration * 4u;
+    if (violations > 0u) {
+      atomicAdd(iteration_residuals[base], violations);
+      atomicMax(iteration_residuals[base + 1u],
+                uint(clamp(round(maximum_residual), 0.0, 4294967295.0)));
+      atomicAdd(iteration_residuals[base + 2u],
+                uint(clamp(round(total_residual), 0.0, 4294967295.0)));
+    }
+    return;
+  }
+  if (push.mode != 0u) return;
+  if (particle >= push.particle_count) return;
+  vec4 source = read_position(particle);
+  bool movable = source.z > 0.0;
+  vec2 position = source.xy;
+  vec2 correction = vec2(0.0);
+  float weight_sum = 0.0;
+  vec4 stress = vec4(0.0);
+  bool legality_settling = push.iteration >= push.solver_iterations - push.solver_iterations / 4u;
+
+  uint neighbours[2];
+  uint neighbour_count = 0u;
+  for (uint segment = 0u; segment < push.segment_count; ++segment) {
+    uint offset = segment * 8u;
+    uint first = segment_words[offset];
+    uint second = segment_words[offset + 1u];
+    if (first != particle && second != particle) continue;
+    uint other = first == particle ? second : first;
+    if (other >= push.particle_count) continue;
+    vec2 other_position = read_position(other).xy;
+    vec2 delta = other_position - position;
+    float current_length = length(delta);
+    float rest_length = uintBitsToFloat(segment_words[offset + 5u]);
+    if (!legality_settling && current_length > 0.0 && rest_length > 0.0) {
+      float other_mass = max(0.0, read_position(other).z);
+      float total_mass = max(1.0e-12, source.z + other_mass);
+      vec2 direction = delta / current_length;
+      accumulate(correction, weight_sum,
+                 direction * ((current_length - rest_length) * source.z / total_mass),
+                 push.stretch_weight);
+      stress.z += abs(current_length - rest_length) * push.stretch_weight;
+    }
+    if (neighbour_count < 2u) neighbours[neighbour_count++] = other;
+  }
+  if (!legality_settling && neighbour_count == 2u) {
+    vec2 target = (read_position(neighbours[0]).xy + read_position(neighbours[1]).xy) * 0.5;
+    accumulate(correction, weight_sum, target - position, push.bend_weight);
+    stress.z += length(target - position) * push.bend_weight;
+  }
+
+  for (uint obstacle = 0u; obstacle < push.obstacle_count; ++obstacle) {
+    uint offset = obstacle * 12u;
+    if (obstacle_words[offset + 5u] != particle_meta[particle].y) continue;
+    if (obstacle_words[offset + 6u] != 0xffffffffu &&
+        obstacle_words[offset + 6u] != particle_meta[particle].x) continue;
+    vec2 first = vec2(uintBitsToFloat(obstacle_words[offset]),
+                      uintBitsToFloat(obstacle_words[offset + 1u]));
+    vec2 second = vec2(uintBitsToFloat(obstacle_words[offset + 2u]),
+                       uintBitsToFloat(obstacle_words[offset + 3u]));
+    float obstacle_radius = uintBitsToFloat(obstacle_words[offset + 4u]);
+    for (uint segment = 0u; segment < push.segment_count; ++segment) {
+      uint segment_offset = segment * 8u;
+      uint segment_first = segment_words[segment_offset];
+      uint segment_second = segment_words[segment_offset + 1u];
+      if (segment_first != particle && segment_second != particle) continue;
+      vec2 route_closest;
+      vec2 obstacle_closest;
+      vec2 parameters = closest_segments(read_position(segment_first).xy,
+                                         read_position(segment_second).xy,
+                                         first, second, route_closest, obstacle_closest);
+      vec2 delta = route_closest - obstacle_closest;
+      float distance = length(delta);
+      float required = uintBitsToFloat(segment_words[segment_offset + 4u]) +
+                       uintBitsToFloat(segment_words[segment_offset + 6u]) +
+                       obstacle_radius + push.guard_nm;
+      if (distance < required) {
+        stress.x += required - distance;
+        vec2 route_delta = read_position(segment_second).xy - read_position(segment_first).xy;
+        vec2 fallback = length(route_delta) > 1.0e-6
+                            ? normalize(vec2(-route_delta.y, route_delta.x))
+                            : normalize(vec2(second.y - first.y, first.x - second.x));
+        if ((segment_words[segment_offset + 2u] & 1u) != 0u) fallback = -fallback;
+        vec2 outward_raw = vec2(uintBitsToFloat(obstacle_words[offset + 7u]),
+                                uintBitsToFloat(obstacle_words[offset + 8u]));
+        bool has_outward = length(outward_raw) > 1.0e-6;
+        vec2 outward = has_outward ? normalize(outward_raw) : fallback;
+        vec2 closest_normal = distance > 1.0e-6 ? delta / distance : fallback;
+        vec2 normal = has_outward && distance > 1.0e-6 && dot(closest_normal, outward) < 0.0
+                          ? outward
+                          : closest_normal;
+        float influence = segment_first == particle ? 1.0 - parameters.x : parameters.x;
+        accumulate(correction, weight_sum, normal * ((required - distance) * influence),
+                   push.clearance_weight);
+      }
+    }
+  }
+
+  for (uint pair_index = 0u; pair_index < push.pair_count; ++pair_index) {
+    uvec2 pair = pairs[pair_index];
+    if (pair.x >= push.segment_count || pair.y >= push.segment_count) continue;
+    uint first_offset = pair.x * 8u;
+    uint second_offset = pair.y * 8u;
+    uvec2 first_indices = uvec2(segment_words[first_offset], segment_words[first_offset + 1u]);
+    uvec2 second_indices = uvec2(segment_words[second_offset], segment_words[second_offset + 1u]);
+    if (particle != first_indices.x && particle != first_indices.y &&
+        particle != second_indices.x && particle != second_indices.y) continue;
+    vec2 first_closest;
+    vec2 second_closest;
+    vec2 parameters = closest_segments(read_position(first_indices.x).xy,
+                                       read_position(first_indices.y).xy,
+                                       read_position(second_indices.x).xy,
+                                       read_position(second_indices.y).xy,
+                                       first_closest, second_closest);
+    vec2 delta = first_closest - second_closest;
+    float distance = length(delta);
+    float required = uintBitsToFloat(segment_words[first_offset + 4u]) +
+                     uintBitsToFloat(segment_words[second_offset + 4u]) +
+                     max(uintBitsToFloat(segment_words[first_offset + 6u]),
+                         uintBitsToFloat(segment_words[second_offset + 6u])) + push.guard_nm;
+    if (distance >= required) continue;
+    stress.y += required - distance;
+    vec2 first_delta = read_position(first_indices.y).xy - read_position(first_indices.x).xy;
+    vec2 normal = distance > 1.0e-6 ? delta / distance : normalize(vec2(-first_delta.y, first_delta.x));
+    if (distance <= 1.0e-6 && ((segment_words[first_offset + 2u] +
+                               segment_words[second_offset + 2u]) & 1u) != 0u) normal = -normal;
+    float influence = 0.0;
+    float sign_value = 1.0;
+    if (particle == first_indices.x) influence = 1.0 - parameters.x;
+    else if (particle == first_indices.y) influence = parameters.x;
+    else if (particle == second_indices.x) { influence = 1.0 - parameters.y; sign_value = -1.0; }
+    else { influence = parameters.y; sign_value = -1.0; }
+    accumulate(correction, weight_sum, normal * ((required - distance) * influence * sign_value),
+               push.clearance_weight);
+  }
+
+  vec4 anchor = anchors[particle];
+  if (anchor.z > 0.0) {
+    vec2 delta = position - anchor.xy;
+    float distance = length(delta);
+    if (distance > anchor.z) {
+      stress.w += distance - anchor.z;
+      accumulate(correction, weight_sum, normalize(delta) * (anchor.z - distance),
+                 push.corridor_weight);
+    }
+  }
+  if (!legality_settling && push.terrain_gain > 0.0 && push.terrain_pitch > 0.0) {
+    vec2 px = vec2(push.terrain_pitch, 0.0);
+    vec2 py = vec2(0.0, push.terrain_pitch);
+    uint layer = particle_meta[particle].y;
+    vec2 gradient = vec2(terrain_at(position + px, layer) - terrain_at(position - px, layer),
+                         terrain_at(position + py, layer) - terrain_at(position - py, layer));
+    accumulate(correction, weight_sum,
+               -gradient * (push.terrain_gain * push.terrain_pitch * 0.5), 1.0);
+  }
+  if (weight_sum > 0.0) correction /= weight_sum;
+  float magnitude = length(correction);
+  if (magnitude > push.maximum_step) correction *= push.maximum_step / magnitude;
+  particle_stress[particle] += stress;
+  write_position(particle, vec4(movable ? position + correction : position, source.zw));
+}

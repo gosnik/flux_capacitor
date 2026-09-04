@@ -1,0 +1,67 @@
+{
+  "git_revision": "a17fe406f392ac0c7e174f9bcfc559e1b46a2bbb",
+  "date": "2026-09-01T02:31:00+08:00",
+  "experiment": "staged-order-and-virtual-medial-capacity",
+  "implementation": {
+    "initial_order": "static terminal/corridor/via/physical-envelope order drives the first negotiated PathFinder pass",
+    "later_order_changes": "unchanged; only between incomplete PathFinder passes",
+    "physical_medial_probe": "allocation-free virtual net membership retaining bus and differential-pair envelopes",
+    "authoritative_legality": "unchanged; exact detailed copper, connectivity, and external KiCad DRC"
+  },
+  "runs": [
+    {
+      "board": "pt2399_delay",
+      "tier": 0,
+      "outcome": "pass",
+      "metrics": {
+        "external_kicad_drc_violations": 0,
+        "external_kicad_drc_unconnected_items": 0,
+        "copper_pngs": "exported"
+      }
+    },
+    {
+      "board": "bm_svf",
+      "tier": 1,
+      "configuration": "one global iteration; 50000 expansions per connection",
+      "before_initial_order": {
+        "paths": 78,
+        "unrouted_nets": 0,
+        "total_overflow": 179,
+        "sampled_overflow": 16,
+        "clearance_shadow_conflicts": 161,
+        "peak_residual_conflict_group_nets": 21
+      },
+      "after_initial_order": {
+        "paths": 78,
+        "unrouted_nets": 0,
+        "total_overflow": 146,
+        "sampled_overflow": 26,
+        "clearance_shadow_conflicts": 120,
+        "peak_residual_conflict_group_nets": 23
+      },
+      "after_virtual_medial_capacity": {
+        "paths": 78,
+        "unrouted_nets": 0,
+        "total_overflow": 146,
+        "sampled_overflow": 26,
+        "clearance_shadow_conflicts": 120,
+        "peak_residual_conflict_group_nets": 23,
+        "elapsed_seconds": 42.72,
+        "maxrss_kb": 105568
+      }
+    },
+    {
+      "board": "bm_svf",
+      "tier": 1,
+      "configuration": "manifest standard; 30 iterations; 50000 expansions per connection",
+      "outcome": "timeout",
+      "timeout_seconds": 180
+    }
+  ],
+  "focused_regression": {
+    "command": "build/dev/tests/flux_unit_tests",
+    "outcome": "pass",
+    "passed": 7,
+    "total": 7
+  }
+}

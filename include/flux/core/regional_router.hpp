@@ -2,6 +2,7 @@
 
 #include "flux/core/geometry.hpp"
 #include "flux/core/global_router.hpp"
+#include "flux/core/routing_compute.hpp"
 #include "flux/core/spline_route.hpp"
 
 #include <cstddef>
@@ -13,6 +14,18 @@
 
 namespace flux {
 
+// Performance observations are intentionally excluded from semantic route-result equality.
+// Repeated routing must compare deterministically even though wall-clock samples cannot.
+struct RegionalPerformanceMicroseconds {
+  std::uint64_t value{0U};
+  RegionalPerformanceMicroseconds& operator+=(std::uint64_t amount) {
+    value += amount;
+    return *this;
+  }
+  [[nodiscard]] constexpr operator std::uint64_t() const { return value; }
+  constexpr bool operator==(const RegionalPerformanceMicroseconds&) const { return true; }
+};
+
 // Positively bounded derived-state policy for the regional physical-packing stage. The first
 // implementation publishes conflict evidence only; later milestones consume these same bounds for
 // window partitioning, route-template enumeration, bundle search, and exact transactions.
@@ -23,14 +36,24 @@ struct RegionalRouterConfig {
   std::size_t max_nets_per_window{12};
   std::size_t max_templates_per_fragment{4};
   std::size_t max_terminal_choices_per_terminal{4};
-  // Diagnostic/test override. Production leaves this false until portal portfolio growth has a
-  // tighter joint-search representation and a measured dense-board benefit.
-  bool enable_terminal_portal_templates{false};
+  // Terminal escape is a first-class bounded regional decision.  The alternatives are exact
+  // static-checked before publication and the leaf access CSP selects them atomically with vias
+  // and lanes; disabling this is retained only as a diagnostic baseline.
+  bool enable_terminal_portal_templates{true};
+  // Endpoint alternatives must be routed through prepared free space rather than represented by
+  // an unchecked straight chord. This is a complete-run budget shared by deduplicated
+  // (fragment,start-portal,end-portal) searches. Zero retains only exact-checked rebinds within
+  // the already selected corridor and disables fresh topology work.
+  std::size_t max_terminal_navmesh_template_checks{2'048};
   std::size_t max_via_regions_per_fragment{4};
   std::size_t max_via_sites_per_region{4};
   std::size_t max_selected_via_site_candidate_checks{16'384};
   std::size_t max_selected_via_site_checks_per_region{256};
-  std::size_t max_access_assignment_states{512};
+  // Total terminal/via-access CSP work available to one bundle-template portfolio.  The budget
+  // is shared across its partial combinations: applying this bound independently to every
+  // branch would multiply one regional window's nominal bundle budget by the access solver's
+  // budget and defeat bounded conflict-cone repair on dense boards.
+  std::size_t max_access_assignment_states{2'048};
   std::size_t max_access_blockers_per_window{16};
   std::size_t max_layer_sequences_per_fragment{3};
   Nanometres navmesh_cell_pitch{Nanometres::from_mm(0.25)};
@@ -52,18 +75,57 @@ struct RegionalRouterConfig {
   std::size_t max_local_layer_bypasses_per_fragment{4};
   // The discrete joint solver retains only this many complete-window states for authoritative
   // continuous realization. The first spline-legal state wins in discrete-objective order.
-  std::size_t max_joint_spline_candidates{4};
+  std::size_t max_joint_spline_candidates{8};
+  // Stable prefix from which the ordinary diversity beam is selected. Fallback capacity must
+  // not silently change normal active routing; states beyond this prefix are late-stage reserve.
+  std::size_t max_joint_spline_active_pool_candidates{72};
+  // Compact complete discrete states outside the active continuous beam are retained for bounded
+  // conflict-directed fallback waves. They carry portals/corridors/lanes/layers/vias, not spline
+  // samples or copper, and therefore preserve bounded diversity without eager geometry cost.
+  std::size_t max_joint_spline_fallback_candidates{512};
+  // Re-rank a residual conflict cone's remaining reserve after every failed wave. Ordinary
+  // regional analysis retains one wave; deeper exploration happens only after the cone has been
+  // spatially isolated, preventing hundreds of useful states from being discarded without
+  // multiplying continuous work across every ordinary window.
+  std::size_t max_joint_spline_fallback_waves{3};
+  // A merged residual cone may require every contiguous fragment of one same-net/layer run to
+  // take the same alternate layer/via template. Keep a small protected coverage set so the
+  // ordinary low-cost bundle pool cannot discard that atomic route-run state before spline/DRC.
+  std::size_t max_residual_cone_template_coverage_states{8};
   // Bounded semantic failure records produced while reducing the joint spline shortlist.
   std::size_t max_local_routability_diagnoses{4'096};
   // Reuse existing exact-prevalidated portfolios for only the highest-pressure windows. The
   // ADR 0145 expanded window is included in this total rather than added on top of it.
   std::size_t max_spline_portfolio_windows{512};
+  // Zero disables same-layer detour construction for diagnostic/decomposition-only runs.
   std::size_t max_same_layer_detour_checks{1'024};
+  std::size_t max_same_layer_detour_offsets{3};
   std::size_t max_bundle_search_states{100'000};
   std::size_t max_lane_order_states{100'000};
+  // Diagnostic/decomposition-only runs may stop after the discrete regional portfolio. Normal
+  // routing always keeps this enabled and exact acceptance still requires realized splines.
+  bool enable_spline_realization{true};
+  // Experimental joint physical relaxation. Disabled by default so established tier baselines
+  // remain directly comparable; when enabled, every result is still re-fitted and accepted only
+  // by the existing topology, continuous-envelope, quantization, connectivity and DRC gates.
+  bool enable_xpbd_relaxation{false};
+  bool enable_xpbd_feedback{false};
+  RoutingXpbdConfig xpbd;
+  // Slow-loop physical history sampled as a soft terrain potential by the next regional XPBD
+  // pass. This is derived, bounded cost evidence only; exact corridor/topology/DRC gates remain
+  // authoritative and an empty vector restores a history-free relaxation baseline.
+  std::vector<RoutabilityHistoryEntry> xpbd_history;
+  std::size_t max_xpbd_obstacle_segments_per_window{32'768U};
+  // Subdivide the exact PH preimage at adaptive curve samples before constructing XPBD
+  // particles. This makes the GPU contact polyline cover the same curved geometry inspected by
+  // the continuous regional gate while keeping the per-route solver state bounded.
+  std::size_t max_xpbd_interpolation_nodes_per_route{64U};
   std::size_t max_spline_sweeps{8};
   std::size_t max_adaptive_pair_shove_checks_per_window{16};
   std::size_t max_quantization_feedback_iterations{2};
+  // Each failed continuous-to-copper conversion may test this many bounded two-route elastic
+  // displacements before returning its diagnosis to the regional/global loops.
+  std::size_t max_quantization_feedback_candidates_per_iteration{32};
   std::size_t max_quantized_segment_pair_checks_per_window{2'000'000};
   // One fallback decomposition may combine a failed articulation window with the windows that
   // currently own its participating fragments. The ordinary decomposition is retained unless
@@ -183,6 +245,8 @@ struct RegionalRoutingWindow {
   std::uint64_t observed_overlap_length_nm{0};
   Nanometres peak_clearance_deficit;
   RegionalWindowFailureReason failure_reason{RegionalWindowFailureReason::none};
+  bool residual_conflict_cone{false};
+  std::size_t residual_stub_fragments{0};
 
   [[nodiscard]] bool eligible() const {
     return failure_reason == RegionalWindowFailureReason::none;
@@ -225,6 +289,17 @@ struct RegionalTopologyLink {
   bool operator==(const RegionalTopologyLink&) const = default;
 };
 
+// A global geometric corridor can overlap several regional channels.  Keep its directed route
+// certificate attached to the exact fragment it describes instead of assigning one arbitrary
+// obstacle-side sequence to every occupant of the merged channel.
+struct RegionalFragmentTopologyBinding {
+  RegionalRouteFragmentId fragment;
+  NavMeshTopologySignature signature;
+  std::vector<Point> centerline;
+
+  bool operator==(const RegionalFragmentTopologyBinding&) const = default;
+};
+
 struct RegionalChannel {
   std::size_t id{0};
   LayerId layer;
@@ -233,6 +308,7 @@ struct RegionalChannel {
   // Directed, selected funnel gates.  Empty is explicit "cell-union-only evidence" for older
   // global corridor producers that did not retain a NavMesh route certificate.
   NavMeshTopologySignature topology_signature;
+  std::vector<RegionalFragmentTopologyBinding> fragment_topology_bindings;
   std::vector<RegionalTopologyLink> endpoint_links;
   std::vector<RegionalCrossSection> cross_sections;
   std::vector<std::size_t> adjacent_channels;
@@ -313,8 +389,9 @@ struct RegionalRouteTemplate {
   std::optional<std::size_t> exit_via_choice;
   std::vector<std::size_t> avoided_conflict_edges;
   std::vector<Point> topology_centerline;
-  // The route class selected by this discrete template.  A B-spline/PNS realization may deform
-  // inside it but must ask the bounded regional template search for any corridor-side change.
+  // The route class selected by this discrete template.  A quintic PH curve/PNS realization may
+  // deform inside it but must ask the bounded regional template search for any corridor-side
+  // change.
   NavMeshTopologySignature topology_signature;
   std::optional<std::size_t> terminal_entry_choice;
   std::optional<std::size_t> terminal_exit_choice;
@@ -354,8 +431,8 @@ struct RegionalSplineRealization {
   Point replacement_end;
   LayerId layer;
   std::vector<Point> centerline;
-  // Final optimized cubic controls retained for diagnostic telemetry. Canonical copper still uses
-  // the separately quantized centerline/materialization transaction.
+  // Flattened six-controls-per-segment quintic PH Bézier polygons retained for diagnostic
+  // telemetry. Canonical copper still uses the separately quantized centerline transaction.
   std::vector<Point> control_points;
   Nanometres width;
   GlobalRouteSegmentWidthKind width_kind{GlobalRouteSegmentWidthKind::nominal};
@@ -365,10 +442,26 @@ struct RegionalSplineRealization {
   std::size_t accepted_control_moves{0};
   std::uint64_t topology_signature{0U};
   std::size_t topology_gate_count{0U};
+  std::size_t merged_fragments{1U};
   bool topology_legal{false};
   bool topology_gate_sequence_legal{false};
   bool endpoint_topology_legal{false};
   bool interior_topology_legal{false};
+  // Non-authoritative reason from the selected NavMesh homotopy certificate. This is retained
+  // with the spline so telemetry can distinguish an obstacle/cell escape from a gate-order error.
+  std::string topology_diagnostic;
+  bool shape_legal{false};
+  bool shape_sample_budget_exhausted{false};
+  std::size_t shape_self_intersections{0U};
+  std::size_t shape_cusps{0U};
+  std::size_t shape_control_station_reversals{0U};
+  std::size_t shape_station_reversals{0U};
+  std::size_t shape_excess_turn_violations{0U};
+  std::size_t shape_unintended_inflections{0U};
+  long double shape_total_turn_radians{0.0L};
+  long double shape_anchor_turn_radians{0.0L};
+  long double interpolation_parameter_exponent{0.5L};
+  long double interpolation_tangent_scale{1.0L};
   bool mutually_legal{false};
   bool quantized_mutually_legal{false};
 
@@ -387,6 +480,22 @@ struct RegionalBundleSelection {
   bool operator==(const RegionalBundleSelection&) const = default;
 };
 
+// Compact post-realization record for a bounded joint spline candidate. It preserves the
+// selected discrete template IDs and failure profile, not mutable spline geometry, so a regional
+// diagnosis can tell whether a promising layer/corridor combination was actually tested.
+struct RegionalSplineCandidateSummary {
+  std::size_t rank{0};
+  std::vector<std::size_t> templates;
+  std::size_t short_realizations{0};
+  std::size_t topology_rejections{0};
+  std::size_t shape_rejections{0};
+  std::size_t mutual_clearance_rejections{0};
+  std::size_t quantized_clearance_rejections{0};
+  bool complete{false};
+
+  bool operator==(const RegionalSplineCandidateSummary&) const = default;
+};
+
 struct RegionalBundleAssignment {
   std::size_t window_id{0};
   std::vector<RegionalRouteTemplate> templates;
@@ -396,6 +505,7 @@ struct RegionalBundleAssignment {
   std::vector<RegionalCrossSection> packed_cross_sections;
   std::vector<RegionalSplineRealization> spline_realizations;
   std::vector<RegionalBundleSelection> spline_candidate_shortlist;
+  std::vector<RegionalBundleSelection> spline_candidate_reserve;
   std::vector<RegionalAccessBlocker> partial_access_blockers;
   std::size_t lane_order_states{0};
   std::size_t bundle_search_states{0};
@@ -419,6 +529,21 @@ struct RegionalBundleAssignment {
   std::size_t selected_via_alternative_switches{0};
   std::size_t access_assignment_exhaustions{0};
   std::size_t spline_candidate_rank{0};
+  // Aggregate result of the bounded continuous shortlist before it is reduced to the best
+  // legal, or least-illegal diagnostic, candidate. These values explain why a local cone did
+  // not commit without retaining every trial spline geometry.
+  std::size_t spline_candidates_evaluated{0};
+  std::size_t spline_candidates_legal{0};
+  std::size_t spline_candidate_min_topology_rejections{0};
+  std::size_t spline_candidate_min_shape_rejections{0};
+  std::size_t spline_candidate_min_mutual_clearance_rejections{0};
+  std::size_t spline_candidate_min_quantized_clearance_rejections{0};
+  std::vector<RegionalSplineCandidateSummary> spline_candidate_summaries;
+  std::size_t residual_cone_template_coverage_states{0};
+  std::size_t residual_cone_template_coverage_coupled_rejections{0};
+  std::size_t residual_cone_template_coverage_access_rejections{0};
+  std::size_t residual_cone_template_coverage_packing_rejections{0};
+  std::size_t spline_fallback_waves{0};
   bool joint_spline_candidate{false};
   RegionalBundleStopReason stop_reason{RegionalBundleStopReason::window_ineligible};
 
@@ -456,6 +581,104 @@ struct RegionalMultilayerRoutePlan {
   bool operator==(const RegionalMultilayerRoutePlan&) const = default;
 };
 
+// One bounded residual-cone retry.  This is diagnostic state only: the ordinary regional
+// checkpoint remains authoritative until a complete cone transaction strictly improves it, and
+// canonical copper/connectivity/DRC still decide the eventual board commit.  Keeping this record
+// makes a failed cone distinguishable from a cone that was legal but not feasibility-first better.
+struct RegionalResidualFragmentFailure {
+  RegionalRouteFragmentId fragment;
+  std::size_t merged_fragments{1U};
+
+  auto operator<=>(const RegionalResidualFragmentFailure&) const = default;
+};
+
+struct RegionalResidualConflictConeAttempt {
+  std::size_t root_window_id{0};
+  std::vector<std::size_t> source_window_ids;
+  std::size_t fragment_count{0};
+  std::size_t net_count{0};
+  std::size_t assignment_count{0};
+  std::size_t incomplete_assignments{0};
+  std::size_t topology_rejections{0};
+  std::size_t mutual_clearance_rejections{0};
+  std::size_t quantized_clearance_rejections{0};
+  std::size_t spline_candidates_evaluated{0};
+  std::size_t spline_candidates_legal{0};
+  std::size_t spline_merged_runs{0};
+  std::size_t spline_merged_fragments{0};
+  std::vector<RegionalResidualFragmentFailure> topology_rejected_fragments;
+  std::vector<RegionalResidualFragmentFailure> mutual_clearance_rejected_fragments;
+  std::vector<RegionalResidualFragmentFailure> quantized_clearance_rejected_fragments;
+  std::size_t template_coverage_states{0};
+  std::size_t template_coverage_retained{0};
+  std::size_t template_coverage_coupled_rejections{0};
+  std::size_t template_coverage_access_rejections{0};
+  std::size_t template_coverage_packing_rejections{0};
+  std::size_t stub_fragments{0};
+  bool complete{false};
+  bool selected{false};
+
+  bool operator==(const RegionalResidualConflictConeAttempt&) const = default;
+};
+
+struct RegionalXpbdInvocation {
+  std::size_t window_id{0U};
+  std::size_t candidate_rank{0U};
+  std::size_t route_count{0U};
+  std::size_t particle_count{0U};
+  std::size_t segment_count{0U};
+  std::size_t obstacle_segment_count{0U};
+  std::size_t terrain_cells{0U};
+  std::size_t terrain_layers{0U};
+  std::size_t pressure_layers{0U};
+  std::size_t candidate_pairs{0U};
+  std::size_t broadphase_cells{0U};
+  std::size_t broadphase_pair_emissions{0U};
+  std::size_t resident_input_buffer_reuses{0U};
+  std::size_t unresolved_trace_pairs{0U};
+  std::vector<NetId> nets;
+  struct NetStress {
+    NetId net;
+    RoutingXpbdStressBreakdown stress;
+    Point worst_location;
+    long double worst_stress_nm{0.0L};
+
+    bool operator==(const NetStress&) const = default;
+  };
+  std::vector<NetStress> net_stress;
+  struct CorridorStress {
+    std::size_t channel_id{0U};
+    long double accumulated_stress_nm{0.0L};
+    long double peak_stress_nm{0.0L};
+
+    bool operator==(const CorridorStress&) const = default;
+  };
+  std::vector<CorridorStress> corridor_stress;
+  RoutingXpbdStressBreakdown stress;
+  RoutingXpbdConstraintCounts constraints;
+  RoutingXpbdTimings timings;
+  std::size_t iterations{0U};
+  std::size_t initial_violations{0U};
+  std::size_t final_violations{0U};
+  Nanometres initial_peak_residual;
+  Nanometres final_peak_residual;
+  std::uint64_t initial_total_residual_nm{0U};
+  std::uint64_t final_total_residual_nm{0U};
+  bool used_gpu{false};
+  bool used_gpu_broadphase{false};
+  bool broadphase_fallback{false};
+  bool used_gpu_pressure_field{false};
+  bool cpu_fallback{false};
+  bool converged{false};
+  bool stalled{false};
+  bool accepted{false};
+  bool topology_escape_required{false};
+  bool pair_budget_exhausted{false};
+  std::string diagnostic;
+
+  bool operator==(const RegionalXpbdInvocation&) const = default;
+};
+
 struct RegionalRouteResult {
   RegionalRouterConfig configured;
   std::vector<RegionalRouteFragment> fragments;
@@ -467,6 +690,11 @@ struct RegionalRouteResult {
   std::vector<RegionalChannel> channels;
   std::vector<RegionalTerminalChoice> terminal_choices;
   std::size_t selected_terminal_portal_choices{0};
+  std::size_t terminal_navmesh_template_checks{0};
+  std::size_t accepted_terminal_corridor_rebinds{0};
+  std::size_t accepted_terminal_navmesh_templates{0};
+  std::size_t rejected_terminal_navmesh_templates{0};
+  bool terminal_navmesh_template_budget_exhausted{false};
   std::vector<RegionalViaChoice> via_choices;
   std::vector<RegionalViaRegionEvidence> via_region_evidence;
   std::vector<RegionalBundleAssignment> bundle_assignments;
@@ -476,6 +704,7 @@ struct RegionalRouteResult {
   std::size_t complete_via_dependent_routes{0};
   std::size_t planned_layer_runs{0};
   std::size_t planned_via_transitions{0};
+  std::size_t stitched_multilayer_runs{0};
   bool spline_candidate_available{false};
   bool spline_candidate_conflicting_articulation{false};
   std::size_t source_clearance_shadow_conflicts{0};
@@ -508,6 +737,11 @@ struct RegionalRouteResult {
   std::size_t fixed_resource_width_fragments{0};
   std::size_t via_site_candidate_checks{0};
   std::size_t via_site_diversity_rejections{0};
+  std::size_t via_site_gpu_filter_batches{0};
+  std::size_t via_site_gpu_candidates{0};
+  std::size_t via_site_gpu_shortlisted{0};
+  std::size_t via_site_gpu_rejected{0};
+  std::size_t via_site_gpu_cpu_fallbacks{0};
   std::size_t contested_via_regions{0};
   std::size_t peak_via_region_contention{0};
   bool selected_via_site_candidate_budget_exhausted{false};
@@ -527,6 +761,14 @@ struct RegionalRouteResult {
   bool local_layer_bypass_budget_exhausted{false};
   std::size_t joint_spline_candidates_evaluated{0};
   std::size_t joint_spline_candidates_legal{0};
+  std::size_t joint_spline_candidates_generated{0};
+  std::size_t joint_spline_active_candidates_retained{0};
+  std::size_t joint_spline_fallback_candidates_retained{0};
+  std::size_t joint_spline_fallback_candidates_dropped{0};
+  std::size_t joint_spline_fallback_candidates_promoted{0};
+  std::size_t joint_spline_fallback_promotion_waves{0};
+  std::size_t joint_spline_fallback_candidates_remaining{0};
+  std::size_t joint_spline_fallback_windows_recovered{0};
   std::size_t joint_spline_windows_recovered{0};
   std::vector<std::size_t> joint_spline_recovered_window_ids;
   std::size_t joint_spline_failed_fallback_improvements{0};
@@ -558,10 +800,36 @@ struct RegionalRouteResult {
   std::size_t spline_topology_gates{0};
   std::size_t spline_topology_gate_rejections{0};
   std::size_t spline_mutual_clearance_rejections{0};
+  std::size_t spline_continuous_hulls_checked{0};
+  std::size_t spline_continuous_envelope_rejections{0};
+  std::size_t spline_continuous_budget_exhaustions{0};
   std::size_t spline_lane_targets{0};
   std::size_t spline_multi_target_fragments{0};
   std::size_t spline_merged_runs{0};
   std::size_t spline_merged_fragments{0};
+  std::size_t spline_interpolation_portfolio_candidates{0};
+  std::size_t spline_interpolation_portfolio_offset_rejections{0};
+  std::size_t spline_interpolation_portfolio_accepted{0};
+  std::size_t spline_interpolation_portfolio_windows_improved{0};
+  std::size_t spline_interpolation_gpu_batches{0};
+  std::size_t spline_interpolation_gpu_fallbacks{0};
+  std::size_t spline_interpolation_gpu_candidates{0};
+  std::size_t spline_interpolation_exact_candidates{0};
+  std::size_t spline_geometry_cache_hits{0};
+  std::size_t spline_geometry_cache_misses{0};
+  std::size_t spline_offset_broadphase_batches{0};
+  std::size_t spline_offset_broadphase_gpu_batches{0};
+  std::size_t spline_offset_broadphase_rejections{0};
+  std::size_t spline_offset_exact_pairs{0};
+  std::size_t spline_offset_subdivision_nodes{0};
+  std::size_t spline_offset_isolated_leaf_pairs{0};
+  std::size_t spline_offset_node_budget_exhaustions{0};
+  RegionalPerformanceMicroseconds spline_interpolation_rank_us;
+  RegionalPerformanceMicroseconds spline_interpolation_exact_us;
+  RegionalPerformanceMicroseconds spline_adaptive_assessment_us;
+  RegionalPerformanceMicroseconds spline_offset_broadphase_us;
+  RegionalPerformanceMicroseconds spline_offset_exact_us;
+  RegionalPerformanceMicroseconds spline_realization_us;
   std::size_t spline_joint_shove_attempts{0};
   std::size_t spline_joint_shove_accepted{0};
   std::size_t spline_adaptive_pair_shove_attempts{0};
@@ -578,10 +846,48 @@ struct RegionalRouteResult {
   std::size_t residual_conflict_cone_retries{0};
   std::size_t residual_conflict_cones_built{0};
   std::size_t residual_conflict_cone_windows_merged{0};
+  std::size_t residual_conflict_cone_stub_fragments{0};
   std::size_t residual_conflict_cone_reused_assignments{0};
   std::size_t residual_conflict_cone_recomputed_assignments{0};
   std::size_t residual_conflict_cone_retry_withheld_assignments{0};
   bool residual_conflict_cone_selected{false};
+  std::size_t residual_cone_template_coverage_states{0};
+  std::size_t residual_cone_template_coverage_retained{0};
+  std::vector<RegionalResidualConflictConeAttempt> residual_conflict_cone_attempts;
+  std::vector<RegionalXpbdInvocation> xpbd_invocations;
+  std::size_t xpbd_windows_attempted{0U};
+  // Multi-route candidates which were already mutually legal under the adaptive continuous
+  // envelope probe do not need a physics solve. Keeping this observable prevents dense regional
+  // portfolios from silently spending most of their budget on no-op GPU dispatches.
+  std::size_t xpbd_unconflicted_candidates_skipped{0U};
+  std::size_t xpbd_windows_improved{0U};
+  std::size_t xpbd_windows_legalized{0U};
+  std::size_t xpbd_gpu_invocations{0U};
+  std::size_t xpbd_cpu_fallbacks{0U};
+  std::size_t xpbd_topology_rejections{0U};
+  std::size_t xpbd_pressure_cells{0U};
+  std::size_t xpbd_terrain_cells_sampled{0U};
+  std::size_t xpbd_obstacle_segments{0U};
+  std::size_t xpbd_obstacle_segment_budget_exhaustions{0U};
+  std::size_t xpbd_constraints{0U};
+  std::size_t xpbd_broadphase_cells{0U};
+  std::size_t xpbd_broadphase_pair_emissions{0U};
+  std::size_t xpbd_resident_input_buffer_reuses{0U};
+  std::size_t xpbd_gpu_broadphase_invocations{0U};
+  std::size_t xpbd_broadphase_fallbacks{0U};
+  std::size_t xpbd_gpu_pressure_field_invocations{0U};
+  std::size_t xpbd_unresolved_trace_pairs{0U};
+  RoutingXpbdStressBreakdown xpbd_stress;
+  std::size_t xpbd_initial_violations{0U};
+  std::size_t xpbd_final_violations{0U};
+  Nanometres xpbd_peak_initial_residual;
+  Nanometres xpbd_peak_final_residual;
+  std::uint64_t xpbd_broadphase_us{0U};
+  std::uint64_t xpbd_constraint_generation_us{0U};
+  std::uint64_t xpbd_solve_us{0U};
+  std::uint64_t xpbd_stress_reduction_us{0U};
+  std::uint64_t xpbd_readback_us{0U};
+  long double xpbd_peak_pressure{0.0L};
   std::uint64_t total_observed_overlap_length_nm{0};
   Nanometres peak_clearance_deficit;
   RegionalRouterStopReason stop_reason{RegionalRouterStopReason::invalid_input};
@@ -607,12 +913,85 @@ enum class RoutingPlanStopReason {
 struct RoutingPlannerConfig {
   GlobalRouterConfig global;
   RegionalRouterConfig regional;
-  // Number of bounded upstream replans after the initial global allocation. Zero restores the
-  // single-pass boundary. Each retry consumes typed physical diagnoses as cost-only history.
-  std::size_t max_routability_feedback_retries{2U};
+  // Number of bounded upstream replans after the initial global allocation. Two passes establish
+  // a physical checkpoint; two further passes let residual regional lane/via/spline diagnoses
+  // influence a fresh global allocation instead of being discovered only on the final pass.
+  // Zero restores the single-pass boundary. Each retry consumes typed physical diagnoses as
+  // cost-only history.
+  std::size_t max_routability_feedback_retries{4U};
   RoutabilityProbeConfig routability_probe;
+  // Split the caller's existing global PathFinder iteration budget across the initial pass and
+  // feedback retries.  Zero retains the old whole-wave behaviour.  A short epoch lets physical
+  // envelope, regional lane/via/escape, and hydraulic feedback influence the next PathFinder
+  // allocation before all configured iterations have been consumed.
+  bool interleave_routability_feedback{true};
+  // Retain distinct outer-loop global topologies for regional comparison.  This is separate from
+  // the global router's pass-local beam: entries survive a physical-feedback epoch and therefore
+  // preserve alternatives that become attractive only after downstream evidence arrives.
+  std::size_t retained_global_portfolios{4U};
+  // Only this many retained topologies receive bounded regional realization in an intermediate
+  // epoch.  The final epoch always uses the full regional configuration on the best portfolio.
+  std::size_t intermediate_regional_portfolios{2U};
+  // Intermediate regional work is intentionally a probe rather than a second full detail pass.
+  // These bounds preserve lane/terminal/via/PH failure information while leaving the configured
+  // full budgets for the final retained checkpoint.
+  std::size_t intermediate_regional_bundle_states{20'000U};
+  std::size_t intermediate_regional_exact_transactions{8U};
+  std::size_t max_stagnant_feedback_epochs{4U};
 
   bool operator==(const RoutingPlannerConfig&) const = default;
+};
+
+// One global candidate inspected by a bounded outer feedback probe.  The candidate is a copy of
+// authoritative global state, but these fields are only a diagnostic summary used to explain
+// why the full routing-plan comparator retained or discarded it.
+struct RoutingPlanFeedbackCandidate {
+  bool history_informed_global{false};
+  // A feedback pass may retain the previous global checkpoint and re-route only the exact nets
+  // attributed by its physical diagnoses.  These are observability fields: they cannot change
+  // the global or regional acceptance predicates.
+  bool incremental_global{false};
+  bool feedback_fell_back_to_full_global{false};
+  std::size_t feedback_affected_nets{0U};
+  std::size_t global_reused_nets{0U};
+  std::size_t global_rerouted_nets{0U};
+  std::size_t global_unrouted_nets{0U};
+  std::size_t global_total_overflow{0U};
+  std::size_t global_clearance_shadow_conflicts{0U};
+  std::size_t global_unaccepted_lane_transitions{0U};
+  bool coarse_topology_complete{false};
+  bool regional_consulted{false};
+  std::size_t regional_incomplete_bundle_assignments{0U};
+  std::size_t regional_diagnoses{0U};
+  bool plan_complete{false};
+
+  bool operator==(const RoutingPlanFeedbackCandidate&) const = default;
+};
+
+// One bounded outer-loop observation.  This is diagnostic state only: it records whether
+// non-authoritative physical history materially changes a subsequent global allocation, without
+// becoming another routing representation or affecting the feasibility comparator.
+struct RoutingPlanFeedbackProbe {
+  std::size_t pass{0U};
+  std::size_t history_entries_before{0U};
+  std::uint64_t history_pressure_before{0U};
+  std::size_t global_diagnoses{0U};
+  std::size_t history_entries_after_global{0U};
+  std::uint64_t history_pressure_after_global{0U};
+  std::vector<RoutingPlanFeedbackCandidate> candidates;
+  std::size_t history_entries_after_regional{0U};
+  std::uint64_t history_pressure_after_regional{0U};
+  // A physically selected checkpoint normally seeds the next cone.  A topology-incomplete,
+  // history-informed branch with an unaccepted packed-lane transition is the bounded exception:
+  // it is retained only as a repair seed so the exact transition occupants can be reconsidered.
+  bool next_feedback_uses_repair_branch{false};
+  std::size_t next_feedback_affected_nets{0U};
+  std::size_t global_epoch_iterations{0U};
+  std::size_t cumulative_global_iterations{0U};
+  std::size_t retained_global_portfolios{0U};
+  bool intermediate_regional_probe{false};
+
+  bool operator==(const RoutingPlanFeedbackProbe&) const = default;
 };
 
 // The first-class boundary between coarse PathFinder state and regional physical packing. Paths
@@ -623,9 +1002,15 @@ struct RoutingPlanResult {
   RegionalRouteResult regional;
   std::vector<GlobalRoutePath> paths;
   RoutabilityKnowledge routability_knowledge;
+  std::vector<RoutingPlanFeedbackProbe> feedback_probes;
   std::size_t global_feedback_passes{0U};
   std::size_t cheap_physical_probes{0U};
   std::size_t regional_feedback_passes{0U};
+  std::size_t global_feedback_epochs{0U};
+  std::size_t cumulative_global_iterations{0U};
+  std::size_t retained_global_portfolio_peak{0U};
+  std::size_t retained_global_portfolios_evaluated{0U};
+  std::size_t intermediate_regional_probes{0U};
   bool routability_feedback_budget_exhausted{false};
   RoutingPlanStopReason stop_reason{RoutingPlanStopReason::invalid_input};
   std::string diagnostic;

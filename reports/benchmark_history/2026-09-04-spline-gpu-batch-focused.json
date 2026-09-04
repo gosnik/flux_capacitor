@@ -1,0 +1,68 @@
+{
+  "date": "2026-09-04T07:15:14+08:00",
+  "git_revision": "a17fe406f392ac0c7e174f9bcfc559e1b46a2bbb",
+  "working_tree_dirty": true,
+  "configuration": "build/dev",
+  "experiment": "batched regional PH realization and conservative offset screening",
+  "scope": "focused verification; not a tier qualification",
+  "baseline_evidence": {
+    "board": "bm_svf",
+    "tier": 1,
+    "observed_spline_starts": 257,
+    "observed_span_seconds": 1760.414,
+    "first_wave_assignments": 218,
+    "first_wave_seconds": 1406.58,
+    "maximum_inter_start_seconds": 300.292,
+    "xpbd_invocations": 16,
+    "xpbd_total_solve_seconds": 0.171
+  },
+  "focused_result": {
+    "fixture": "obstacle_aware_diagonals_and_curves_remain_capacity_and_drc_gated",
+    "observed_realizations": 4,
+    "approximate_realization_seconds_each": 1.55,
+    "approximate_interpolation_exact_seconds_each": 0.14,
+    "approximate_offset_broadphase_seconds_each": 0.24,
+    "offset_exact_subdivision_nodes": 0,
+    "offset_node_budget_exhaustions": 0,
+    "note": "The later global-feedback portion was stopped and excluded from spline timing."
+  },
+  "verification": [
+    {
+      "test": "quintic_ph_geometry_preserves_invariants_and_exact_offsets",
+      "outcome": "pass",
+      "runtime_seconds": 5.28
+    },
+    {
+      "test": "advanced_routing_compute_shortlists_preserve_cpu_authority",
+      "outcome": "pass",
+      "runtime_seconds": 0.26
+    },
+    {
+      "test": "physical_copper_t_junction_is_preserved_during_ph_realization",
+      "outcome": "pass",
+      "runtime_seconds": 11.75
+    }
+  ],
+  "tier_0": {
+    "board": "pt2399_delay",
+    "outcome": "pass",
+    "global_paths": 50,
+    "structural_errors": 0,
+    "open_connections": 0,
+    "represented_copper_violations": 0,
+    "external_kicad_drc_errors": 0,
+    "kicad_version": "9.0.8",
+    "artifact_root": "build/spline-gpu-batch-tier0/tier-0-pt2399_delay"
+  },
+  "tier_1": {
+    "board": "bm_svf",
+    "router_iterations": 1,
+    "maximum_expansions": 50000,
+    "timeout_seconds": 180,
+    "elapsed_seconds": 180.08,
+    "peak_rss_kb": 335440,
+    "outcome": "timeout during global seed generation before spline realization",
+    "qualification_run": false
+  },
+  "promotion": false
+}

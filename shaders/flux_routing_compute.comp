@@ -1,0 +1,615 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+layout(std430, binding = 0) readonly buffer InputA { uint input_a[]; };
+layout(std430, binding = 1) readonly buffer InputB { uint input_b[]; };
+layout(std430, binding = 2) buffer State { uint state[]; };
+layout(std430, binding = 3) buffer Output { uint output_data[]; };
+
+layout(push_constant) uniform Push {
+  uint mode;
+  uint count_a;
+  uint count_b;
+  uint width;
+  uint height;
+  uint read_state;
+  uint guard_nm;
+  uint pass;
+  uint weights[8];
+} push;
+
+float point_segment_distance(vec2 point, vec2 first, vec2 second) {
+  vec2 delta = second - first;
+  float amount = dot(delta, delta) > 0.0 ?
+      clamp(dot(point - first, delta) / dot(delta, delta), 0.0, 1.0) : 0.0;
+  return length(point - (first + amount * delta));
+}
+
+float orientation(vec2 a, vec2 b, vec2 c) {
+  vec2 ab = b - a;
+  vec2 ac = c - a;
+  return ab.x * ac.y - ab.y * ac.x;
+}
+
+bool on_segment(vec2 a, vec2 b, vec2 point) {
+  return point.x >= min(a.x, b.x) && point.x <= max(a.x, b.x) &&
+         point.y >= min(a.y, b.y) && point.y <= max(a.y, b.y);
+}
+
+float segment_distance(vec2 a, vec2 b, vec2 c, vec2 d) {
+  bool first_degenerate = all(equal(a, b));
+  bool second_degenerate = all(equal(c, d));
+  float ab_c = orientation(a, b, c);
+  float ab_d = orientation(a, b, d);
+  float cd_a = orientation(c, d, a);
+  float cd_b = orientation(c, d, b);
+  bool proper_intersection =
+      ((ab_c < 0.0 && ab_d > 0.0) || (ab_c > 0.0 && ab_d < 0.0)) &&
+      ((cd_a < 0.0 && cd_b > 0.0) || (cd_a > 0.0 && cd_b < 0.0));
+  bool endpoint_intersection =
+      (ab_c == 0.0 && on_segment(a, b, c)) || (ab_d == 0.0 && on_segment(a, b, d)) ||
+      (cd_a == 0.0 && on_segment(c, d, a)) || (cd_b == 0.0 && on_segment(c, d, b));
+  if (!first_degenerate && !second_degenerate &&
+      (proper_intersection || endpoint_intersection)) return 0.0;
+  return min(min(point_segment_distance(a, c, d), point_segment_distance(b, c, d)),
+             min(point_segment_distance(c, a, b), point_segment_distance(d, a, b)));
+}
+
+int64_t orientation_i64(ivec2 a, ivec2 b, ivec2 c) {
+  return (int64_t(b.x) - int64_t(a.x)) * (int64_t(c.y) - int64_t(a.y)) -
+         (int64_t(b.y) - int64_t(a.y)) * (int64_t(c.x) - int64_t(a.x));
+}
+
+bool segment_crosses_i64(ivec2 a, ivec2 b, ivec2 c, ivec2 d) {
+  int64_t ab_c = orientation_i64(a, b, c), ab_d = orientation_i64(a, b, d);
+  int64_t cd_a = orientation_i64(c, d, a), cd_b = orientation_i64(c, d, b);
+  return ((ab_c <= int64_t(0) && ab_d >= int64_t(0)) ||
+          (ab_c >= int64_t(0) && ab_d <= int64_t(0))) &&
+         ((cd_a <= int64_t(0) && cd_b >= int64_t(0)) ||
+          (cd_a >= int64_t(0) && cd_b <= int64_t(0)));
+}
+
+vec2 spline_position(uint candidate, uint sample_index) {
+  uint control_base = candidate * push.count_b;
+  uint coefficient_base = (candidate * push.width + sample_index) * push.count_b;
+  vec2 position = vec2(0.0);
+  for (uint control = 0u; control < push.count_b; ++control) {
+    uint control_offset = (control_base + control) * 2u;
+    float coefficient = uintBitsToFloat(input_b[coefficient_base + control]);
+    position += coefficient * vec2(uintBitsToFloat(input_a[control_offset]),
+                                   uintBitsToFloat(input_a[control_offset + 1u]));
+  }
+  return position;
+}
+
+void main() {
+  uint invocation = gl_GlobalInvocationID.x;
+  if (push.mode == 0u) {
+    if (invocation >= push.count_a) return;
+    uint q = invocation * 5u;
+    vec2 point = vec2(int(input_a[q]), int(input_a[q + 1u]));
+    float radius = float(input_a[q + 2u]);
+    uint layer = input_a[q + 3u];
+    uint owner = input_a[q + 4u];
+    float best = 3.402823466e+38;
+    uint selected = 0xffffffffu;
+    uint checks = 0u;
+    for (uint index = 0u; index < push.count_b; ++index) {
+      uint s = index * 7u;
+      if (input_b[s + 5u] != layer || (owner != 0xffffffffu && input_b[s + 6u] == owner)) continue;
+      ++checks;
+      float distance = point_segment_distance(
+          point, vec2(int(input_b[s]), int(input_b[s + 1u])),
+          vec2(int(input_b[s + 2u]), int(input_b[s + 3u]))) - radius -
+          float(input_b[s + 4u]) - float(push.guard_nm);
+      if (distance < best) { best = distance; selected = index; }
+    }
+    uint out_index = invocation * 4u;
+    output_data[out_index] = floatBitsToUint(best);
+    output_data[out_index + 1u] = selected;
+    output_data[out_index + 2u] = best < 0.0 ? 1u : 0u;
+    output_data[out_index + 3u] = checks;
+    return;
+  }
+  if (push.mode == 1u) {
+    if (invocation >= push.count_a) return;
+    uint first_index = input_a[invocation * 2u];
+    uint second_index = input_a[invocation * 2u + 1u];
+    if (first_index >= push.count_b || second_index >= push.count_b) {
+      output_data[invocation] = 1u; return;
+    }
+    uint first = first_index * 7u;
+    uint second = second_index * 7u;
+    if (input_b[first + 5u] != input_b[second + 5u] ||
+        input_b[first + 6u] == input_b[second + 6u]) {
+      output_data[invocation] = 0u; return;
+    }
+    float distance = segment_distance(
+        vec2(int(input_b[first]), int(input_b[first + 1u])),
+        vec2(int(input_b[first + 2u]), int(input_b[first + 3u])),
+        vec2(int(input_b[second]), int(input_b[second + 1u])),
+        vec2(int(input_b[second + 2u]), int(input_b[second + 3u])));
+    float required = float(input_b[first + 4u] + input_b[second + 4u] + push.guard_nm);
+    output_data[invocation] = distance < required ? 1u : 0u;
+    return;
+  }
+  if (push.mode == 2u) {
+    if (invocation >= push.count_a) return;
+    uint score = 0u;
+    for (uint term = 0u; term < 8u; ++term) {
+      uint high = 0u;
+      uint low = 0u;
+      umulExtended(input_a[invocation * 8u + term], push.weights[term], high, low);
+      score = high != 0u || low > 0xffffffffu - score ? 0xffffffffu : score + low;
+    }
+    output_data[invocation * 2u] = score;
+    output_data[invocation * 2u + 1u] = 0u;
+    return;
+  }
+  if (push.mode == 3u) {
+    uint count = push.width * push.height;
+    if (invocation >= count) return;
+    uint value = push.read_state != 0u ? state[invocation] : output_data[invocation];
+    if (input_a[invocation] != 0u && value != 0u) {
+      int x = int(invocation % push.width);
+      int y = int(invocation / push.width);
+      const int dx[4] = int[4](1, -1, 0, 0);
+      const int dy[4] = int[4](0, 0, 1, -1);
+      for (uint direction = 0u; direction < 4u; ++direction) {
+        int nx = x + dx[direction]; int ny = y + dy[direction];
+        if (nx < 0 || ny < 0 || nx >= int(push.width) || ny >= int(push.height)) continue;
+        uint neighbour = uint(ny) * push.width + uint(nx);
+        if (input_a[neighbour] == 0u) continue;
+        uint prior = push.read_state != 0u ? state[neighbour] : output_data[neighbour];
+        if (prior != 0xffffffffu && prior < 0xfffffffeu) value = min(value, prior + 1u);
+      }
+    }
+    if (push.read_state != 0u) output_data[invocation] = value;
+    else state[invocation] = value;
+    return;
+  }
+  if (push.mode == 4u) {
+    if (invocation >= push.count_a) return;
+    uint candidate = push.width > 0u ? invocation / push.width : 0u;
+    uint control_base = candidate * push.count_b;
+    vec2 position = vec2(0.0);
+    for (uint control = 0u; control < push.count_b; ++control) {
+      uint control_offset = (control_base + control) * 2u;
+      float coefficient = uintBitsToFloat(input_b[invocation * push.count_b + control]);
+      position += coefficient *
+                  vec2(uintBitsToFloat(input_a[control_offset]),
+                       uintBitsToFloat(input_a[control_offset + 1u]));
+    }
+    output_data[invocation * 2u] = floatBitsToUint(position.x);
+    output_data[invocation * 2u + 1u] = floatBitsToUint(position.y);
+    return;
+  }
+  if (push.mode == 6u) {
+    if (invocation >= push.count_a) return;
+    uint chord = invocation * 7u;
+    vec2 first = vec2(int(input_a[chord]), int(input_a[chord + 1u]));
+    vec2 second = vec2(int(input_a[chord + 2u]), int(input_a[chord + 3u]));
+    float best = 3.402823466e+38;
+    uint closest = 0xffffffffu;
+    bool intersects = false;
+    for (uint index = 0u; index < push.count_b; ++index) {
+      uint boundary = index * 7u;
+      float distance = segment_distance(
+          first, second, vec2(int(input_b[boundary]), int(input_b[boundary + 1u])),
+          vec2(int(input_b[boundary + 2u]), int(input_b[boundary + 3u])));
+      if (distance <= 0.0) intersects = true;
+      if (distance < best) { best = distance; closest = index; }
+    }
+    uint out_index = invocation * 3u;
+    output_data[out_index] = floatBitsToUint(best);
+    output_data[out_index + 1u] = closest;
+    output_data[out_index + 2u] = intersects ? 1u : 0u;
+    return;
+  }
+  if (push.mode == 7u) {
+    if (invocation >= push.count_a) return;
+    uint grid_width = state[0], grid_height = state[1];
+    float pitch = uintBitsToFloat(state[2]);
+    vec2 field_origin = vec2(uintBitsToFloat(state[3]), uintBitsToFloat(state[4]));
+    float minimum_clearance = uintBitsToFloat(state[5]);
+    float minimum_bend_radius = uintBitsToFloat(state[6]);
+    float clearance_influence = uintBitsToFloat(state[7]);
+    uint grid_count = grid_width * grid_height;
+    uint clearance_base = 8u, corridor_base = clearance_base + grid_count;
+    float length_weight = uintBitsToFloat(push.weights[0]);
+    float curvature_weight = uintBitsToFloat(push.weights[1]);
+    float curvature_change_weight = uintBitsToFloat(push.weights[2]);
+    float bend_weight = uintBitsToFloat(push.weights[3]);
+    float clearance_weight = uintBitsToFloat(push.weights[4]);
+    float objective = 0.0;
+    float prior_turn = 0.0;
+    uint violations = 0u;
+    uint self_intersections = 0u;
+    for (uint sample_index = 0u; sample_index < push.width; ++sample_index) {
+      vec2 position = spline_position(invocation, sample_index);
+      ivec2 coordinate = ivec2(floor((position - field_origin) / pitch));
+      bool in_field = coordinate.x >= 0 && coordinate.y >= 0 &&
+                      coordinate.x < int(grid_width) && coordinate.y < int(grid_height);
+      float clearance = -3.402823466e+38;
+      bool in_corridor = false;
+      if (in_field) {
+        uint cell = uint(coordinate.y) * grid_width + uint(coordinate.x);
+        clearance = uintBitsToFloat(state[clearance_base + cell]);
+        in_corridor = state[corridor_base + cell] != 0u;
+      }
+      if (!in_corridor || clearance < minimum_clearance) ++violations;
+      if (in_field && clearance_influence > 0.0 && clearance < clearance_influence) {
+        float deficit = (clearance_influence - clearance) / clearance_influence;
+        objective += clearance_weight * deficit * deficit;
+      }
+      if (sample_index > 0u) {
+        vec2 prior = spline_position(invocation, sample_index - 1u);
+        objective += length_weight * length(position - prior) / 1000000.0;
+      }
+      if (sample_index > 0u && sample_index + 1u < push.width) {
+        vec2 prior = spline_position(invocation, sample_index - 1u);
+        vec2 after = spline_position(invocation, sample_index + 1u);
+        vec2 first = position - prior, second = after - position;
+        float first_length = length(first), second_length = length(second);
+        if (first_length > 0.0 && second_length > 0.0) {
+          float turn = atan(first.x * second.y - first.y * second.x, dot(first, second));
+          float radius = min(first_length, second_length) /
+                         max(1.0e-6, 2.0 * sin(abs(turn) * 0.5));
+          objective += curvature_weight * turn * turn;
+          float change = turn - prior_turn;
+          objective += curvature_change_weight * change * change;
+          if (minimum_bend_radius > 0.0 && radius < minimum_bend_radius) {
+            ++violations;
+            float deficit = (minimum_bend_radius - radius) / 1000000.0;
+            objective += bend_weight * deficit * deficit;
+          }
+          prior_turn = turn;
+        }
+      }
+    }
+    // Sparse non-adjacent chord probes catch gross loops without turning this approximate ranker
+    // into an O(samples^2 * controls) exact geometry pass.
+    for (uint first = 1u; first < push.width; first += 8u) {
+      vec2 a = spline_position(invocation, first - 1u);
+      vec2 b = spline_position(invocation, first);
+      for (uint second = first + 9u; second < push.width; second += 8u) {
+        if (first == 1u && second + 1u == push.width) continue;
+        vec2 c = spline_position(invocation, second - 1u);
+        vec2 d = spline_position(invocation, second);
+        if (segment_distance(a, b, c, d) <= 1.0) ++self_intersections;
+      }
+    }
+    uint output_index = invocation * 4u;
+    output_data[output_index] = violations + self_intersections;
+    output_data[output_index + 1u] = floatBitsToUint(objective);
+    output_data[output_index + 2u] = self_intersections;
+    output_data[output_index + 3u] = 0u;
+    return;
+  }
+  if (push.mode == 8u) {
+    uint primitive_count = push.count_a;
+    if (primitive_count == 0u || invocation >= primitive_count * primitive_count) return;
+    uint first_index = invocation / primitive_count;
+    uint second_index = invocation % primitive_count;
+    if (second_index <= first_index) return;
+    uint first = first_index * 6u, second = second_index * 6u;
+    if (input_a[first + 4u] != input_a[second + 4u] ||
+        input_a[first + 5u] == input_a[second + 5u]) return;
+    ivec4 a = ivec4(int(input_a[first]), int(input_a[first + 1u]),
+                    int(input_a[first + 2u]), int(input_a[first + 3u]));
+    ivec4 b = ivec4(int(input_a[second]), int(input_a[second + 1u]),
+                    int(input_a[second + 2u]), int(input_a[second + 3u]));
+    if (a.z < b.x || b.z < a.x || a.w < b.y || b.w < a.y) return;
+    uint slot = atomicAdd(output_data[0], 1u);
+    if (slot < push.count_b) {
+      output_data[1u + slot * 2u] = first_index;
+      output_data[2u + slot * 2u] = second_index;
+    }
+    return;
+  }
+  if (push.mode == 9u) {
+    if (invocation >= push.count_a) return;
+    const uint candidate_words = 15u;
+    uint c = invocation * candidate_words;
+    vec2 site = vec2(int(input_a[c]), int(input_a[c + 1u]));
+    float via_radius = float(input_a[c + 2u]);
+    uint owner = input_a[c + 3u];
+    uvec2 layer_mask = uvec2(input_a[c + 4u], input_a[c + 5u]);
+    float runup_radius = float(input_a[c + 6u]);
+    uint runup_count = input_a[c + 7u];
+    uint corridor_pressure = input_a[c + 8u];
+    uint rejection = (all(equal(layer_mask, uvec2(0u))) || runup_count > 2u) ? 1u : 0u;
+    uint conflicts = 0u;
+    float best_margin = 3.402823466e+38;
+    float runup_length = 0.0;
+    for (uint runup = 0u; runup < min(runup_count, 2u); ++runup) {
+      uint r = c + 9u + runup * 3u;
+      runup_length += length(site - vec2(int(input_a[r]), int(input_a[r + 1u])));
+    }
+    for (uint index = 0u; index < push.count_b; ++index) {
+      uint s = index * 7u;
+      uint layer = input_b[s + 5u];
+      bool spans_layer = layer < 32u ? (layer_mask.x & (1u << layer)) != 0u
+                                    : layer < 64u && (layer_mask.y & (1u << (layer - 32u))) != 0u;
+      if (!spans_layer || (owner != 0xffffffffu && input_b[s + 6u] == owner)) continue;
+      vec2 first = vec2(int(input_b[s]), int(input_b[s + 1u]));
+      vec2 second = vec2(int(input_b[s + 2u]), int(input_b[s + 3u]));
+      float obstacle_radius = float(input_b[s + 4u]);
+      float site_margin = point_segment_distance(site, first, second) - via_radius -
+                          obstacle_radius - float(push.guard_nm);
+      best_margin = min(best_margin, site_margin);
+      if (site_margin < 0.0) { rejection |= 2u; ++conflicts; }
+      for (uint runup = 0u; runup < min(runup_count, 2u); ++runup) {
+        uint r = c + 9u + runup * 3u;
+        if (input_a[r + 2u] != layer) continue;
+        float runup_margin = segment_distance(
+            vec2(int(input_a[r]), int(input_a[r + 1u])), site, first, second) -
+            runup_radius - obstacle_radius - float(push.guard_nm);
+        best_margin = min(best_margin, runup_margin);
+        if (runup_margin < 0.0) { rejection |= 4u; ++conflicts; }
+      }
+    }
+    float deficit = max(0.0, -best_margin);
+    float score = float(conflicts) * 1.0e12 + deficit * 1.0e3 +
+                  float(corridor_pressure) * 1.0e6 + runup_length;
+    uint out_index = invocation * 6u;
+    output_data[out_index] = rejection;
+    output_data[out_index + 1u] = conflicts;
+    output_data[out_index + 2u] = floatBitsToUint(best_margin);
+    output_data[out_index + 3u] = floatBitsToUint(runup_length);
+    output_data[out_index + 4u] = corridor_pressure;
+    output_data[out_index + 5u] = floatBitsToUint(score);
+    return;
+  }
+  if (push.mode == 10u) {
+    if (invocation >= push.count_a) return;
+    float quantum = max(1.0, float(push.weights[0]));
+    uint point_base = invocation * push.width;
+    uint violations = 0u, crossings = 0u;
+    float deficit_sum = 0.0, route_length = 0.0;
+    for (uint route = 0u; route < push.count_b; ++route) {
+      uint r = route * 5u;
+      for (uint point = 1u; point < input_b[r + 1u]; ++point) {
+        uint ia = (point_base + input_b[r] + point - 1u) * 2u, ib = ia + 2u;
+        vec2 a = round(vec2(uintBitsToFloat(input_a[ia]), uintBitsToFloat(input_a[ia + 1u])) /
+                       quantum) * quantum;
+        vec2 b = round(vec2(uintBitsToFloat(input_a[ib]), uintBitsToFloat(input_a[ib + 1u])) /
+                       quantum) * quantum;
+        route_length += length(b - a);
+      }
+    }
+    for (uint first_route = 0u; first_route < push.count_b; ++first_route) {
+      uint ar = first_route * 5u;
+      for (uint second_route = first_route + 1u; second_route < push.count_b; ++second_route) {
+        uint br = second_route * 5u;
+        if (input_b[ar + 2u] != input_b[br + 2u] ||
+            input_b[ar + 3u] == input_b[br + 3u]) continue;
+        float required = float(input_b[ar + 4u] + input_b[br + 4u] + push.guard_nm);
+        for (uint ai = 1u; ai < input_b[ar + 1u]; ++ai) {
+          uint a0 = (point_base + input_b[ar] + ai - 1u) * 2u, a1 = a0 + 2u;
+          vec2 af = round(vec2(uintBitsToFloat(input_a[a0]), uintBitsToFloat(input_a[a0 + 1u])) /
+                          quantum) * quantum;
+          vec2 at = round(vec2(uintBitsToFloat(input_a[a1]), uintBitsToFloat(input_a[a1 + 1u])) /
+                          quantum) * quantum;
+          for (uint bi = 1u; bi < input_b[br + 1u]; ++bi) {
+            uint b0 = (point_base + input_b[br] + bi - 1u) * 2u, b1 = b0 + 2u;
+            vec2 bf = round(vec2(uintBitsToFloat(input_a[b0]), uintBitsToFloat(input_a[b0 + 1u])) /
+                            quantum) * quantum;
+            vec2 bt = round(vec2(uintBitsToFloat(input_a[b1]), uintBitsToFloat(input_a[b1 + 1u])) /
+                            quantum) * quantum;
+            bool crosses = segment_crosses_i64(ivec2(af), ivec2(at), ivec2(bf), ivec2(bt));
+            float distance = crosses ? 0.0 : segment_distance(af, at, bf, bt);
+            if (distance < required) {
+              ++violations;
+              if (crosses) ++crossings;
+              deficit_sum += required - distance;
+            }
+          }
+        }
+      }
+    }
+    uint out_index = invocation * 6u;
+    output_data[out_index] = violations;
+    output_data[out_index + 1u] = crossings;
+    output_data[out_index + 2u] = uint(min(deficit_sum, 4294967295.0));
+    output_data[out_index + 3u] = 0u;
+    output_data[out_index + 4u] = uint(min(route_length, 4294967295.0));
+    output_data[out_index + 5u] = 0u;
+    return;
+  }
+  if (push.mode == 11u) {
+    uint n = push.count_a, state_count = 1u << n;
+    if (invocation >= state_count * n) return;
+    uint mask = invocation / n, last = invocation % n;
+    uint source_width = push.read_state != 0u ? state[invocation * 2u]
+                                              : output_data[invocation * 2u];
+    uint source_inv = push.read_state != 0u ? state[invocation * 2u + 1u]
+                                            : output_data[invocation * 2u + 1u];
+    uint width = 0xffffffffu, inversions = 0xffffffffu;
+    if (bitCount(mask) == push.pass + 1u && (mask & (1u << last)) != 0u) {
+      uint rank = input_a[last * 4u + 3u], prior_mask = mask & ~(1u << last);
+      uint coupled_before = 0u;
+      for (uint bit = 0u; bit < n; ++bit)
+        if ((prior_mask & (1u << bit)) != 0u && input_a[bit * 4u + 3u] != 0xffffffffu)
+          ++coupled_before;
+      bool coupled_ok = rank == 0xffffffffu || rank == coupled_before;
+      if (coupled_ok && prior_mask == 0u) {
+        width = input_a[last * 4u] + input_a[last * 4u + 1u]; inversions = 0u;
+      } else if (coupled_ok) {
+        for (uint prior = 0u; prior < n; ++prior) {
+          if ((prior_mask & (1u << prior)) == 0u) continue;
+          uint prior_slot = (prior_mask * n + prior) * 2u;
+          uint prior_width = push.read_state != 0u ? state[prior_slot] : output_data[prior_slot];
+          uint prior_inv = push.read_state != 0u ? state[prior_slot + 1u]
+                                                 : output_data[prior_slot + 1u];
+          if (prior_width == 0xffffffffu) continue;
+          uint candidate_width = prior_width +
+              max(input_a[prior * 4u + 1u], input_a[last * 4u + 1u]) + input_a[last * 4u];
+          uint added = 0u;
+          for (uint placed = 0u; placed < n; ++placed)
+            if ((prior_mask & (1u << placed)) != 0u &&
+                input_a[placed * 4u + 2u] > input_a[last * 4u + 2u]) ++added;
+          uint candidate_inv = prior_inv + added;
+          if (candidate_width < width ||
+              (candidate_width == width && candidate_inv < inversions)) {
+            width = candidate_width; inversions = candidate_inv;
+          }
+        }
+      }
+    } else { width = source_width; inversions = source_inv; }
+    if (push.read_state != 0u) {
+      output_data[invocation * 2u] = width; output_data[invocation * 2u + 1u] = inversions;
+    } else {
+      state[invocation * 2u] = width; state[invocation * 2u + 1u] = inversions;
+    }
+    return;
+  }
+  if (push.mode == 12u) {
+    if (invocation >= push.count_a) return;
+    uint variables = push.width, code = invocation, score = 0u;
+    bool legal = true;
+    for (uint variable = 0u; variable < variables && legal; ++variable) {
+      uint begin = input_a[variable], end = input_a[variable + 1u], size = end - begin;
+      if (size == 0u) { legal = false; break; }
+      uint option = input_a[variables + 1u + begin + (code % size)];
+      code /= size;
+      if (option < push.height) score += input_b[push.count_b * 2u + option];
+      uint prior_code = invocation;
+      for (uint prior_variable = 0u; prior_variable < variable && legal; ++prior_variable) {
+        uint pbegin = input_a[prior_variable], pend = input_a[prior_variable + 1u];
+        uint prior_option = input_a[variables + 1u + pbegin +
+                                    (prior_code % (pend - pbegin))];
+        prior_code /= pend - pbegin;
+        for (uint pair = 0u; pair < push.count_b; ++pair) {
+          uint first = input_b[pair * 2u], second = input_b[pair * 2u + 1u];
+          if ((option == first && prior_option == second) ||
+              (option == second && prior_option == first)) { legal = false; break; }
+        }
+      }
+    }
+    output_data[invocation * 2u] = legal ? 1u : 0u;
+    output_data[invocation * 2u + 1u] = score;
+    return;
+  }
+  if (push.mode == 13u) {
+    if (invocation >= push.count_a) return;
+    bool legal = true;
+    for (uint clause = 0u; clause < push.count_b; ++clause)
+      if ((invocation & input_a[clause * 2u]) == input_a[clause * 2u + 1u]) {
+        legal = false; break;
+      }
+    uint score = 0u;
+    for (uint bit = 0u; bit < push.width; ++bit)
+      if ((invocation & (1u << bit)) != 0u && bit < push.height) score += input_b[bit];
+    output_data[invocation * 2u] = legal ? 1u : 0u;
+    output_data[invocation * 2u + 1u] = score;
+    return;
+  }
+  if (push.mode == 14u) {
+    uint node_count = push.count_a;
+    if (invocation >= node_count * push.width) return;
+    uint node = invocation % node_count;
+    uint value = push.read_state != 0u ? state[invocation] : output_data[invocation];
+    uint edge_base = node_count + 1u;
+    for (uint edge = input_a[node]; edge < input_a[node + 1u]; ++edge) {
+      uint neighbour = input_a[edge_base + edge * 2u];
+      uint cost = input_a[edge_base + edge * 2u + 1u];
+      uint other = (invocation / node_count) * node_count + neighbour;
+      uint prior = push.read_state != 0u ? state[other] : output_data[other];
+      if (prior != 0xffffffffu && prior <= 0xfffffffeu - cost) value = min(value, prior + cost);
+    }
+    if (push.read_state != 0u) output_data[invocation] = value;
+    else state[invocation] = value;
+    return;
+  }
+  if (push.mode == 15u) {
+    if (invocation >= push.count_a) return;
+    uint first_index = input_a[invocation * 2u], second_index = input_a[invocation * 2u + 1u];
+    if (first_index >= push.count_b || second_index >= push.count_b) return;
+    uint a = first_index * 8u, b = second_index * 8u;
+    uint out_index = invocation * 4u;
+    if (input_b[a + 6u] != input_b[b + 6u] || input_b[a + 7u] == input_b[b + 7u]) {
+      output_data[out_index] = 0u; return;
+    }
+    ivec2 af_i = ivec2(int(input_b[a + 1u]), int(input_b[a + 2u]));
+    ivec2 at_i = ivec2(int(input_b[a + 3u]), int(input_b[a + 4u]));
+    ivec2 bf_i = ivec2(int(input_b[b + 1u]), int(input_b[b + 2u]));
+    ivec2 bt_i = ivec2(int(input_b[b + 3u]), int(input_b[b + 4u]));
+    vec2 af = vec2(af_i), at = vec2(at_i), bf = vec2(bf_i), bt = vec2(bt_i);
+    uint kind_a = input_b[a], kind_b = input_b[b];
+    float distance = kind_a == 1u && kind_b == 1u ? length(af - bf) :
+                     kind_a == 1u ? point_segment_distance(af, bf, bt) :
+                     kind_b == 1u ? point_segment_distance(bf, af, at) :
+                     segment_crosses_i64(af_i, at_i, bf_i, bt_i) ? 0.0 :
+                     segment_distance(af, at, bf, bt);
+    float deficit = float(input_b[a + 5u] + input_b[b + 5u] + push.guard_nm) - distance;
+    vec2 delta = af - bf;
+    vec2 normal = length(delta) > 0.0 ? normalize(delta) : vec2(0.0);
+    output_data[out_index] = deficit > 0.0 ? 1u : 0u;
+    output_data[out_index + 1u] = floatBitsToUint(max(0.0, deficit));
+    output_data[out_index + 2u] = floatBitsToUint(normal.x);
+    output_data[out_index + 3u] = floatBitsToUint(normal.y);
+    return;
+  }
+  if (push.mode == 16u) {
+    if (invocation >= push.count_a) return;
+    uint c = invocation * 14u;
+    vec2 previous = vec2(int(input_a[c]), int(input_a[c + 1u]));
+    vec2 start = vec2(int(input_a[c + 2u]), int(input_a[c + 3u]));
+    vec2 middle = vec2(int(input_a[c + 4u]), int(input_a[c + 5u]));
+    vec2 end = vec2(int(input_a[c + 6u]), int(input_a[c + 7u]));
+    vec2 next = vec2(int(input_a[c + 8u]), int(input_a[c + 9u]));
+    float copper_radius = float(input_a[c + 11u]);
+    uint layer = input_a[c + 12u], owner = input_a[c + 13u];
+    vec2 a = start - previous, b = middle - start, d = end - middle, e = next - end;
+    float tangent_error = abs(atan(a.x * b.y - a.y * b.x, dot(a, b))) +
+                          abs(atan(d.x * e.y - d.y * e.x, dot(d, e)));
+    uint conflicts = 0u;
+    for (uint obstacle = 0u; obstacle < push.count_b; ++obstacle) {
+      uint s = obstacle * 7u;
+      if (input_b[s + 5u] != layer || input_b[s + 6u] == owner) continue;
+      vec2 first = vec2(int(input_b[s]), int(input_b[s + 1u]));
+      vec2 second = vec2(int(input_b[s + 2u]), int(input_b[s + 3u]));
+      float required = copper_radius + float(input_b[s + 4u]) + float(push.guard_nm);
+      if (segment_distance(start, middle, first, second) < required ||
+          segment_distance(middle, end, first, second) < required) ++conflicts;
+    }
+    uint out_index = invocation * 4u;
+    output_data[out_index] = conflicts;
+    output_data[out_index + 1u] = floatBitsToUint(tangent_error);
+    output_data[out_index + 2u] = uint(min(length(middle - start) + length(end - middle),
+                                          4294967295.0));
+    output_data[out_index + 3u] = 0u;
+    return;
+  }
+  if (push.mode == 17u) {
+    if (invocation >= push.count_a) return;
+    uint base = invocation * 4u;
+    uint demand = input_a[base], capacity = input_a[base + 1u];
+    uint overflow = demand > capacity ? demand - capacity : 0u;
+    uint high = 0u, increment = 0u;
+    umulExtended(overflow, input_a[base + 3u], high, increment);
+    uint history = input_a[base + 2u];
+    uint updated = high != 0u || increment > 0xffffffffu - history
+                       ? 0xffffffffu : history + increment;
+    output_data[base] = overflow;
+    output_data[base + 1u] = updated;
+    output_data[base + 2u] = overflow;
+    output_data[base + 3u] = 0u;
+    return;
+  }
+  if (push.mode == 5u) {
+    if (invocation >= push.count_a) return;
+    uint value = push.read_state != 0u ? state[invocation] : output_data[invocation];
+    uint edge_base = push.count_a + 1u;
+    for (uint edge = input_a[invocation]; edge < input_a[invocation + 1u]; ++edge) {
+      uint neighbour = input_a[edge_base + edge * 2u];
+      uint cost = input_a[edge_base + edge * 2u + 1u];
+      uint prior = push.read_state != 0u ? state[neighbour] : output_data[neighbour];
+      if (prior != 0xffffffffu && prior <= 0xfffffffeu - cost)
+        value = min(value, prior + cost);
+    }
+    if (push.read_state != 0u) output_data[invocation] = value;
+    else state[invocation] = value;
+  }
+}

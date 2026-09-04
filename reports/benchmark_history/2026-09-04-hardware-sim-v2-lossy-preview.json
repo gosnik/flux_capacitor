@@ -1,0 +1,66 @@
+{
+  "date": "2026-09-04T08:10:00+08:00",
+  "git_revision": "a17fe406f392ac0c7e174f9bcfc559e1b46a2bbb",
+  "working_tree_dirty": true,
+  "scope": "external diagnostic lossy copper-preview attempt",
+  "source": {
+    "board": "/home/adam/blueocean/HardwareSimBoardV2/Hardware Simulation Board.kicad_pcb",
+    "project": "/home/adam/blueocean/HardwareSimBoardV2/Hardware Simulation Board.kicad_pro",
+    "provenance_note": "user identified the board as an Altium-to-KiCad conversion",
+    "board_sha256": "da789261c247fe16e38bc73ac62f2980f81887f59d01f2fed1abefb89ac97b1c",
+    "project_sha256": "7d8754e4068de5894715a8ad836aa2359ae6d1ff6b8fc973d0a3967d5d097d95"
+  },
+  "mode": {
+    "command": "detail-kicad",
+    "diagnostic_lossy_preview": true,
+    "drc_is_export_gate": false,
+    "qualification_possible_from_preview": false,
+    "source_mutated": false
+  },
+  "direct_medial_attempt": {
+    "exit_status": 5,
+    "elapsed_seconds": 64.50,
+    "peak_rss_kb": 339480,
+    "global_stop_reason": "invalid_input",
+    "global_diagnostic": "shared Voronoi allocation cannot represent every physical obstacle",
+    "detailed_stop_reason": "structural_violations",
+    "validation_errors": 175,
+    "open_connections": 423,
+    "added_tracks": 0,
+    "added_track_arcs": 0,
+    "added_vias": 0,
+    "artifact_written": true,
+    "artifact_preview_only": true,
+    "artifact_sha256": "27efa3964aea794973b1779ab2f31b6cf62fc016daed8b185dc98038b2763d91",
+    "export_issue_codes": [
+      "lossy_diagnostic_preview",
+      "invalid_diagnostic_preview"
+    ]
+  },
+  "sampled_fallback_attempt": {
+    "exit_status": 130,
+    "termination": "stopped by user request with SIGINT",
+    "elapsed_seconds": 928.27,
+    "peak_rss_kb": 2855716,
+    "routing_tasks": 197,
+    "completed_iterations": 6,
+    "selected_epoch_1_checkpoint": {
+      "routed_nets": 120,
+      "unrouted_nets": 77,
+      "sampled_overflow": 976,
+      "corridor_overflow": 6,
+      "clearance_shadow_conflicts": 2686
+    },
+    "second_epoch_history_entries": 1174,
+    "artifact_written": false,
+    "artifact_absence_reason": "SIGINT exits before retained checkpoint materialization",
+    "telemetry_bytes": 119948293
+  },
+  "artifacts": {
+    "root": "build/hardware-sim-v2-lossy-preview-2h-20260904",
+    "direct_preview": "build/hardware-sim-v2-lossy-preview-2h-20260904/hardware-sim-v2-routed-preview.kicad_pcb",
+    "direct_result": "build/hardware-sim-v2-lossy-preview-2h-20260904/result.json",
+    "sampled_telemetry": "build/hardware-sim-v2-lossy-preview-2h-20260904/telemetry/hardware-sim-v2-sampled-detail.jsonl"
+  },
+  "qualification": false
+}

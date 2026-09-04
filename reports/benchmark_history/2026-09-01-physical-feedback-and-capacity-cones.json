@@ -1,0 +1,243 @@
+{
+  "date": "2026-09-01",
+  "board": "tests/fixtures/routing-corpus/bm_svf.kicad_pcb",
+  "command_profile": {
+    "max_router_iterations": 2,
+    "max_expansions": 50000,
+    "direct_medial": true,
+    "negotiate_lane_conflicts": true,
+    "atomic_net_trees": true,
+    "search_diversification": true
+  },
+  "initial_checkpoint": {
+    "paths": 78,
+    "unrouted_nets": 0,
+    "total_overflow": 146,
+    "clearance_shadow_conflicts": 120,
+    "regional_failed_spline_assignments": 14,
+    "regional_joint_spline_windows_recovered": 15
+  },
+  "selected_physical_checkpoint": {
+    "paths": 78,
+    "unrouted_nets": 0,
+    "total_overflow": 242,
+    "clearance_shadow_conflicts": 198,
+    "unaccepted_lane_transitions": 0,
+    "regional_windows": 93,
+    "regional_complete_bundle_assignments": 84,
+    "regional_failed_spline_assignments": 9,
+    "regional_joint_spline_windows_recovered": 27,
+    "complete": false
+  },
+  "feedback": {
+    "initial_affected_nets": 23,
+    "broad_cone_policy": "full_global_reallocation_when_less_than_25_percent_of_net_groups_would_be_preserved",
+    "broad_cone_fallbacks": 2,
+    "physical_overflow_history_unit": "configured clearance severity quantum",
+    "lane_bridge_diagnostic_contributes_to_generic_history": false
+  },
+  "measurement": {
+    "exit_code": 3,
+    "elapsed_seconds": 104.43,
+    "max_rss_kib": 117156,
+    "result": "incomplete_iteration_limit"
+  },
+  "independent_residual_cones": {
+    "regional_windows_before": 93,
+    "regional_windows_after": 91,
+    "failed_spline_assignments_before": 9,
+    "failed_spline_assignments_after": 6,
+    "cones_built": 3,
+    "source_windows_merged": 6,
+    "recomputed_assignments": 3,
+    "selected": true,
+    "elapsed_seconds": 105.99,
+    "max_rss_kib": 117804,
+    "result": "incomplete_iteration_limit"
+  },
+  "local_deformation_and_topology": {
+    "asymmetric_pns": {
+      "quantized_conflicts_before": 219,
+      "quantized_conflicts_after": 187,
+      "adaptive_windows_legalized": 1,
+      "failed_spline_assignments_after": 6,
+      "elapsed_seconds": 105.71,
+      "max_rss_kib": 118324
+    },
+    "joint_quantization": {
+      "feedback_attempts": 6,
+      "feedback_accepted": 0,
+      "failed_spline_assignments_after": 6,
+      "elapsed_seconds": 104.55,
+      "max_rss_kib": 118116
+    },
+    "topology_diagnostics": {
+      "directed_gate_failures": 2,
+      "cell_containment_only_explanation": false
+    }
+  },
+  "extended_regional_feedback": {
+    "configured_upstream_retries": 4,
+    "global_feedback_passes": 1,
+    "regional_feedback_passes": 3,
+    "retained_failed_spline_assignments": 6,
+    "retained_coarse_topology_complete": true,
+    "extra_passes_coarse_incomplete": [
+      {"pass": 3, "unaccepted_lane_transitions": 5},
+      {"pass": 4, "unaccepted_lane_transitions": 6}
+    ],
+    "elapsed_seconds": 180.07,
+    "max_rss_kib": 161880,
+    "result": "incomplete_iteration_limit"
+  },
+  "residual_cone_diagnostics": {
+    "board": "bm_svf",
+    "profile": "two iterations / 50000 expansions",
+    "cones_built": 3,
+    "selected_cones": 2,
+    "critical_cone": {
+      "source_windows": [0, 9],
+      "fragments": 7,
+      "nets": 4,
+      "topology_rejections": 0,
+      "minimum_mutual_clearance_rejections": 1,
+      "minimum_quantized_clearance_rejections": 2,
+      "four_candidate_legal_states": 0,
+      "eight_candidate_legal_states": 0
+    },
+    "rejected_experiments": {
+      "wider_residual_spline_shortlist": "no checkpoint change; removed",
+      "same_side_bundle_pns": "zero candidate moves; removed"
+    },
+    "retained_change": "bounded residual-cone and per-shortlist physical failure telemetry",
+    "result": "incomplete_iteration_limit"
+  },
+  "kicad_differential_suffix_and_early_regional_handoff": {
+    "source": "https://raw.githubusercontent.com/KiCad/kicad-source-mirror/master/pcbnew/board.cpp",
+    "import_correction": "stop differential-pair suffix matching at any non digit/underscore suffix character",
+    "false_pair_removed_from_bm_svf": true,
+    "global_checkpoint_after_import_correction": {
+      "paths": 78,
+      "unrouted_nets": 0,
+      "total_overflow": 131,
+      "clearance_shadow_conflicts": 113,
+      "unaccepted_lane_transitions": 2,
+      "elapsed_seconds": 130.53,
+      "max_rss_kib": 135436,
+      "result": "incomplete_iteration_limit"
+    },
+    "early_regional_handoff": {
+      "condition": "all coarse connections routed; unaccepted packed-medial transitions remain final gates",
+      "regional_windows": 67,
+      "eligible_windows": 67,
+      "complete_bundle_assignments": 63,
+      "failed_spline_bundle_assignments": 4,
+      "joint_spline_candidates_evaluated": 216,
+      "joint_spline_candidates_legal": 140,
+      "elapsed_seconds": 290.72,
+      "max_rss_kib": 143788,
+      "result": "incomplete_iteration_limit"
+    }
+  },
+  "gate_preserving_regional_spline_seeds": {
+    "profile": "bm_svf / two iterations / 50000 expansions",
+    "complete_bundle_assignments_before": 63,
+    "complete_bundle_assignments_after": 65,
+    "failed_spline_assignments_before": 4,
+    "failed_spline_assignments_after": 2,
+    "joint_spline_candidates_evaluated": 216,
+    "joint_spline_candidates_legal_before": 140,
+    "joint_spline_candidates_legal_after": 148,
+    "global_checkpoint_unchanged": true,
+    "result": "incomplete_iteration_limit"
+  },
+  "residual_endpoint_stub_and_run_merge": {
+    "profile": "bm_svf / two iterations / 50000 expansions",
+    "source_windows": [11, 34],
+    "fragments_before": 3,
+    "fragments_after": 6,
+    "stub_fragments": 3,
+    "mutual_clearance_rejections_before": 2,
+    "mutual_clearance_rejections_after": 1,
+    "quantized_clearance_rejections_after": 2,
+    "spline_candidate_states": 4,
+    "spline_merged_runs": 5,
+    "spline_merged_fragments": 15,
+    "remaining_continuous_failure": {
+      "net": "kicad-net-16",
+      "connection": 1,
+      "run": 1,
+      "fragment": 13,
+      "merged_fragments": 1
+    },
+    "opposing_quantized_failure": {
+      "net": "kicad-net-3",
+      "connection": 1,
+      "run": 0,
+      "fragment": 2,
+      "merged_fragments": 3
+    },
+    "legal_candidates": 0,
+    "selected": false,
+    "result": "incomplete_iteration_limit"
+  },
+  "tscircuit_mandatory_physical_demand": {
+    "source": "https://github.com/tscircuit/tscircuit-autorouter",
+    "transferred_principle": "forward-looking capacity allocation before high-density realization",
+    "retained_flux_representations": [
+      "NavMesh topology signatures",
+      "clearance-expanded polygonal corridors",
+      "dimensioned shared medial resources",
+      "attributed clearance shadows",
+      "exact transactional DRC"
+    ],
+    "experiment": [
+      "mandatory shared-resource intersection across complete static trees",
+      "minimum unavoidable width-plus-clearance demand in nanometres",
+      "pending-net residual physical-capacity penalty",
+      "CLI demand and selected-path penalty metrics"
+    ],
+    "measurement": {
+      "mandatory_nets": 23,
+      "mandatory_resources": 186,
+      "mandatory_demand_nm": 120900000,
+      "penalty_events": 6,
+      "penalty": 3600,
+      "total_overflow_before": 131,
+      "total_overflow_after": 142,
+      "clearance_shadows_before": 113,
+      "clearance_shadows_after": 120,
+      "failed_regional_splines_before": 2,
+      "failed_regional_splines_after": 8,
+      "elapsed_seconds": 383.32,
+      "max_rss_kib": 157020
+    },
+    "rejected": {
+      "duplicate_navmesh_portal_occupancy": "would double-charge the carried corridor/medial aperture",
+      "rectangular_capacity_quadtree": "weaker than Flux polygonal free-space and exact KiCad geometry",
+      "generic_future_terminal_proximity": "conflicts with last-viable-escape-only reservation policy"
+    },
+    "decision": "benchmark regression; active heuristic and derived state removed"
+  },
+  "tier0_requalification": {
+    "board": "pt2399_delay",
+    "elapsed_seconds": 115.82,
+    "max_rss_kib": 50752,
+    "validation_errors": 0,
+    "open_connections": 0,
+    "flux_copper_violations": 0,
+    "external_kicad_drc_violations": 0,
+    "external_kicad_unconnected_items": 0,
+    "accepted_track_arcs": 234,
+    "unrounded_non_junction_bends": 0
+  },
+  "tier0_kicad_suffix_requalification": {
+    "board": "pt2399_delay",
+    "elapsed_seconds": 154.02,
+    "max_rss_kib": 280460,
+    "paths": 50,
+    "flux_exact_copper": "accepted",
+    "external_kicad_drc": "clean",
+    "artifact_directory": "build/tier0-dp-suffix-requal/tier-0-pt2399_delay/copper"
+  }
+}

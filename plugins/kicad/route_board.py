@@ -165,7 +165,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--curved-traces",
         action="store_true",
         help=(
-            "enable crossing-safe two-diagonal discovery plus cubic B-spline fitting, collision "
+            "enable crossing-safe two-diagonal discovery plus quintic PH fitting, collision "
             "envelopes, bounded PNS, and native line/arc output; allocation remains polyline based"
         ),
     )

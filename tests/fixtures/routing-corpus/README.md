@@ -66,6 +66,28 @@ those exact gates and an error-level external KiCad DRC pass does the harness re
 directory. Incomplete previews are never labelled or rendered as final copper. CTest writes these review artifacts below
 `build/release/tests/routing-corpus-artifacts/`.
 
+Every tier run records diagnostic telemetry and writes bounded, non-authoritative analysis PNGs
+under `artifacts/tier-<level>-<board>/analysis`. The images are emitted for successful,
+incomplete, and timed-out routing attempts. `--failed-route-png-dir` remains available only to
+override that analysis root, for example:
+
+```sh
+python3 tests/python/verify_routing_corpus.py \
+  --flux-cli build/dev/flux-cli \
+  --corpus tests/fixtures/routing-corpus \
+  --board bm_svf \
+  --failed-route-png-dir build/failed-route-previews \
+  --failed-route-png-mode both \
+  --max-failed-route-png-results 8
+```
+
+The harness ranks completed regional candidates by topology
+and mutual-clearance failures, and writes layer copper, whole provisional-board, full-context
+quintic PH Bezier controls, and automatically cropped control close-ups. A JSON manifest records the candidate/window identity and explicitly marks
+the output as diagnostic rather than accepted copper. `copper` and `spline` modes may be selected
+individually. Rendering also runs after a board timeout, using every complete telemetry event that
+was flushed before cancellation.
+
 Useful KiCadRoutingTools ideas retained in Flux's harness are immutable pinned sources, paired
 human references, manifest provenance, bounded per-board execution, deterministic replay inputs,
 and progressive corpus qualification. Their large queue/agent orchestration is intentionally not

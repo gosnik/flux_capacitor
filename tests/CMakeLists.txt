@@ -6,7 +6,12 @@ target_compile_definitions(
 
 add_test(NAME flux_unit_tests COMMAND flux_unit_tests)
 
-add_executable(flux_telemetry_viewer_tests unit/telemetry_viewer_tests.cpp)
+add_executable(
+  flux_telemetry_viewer_tests
+  unit/telemetry_viewer_tests.cpp
+  ${PROJECT_SOURCE_DIR}/apps/flux-viewer/viewer_preferences.cpp)
+target_include_directories(
+  flux_telemetry_viewer_tests PRIVATE ${PROJECT_SOURCE_DIR}/apps/flux-viewer)
 target_link_libraries(flux_telemetry_viewer_tests PRIVATE flux::core flux::telemetry)
 target_compile_features(flux_telemetry_viewer_tests PRIVATE cxx_std_20)
 add_test(NAME flux_telemetry_viewer_tests COMMAND flux_telemetry_viewer_tests)

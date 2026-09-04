@@ -84,6 +84,48 @@ def render_copper_layers(
         )
 
 
+def render_failed_route_previews(
+    board: Path,
+    telemetry_record: Path,
+    output_dir: Path,
+    kicad_cli: Path,
+    inkscape: Path,
+    mode: str,
+    max_results: int,
+) -> None:
+    script = Path(__file__).with_name("export_failed_route_pngs.py")
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--board",
+            str(board),
+            "--telemetry-record",
+            str(telemetry_record),
+            "--output-dir",
+            str(output_dir),
+            "--kicad-cli",
+            str(kicad_cli),
+            "--inkscape",
+            str(inkscape),
+            "--mode",
+            mode,
+            "--max-results",
+            str(max_results),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"analysis render failed ({completed.returncode}) for {board}\n"
+            f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}",
+        )
+    print(f"ANALYSIS {board.stem}: {completed.stdout.strip()}")
+
+
 def require_kicad_drc(board: Path, report: Path, kicad_cli: Path) -> None:
     completed = subprocess.run(
         [
@@ -117,6 +159,11 @@ def verify_board(
     kicad_cli: Path,
     inkscape: Path,
     board: dict,
+    telemetry_level: str | None,
+    telemetry_record_dir: Path | None,
+    failed_route_png_dir: Path | None,
+    failed_route_png_mode: str,
+    max_failed_route_png_results: int,
 ) -> None:
     board_id = board["id"]
     source = corpus / f"{board_id}.kicad_pcb"
@@ -157,32 +204,88 @@ def verify_board(
             isinstance(router_args, list) and all(isinstance(arg, str) for arg in router_args),
             f"{board_id}: router_args must be a list of strings",
         )
-        routed = run_json(
-            [
-                str(flux_cli),
-                "route-kicad",
-                str(source),
-                "--max-router-iterations",
-                str(board.get("probe_iterations", 1)),
-                "--max-expansions",
-                "50000",
-                "--max-static-seed-workers",
-                "2",
-                "--search-diversification",
-                *router_args,
-            ],
-            timeout=180,
-            # route-kicad uses 3 for a structured invalid-input result. An
-            # unlocked tier still has to report that result so its blocker is
-            # visible; a qualified tier remains strict about exit status.
-            allowed_returncodes=(0, 3) if board["status"] == "unlocked" else (0,),
+        probe_timeout = board.get("probe_timeout_seconds", 180)
+        require(isinstance(probe_timeout, int) and probe_timeout > 0,
+                f"{board_id}: probe_timeout_seconds must be a positive integer")
+        tier_dir = artifacts / f"tier-{board['level']}-{board_id}"
+        tier_dir.mkdir(parents=True, exist_ok=True)
+        analysis_dir = (
+            failed_route_png_dir / board_id
+            if failed_route_png_dir is not None
+            else tier_dir / "analysis"
         )
+        # Analysis images are part of the tier contract. Regional PH controls are emitted only at
+        # diagnostic level, so a caller may increase this to trace but may not reduce it to normal.
+        effective_telemetry_level = (
+            "trace" if telemetry_level == "trace" else "diagnostic"
+        )
+        effective_telemetry_record_dir = (
+            telemetry_record_dir if telemetry_record_dir is not None else tier_dir / "telemetry"
+        )
+        route_telemetry_args: list[str] = [
+            "--telemetry-level",
+            effective_telemetry_level,
+        ]
+        route_telemetry_record: Path | None = None
+        if effective_telemetry_record_dir is not None:
+            effective_telemetry_record_dir.mkdir(parents=True, exist_ok=True)
+            route_telemetry_record = effective_telemetry_record_dir / f"{board_id}-global.jsonl"
+            route_telemetry_args.extend(
+                ["--telemetry-record", str(route_telemetry_record)]
+            )
+        try:
+            routed = run_json(
+                [
+                    str(flux_cli),
+                    "route-kicad",
+                    str(source),
+                    "--max-router-iterations",
+                    str(board.get("probe_iterations", 1)),
+                    "--max-expansions",
+                    "50000",
+                    "--max-static-seed-workers",
+                    "2",
+                    "--search-diversification",
+                    *router_args,
+                    *route_telemetry_args,
+                ],
+                timeout=probe_timeout,
+                # route-kicad uses 3 for a structured invalid-input result. An
+                # unlocked tier still has to report that result so its blocker is
+                # visible; a qualified tier remains strict about exit status.
+                allowed_returncodes=(0, 3) if board["status"] == "unlocked" else (0,),
+            )
+        except subprocess.TimeoutExpired:
+            if (
+                route_telemetry_record is not None
+                and route_telemetry_record.is_file()
+            ):
+                render_failed_route_previews(
+                    source,
+                    route_telemetry_record,
+                    analysis_dir / "global",
+                    kicad_cli,
+                    inkscape,
+                    failed_route_png_mode,
+                    max_failed_route_png_results,
+                )
+            raise
         global_qualified = (
             routed.get("complete") is True
             and routed.get("unrouted_nets") == 0
             and routed.get("total_overflow") == 0
             and routed.get("static_seed_terminals_without_seed") == 0
         )
+        if route_telemetry_record is not None and route_telemetry_record.is_file():
+            render_failed_route_previews(
+                source,
+                route_telemetry_record,
+                analysis_dir / "global",
+                kicad_cli,
+                inkscape,
+                failed_route_png_mode,
+                max_failed_route_png_results,
+            )
         qualification = board.get("qualification")
         require(
             qualification in {"global_complete", "detailed_complete"},
@@ -208,34 +311,72 @@ def verify_board(
         # as a PNG. Failed/incomplete transactions never produce misleading "final" images.
         detailed_qualified = False
         if qualification == "detailed_complete" and planning_ready:
-            tier_dir = artifacts / f"tier-{board['level']}-{board_id}"
             final_board = tier_dir / f"{board_id}.kicad_pcb"
-            tier_dir.mkdir(parents=True, exist_ok=True)
             # Flux deliberately refuses to overwrite output boards. Route into a fresh temporary
             # path, validate that exact artifact, and publish it only after every acceptance gate
             # passes. This keeps repeated corpus runs deterministic without deleting prior output
             # before a replacement has been certified.
             with tempfile.TemporaryDirectory(prefix=".flux-candidate-", dir=tier_dir) as temporary:
                 candidate_board = Path(temporary) / f"{board_id}.kicad_pcb"
-                detailed = run_json(
-                    [
-                        str(flux_cli),
-                        "detail-kicad",
-                        str(source),
-                        "--max-router-iterations",
-                        str(board.get("detail_iterations", board.get("probe_iterations", 30))),
-                        "--max-expansions",
-                        "50000",
-                        "--max-static-seed-workers",
-                        "2",
-                        "--search-diversification",
-                        *router_args,
-                        "--arcs",
-                        str(candidate_board),
-                    ],
-                    timeout=2400,
-                    allowed_returncodes=(0, 3, 5) if board["status"] == "unlocked" else (0,),
-                )
+                detail_telemetry_args: list[str] = []
+                if effective_telemetry_level is not None:
+                    detail_telemetry_args.extend(
+                        ["--telemetry-level", effective_telemetry_level]
+                    )
+                detail_telemetry_record: Path | None = None
+                if effective_telemetry_record_dir is not None:
+                    effective_telemetry_record_dir.mkdir(parents=True, exist_ok=True)
+                    detail_telemetry_record = (
+                        effective_telemetry_record_dir / f"{board_id}-detail.jsonl"
+                    )
+                    detail_telemetry_args.extend(
+                        [
+                            "--telemetry-record",
+                            str(detail_telemetry_record),
+                        ]
+                    )
+                try:
+                    detailed = run_json(
+                        [
+                            str(flux_cli),
+                            "detail-kicad",
+                            str(source),
+                            "--max-router-iterations",
+                            str(
+                                board.get(
+                                    "detail_iterations", board.get("probe_iterations", 30)
+                                )
+                            ),
+                            "--max-expansions",
+                            "50000",
+                            "--max-static-seed-workers",
+                            "2",
+                            "--search-diversification",
+                            *router_args,
+                            *detail_telemetry_args,
+                            "--arcs",
+                            str(candidate_board),
+                        ],
+                        timeout=2400,
+                        allowed_returncodes=(0, 3, 5)
+                        if board["status"] == "unlocked"
+                        else (0,),
+                    )
+                except subprocess.TimeoutExpired:
+                    if (
+                        detail_telemetry_record is not None
+                        and detail_telemetry_record.is_file()
+                    ):
+                        render_failed_route_previews(
+                            source,
+                            detail_telemetry_record,
+                            analysis_dir / "detail",
+                            kicad_cli,
+                            inkscape,
+                            failed_route_png_mode,
+                            max_failed_route_png_results,
+                        )
+                    raise
                 detailed_qualified = (
                     detailed.get("complete") is True
                     and detailed.get("validation_errors") == 0
@@ -248,6 +389,16 @@ def verify_board(
                     and detailed.get("artifact_written") is True
                     and candidate_board.is_file()
                 )
+                if detail_telemetry_record is not None and detail_telemetry_record.is_file():
+                    render_failed_route_previews(
+                        source,
+                        detail_telemetry_record,
+                        analysis_dir / "detail",
+                        kicad_cli,
+                        inkscape,
+                        failed_route_png_mode,
+                        max_failed_route_png_results,
+                    )
                 if detailed_qualified:
                     require_kicad_drc(candidate_board, tier_dir / "kicad-drc.json", kicad_cli)
                     shutil.copy2(candidate_board, final_board)
@@ -294,16 +445,41 @@ def main() -> int:
     parser.add_argument("--artifacts", type=Path, default=Path("build/routing-corpus-artifacts"))
     parser.add_argument("--kicad-cli", type=Path)
     parser.add_argument("--inkscape", type=Path)
+    parser.add_argument(
+        "--telemetry-level", choices=("normal", "diagnostic", "trace")
+    )
+    parser.add_argument("--telemetry-record-dir", type=Path)
+    parser.add_argument(
+        "--failed-route-png-dir",
+        type=Path,
+        help=(
+            "override the default artifact root for mandatory non-authoritative analysis PNGs"
+        ),
+    )
+    parser.add_argument(
+        "--failed-route-png-mode", choices=("copper", "spline", "both"), default="both"
+    )
+    parser.add_argument("--max-failed-route-png-results", type=int, default=8)
     args = parser.parse_args()
 
     flux_cli = args.flux_cli.resolve()
     corpus = args.corpus.resolve()
     artifacts = args.artifacts.resolve()
+    telemetry_record_dir = (
+        args.telemetry_record_dir.resolve() if args.telemetry_record_dir is not None else None
+    )
+    failed_route_png_dir = (
+        args.failed_route_png_dir.resolve() if args.failed_route_png_dir is not None else None
+    )
     kicad_cli = args.kicad_cli or Path(shutil.which("kicad-cli") or "")
     inkscape = args.inkscape or Path(shutil.which("inkscape") or "")
     require(flux_cli.is_file(), f"missing flux-cli: {flux_cli}")
     require(kicad_cli.is_file(), f"missing kicad-cli: {kicad_cli}")
     require(inkscape.is_file(), f"missing Inkscape: {inkscape}")
+    require(
+        args.max_failed_route_png_results > 0,
+        "--max-failed-route-png-results must be positive",
+    )
     manifest_path = corpus / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     require(manifest.get("schema") == 1, "unsupported routing corpus manifest schema")
@@ -345,7 +521,19 @@ def main() -> int:
     require(selected, "no corpus boards selected")
 
     for board in selected:
-        verify_board(flux_cli, corpus, artifacts, kicad_cli, inkscape, board)
+        verify_board(
+            flux_cli,
+            corpus,
+            artifacts,
+            kicad_cli,
+            inkscape,
+            board,
+            args.telemetry_level,
+            telemetry_record_dir,
+            failed_route_png_dir,
+            args.failed_route_png_mode,
+            args.max_failed_route_png_results,
+        )
     print(f"{len(selected)}/{len(selected)} selected corpus boards passed")
     return 0
 

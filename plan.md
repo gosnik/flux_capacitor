@@ -1,1209 +1,653 @@
-# Flux Autorouter — Iterative Research, Integration, and Benchmark Improvement Instructions
-
-You are working on **Flux**, an experimental KiCad PCB autorouter.
-
-Your objective is not merely to improve routing quality incrementally. Your objective is to **systematically advance Flux through its complete routing benchmark suite until every test-board tier passes**, while preserving or improving performance on all previously passing tiers.
-
-Flux currently:
-
-* completes **Tier 0**
-* does **not complete Tier 1**
-* has additional increasingly difficult tiers after Tier 1
-* uses test boards drawn from KiCad routing/router projects and related routing benchmarks
-
-Flux already contains substantial routing machinery. Do not assume that replacing the architecture wholesale is appropriate.
-
-The current broad routing architecture includes:
-
-1. immutable canonical KiCad board representation
-2. clearance-expanded geometry
-3. obstacles, board edges, pads and keepouts
-4. spatial indices
-5. NavMesh / free-space representation
-6. terminal and via candidate generation
-7. global route allocation
-8. route portfolios
-9. PathFinder-style iterative congestion negotiation
-10. graph topology and layer assignment
-11. corridor/resource capacity and history
-12. clearance-shadow/resource conflicts
-13. via alternatives
-14. physical copper conflict extraction
-15. conflict graphs
-16. regional joint routing
-17. corridor alternatives
-18. funnel / continuous geometry
-19. continuous route geometry
-20. B-spline-based route representation
-21. final quantisation to legal KiCad copper
-22. KiCad DRC verification
-
-A recurring historical failure mode has been:
-
-> Flux can often find combinatorial paths for all nets, but cannot convert those paths into mutually legal physical copper.
-
-Therefore always distinguish between:
-
-* topological routability
-* resource/capacity feasibility
-* geometric feasibility
-* layer/via feasibility
-* detailed copper legality
-* final KiCad DRC correctness
-
-Do not consider a board routed merely because every net has a path.
-
----
-
-# Primary Goal
-
-Iteratively:
-
-**diagnose → research → hypothesise → implement → verify → benchmark → analyse → refine**
-
-until:
-
-* Tier 0 passes
-* Tier 1 passes
-* Tier 2 passes
-* …
-* every available tier passes
-
-A higher tier must never be considered solved by breaking lower tiers.
-
-The benchmark suite is the authority.
-
----
-
-# Core Working Principle
-
-Do not make speculative large rewrites.
-
-Use an **evidence-driven experimental loop**.
-
-At any point, you should be able to answer:
-
-1. What specifically prevents the current board from completing?
-2. What evidence demonstrates that?
-3. What algorithmic family might address that failure?
-4. Why should that family help this particular failure?
-5. What is the smallest useful experiment?
-6. What changed in the benchmark results?
-7. Did the change solve the intended mechanism, or merely move the failure elsewhere?
-
-Treat router development as applied algorithm research rather than ordinary feature development.
-
----
-
-# Autonomous Iteration Loop
-
-Repeat the following loop continuously.
-
-## Phase 1 — Establish the Current Baseline
-
-Run the complete benchmark suite that is currently practical.
-
-At minimum record for every board:
-
-* pass/fail
-* routed nets
-* unrouted nets
-* open connections
-* track count
-* via count
-* route length
-* runtime
-* memory consumption where available
-* global-routing overflows
-* resource congestion
-* corridor congestion
-* physical conflicts
-* conflict graph size
-* shorts
-* track crossings
-* clearance violations
-* hole-clearance violations
-* via-related violations
-* malformed geometry
-* KiCad DRC violation counts by category
-
-Store benchmark output in a structured format suitable for comparison between runs.
-
-Never rely on console impressions.
-
-Create or maintain a benchmark history.
-
----
-
-## Phase 2 — Select the Frontier Board
-
-Work primarily on the **first failing tier**.
-
-Within that tier, select the smallest or clearest representative failing board unless another board exposes the underlying issue substantially better.
-
-The normal progression should be:
-
-Tier 0 remains green
-↓
-solve Tier 1
-↓
-Tier 0 + Tier 1 remain green
-↓
-solve Tier 2
-↓
-etc.
-
-Do not prematurely optimise later tiers while an earlier tier still exposes fundamental failures.
-
----
-
-# Phase 3 — Reproduce and Characterise the Failure
-
-Before changing code, reproduce the failure.
-
-Instrument Flux where required.
-
-Determine which stage first becomes infeasible or loses useful information.
-
-Classify the failure into one or more categories such as:
-
-### Global topology failure
-
-Examples:
-
-* no path exists in the routing graph
-* poor terminal escape choices
-* poor via candidates
-* wrong layer topology
-* disconnected NavMesh
-* insufficient route alternatives
-
-### Allocation / congestion failure
-
-Examples:
-
-* PathFinder oscillation
-* persistent resource overflow
-* poor history-cost behaviour
-* bottlenecks assigned to too many nets
-* route ordering sensitivity
-* starvation of difficult nets
-* locally optimal but globally impossible allocations
-
-### Detailed geometry failure
-
-Examples:
-
-* centreline path exists but copper does not fit
-* clearance envelopes overlap
-* funnel paths collapse
-* spline smoothing creates illegal copper
-* neck-down opportunities are missed
-* corner geometry is unnecessarily expensive
-
-### Via/layer failure
-
-Examples:
-
-* legal path requires different via location
-* via clearance blocks neighbouring nets
-* layer assignment becomes trapped
-* excessive vias cause local congestion
-* stacked decisions made independently should be solved jointly
-
-### Local interaction failure
-
-Examples:
-
-* two or more nets require coordinated movement
-* sequential routing cannot solve a channel
-* push-and-shove cannot escape a local minimum
-* route repair repeatedly moves the same conflict elsewhere
-
-### Search failure
-
-Examples:
-
-* search horizon too local
-* alternative corridors pruned too early
-* insufficient route diversity
-* poor cost heuristic
-* high-quality solution exists but search never explores it
-
-### Physical legalisation failure
-
-Examples:
-
-* abstract allocation says capacity is available but true copper does not fit
-* resource capacity model does not accurately represent physical packing
-* path quantisation introduces crossings
-* smoothing/legalisation invalidates formerly valid topology
-
-### Rip-up/reroute failure
-
-Examples:
-
-* same nets repeatedly reclaim the same resources
-* congestion history is ineffective
-* victim selection is poor
-* routing order dominates the result
-* router lacks sufficient perturbation to escape a fixed point
-
-Do not treat DRC violations as a single undifferentiated metric.
-
-Identify their physical causes.
-
-A single collision may produce several KiCad DRC reports.
-
----
-
-# Phase 4 — Produce a Concrete Failure Report
-
-Before researching solutions, create a short machine-readable and human-readable diagnosis containing:
-
-* board
-* tier
-* failing stage
-* smallest set of implicated nets
-* implicated physical region
-* relevant layers
-* relevant corridors/resources
-* whether the failure is topological or geometric
-* whether an alternative route appears to exist
-* dominant DRC categories
-* suspected root mechanism
-* supporting metrics
-
-Where useful, produce temporary diagnostic geometry or logs.
-
-Prefer precise statements such as:
-
-> Nets A, B and C repeatedly share corridor R17. The global allocator reports zero NavMesh overflow, but clearance-expanded copper envelopes overlap by 0.31 mm after via insertion. All PathFinder iterations converge to the same three corridor choices.
-
-over statements such as:
-
-> Routing seems congested.
-
----
-
-# Phase 5 — Search the Internet for Relevant Techniques
-
-Once the failure mechanism is understood, research algorithms specifically relevant to it.
-
-Internet research is part of the development process.
-
-Search broadly across:
-
-* PCB autorouting literature
-* VLSI routing
-* FPGA routing
-* IC detailed routing
-* global routing
-* maze routing
-* negotiated congestion routing
-* PathFinder
-* rip-up and reroute
-* push-and-shove routing
-* track assignment
-* channel routing
-* escape routing
-* bus routing
-* detailed routing
-* geometric shortest-path algorithms
-* computational geometry
-* robotics path planning
-* multi-agent path finding
-* MAPF
-* CBS / Conflict-Based Search
-* ECBS
-* prioritized planning
-* dynamic obstacle planning
-* motion planning
-* visibility graphs
-* navigation meshes
-* funnel algorithms
-* homotopy-aware planning
-* continuous optimisation
-* spline optimisation
-* trajectory optimisation
-* sequential convex optimisation
-* packing
-* graph colouring
-* min-cost flow
-* multicommodity flow
-* constraint programming
-* SAT/SMT techniques
-* ILP/MILP approaches
-* simulated annealing
-* large-neighbourhood search
-* tabu search
-* evolutionary optimisation
-* local repair methods
-* Steiner trees
-* topology optimisation
-
-Also inspect implementations and papers from relevant open-source projects.
-
-Potentially useful sources include, but are not limited to:
-
-* KiCad interactive router
-* FreeRouting
-* TopoR
-* pcb-rnd
-* OpenROAD
-* TritonRoute
-* FastRoute
-* CUGR
-* FPGA routing research
-* VPR
-* academic PCB autorouters
-* modern VLSI detailed routers
-* multi-agent path-planning libraries
-* game pathfinding literature
-
-Do not search for generic “PCB routing algorithm” results only.
-
-Search based on the observed failure.
-
-For example:
-
-> negotiated congestion routing narrow channel physical packing
-
-> detailed routing local rip-up reroute conflict graph
-
-> PCB routing simultaneous routing multiple nets bottleneck
-
-> VLSI detailed routing track assignment minimum conflict
-
-> MAPF continuous agents different radii conflict based search
-
-> PathFinder oscillation congestion history adaptive penalty
-
-> push shove routing local minimum rip up reroute
-
-> topology preserving path smoothing obstacles
-
-Read primary papers, technical documentation and source code where practical.
-
----
-
-# Phase 6 — Maintain a Research Notebook
-
-For every promising technique record:
-
-* algorithm / technique name
-* source
-* problem it solves
-* assumptions
-* complexity
-* how closely those assumptions match Flux
-* likely integration point
-* expected benefit
-* likely downside
-* minimum experiment needed to test it
-* result after testing
-
-Do not repeatedly rediscover the same approaches.
-
-Also record approaches that were tested and rejected.
-
-A failed experiment is useful information.
-
----
-
-# Phase 7 — Rank Candidate Approaches
-
-Do not immediately implement the first interesting algorithm.
-
-Rank candidates.
-
-Prefer changes that:
-
-1. directly address the measured failure
-2. fit Flux's existing architecture
-3. can be experimentally isolated
-4. preserve useful route diversity
-5. produce measurable intermediate metrics
-6. are reversible
-7. generalise beyond one benchmark board
-
-Avoid board-specific hacks.
-
-A heuristic may depend on general geometric or routing properties, but never on:
-
-* board filename
-* exact benchmark identity
-* specific net names
-* hard-coded coordinates
-
----
-
-# Phase 8 — Design the Smallest Useful Experiment
-
-For each selected technique formulate a hypothesis.
-
-Example:
-
-> Hypothesis: persistent Tier-1 failure occurs because corridor capacity is represented topologically rather than using clearance-aware packing. Adding geometry-derived edge capacity will prevent the global allocator from committing incompatible nets to the same bottleneck.
-
-Or:
-
-> Hypothesis: sequential local repair cannot resolve three-net swaps. Jointly rerouting the connected component of the physical conflict graph will allow topology changes unavailable through pairwise push-shove.
-
-Then define:
-
-* code change
-* expected metric change
-* expected board behaviour
-* success criterion
-* regression criterion
-
-Implement the minimum needed to test the hypothesis.
-
-Do not bundle several unrelated algorithms into one experiment unless absolutely necessary.
-
----
-
-# Phase 9 — Integrate Cleanly
-
-New algorithms should normally fit into Flux through explicit interfaces.
-
-Avoid accumulating one-off conditions.
-
-Where practical separate:
-
-* candidate generation
-* scoring
-* search
-* conflict detection
-* negotiation
-* legalisation
-
-from orchestration.
-
-Algorithms should expose diagnostic information.
-
-For example:
-
-* alternatives considered
-* alternatives rejected
-* cost terms
-* expanded nodes
-* conflict count
-* rip-up reason
-* congestion penalties
-* capacity estimates
-* convergence behaviour
-
-This instrumentation is part of the implementation, not temporary debugging clutter.
-
----
-
-# Phase 10 — Verify at Multiple Levels
-
-Every algorithm change must be tested at several levels.
-
-## Unit / local algorithm tests
-
-Add deterministic tests for the new mechanism.
-
-Examples:
-
-* two-net channel swap
-* three-net narrow passage
-* via blocking channel
-* forced layer transition
-* local bottleneck
-* U-shaped obstacle
-* conflicting spline smoothing
-* insufficient physical width despite topological connectivity
-* route ordering trap
-
-Use synthetic micro-boards when useful.
-
-Micro-tests should reproduce the algorithmic mechanism independently of a large benchmark board.
-
-## Regression tests
-
-Run existing tests.
-
-No previously passing test may silently regress.
-
-## Tier benchmark
-
-Run:
-
-* the frontier board
-* its entire tier
-* all lower tiers
-
-If promising, run every tier.
-
-## KiCad validation
-
-Final copper must be verified using KiCad DRC.
-
-Internal Flux validity is necessary but not sufficient.
-
----
-
-# Phase 11 — Analyse the Result
-
-Compare before/after metrics.
-
-Do not ask merely:
-
-> Did it pass?
-
-Ask:
-
-* Did global congestion decrease?
-* Did physical conflicts decrease?
-* Did via count explode?
-* Did runtime increase significantly?
-* Did the same conflicts remain?
-* Did conflicts move?
-* Did route diversity improve?
-* Did the number of reroutes increase?
-* Did search actually explore the intended alternatives?
-* Did topology improve while geometry worsen?
-* Did DRC categories change?
-* Did an earlier stage become more accurate?
-* Did the router converge or oscillate?
-
-Determine whether the hypothesis was:
-
-* strongly supported
-* partially supported
-* disproven
-* inconclusive
-
-Record the result.
-
----
-
-# Phase 12 — Keep, Refine or Revert
-
-If the experiment produces clear general improvement:
-
-* keep it
-* add regression coverage
-* commit it as a coherent change
-
-If it shows promise but remains incomplete:
-
-* refine it
-
-If it does not help:
-
-* revert or disable it
-* record why
-* move to the next hypothesis
-
-Do not leave layers of failed heuristics active “just in case”.
-
-Complexity must earn its place through benchmark results.
-
----
-
-# Phase 13 — Escape Local Optima
-
-If repeated modifications only reduce violation counts without completing the tier, reconsider the level at which the problem is being solved.
-
-A common autorouter failure is attempting to repair a global topological mistake using increasingly sophisticated local geometry.
-
-Watch specifically for:
-
-* repeated conflicts between the same nets
-* oscillation between equivalent states
-* congestion moving between adjacent resources
-* local repairs recreating previous conflicts
-* heavy sensitivity to routing order
-* excessive via growth
-* route-length growth without conflict reduction
-* physical legaliser fighting global allocation
-
-When observed, move the feedback upstream.
-
-For example:
-
-physical copper conflict
-→ identify participating nets
-→ identify their route portfolios
-→ penalise responsible corridor combination
-→ regenerate alternatives
-→ rerun regional/global allocation
-
-Do not force the final geometry stage to solve mistakes that should have been reconsidered earlier.
-
----
-
-# Feedback Between Routing Representations
-
-Flux has several representations of the same routing problem.
-
-Treat them as a feedback system rather than a one-way pipeline.
-
-Useful feedback may include:
-
-### Detailed geometry → global routing
-
-Physical conflicts should modify:
-
-* corridor cost
-* corridor capacity
-* route portfolio ranking
-* congestion history
-* layer preference
-* via-placement preference
-
-### Detailed routing → terminal analysis
-
-Repeated failed pad escapes may trigger regeneration of terminal candidates.
-
-### Local conflict graph → joint routing scope
-
-Connected physical conflicts may define the region and net set for simultaneous rerouting.
-
-### Legalisation → continuous geometry
-
-If quantisation repeatedly invalidates a spline/path, feed legalisation constraints into the continuous optimiser.
-
-### Continuous geometry → global allocation
-
-If a nominal corridor cannot physically fit the route width/clearance combination, reduce its effective capacity rather than repeatedly rediscovering the failure downstream.
-
-The router should learn from failed physical realisations.
-
----
-
-# Algorithm Families Worth Explicitly Investigating
-
-These are research directions, not mandatory implementation requirements.
-
-## Clearance-aware corridor capacity
-
-Replace simplistic occupancy with estimates based on:
-
-* available corridor width
-* required trace width
-* clearance
-* via diameter
-* via clearance
-* local curvature
-* layer availability
-
-Investigate interval/strip packing rather than grid occupancy.
-
----
-
-## Homotopy-aware route portfolios
-
-Preserve fundamentally different path classes instead of numerous small variations of the same path.
-
-A portfolio of 10 nearly identical routes is much less useful than 3 topologically distinct routes.
-
-Investigate:
-
-* homotopy classes
-* obstacle signatures
-* corridor sequences
-* portal sequences
-* visibility graph alternatives
-* Yen/Eppstein k-shortest paths with diversity penalties
-
----
-
-## Conflict-directed rerouting
-
-Instead of random or net-order rip-up:
-
-1. construct physical conflict graph
-2. find connected components
-3. rank responsible nets/resources
-4. reroute the component jointly or in coordinated sequence
-
-Investigate ideas from:
-
-* Conflict-Based Search
-* large-neighbourhood search
-* VLSI detailed-routing repair
-
----
-
-## Large-neighbourhood search
-
-When locally trapped:
-
-* rip up a coherent subset of routes
-* temporarily reserve useful structure outside the region
-* regenerate alternatives inside the region
-* solve that region again
-
-Vary neighbourhood size adaptively.
-
----
-
-## Adaptive negotiated congestion
-
-Investigate stronger PathFinder variants:
-
-* historical congestion
-* present congestion
-* adaptive penalty growth
-* overflow-sensitive cost scaling
-* resource-specific learning rates
-* deterministic tie-breaking
-* randomized diversification
-* congestion decay
-* oscillation detection
-
----
-
-## Multi-commodity-flow approximations
-
-Use relaxed global flow to estimate which bottlenecks fundamentally cannot support the proposed routing arrangement.
-
-This need not become the final router.
-
-It may provide better:
-
-* corridor pressure
-* capacity estimation
-* ordering
-* decomposition
-
----
-
-## Track assignment
-
-Inside narrow channels, convert continuous free-space routing into a track-assignment problem where appropriate.
-
-Determine:
-
-* ordering of traces
-* feasible lanes
-* layer assignment
-* via insertion
-
-before producing final curved geometry.
-
----
-
-## Simultaneous local routing
-
-Some regions should route several nets together rather than sequentially.
-
-Potential formulations:
-
-* joint A*
-* CBS-like search
-* min-cost flow
-* ILP
-* bounded combinatorial enumeration
-* dynamic programming
-
-Use expensive methods only on small conflict regions.
-
----
-
-## Push-and-shove plus topology change
-
-Push-and-shove is useful when a nearby valid deformation exists.
-
-It is insufficient when the required solution changes topology.
-
-Detect when shove displacement ceases to improve feasibility and trigger:
-
-* rip-up
-* alternative corridor selection
-* via relocation
-* layer reassignment
-
-rather than endlessly pushing.
-
----
-
-## Difficulty-aware net ordering
-
-Investigate routing priority based on:
-
-* escape freedom
-* route entropy
-* number of route portfolios
-* bottleneck dependence
-* pad density
-* clearance width
-* required layer changes
-* expected via scarcity
-
-The most constrained nets may deserve early reservation.
-
-Also investigate dynamically changing priority during negotiated routing.
-
----
-
-## Via-aware planning
-
-Do not treat vias as simple point transitions.
-
-Model their true:
-
-* copper diameter
-* drill
-* annular ring
-* clearance shadow
-* layer interaction
-
-Generate via candidates according to regional packing feasibility.
-
----
-
-## Continuous optimisation
-
-Once topology is fixed, investigate optimisation objectives combining:
-
-* path length
-* curvature
-* clearance
-* obstacle distance
-* neighbouring copper distance
-* via placement
-* manufacturability
-
-Possible techniques include:
-
-* elastic bands
-* CHOMP-like optimisation
-* sequential convex approximation
-* constrained B-spline optimisation
-
-But do not use continuous optimisation to compensate for an incorrect topology.
-
----
-
-# Benchmark Promotion Rules
-
-A tier is considered passed only when:
-
-* all required connections are routed
-* there are zero opens
-* no forbidden shorts exist
-* no crossings exist where prohibited
-* clearance rules pass
-* hole clearance passes
-* via legality passes
-* board-edge constraints pass
-* KiCad DRC passes according to the benchmark's expected rule set
-
-Once a tier passes, add it to the mandatory regression set.
-
-Do not manually promote a tier based on visual inspection.
-
----
-
-# Performance Discipline
-
-Correctness comes first, but track computational cost.
-
-For each meaningful improvement record:
-
-* runtime
-* route-search expansions
-* reroute iterations
-* peak conflict count
-* peak memory where available
-
-An algorithm that solves a formerly impossible board at higher runtime may initially be acceptable.
-
-After correctness is established, optimise expensive stages.
-
-Use hierarchical computation:
-
-cheap global approximation
-→ targeted expensive regional solve
-
-rather than applying exponential algorithms to the entire board.
-
----
-
-# Source-Code Investigation
-
-When an algorithm from another project appears relevant, do not copy it blindly.
-
-Inspect:
-
-* data representation
-* invariants
-* cost model
-* conflict representation
-* update strategy
-* convergence criteria
-* assumptions about Manhattan routing
-* assumptions about grids
-* assumptions about fixed track widths
-* licence compatibility
-
-Translate the underlying idea into Flux's continuous/corridor architecture where appropriate.
-
-Prefer algorithmic concepts over cargo-cult ports.
-
----
-
-# Git Discipline
-
-Keep experiments recoverable.
-
-Before substantial changes:
-
-* ensure the baseline state is known
-* preserve benchmark results
-
-For successful changes:
-
-* create focused commits
-* include the hypothesis or reason in the commit message
-* include relevant benchmark improvement where practical
-
-Do not combine unrelated router experiments into a single enormous change.
-
-Never discard useful existing work merely to simplify an experiment.
-
----
-
-# Research and Experiment Log
-
-Maintain a persistent development document, for example:
-
-`docs/router_research_log.md`
-
-Each experiment should contain roughly:
-
-## Experiment N — <name>
-
-### Failure
-
-Board/tier and observed failure.
-
-### Hypothesis
-
-What mechanism is believed to be responsible.
-
-### Research
-
-Relevant algorithms/papers/projects and why they apply.
-
-### Change
-
-What was implemented.
-
-### Before
-
-Metrics.
-
-### After
-
-Metrics.
-
-### Interpretation
-
-What changed and why.
-
-### Decision
-
-Keep / refine / revert.
-
-### Next hypothesis
-
-What should be investigated next.
-
----
-
-# Structured Benchmark History
-
-Also preserve benchmark data in machine-readable form.
-
-For example:
-
-`reports/benchmark_history/`
-
-Each run should identify:
-
-* git revision
-* date
-* configuration
-* board
-* tier
-* router parameters
-* outcome
-* metrics
-* DRC summary
-
-This will prevent optimisation based on memory or anecdote.
-
----
-
-# Important Anti-Patterns
-
-Do **not**:
-
-* optimise only for violation count
-* accept combinatorial connectivity as successful routing
-* introduce benchmark-board-specific hacks
-* endlessly tweak constants without diagnosing the failure
-* add random penalties without measuring their effect
-* route higher tiers while lower tiers regress
-* add heuristics that cannot be inspected
-* hide routing failures with relaxed DRC rules
-* reduce legal clearance merely to make benchmarks pass
-* discard difficult nets
-* silently omit vias or connections
-* declare success from an incomplete preview
-* rewrite major subsystems without evidence that the architecture is the blocker
-* assume grids are inherently required
-* assume gridless routing is inherently superior
-* assume B-splines solve routing topology
-* assume PathFinder alone will solve physical copper packing
-
----
-
-# When Progress Stalls
-
-If several consecutive experiments fail to materially improve the frontier tier:
-
-1. stop tuning
-2. rerun the baseline
-3. inspect traces/logs
-4. identify the earliest stage where the eventual conflict becomes inevitable
-5. search literature specifically for that mechanism
-6. construct a minimal synthetic board reproducing it
-7. solve the synthetic case
-8. integrate the solution
-9. rerun the real tier
-
-If necessary, temporarily use an exact/expensive solver on the small failing region to determine whether:
-
-* a solution exists
-* Flux's heuristic is failing to find it
-
-This distinction is extremely valuable.
-
----
-
-# Differential/Oracle Testing
-
-Where practical, compare Flux against another router.
-
-For a board Flux cannot solve:
-
-* route it with KiCad interactive router, FreeRouting, another available autorouter, or an existing known-good solution
-* examine topology rather than merely track coordinates
-* identify:
-
-  * different bottleneck usage
-  * different layer allocation
-  * different net ordering
-  * different via placement
-  * different escape direction
-  * different corridor choice
-
-Do not simply copy the resulting tracks.
-
-Use the external result as an oracle demonstrating what structural decision Flux is missing.
-
----
-
-# Automatic Parameter Exploration
-
-If an algorithm is sound but parameter-sensitive, perform bounded automated sweeps.
-
-Examples:
-
-* congestion penalty
-* history multiplier
-* alternative-route count
-* regional repair size
-* rip-up threshold
-* route diversity weighting
-* via penalty
-
-Evaluate parameter combinations against multiple boards.
-
-Do not hand-tune a value solely for one benchmark.
-
-Promote parameters that generalise.
-
----
-
-# Randomisation
-
-Use controlled randomisation when useful for escaping deterministic local minima.
-
-Always record the seed.
-
-If different seeds yield dramatically different results, investigate why.
-
-Successful stochastic solutions can reveal missing deterministic heuristics.
-
-A benchmark should preferably become reliably solvable rather than pass only with a lucky seed.
-
----
-
-# Stop Condition
-
-Continue this process without asking for routine permission after each experiment.
-
-The task is complete when:
-
-1. every available routing tier passes
-2. all lower-tier regressions remain green
-3. final output is accepted by KiCad DRC
-4. successful algorithms have regression tests
-5. benchmark history records the progression
-6. abandoned experiments are documented sufficiently to avoid repeating them
-7. the resulting implementation remains general rather than benchmark-specific
-
-If complete success is not yet achievable, continue advancing the frontier and leave the repository in the best verified state reached.
-
-Do not stop merely because one attempted algorithm failed.
-
-Choose the next evidence-backed hypothesis and continue.
-
----
-
-# Immediate Starting Procedure
-
-Begin now with the following sequence:
-
-1. inspect the Flux repository and identify the benchmark/tier runner
-2. determine exactly which boards comprise Tier 0, Tier 1 and subsequent tiers
-3. run Tier 0 to confirm the known baseline
-4. run Tier 1
-5. identify the first failing Tier-1 board
-6. collect detailed routing and KiCad DRC metrics
-7. locate the smallest physical conflict set responsible for failure
-8. trace that conflict backwards through:
-
-   * quantised copper
-   * continuous geometry
-   * regional routing
-   * corridor choice
-   * route portfolio
-   * global allocation
-9. identify the earliest decision that makes the conflict likely or inevitable
-10. formulate 2–5 candidate algorithmic explanations
-11. research those mechanisms on the internet
-12. rank the approaches
-13. implement the smallest high-value experiment
-14. add a focused regression/micro-test
-15. rerun the failing board
-16. rerun all of Tier 1
-17. rerun Tier 0
-18. retain or revert based on evidence
-19. record the result
-20. repeat
-
-As soon as Tier 1 passes reliably, move the frontier to Tier 2 and repeat the same process.
-
-The benchmark ladder—not the elegance of any particular algorithm—is the final measure of progress.
-
+# Flux feature-parity plan for KiCadRoutingTools
+
+## 1. Objective
+
+Bring Flux to behavioral feature parity with the public capabilities of
+[KiCadRoutingTools](https://github.com/drandyhaas/KiCadRoutingTools) while preserving Flux's
+integrated placement/routing design, physical corridor model, continuous quintic PH routes,
+transactional source handling, deterministic search, mandatory GPU acceleration, and exact KiCad
+acceptance gates.
+
+This plan is based on KiCadRoutingTools v0.21.5 at commit
+`e239e067c204870b4ac570fc9e931a374bdfd5b4` from 2026-09-02. That reference point contains 199
+Python modules across its routing, placement, and utility packages, a Rust A* core, 547 Python
+tests, and 443 entries in its checked-in stress manifests. Reassess the upstream feature inventory
+before declaring parity because the upstream repository remains active.
+
+Parity means that a Flux user can accomplish the same board-design task with equal or stronger
+safety and observable evidence. It does not mean copying KiCadRoutingTools' grid model, internal
+module layout, command names, heuristics, or source code.
+
+## 2. Definition of parity
+
+A reference capability is complete only when all of the following hold:
+
+1. A public Flux CLI or KiCad workflow exposes the behavior.
+2. Its configuration is explicit, validated, serializable, and visible in telemetry.
+3. The behavior operates on the canonical immutable source board rather than a parallel PCB model.
+4. The result passes canonical validation, represented connectivity, represented copper DRC,
+   source-preserving round-trip checks, and external KiCad DRC where applicable.
+5. Failure is typed and attributable; unsupported source semantics fail closed.
+6. A focused capability fixture passes, all previously qualified routing tiers remain green, and a
+   relevant real-board stress sample does not regress.
+7. Runtime, peak memory, GPU utilization, queue delay, and exact-check workload are recorded.
+8. The implementation remains deterministic for a fixed seed, device, configuration, and source
+   revision. GPU reductions use stable keys and deterministic final reduction on the CPU.
+
+Stronger Flux behavior satisfies parity. For example, Flux's global PathFinder plus regional
+packing can satisfy a reference A* routing feature; a second KRT-style router is not required.
+
+## 3. Non-negotiable Flux design constraints
+
+- Keep one canonical `Board` and one route acceptance pipeline. Do not build a separate feature
+  router whose copper bypasses global/regional feedback.
+- Preserve the three representations: topology/resources, continuous PH/corridor geometry, and
+  quantized KiCad copper.
+- Keep the nested global-routability, regional-realization, and materialization-feedback loops.
+- Treat placement, polarity changes, target swaps, fanout, planes, teardrops, and cleanup as complete
+  transactions on a board copy.
+- Never accept a partial coupled-pair, bus, plane, placement, or shove transaction.
+- Never make an inferred bus, electrical constraint, fabrication capability, or schematic mutation
+  authoritative. Inference may generate a reviewable source-bound proposal.
+- Do not weaken or rewrite KiCad project rules merely to make generated copper pass. Resolve rules
+  from the source, report unrepresented semantics, and leave external KiCad DRC authoritative.
+- Keep zones under KiCad refill authority. Flux may propose zone outlines, priorities, taps, and
+  stitching, but acceptance requires refill, strict re-import, connectivity, and DRC.
+- Keep quintic PH chains as routed continuous geometry. Quantized lines/arcs are the KiCad physical
+  realization, not the optimization representation.
+- GPU support is mandatory for production routing. CPU code remains authoritative for branchy
+  orchestration, exact integer predicates, source parsing, transactional commit, and final
+  certification.
+- Telemetry remains non-authoritative and non-blocking. A future control surface must use a separate
+  orchestration boundary rather than sending commands through the observer WebSocket.
+- Preserve source bytes and refuse accidental overwrite. Existing copper is immutable unless the
+  caller explicitly selects it as a reroute/rip-up scope; KiCad-locked copper is never movable.
+
+## 4. Upstream capability inventory and current Flux gap
+
+The status column is a planning assessment, not a claim of qualification.
+
+| Capability family | Reference behavior | Current Flux position | Parity work |
+| --- | --- | --- | --- |
+| Single-ended routing | Octilinear multilayer A*, automatic vias, incremental obstacles | Core equivalent is stronger but dense-board completion is incomplete | Qualify outcomes and close remaining global/regional failures |
+| Route scope | Net patterns, exclusions, components, classes, placement blocks, preview, forced reroute | Individual-net selection and previews exist; scope vocabulary is incomplete | Add one canonical route-selector language and explicit reroute modes |
+| Net ordering | MPS, inside-out, original order, bus middle-out, MPS layer swaps | Constraint priority, portfolio diversity, interference scores, and feedback ordering exist | Add MPS/inside-out evidence as portfolio generators, not a replacement scheduler |
+| Rip-up/reroute | Bidirectional probes, blocker attribution, min-cut ranking, N+1 escalation, ripped-corridor avoidance | PathFinder history, hard-capacity rip-up, blocker memory, and LNS exist | Add explicit frontier/min-cut evidence and protected/pre-existing route policy |
+| Proximity guidance | Stub, BGA, track, via, vertical-alignment, and guide-corridor costs | Physical history and terminal reservation cover part of this | Add typed future-demand and user-guidance fields with residual-demand accounting |
+| Differential pairs | Coupled bare-pad, multipoint, hybrid escape, tangent-aware routing, swaps, return vias | Declared pairs, atomic capacity, synchronized vias/fanout, PH geometry, and skew checks are partial | Complete pair topology, return path, target/polarity proposal, and qualification |
+| Buses | Detection, middle-out routing, neighbor attraction, parallel packing | Explicit ordered buses and shared packing exist; auto-detection is deliberately absent | Add non-authoritative bus proposal generation and complete joint realization |
+| BGA/QFN fanout | Channel, dogbone, under-pad, layer balancing, pair fanout, adjacent-net joins | Generic terminal access exists; specialized package fanout is absent | Add package-aware terminal-escape template generators feeding regional routing |
+| Power traces | Per-net widths, fabrication tiers, neck-downs and stepped transitions | Explicit net-class widths and bounded neck-downs exist | Add current-policy sidecars, complete transition geometry, and fab validation |
+| Power/ground planes | Plane creation, multi-net Voronoi zones, region repair, pad taps, thermal arrays | Saved zones/refill are understood; plane synthesis and repair are absent | Add proposal/refill/repair workflow without implementing a competing fill engine |
+| Return/stitch vias | Signal return vias, split-ground domains, area stitching, edge fences | Same-net via reuse exists; return-domain and stitching policy are absent | Add ground-domain analysis and joint via-site allocation |
+| Length/time matching | Groups, DDR discovery, trombone meanders, via barrels, layer delay, AC-coupled XNets | Differential skew tuning is narrow and post-route | Add explicit match groups and PH-native length/time tuning |
+| Impedance | Stackup-aware microstrip, stripline, coplanar, pair widths and reports | Absent | Add advisory electrical model plus source-rule-bound geometry validation |
+| Placement | Seed refinement, quench, portfolios, router-in-loop repair, block moves | Integrated analytical/local placement and route acceptance are strong but not workflow-complete | Add design intent, portfolio UX, health grading, and package-specific repair |
+| Design intent | Design brief, edge-facing connectors, floorplan rules, locks, groups, health | Source-bound groups/regions/relative constraints exist | Add a strict design-intent schema and deterministic brief-to-policy compiler |
+| Swaps/schematic sync | Hungarian target assignment and opt-in P/N/pad swaps | Absent | Add proposal-only logical swaps with schematic consistency and human approval gates |
+| Cleanup | Gap snapping, redundant-copper removal, restore accounting, KiCad reconnect | Exact validation and transactional fallback exist; cleanup vocabulary is incomplete | Add connectivity-preserving copper hygiene and DRC-oracle repair |
+| Verification tools | DRC, connectivity, pads, orphan stubs, cycles, odd copper, capacity, channels, pockets | Core validation plus analysis PNGs exist | Expose focused diagnostic subcommands from shared authoritative predicates |
+| Teardrops | Add settings to routed pads and vias | Absent | Add source-preserving opt-in policy and external refill/DRC validation |
+| GUI/plugin | Full KiCad tabs, selection, settings, cancellation, live apply | File workflow, live route application, telemetry viewer, and preferences exist | Add a thin KiCad orchestration UI while keeping routing out of the plugin process |
+| Rendering/replay | Static board images, routing movies, plan recording/replay | Live/history telemetry and PNG diagnostics exist | Add deterministic static export and trace-to-video tooling |
+| Plans/AI adapters | JSON routing plans, headless replay, optional AI assistance | No stable workflow-plan schema | Add deterministic plan schema first; AI remains an optional untrusted author |
+| Stress/release | Feature tests, replayable chains, A/B waves, large real-board corpus | Progressive tier corpus exists | Add feature-parity fixtures and scalable A/B qualification without running all boards per edit |
+
+## 5. Target architecture
+
+```text
+KiCad board + project rules + reviewed source-bound policies
+                         |
+                         v
+                 canonical Board IR
+                         |
+          +--------------+---------------+
+          |                              |
+          v                              v
+  intent/electrical analysis       physical free-space preparation
+          |                              |
+          +--------------+---------------+
+                         v
+              route/fanout/plane work plan
+                         |
+                         v
+              GLOBAL NEGOTIATION LOOP
+       portfolios + PathFinder + physical feedback
+                         |
+                         v
+              REGIONAL REALIZATION LOOP
+      terminal/lane/via/layer state <-> PH/PNS/XPBD
+                         |
+                         v
+               MATERIALIZATION LOOP
+         quantize -> exact local check -> PH feedback
+                         |
+                         v
+      optional tuning / planes / cleanup transactions
+                         |
+                         v
+       validation + connectivity + analytic copper DRC
+                         |
+                         v
+  source-preserving export -> KiCad refill -> external DRC
+```
+
+New capabilities must enter through work-plan inputs, route portfolios, regional templates,
+continuous constraints, or post-route transactions. None may write copper around the established
+acceptance pipeline.
+
+## 6. Performance and GPU policy
+
+### 6.1 Shared GPU runtime
+
+Complete and use one Vulkan runtime for hydraulic routing, SDF/clearance fields, global batch
+search, PH scoring, XPBD, broadphase, plane analysis, fanout evaluation, and rendering.
+
+- Select one physical device deliberately and expose its identity in every run artifact.
+- Keep one logical device, allocator, descriptor/pipeline cache, queue family set, and timeline.
+- Use capacity-grown persistent buffers and a bounded in-flight ring.
+- Cache immutable board geometry, layer masks, SDFs, boundary BVHs, pad fields, and rule tables by
+  source revision plus policy identity.
+- Keep intermediate products device-local across clearance, hydraulic, global, regional, XPBD, and
+  broadphase stages.
+- Batch independent nets, candidate portfolios, fanout terminals, via sites, tuning patterns, and
+  placement proposals before dispatch.
+- Read back compact scores, predecessor paths, conflict pairs, diagnostic tiles, and top-K indices;
+  do not read complete fields unless telemetry or an analysis artifact explicitly requests them.
+- Use fences or timeline semaphores rather than queue-idle waits. Overlap preparation, compute,
+  compact readback, and CPU exact certification.
+- A missing/failed GPU is a clear production preflight failure. A CPU reference backend may exist
+  only for focused verification and differential testing.
+
+### 6.2 Suitable GPU work
+
+- polygon/grid/SDF preparation and obstacle-distance transforms;
+- hydraulic and anisotropic routing fields per copper layer;
+- batched reverse cost-to-go fields and bucketed global searches;
+- occupancy histograms, critical-cut demand, history deposition, and route-priority reductions;
+- terminal, via, fanout, layer, lane, and regional-template approximate scoring;
+- MPS crossing matrices and route-interference matrices;
+- PH position/tangent/curvature/offset sampling and quantized candidate scoring;
+- XPBD constraint projection and route-to-route broadphase;
+- segment/circle/simple-arc DRC broadphase and guarded simple narrow-phase;
+- plane masks, connected components, Voronoi ownership, resistance/current approximations, and via
+  coverage fields;
+- meander/serpentine pattern generation and approximate clearance/skew scoring;
+- placement density, congestion, HPWL, plane-fragility, and batched screening objectives;
+- telemetry overlay reduction, static board rasterization, and replay frames.
+
+### 6.3 Work that remains CPU or KiCad authoritative
+
+- S-expression import/export and source-revision binding;
+- rule precedence and source-policy validation;
+- branch-and-bound regional state orchestration and stable tie reduction;
+- exact integer polygon, rational PH-offset, connectivity, and complex-pad predicates;
+- final whole-board transaction comparison;
+- source-preserving change-set construction;
+- KiCad zone refill and external KiCad DRC.
+
+### 6.4 Performance gates
+
+Every milestone reports, before and after:
+
+- wall time and CPU time by stage;
+- peak RSS and peak device memory;
+- GPU busy time, dispatch count, batch occupancy, cache hit rate, and readback bytes;
+- search expansions/states and exact predicate counts;
+- candidates generated, GPU-rejected, CPU-shortlisted, exact-rejected, and accepted;
+- telemetry queue drops and observer overhead;
+- route-quality feasibility tuple, copper length, via count, width loss, and DRC results.
+
+A feature may not become default if it regresses the qualified-tier geometric mean runtime by more
+than 10%, peak memory by more than 15%, or route feasibility on any qualified board unless a
+documented benchmark decision explicitly accepts the trade. GPU batching must show either a
+measured wall-time improvement or a demonstrated removal of a scaling bottleneck.
+
+## 7. Implementation milestones
+
+Milestones are dependency-ordered. Work within a milestone may proceed in parallel only when it
+does not create two board models or two acceptance paths.
+
+### Milestone 0 — Freeze the parity contract and benchmark baseline
+
+Priority: P0.
+
+1. Add a machine-readable parity manifest keyed to the pinned upstream commit. Give every advertised
+   capability a stable ID, Flux status, reference evidence, focused fixture, stress sample, public
+   command, and acceptance criteria.
+2. Add `flux-cli capabilities --json` so scripts and the KiCad adapter can fail before running an
+   unsupported plan.
+3. Record the current Flux tier results, performance counters, GPU identity, source revisions,
+   route configuration, analysis PNGs, and telemetry traces.
+4. Select the smallest legally reusable KRT fixtures for each feature. Copy only boards whose
+   licenses permit it, retain provenance, and prefer the already imported routing corpus.
+5. Establish three suites:
+   - per-change risk suite: focused invariant tests plus all qualified tiers;
+   - frontier suite: qualified tiers plus the one permanently unlocked tier;
+   - release suite: parity fixtures plus a representative real-board stress wave.
+6. Record equivalent KiCadRoutingTools outcomes on the comparison fixtures. Compare connectivity,
+   DRC, route scope, and feature behavior, not byte-identical copper.
+
+Exit gate: every parity item is present in the manifest with `present`, `partial`, `missing`, or
+`intentional-stronger-alternative`, and the baseline can be replayed from one command.
+
+### Milestone 1 — Unified workflow, configuration, and route selection
+
+Priority: P0.
+
+1. Define one versioned `FluxWorkPlan` schema for route, fanout, pair, bus, plane, tuning, cleanup,
+   validation, and placement steps. Bind it to the source revision and policy identities.
+2. Add selectors for exact net names, glob inclusion/exclusion, net classes, footprints, declared
+   placement groups, and touching/internal group scope.
+3. Add explicit modes for preview, new routing, force-reroute selected nets, and allowlisted rip-up
+   of pre-existing nets. Never infer permission from a wildcard; locked copper remains immutable.
+4. Make every CLI option serialize to the work plan and round-trip without semantic drift.
+5. Add plan dry-run, capability preflight, deterministic replay, stop-token cancellation, and a
+   structured final summary.
+6. Preserve telemetry defaults and expose active step, selector expansion, policy identity, and
+   exact acceptance state.
+
+GPU work: compile expanded route scopes into device-resident net/resource masks and reuse them
+across all plan steps.
+
+Exit gate: the same saved plan produces the same ordered proposals and acceptance tuple through CLI
+and KiCad orchestration, with no board mutation in preview mode.
+
+### Milestone 2 — Complete rule, stackup, and geometry fidelity
+
+Priority: P0.
+
+1. Extend strict import and canonical policy to cover every geometry needed by the selected parity
+   corpus: Edge.Cuts lines/arcs and cutouts, rotated and supported custom pads, rule areas, plated
+   holes, enabled copper layers, via spans, existing zones, copper text/graphics that affect
+   routing, and locked objects.
+2. Capture per-net/per-layer width, clearance, via style, hole-to-hole, copper-to-edge, differential
+   pair, length/skew, and stackup dielectric/copper-thickness data through official KiCad data or a
+   strict source-bound snapshot.
+3. Represent unsupported region-dependent or pairwise rules explicitly. Do not replace them with a
+   global minimum while claiming exactness.
+4. Add fabrication-capability sidecars as reviewed constraints. A standard/advanced tier may select
+   allowable geometry but may not rewrite project DRC floors silently.
+5. Keep resolved routing rules cached on both host and device by immutable rule identity.
+
+GPU work: prepare device-resident obstacle primitives, per-layer masks, SDFs, clearance matrices,
+and boundary indices once per source/policy revision.
+
+Exit gate: every selected feature fixture imports strictly or stops with an attributed unsupported
+semantic; represented rule queries agree with KiCad on a focused matrix.
+
+### Milestone 3 — Core routing-strategy parity
+
+Priority: P0.
+
+1. Add MPS evidence from component-boundary ordering and MST-segment crossings. Use it to seed route
+   portfolios and crossing pressure; do not replace staged scarcity priority or PathFinder.
+2. Add inside-out BGA ordering as another deterministic portfolio.
+3. Retain original/source order and explicit user order as reproducible portfolios.
+4. Add MPS-derived layer/stub alternatives to regional template enumeration.
+5. Implement direction-aware future-terminal demand, routed-track spreading, cross-layer vertical
+   alignment, and BGA-edge pressure as typed fields. Residual capacity and critical cuts determine
+   whether a proximity term attracts, repels, or remains neutral.
+6. Add explicit per-layer costs and straightness/turn preferences to portfolio objectives while PH
+   length, curvature, and minimum-radius terms remain the final geometric objectives.
+7. Import user-drawn guide polylines as soft corridor priors and user-layer closed polygons as hard
+   reviewed keepout proposals. Guidance can never make an otherwise legal topology unavailable.
+8. Preserve longer coarse paths and river alternatives as late congestion fallbacks.
+
+GPU work: crossing/interference matrices, terminal/BGA proximity fields, guide distance fields,
+critical-cut demand, portfolio scoring, and compatible batched global searches.
+
+Exit gate: focused boards demonstrate each strategy changes the intended evidence, all strategies
+retain exact legality, and at least one hard crossing fixture improves without regressing the
+frontier tier.
+
+### Milestone 4 — Conflict-directed rip-up and recovery parity
+
+Priority: P0.
+
+1. Add cheap forward/reverse feasibility probes whose blocked frontier is attributed to exact route
+   owners and immutable obstacles.
+2. Preserve validator-named blockers ahead of inferred blockers.
+3. Add bounded blocker rankings equivalent in outcome to count, endpoint proximity,
+   both-directions, and soft min-cut evidence.
+4. Integrate that evidence with Flux's existing history, hard-capacity repair, rip-up memory, and
+   large-neighborhood destruction ladder.
+5. Escalate from direct conflicts through adjacent users, portal occupants, regional windows, and
+   upstream/downstream routes. Keep differential pairs and buses atomic.
+6. Store former route corridors as expiring avoidance history so a victim does not immediately
+   reclaim the same topology.
+7. Add protected-net policy for tuned, paired, plane, and user-protected routes. Explicit exact-net
+   selection is required to remove protection; it never overrides a KiCad lock.
+8. Restore a rejected destruction transaction completely, including copper, via reservations,
+   tuning metadata, and pressure ownership.
+
+GPU work: frontier extraction, owner intersection histograms, soft min-cut probes, former-corridor
+distance fields, and blocker score reduction.
+
+Exit gate: N+1 blocker fixtures recover routes without losing restored copper, and repeated retries
+demonstrably explore different corridors rather than oscillating.
+
+### Milestone 5 — Package-aware BGA/QFN fanout
+
+Priority: P0 because fanout quality controls every later global route.
+
+1. Analyze package-local pad geometry without relying on reference prefixes. Detect BGA lattice,
+   pitch, holes, population, perimeter/interior balls, QFN/QFP edges, exposed pads, and rotation.
+   Use actual reviewed body/courtyard geometry for package exclusion rather than inventing a BGA
+   rectangle when exact source geometry exists.
+2. Generate bounded BGA channel, dogbone, under-pad, and direct same-net terminal templates.
+3. Generate QFN/QFP perpendicular, two-leg, under-pad, via-in-pad-authorized, and interior-pad
+   templates.
+4. Treat fanout as a regional multi-terminal packing problem: jointly select escape direction,
+   layer, lane, via site/span, adjacent same-net join, and differential-pair adjacency.
+5. Balance layers only after scarcity, critical cuts, return path, pair order, and terminal survival.
+6. Reuse compatible existing same-net vias and plated through-hole pads.
+7. Add exposed-pad thermal-via-array proposals with explicit fabrication policy.
+8. Feed accepted fanout reservations into the global portfolio rather than committing independent
+   stubs before routing.
+9. Add bounded decoupling-cap repair proposals driven by foreign-via overlap, same-net electrical
+   proximity, placement groups, and reviewed placement envelopes. Accept only through the complete
+   integrated route gate.
+
+GPU work: one thread per terminal/template/site for static legality and score terms, batched
+terminal contention matrices, via interaction bitsets, escape wavefronts, and layer-balance
+reductions. CPU performs joint assignment and exact certification of top-K bundles.
+
+Exit gate: generic rotated BGA and QFN fixtures complete fanout with no opens/shorts, dense under-pad
+fixtures retain legal escapes, and a fanout-plus-route board passes external KiCad DRC.
+
+### Milestone 6 — Differential-pair and bus parity
+
+Priority: P1.
+
+1. Complete pair terminal classification for existing stubs, bare pads, different-layer launches,
+   three-plus-terminal chains, electrically short legs, and hybrid coupled-middle/single-ended legs.
+2. Carry endpoint pose and preferred tangent into corridor search and PH interpolation. Use a
+   curvature-aware admissible lower bound where useful; do not add a separate Dubins-grid copper
+   representation.
+3. Jointly select pair escape, center topology, polarity/order, layer sequence, synchronized via
+   sites, approach/exit run-ups, and return-via sites.
+4. Enforce gap, skew, minimum radius, U-turn/inflection policy, phase continuity, and return-path
+   constraints throughout regional and materialization loops.
+5. Add split-ground-domain analysis. A signal/pair may receive return vias only on its resolved
+   domain; ambiguous domains must be reported or explicitly selected.
+6. Add bounded target-assignment proposals using crossing, length, and pin-function policy. Logical
+   P/N or target swaps require an explicit source-bound permission, a reversible schematic change
+   set, and human approval before becoming authoritative.
+7. Add bus-candidate detection as a proposal generator using terminal clustering, naming, and
+   crossing evidence. It emits a reviewable explicit ordered-bus sidecar; it never silently creates
+   an authoritative bus.
+8. Complete multi-channel bus ordering, middle-out escape, neighbor/river cohesion, synchronized
+   transitions, and joint exact acceptance.
+
+GPU work: pose/template expansion, tangent/curvature scoring, pair/bus envelope collision matrices,
+target-assignment cost matrices, return-via site scoring, and joint quantized shortlist assessment.
+Hungarian or branch-and-bound assignment remains CPU-side unless measured matrix size justifies a
+device implementation.
+
+Exit gate: bare-pad, multipoint, hybrid, multilayer, swapped-policy, return-domain, and ordered-bus
+fixtures all pass connectivity, pair/bus constraints, and external DRC atomically.
+
+### Milestone 7 — Power traces, planes, repair, and via stitching
+
+Priority: P1.
+
+1. Add reviewed power-policy sidecars describing source/sink/pass-through/shunt roles, expected
+   current, allowed temperature rise, preferred plane/trace treatment, and net-specific widths.
+2. Implement continuous or bounded stepped power neck-down transitions with exact current-capacity
+   and fabrication-policy reporting. A narrow escape remains explicit width state.
+3. Generate proposed single-net and multi-net plane zone outlines. Multi-net ownership may use
+   Voronoi/weighted-distance evidence, but KiCad refill determines physical copper.
+4. Model predicted fill only for search and scoring. After each zone proposal, refill a separate
+   candidate in KiCad, strictly re-import actual fill, and invalidate stale predictions.
+5. Build an actual-fill connectivity graph containing pads, through holes, filled components,
+   islands, necks, and layer transitions.
+6. Repair disconnected regions through jointly selected pad taps, region joins, layer changes, and
+   blocker-aware local rerouting. Do not rip protected plane or tuned nets without authority.
+7. Generate exposed-pad thermal arrays, area stitching lattices, and board-edge fences. Count an
+   existing same-net via/PTH as coverage and enforce fill-thickness, edge, drill, and clearance
+   constraints.
+8. Estimate plane resistance, current density, bottleneck width, thermal-via coverage, and maximum
+   supported current with explicit model assumptions.
+9. Integrate single-ended and pair return-via requirements with plane-domain connectivity.
+
+GPU work: zone masks, weighted Voronoi ownership, connected-component labeling, distance transforms,
+fill-neck detection, resistor-network/PDE approximations, stitching coverage, and candidate-site
+scoring. CPU/KiCad retain exact zone syntax, refill, connectivity, and DRC authority.
+
+Exit gate: plane creation, shared-layer planes, region repair, pad welding, thermal arrays, area
+stitching, edge fencing, and split-ground return paths pass refill, re-import, connectivity, and
+external DRC fixtures.
+
+### Milestone 8 — Impedance, length, and time matching
+
+Priority: P1.
+
+1. Parse stackup geometry and dielectric properties with provenance. Report assumptions whenever
+   source data is absent; assumptions cannot satisfy a hard electrical constraint silently.
+2. Add microstrip, stripline, and coplanar single/differential impedance calculators with a clear
+   applicability envelope and comparison against KiCad-defined impedance profiles where available.
+3. Resolve per-layer track width and pair gap from an explicit target, then pass that geometry into
+   global capacity, fanout, via allocation, PH offsets, and DRC.
+4. Add explicit source-bound length/time match groups. DDR naming may produce a review proposal, not
+   an accepted electrical classification.
+5. Measure horizontal geometry, native arcs, PH analytic length, via barrels, pad-to-route joins,
+   and layer-dependent propagation delay consistently.
+6. Generate smooth PH-native trombone/serpentine alternatives over certified free runs. Tune
+   multiple nets/pairs jointly so added copper does not consume another member's only tuning area.
+7. Support pair-to-pair, intra-pair, multi-run, multilayer, and AC-coupled extended-net matching.
+8. Protect accepted tuned routes and retain their electrical declaration through reroute.
+9. Add impedance, physical length, propagation time, skew, tuning reserve, and residual-error reports.
+
+GPU work: free-run discovery, thousands of tuning-pattern candidates, analytic PH evaluation,
+SDF/route clearance, candidate conflict bitsets, combination scoring, and top-K reduction. CPU
+exact-checks selected patterns and the final coupled transaction.
+
+Exit gate: impedance-controlled, DDR group, multilayer delay, intra-pair, and AC-coupled fixtures
+meet their declared tolerances after KiCad materialization and DRC.
+
+### Milestone 9 — Placement intent and parity workflows
+
+Priority: P1.
+
+1. Define a strict versioned design-brief schema for board purpose, user-facing connectors, required
+   edges/bands, fixed parts, access directions, assembly notes, and explicitly unknown facts.
+2. Compile the brief into existing source-bound placement groups, regions, relative constraints,
+   move priorities, and new connector-access policy. Compilation is deterministic and reports
+   declared, inferred, unknown, and withheld fields separately.
+3. Add a floorplan grader for overlap, containment, permitted side/orientation, edge intent,
+   connector access, net affinity, decoupling proximity, terminal escape lanes, via slots, corridor
+   cuts, and plane fragility.
+4. Add intent-driven seed proposals and a bounded deterministic placement portfolio containing the
+   immutable input, analytical seeds, route-pressure repairs, swaps, group moves, and controlled
+   perturbations.
+5. Keep feasibility-first candidate comparison and the exact routed Pareto archive. Proxy scores
+   only screen candidates; they never accept placement.
+6. Add violation-directed minimal-move reconstruction for illegal source placements and an explicit
+   lock advisor whose output remains a review proposal.
+7. Integrate BGA/QFN fanout feasibility and decoupling-cap cleanup into placement evaluation.
+8. Produce placement heatmaps and before/after renderings with route-pressure attribution.
+
+GPU work: density/electrostatic fields, overlap/containment broadphase, HPWL and crossing matrices,
+escape-lane/via-slot fields, plane-fragility estimates, and concurrent proxy evaluation of candidate
+waves. CPU owns constraints, proposal construction, stable reduction, and full reroute acceptance.
+
+Exit gate: seeded, perturbed-recovery, connector-edge, group/relative, BGA-decoupling, and illegal-
+placement repair fixtures improve or preserve every hard term and pass a fresh complete route.
+
+### Milestone 10 — Cleanup, verification, and KiCad-oracle repair
+
+Priority: P1.
+
+1. Expose diagnostic commands for connectivity, DRC, pad geometry, orphan stubs, redundant cycles,
+   overlapping vias, malformed/very short copper, non-preferred angles, capacity, channels,
+   terminal pockets, impedance, and per-net forensics.
+2. Make every diagnostic consume the same prepared geometry, connectivity, and rules as routing.
+   There must not be a lenient checker and a stricter hidden acceptance path.
+3. Add connectivity-preserving simplification, gap snapping, redundant-loop removal, duplicate-via
+   removal, dead-tail removal, and PH/arc refitting as board-wide proposed transactions.
+4. Compute before/after connected components and prove that cleanup creates no new open, orphan,
+   short, rule violation, or protected-copper mutation.
+5. Parse KiCad DRC unconnected-item evidence into exact source-bound repair requests. Route only the
+   reported missing links, then rerun complete connectivity and DRC; KiCad evidence cannot exempt
+   other rules.
+6. Add opt-in teardrop policy for pads and vias using native KiCad semantics where possible. Refill
+   and DRC the complete candidate.
+7. Add explicit cleanup proposals for movable copper text or routing-relevant graphics. Preserve
+   content, layer, orientation, source identity, and clearance, and never move ordinary annotation
+   merely because it is visually inconvenient.
+8. Produce stable machine-readable diagnostics and corresponding viewer overlays/analysis PNGs.
+
+GPU work: shared physical broadphase, connectivity edge generation, cycle candidates, orphan/gap
+proximity, cleanup candidate scoring, and diagnostic overlay rasterization. CPU exact predicates and
+KiCad remain authoritative.
+
+Exit gate: deliberately damaged fixtures are detected and repaired only when the complete exact
+transaction is cleaner; clean fixtures remain byte-stable under check-only workflows.
+
+### Milestone 11 — KiCad UX, plans, rendering, and optional AI adapters
+
+Priority: P2 after core feature behavior is qualified.
+
+1. Add a thin KiCad 9/10 orchestration plugin with Route, Advanced, Differential/Bus, Fanout, Planes,
+   Placement, Validation, and Plan tabs.
+2. Read the live selection, expand it through the canonical selector, save a source snapshot, launch
+   the external Flux process, attach the viewer, support cancellation, and apply only an exactly
+   certified routing transaction as one unsaved undo step.
+3. Keep placement, logical swaps, zone proposals, and other high-impact changes preview-only until
+   their dedicated live transaction boundaries are proven.
+4. Persist settings through the existing platform-standard viewer/plugin configuration path. The
+   plan file remains the authoritative portable configuration.
+5. Retain the telemetry WebSocket as observer-only. Process launch/cancel/apply uses a separate local
+   orchestration protocol with source revision and capability checks.
+6. Add deterministic static PCB/copper/placement PNG export and trace-to-MP4/GIF rendering. Reuse
+   recorded snapshots; do not rerun routing to create a movie.
+7. Expose route plans, failure diagnoses, board review, and source evidence as documented JSON APIs.
+8. Allow optional external AI tools to author or explain a `FluxWorkPlan`. Validate the result with
+   the same schema and capabilities as any human-authored plan; the AI receives no routing authority
+   and is never required to use Flux.
+
+GPU work: viewer/static rasterization, video frame generation, large-overlay filtering, and optional
+visual heatmaps. UI orchestration itself remains CPU/event-loop work.
+
+Exit gate: CLI and plugin execute the same serialized work plan, cancellation leaves the source
+untouched, settings round-trip, replay is deterministic, and telemetry on/off does not change the
+routing result.
+
+### Milestone 12 — Parity qualification and release gate
+
+Priority: P0 for declaring completion; performed incrementally throughout all milestones.
+
+1. Run each focused parity fixture when its capability changes.
+2. Run all permanently qualified tiers and the currently unlocked frontier tier after any routing,
+   geometry, rules, GPU, or acceptance change. Permanently unlock the next tier only after its
+   predecessor remains qualified.
+3. Always write source/copper/spline/PH/via/conflict/erosion analysis PNGs and a diagnostic telemetry
+   trace for tier runs, including failed and near-result candidates.
+4. Run representative KRT stress boards by feature class rather than all 443 boards per edit:
+   - simple two-layer and four-layer routing;
+   - dense BGA/QFN escape;
+   - differential pairs and buses;
+   - planes, power, and return paths;
+   - length/time/impedance;
+   - placement recovery;
+   - complex outlines, keepouts, and existing copper.
+5. Run a full corpus-scale A/B wave only for milestone promotion and release. Freeze the executable,
+   config, source corpus, GPU driver/device, and grader for the complete wave.
+6. Compare Flux against both its previous qualified release and pinned KiCadRoutingTools on common
+   source boards. Report completion, DRC, opens/shorts, length/skew, vias, copper length, runtime,
+   peak host/device memory, and unsupported semantics.
+7. Repeat representative runs to measure variance. A randomized portfolio carries an explicit seed;
+   acceptance and reduction remain deterministic.
+8. Preserve every source board byte and make artifact directories write-once.
+
+Exit gate: every parity-manifest item is qualified or explicitly documented as a stronger Flux
+alternative; every routing tier is qualified; no selected stress category has an unexplained
+feasibility regression; the performance gates pass; and all final boards pass external KiCad DRC.
+
+## 8. Cross-cutting implementation requirements
+
+### Diagnostics and telemetry
+
+Every new capability emits semantic events at decision boundaries, not hot-loop probes. Required
+information includes:
+
+- work-plan step and source-policy identity;
+- selector expansion and protected/locked exclusions;
+- fanout/package classification and terminal alternatives;
+- ordering/portfolio evidence and selected topology;
+- rip-up blocker evidence, destruction radius, and restored objects;
+- pair/bus pose, order, via, gap, skew, and return-domain decisions;
+- plane ownership, refill revision, island/neck connectivity, and stitching coverage;
+- impedance/length/time target, measured value, reserve, and residual;
+- placement intent terms and exact rejection reason;
+- GPU batch sizes, queue delay, cache hits, shortlist rates, and fallback/withholding reasons;
+- exact validation state and final external KiCad DRC status.
+
+Normal telemetry coalesces state. Diagnostic traces retain bounded candidate summaries. Trace mode is
+reserved for targeted algorithm work. Queue overflow may drop observer data but can never delay or
+change routing.
+
+### Testing discipline
+
+- Keep compiled unit tests limited to risky invariants: source binding, exact geometry boundaries,
+  deterministic GPU/CPU differential checks, transaction atomicity, coupled groups, and
+  serialization compatibility.
+- Remove redundant tests once their behavior is permanently covered by a stronger invariant or
+  board-level qualification.
+- Use board fixtures for behavior involving routing, fanout, planes, tuning, placement, export, or
+  KiCad DRC.
+- A passed test becomes part of the qualified baseline; do not repeatedly add narrow tests for the
+  same mechanism.
+- Every GPU kernel has a small CPU reference comparison over adversarial fixed cases. Production
+  routing still requires the GPU.
+
+### Source and licensing discipline
+
+- Treat KiCadRoutingTools as a behavioral and algorithmic reference. Reimplement Flux-native C++/GPU
+  mechanisms around the canonical IR.
+- Record the upstream commit and referenced files in research/ADR notes.
+- Preserve attribution and licenses for any imported board fixture, data file, or directly adapted
+  material.
+- Do not mix AGPL slicer code or other incompatible source into Flux. Conceptual use of published
+  algorithms must be documented independently.
+
+## 9. Delivery order
+
+The dependency-respecting route to useful parity is:
+
+```text
+M0 parity contract/baseline
+  -> M1 work plans and route scope
+  -> M2 rules/geometry fidelity
+  -> M3 global strategy + M4 conflict recovery
+  -> M5 fanout
+  -> M6 pairs/buses
+  -> M7 power/planes
+  -> M8 impedance/length/time
+  -> M9 placement intent
+  -> M10 cleanup/verification
+  -> M11 KiCad UX/rendering/optional AI
+  -> M12 full parity qualification
+```
+
+M12 runs continuously rather than only at the end. When a milestone exposes a lower-level routing
+failure, repair the shared global/regional/detail mechanism first and resume the feature milestone;
+do not add a feature-specific legality bypass.
+
+## 10. Completion definition
+
+Feature parity is complete when:
+
+- the parity manifest covers the pinned upstream public feature set;
+- every feature has a Flux command/work-plan representation and observable result;
+- all explicitly supported boards retain strict import and source-preserving export;
+- all route, fanout, pair, bus, plane, tuning, cleanup, and placement transactions pass their hard
+  constraints and final KiCad validation;
+- every progressive tier is permanently qualified;
+- the selected real-board stress wave shows no unexplained regression from the previous Flux
+  release and records a comparison with the pinned reference;
+- production routing fails clearly without a supported GPU and uses the shared runtime when enabled;
+- telemetry, replay, plugin orchestration, and optional AI authorship cannot affect acceptance;
+- documentation distinguishes implemented, qualified, experimental, proposed, and unsupported
+  behavior without overstating any result.

@@ -4,6 +4,7 @@
 
 #include <deque>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -38,6 +39,9 @@ public:
   [[nodiscard]] const std::map<std::string, ResourceOccupancy>& resources() const {
     return resources_;
   }
+  [[nodiscard]] const std::map<std::string, HydraulicField>& hydraulic_fields() const {
+    return hydraulic_fields_;
+  }
   [[nodiscard]] const std::map<std::string, Priority>& priorities() const { return priorities_; }
   [[nodiscard]] const std::map<std::string, std::shared_ptr<const SourceBoard>>&
   source_boards() const {
@@ -67,12 +71,43 @@ private:
   std::map<std::string, Via> vias_;
   std::map<std::string, Conflict> conflicts_;
   std::map<std::string, ResourceOccupancy> resources_;
+  std::map<std::string, HydraulicField> hydraulic_fields_;
   std::map<std::string, Priority> priorities_;
   std::map<std::string, std::shared_ptr<const SourceBoard>> source_boards_;
   std::vector<IterationMetrics> iteration_history_;
   std::optional<IterationMetrics> metrics_;
   Counters counters_;
   std::deque<Activity> activity_;
+};
+
+// Chronological, viewer-side history of non-authoritative telemetry. Events are retained as
+// deltas and periodically reduced into checkpoints so timeline seeks do not require a complete
+// geometry copy for every event. Immutable source-board scenes remain shared through LiveState.
+class LiveStateHistory {
+public:
+  void clear();
+  void append(const Event& event);
+  void seek(std::size_t event_count);
+
+  [[nodiscard]] const LiveState& state() const { return state_; }
+  [[nodiscard]] std::size_t position() const { return position_; }
+  [[nodiscard]] std::size_t size() const { return events_.size(); }
+  [[nodiscard]] const Event* event(std::size_t index) const {
+    return index < events_.size() ? &events_[index] : nullptr;
+  }
+
+private:
+  struct Checkpoint {
+    std::size_t position{0U};
+    LiveState state;
+  };
+
+  static constexpr std::size_t checkpoint_interval = 128U;
+  std::vector<Event> events_;
+  std::vector<Checkpoint> checkpoints_;
+  LiveState tail_state_;
+  LiveState state_;
+  std::size_t position_{0U};
 };
 
 } // namespace flux::telemetry

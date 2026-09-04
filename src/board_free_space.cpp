@@ -114,6 +114,7 @@ extract_polygonal_board_free_space(const Board& board,
     if (keepout.prohibit.tracks && keepout_contains_layer(keepout, config.layer)) {
       result.domain.obstacles.push_back(keepout.area);
       result.obstacle_ids.push_back(keepout.id);
+      result.obstacle_nets.push_back(std::nullopt);
     }
   }
   for (const auto& pad : copper_pad_shapes(board)) {
@@ -124,6 +125,7 @@ extract_polygonal_board_free_space(const Board& board,
     if (auto polygon = polygonal_pad_outline(pad)) {
       result.domain.obstacles.push_back(std::move(polygon->area));
       result.obstacle_ids.push_back(pad.id);
+      result.obstacle_nets.push_back(pad.net);
       if (polygon->conservative) {
         result.conservative_obstacles.push_back(pad.id);
       }
@@ -142,6 +144,7 @@ extract_polygonal_board_free_space(const Board& board,
         }
         result.domain.filled_obstacles.push_back(fill);
         result.filled_obstacle_ids.push_back(zone.id);
+        result.filled_obstacle_nets.push_back(zone.net);
       }
     }
   }
@@ -152,6 +155,7 @@ extract_polygonal_board_free_space(const Board& board,
         if (auto polygon = conservative_track_outline(track)) {
           result.domain.obstacles.push_back(std::move(*polygon));
           result.obstacle_ids.push_back(track.id);
+          result.obstacle_nets.push_back(track.net);
           result.conservative_obstacles.push_back(track.id);
         } else {
           result.unsupported_obstacles.push_back(track.id);
@@ -164,6 +168,7 @@ extract_polygonal_board_free_space(const Board& board,
         if (auto polygon = conservative_track_arc_outline(arc)) {
           result.domain.obstacles.push_back(std::move(*polygon));
           result.obstacle_ids.push_back(arc.id);
+          result.obstacle_nets.push_back(arc.net);
           result.conservative_obstacles.push_back(arc.id);
         } else {
           result.unsupported_obstacles.push_back(arc.id);
@@ -176,6 +181,7 @@ extract_polygonal_board_free_space(const Board& board,
         if (auto polygon = conservative_via_outline(via)) {
           result.domain.obstacles.push_back(std::move(*polygon));
           result.obstacle_ids.push_back(via.id);
+          result.obstacle_nets.push_back(via.net);
           result.conservative_obstacles.push_back(via.id);
         } else {
           result.unsupported_obstacles.push_back(via.id);

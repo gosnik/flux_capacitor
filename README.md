@@ -1,5 +1,21 @@
 # flux_capacitor
 
+v0.137/schema 21 preserves the saved physical board thickness and ordered KiCad stackup as
+canonical source state. Copper, dielectric, mask, paste, and silkscreen entries retain their
+physical order; dielectric `addsublayer` records retain independent material and thickness data;
+and dielectric constant/loss tangent use deterministic decimal nanounits rather than binary
+floating point. Source-preserving export and telemetry/replay carry the same state. Unrepresented
+frequency-dependent dielectric fields stop strict import with an attributed diagnostic instead of
+being silently discarded. See
+[`ADR 0167`](docs/adr/0167-source-bound-fabrication-rules-and-stackup.md).
+
+v0.136/schema 20 also extends the strict KiCad net-class snapshot to bind the matching saved
+project revision and its board-wide fabrication floors. Track, clearance, via diameter, drill, and
+annular-ring minima participate in rule resolution; exact circular/oval physical holes participate
+in mechanical hole-to-hole DRC and early global/regional via-site rejection. KiCad remains the
+project-rule authority, and unrepresented custom or region-dependent rules are not approximated as
+if they were exact.
+
 v0.129/schema 19 preserves a KiCad zone that has no saved fill as an immutable
 `requires_refill` marker instead of discarding it or inventing copper. Canonical validation keeps
 saved-fill and requires-refill states mutually exclusive. Ordinary detailed routing fails closed;

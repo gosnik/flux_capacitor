@@ -2,7 +2,7 @@
 
 ## 1. Scope and current state
 
-This document describes the implementation present in Flux Capacitor v0.135.0, using canonical board schema 19. It is a description of the working code, its execution flow, and its current limits. The ADRs under `docs/adr/` remain the detailed decision history; `plan.md` records the completed replacement of the old optional seed-guidance path. Schema 19 preserves an unfilled KiCad zone as an immutable requires-refill marker and never treats it as physical copper; only the explicitly provisional refill workflow may route such a source before KiCad refill, strict re-import, connectivity, and DRC. It also retains exact circular/oval pad-drill dimensions and pad-local offsets, using physical hole centres for non-plated obstacles and reusable plated-pad transitions.
+This document describes the implementation present in Flux Capacitor v0.137.0, using canonical board schema 21. It is a description of the working code, its execution flow, and its current limits. The ADRs under `docs/adr/` remain the detailed decision history; `plan.md` records the active feature-parity roadmap. Schema 21 preserves physical board thickness and the ordered KiCad stackup, including exact integer-nanometre copper/dielectric thickness and deterministic fixed-point dielectric properties. Schema 20 introduced source-bound project fabrication floors and exact mechanical drill spacing. Schema 19 preserves an unfilled KiCad zone as an immutable requires-refill marker and retains exact circular/oval pad-drill dimensions and pad-local offsets.
 
 Flux is an experimental C++20 placement-and-routing engine with KiCad as its first integration. Its defining design choice is that placement and routing operate on the same board model:
 
@@ -83,11 +83,15 @@ The implementation is organized around the following invariants.
 
 ## 4. Canonical board model
 
-`include/flux/core/board.hpp` defines schema 18. The model contains:
+`include/flux/core/board.hpp` defines schema 21. The model contains:
 
 - board outline and cutouts;
 - ordered copper and technical layers, including KiCad `power`-typed inner copper layers;
-- nets, prioritized net classes, resolved default rules, differential pairs, and explicit ordered physical routing buses;
+- source physical thickness and an ordered physical stackup whose copper/dielectric dimensions are
+  integer nanometres and whose relative permittivity/loss tangent are exact decimal parts per
+  billion; unsupported frequency/model semantics remain explicit import blockers;
+- nets, prioritized net classes, resolved project fabrication floors, differential pairs, and
+  explicit ordered physical routing buses;
 - footprints, placement transforms, locks, exact or tentative placement-envelope provenance, exact circular courtyard primitives, pads, and footprint-owned keepouts;
 - board keepouts with independent track, via, pad, pour, and footprint prohibitions;
 - straight track segments, native three-point circular `TrackArc` objects, through/span vias, and immutable saved zone-fill regions with holes;
@@ -102,7 +106,7 @@ Placement-envelope provenance matters. Exact courtyards and approved external en
 
 ### 5.1 Strict import
 
-The KiCad importer parses the board S-expression into the canonical model. It supports the board and copper objects used by the current workflows, including rotated standard pads, board and footprint keepouts, native track arcs, circular courtyards, simple saved fills, and KiCad's fractured polygon-with-holes walks. Unsupported or lossy geometry is reported explicitly. Routing and optimization commands require `KicadImportResult::strict()`, meaning a board exists, no import error occurred, and the import was not lossy.
+The KiCad importer parses the board S-expression into the canonical model. It supports the board and copper objects used by the current workflows, including rotated standard pads, board and footprint keepouts, native track arcs, circular courtyards, simple saved fills, KiCad's fractured polygon-with-holes walks, physical board thickness, and ordered stackups. A stackup retains copper, dielectric, mask, paste and silkscreen entries plus bounded dielectric sublayers. Thickness is converted directly from source decimal millimetres to integer nanometres; relative permittivity and loss tangent are converted directly to dimensionless parts per billion. The importer does not pass those canonical values through binary floating point. Unsupported or lossy geometry is reported explicitly. Frequency-dependent dielectric model/frequency properties are not yet represented and are attributed strict-import errors rather than ignored. Routing and optimization commands require `KicadImportResult::strict()`, meaning a board exists, no import error occurred, and the import was not lossy.
 
 Pad angles are converted from KiCad's placed absolute orientation into footprint-local orientation on import. This prevents a footprint rotation from being applied twice during geometry checks.
 
@@ -110,7 +114,7 @@ Pad angles are converted from KiCad's placed absolute orientation into footprint
 
 KiCad syntax is not extended with invented Flux properties. Policies absent from the board format are loaded from deterministic sidecars bound to both the source revision and stable object IDs. Current sidecars cover:
 
-- net classes and effective net membership;
+- net classes, effective net membership, and the exact matching saved-project fabrication floors;
 - differential-pair hard gap/skew constraints;
 - explicit ordered routing buses;
 - footprint orientation/side constraints;
@@ -120,7 +124,7 @@ KiCad syntax is not extended with invented Flux properties. Policies absent from
 - relative placement tolerances;
 - staged placement-move priorities.
 
-The official `kicad-python` IPC bridge is read-only when capturing live project net-class data. It verifies that the open document path matches the requested saved file and that the saved bytes do not change during capture.
+The official `kicad-python` IPC bridge is read-only when capturing live project net-class data. It verifies that the open document path matches the requested saved file and that the saved bytes do not change during capture. The installed official IPC surface does not currently expose board-wide minimum constraints, so the same operation reads the matching saved `.kicad_pro` once under a size/change guard, hashes it independently, and captures exactly the eight supported board-rule fields. Snapshot version 3 binds both board and project revisions; missing or malformed fields reject the complete application. The resolver applies those values as floors without rewriting the imported net classes. Region-dependent/custom rules, length constraints, per-layer rule specialization, and the project-wide hole-to-copper rule remain explicitly incomplete.
 
 ## 6. Geometry and free-space services
 

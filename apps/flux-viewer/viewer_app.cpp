@@ -620,6 +620,20 @@ void ViewerApp::draw_source_panel() {
       ImGui::TextWrapped("%s", board->path.empty() ? id.c_str() : board->path.c_str());
       ImGui::TextDisabled("schema %u  %zu layers  %zu nets  %zu objects", board->board_schema,
                           board->layers.size(), board->nets.size(), board->primitives.size());
+      if (board->stackup) {
+        const auto dielectric_count =
+            static_cast<std::size_t>(std::count_if(
+                board->stackup->layers.begin(), board->stackup->layers.end(),
+                [](const auto& layer) { return layer.kind == "dielectric"; }));
+        if (board->physical_thickness_nm) {
+          ImGui::TextDisabled("stackup %zu physical layers / %zu dielectric  %.3f mm",
+                              board->stackup->layers.size(), dielectric_count,
+                              static_cast<double>(*board->physical_thickness_nm) / 1'000'000.0);
+        } else {
+          ImGui::TextDisabled("stackup %zu physical layers / %zu dielectric",
+                              board->stackup->layers.size(), dielectric_count);
+        }
+      }
       if (!board->revision.empty() && ImGui::IsItemHovered()) {
         ImGui::SetTooltip("Source revision: %s", board->revision.c_str());
       }

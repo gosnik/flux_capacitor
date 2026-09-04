@@ -24,7 +24,7 @@ UUID_PATTERN = re.compile(
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
 SUPPORTED_CHANGE_SET_VERSION = 1
-SUPPORTED_BOARD_SCHEMA = 20
+SUPPORTED_BOARD_SCHEMA = 21
 TOP_LEVEL_KEYS = {
     "ok",
     "version",

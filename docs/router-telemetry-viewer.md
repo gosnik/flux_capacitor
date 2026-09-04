@@ -101,8 +101,9 @@ the displayed live state before consuming the new instance's snapshot and events
 or `--no-connect` when automatic connection is not wanted.
 
 Each KiCad CLI run first publishes an immutable source scene. The viewer shows its path, revision,
-schema and object counts, fits the canvas to the board outline, and renders retained native arcs as
-curves. Flux caches this source snapshot separately from current routing state, so a late or
+schema and object counts plus represented physical-stackup layer/dielectric counts and board
+thickness, fits the canvas to the board outline, and renders retained native arcs as curves. Flux
+caches this source snapshot separately from current routing state, so a late or
 reconnected viewer receives both while normal periodic snapshots remain compact. When a workflow
 publishes several boards, path-plus-imported-revision identities retain every immutable scene
 instead of replacing the previously published source. Current fitting
@@ -174,8 +175,9 @@ event is written as one versioned JSONL record.
 Core fields (`type`, `protocol`, `kind`, `sequence`, iteration counters, stable IDs, and `detail`)
 remain accepted. Snapshot or incremental records may additionally contain these bounded arrays:
 
-- `source_boards`: path/revision/schema plus stable layers, nets, and generic integer primitives
-  for outline/cutouts, footprints, pads, existing segments/arcs/vias, zones, and keepouts;
+- `source_boards`: path/revision/schema, optional physical thickness, fixed-point stackup material
+  records, stable layers/nets, and generic integer primitives for outline/cutouts, footprints,
+  pads, existing segments/arcs/vias, zones, and keepouts;
 
 - `routes`: stable route/net IDs, revision, state, width, cost, geometry kind, spline degree,
   `{x_nm,y_nm,layer}` physical-check points, and optional degree-five PH `control_points`; these include

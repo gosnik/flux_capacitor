@@ -249,6 +249,23 @@ Progress ledger (updated 2026-09-04):
   geometry for non-plated obstacles, and exposes plated-pad transitions at the physical hole
   centre. This removes the false oval-drill structural blockers in the CH32V003 corpus board. The
   remaining geometry/rule fidelity list is still open; see ADR 0158 and ADR 0159.
+- Milestone 2.2 partial: net-class snapshot version 3 now binds the exact board revision and an
+  independently SHA-256-bound matching saved project. It captures the complete supported set of
+  eight board-wide KiCad fabrication minima, raises resolved track/clearance/via/drill geometry to
+  those floors, and exact-checks circular/oval mechanical hole-to-hole clearance in whole/dynamic
+  DRC plus global/regional via selection. Schema 20 keeps same-net hole reuse exact-coordinate-only.
+  The installed official IPC surface remains the authority for live net-class membership but does
+  not expose these board minima, so the guarded one-read project snapshot is explicit. Project
+  hole-to-copper enforcement, custom/region-dependent rules, pairwise/per-layer rules, and focused
+  KiCad rule-query agreement remain open; see ADR 0167.
+- Milestone 2.3 partial: board schema 21 now preserves optional physical board thickness and the
+  ordered KiCad physical stackup, including copper and dielectric nanometre thickness, bounded
+  dielectric sublayers, thickness locks, material/color, fixed-point relative permittivity/loss
+  tangent, and board-finish flags. Import requires exact enabled-copper order and alternating
+  copper/dielectric structure, canonical validation repeats the invariants, source-preserving
+  export round-trips them, and source telemetry/replay carries the same state. Unrepresented
+  frequency/model properties stop strict import with an attributed diagnostic. Impedance/delay
+  models and device-resident stackup/rule tables remain open; see ADR 0167.
 - Milestone 1.1 complete: `FluxWorkPlan` schema 1 now carries an exact source revision, explicit
   protected-routing mode, immutable policy identities, ordered typed workflow steps and
   dependencies, selectors, typed scalar options, and default-on telemetry. Its bounded strict JSON

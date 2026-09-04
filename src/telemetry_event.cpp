@@ -21,6 +21,11 @@ template <typename T> T get_or(const ptree& tree, const char* name, T fallback =
   return tree.get<T>(name, std::move(fallback));
 }
 
+template <typename T> std::optional<T> get_optional(const ptree& tree, const char* name) {
+  const auto value = tree.get_optional<T>(name);
+  return value ? std::optional<T>{*value} : std::nullopt;
+}
+
 std::string escape_json(std::string_view value) {
   std::ostringstream out;
   for (const char character : value) {
@@ -77,6 +82,14 @@ void write_number(std::ostringstream& out, std::string_view name, T value, bool&
   out << '"' << name << "\":" << value;
 }
 
+void write_bool(std::ostringstream& out, std::string_view name, bool value, bool& first) {
+  if (!first) {
+    out << ',';
+  }
+  first = false;
+  out << '"' << name << "\":" << (value ? "true" : "false");
+}
+
 Point parse_point(const ptree& tree) {
   return Point{get_or<std::int64_t>(tree, "x_nm"), get_or<std::int64_t>(tree, "y_nm"),
                get_or<std::string>(tree, "layer")};
@@ -96,8 +109,7 @@ Route parse_route(const ptree& tree) {
   route.spline_degree = get_or<std::uint32_t>(tree, "spline_degree");
   route.topology_signature = get_or<std::uint64_t>(tree, "topology_signature");
   route.topology_gate_count = get_or<std::size_t>(tree, "topology_gate_count");
-  route.topology_gate_sequence_legal =
-      get_or<bool>(tree, "topology_gate_sequence_legal", false);
+  route.topology_gate_sequence_legal = get_or<bool>(tree, "topology_gate_sequence_legal", false);
   if (const auto points = tree.get_child_optional("points")) {
     for (const auto& item : *points) {
       route.points.push_back(parse_point(item.second));
@@ -190,8 +202,7 @@ HydraulicField parse_hydraulic_field(const ptree& tree) {
   field.maximum_flow = get_or<std::uint32_t>(tree, "maximum_flow");
   field.maximum_erosion = get_or<std::uint32_t>(tree, "maximum_erosion");
   field.maximum_terrain_height = get_or<std::uint32_t>(tree, "maximum_terrain_height");
-  field.maximum_downstream_pressure =
-      get_or<std::uint32_t>(tree, "maximum_downstream_pressure");
+  field.maximum_downstream_pressure = get_or<std::uint32_t>(tree, "maximum_downstream_pressure");
   field.maximum_success_prior = get_or<std::uint32_t>(tree, "maximum_success_prior");
   const auto parse_values = [&](const char* name, std::vector<std::uint16_t>& values) {
     if (const auto child = tree.get_child_optional(name)) {
@@ -230,6 +241,47 @@ Priority parse_priority(const ptree& tree) {
 SourceLayer parse_source_layer(const ptree& tree) {
   return SourceLayer{get_or<std::string>(tree, "id"), get_or<std::string>(tree, "name"),
                      get_or<std::string>(tree, "kind"), get_or<std::uint32_t>(tree, "stack_order")};
+}
+
+SourceStackupSublayer parse_source_stackup_sublayer(const ptree& tree) {
+  SourceStackupSublayer sublayer;
+  sublayer.thickness_nm = get_optional<std::uint64_t>(tree, "thickness_nm");
+  sublayer.thickness_locked = get_or<bool>(tree, "thickness_locked");
+  sublayer.material = get_or<std::string>(tree, "material");
+  sublayer.relative_permittivity_ppb =
+      get_optional<std::uint64_t>(tree, "relative_permittivity_ppb");
+  sublayer.loss_tangent_ppb = get_optional<std::uint64_t>(tree, "loss_tangent_ppb");
+  sublayer.color = get_or<std::string>(tree, "color");
+  return sublayer;
+}
+
+SourceStackupLayer parse_source_stackup_layer(const ptree& tree) {
+  SourceStackupLayer layer;
+  layer.name = get_or<std::string>(tree, "name");
+  layer.type = get_or<std::string>(tree, "type");
+  layer.kind = get_or<std::string>(tree, "kind");
+  layer.board_layer = get_or<std::string>(tree, "board_layer");
+  if (const auto sublayers = tree.get_child_optional("sublayers")) {
+    for (const auto& item : *sublayers) {
+      layer.sublayers.push_back(parse_source_stackup_sublayer(item.second));
+    }
+  }
+  return layer;
+}
+
+SourceStackup parse_source_stackup(const ptree& tree) {
+  SourceStackup stackup;
+  stackup.copper_finish = get_or<std::string>(tree, "copper_finish");
+  stackup.dielectric_constraints = get_or<bool>(tree, "dielectric_constraints");
+  stackup.edge_plating = get_or<bool>(tree, "edge_plating");
+  stackup.castellated_pads = get_or<bool>(tree, "castellated_pads");
+  stackup.edge_connector = get_or<std::string>(tree, "edge_connector");
+  if (const auto layers = tree.get_child_optional("layers")) {
+    for (const auto& item : *layers) {
+      stackup.layers.push_back(parse_source_stackup_layer(item.second));
+    }
+  }
+  return stackup;
 }
 
 SourceNet parse_source_net(const ptree& tree) {
@@ -281,6 +333,10 @@ std::shared_ptr<const SourceBoard> parse_source_board(const ptree& tree) {
   board->path = get_or<std::string>(tree, "path");
   board->revision = get_or<std::string>(tree, "revision");
   board->board_schema = get_or<std::uint32_t>(tree, "board_schema");
+  board->physical_thickness_nm = get_optional<std::uint64_t>(tree, "physical_thickness_nm");
+  if (const auto stackup = tree.get_child_optional("stackup")) {
+    board->stackup = parse_source_stackup(*stackup);
+  }
   if (const auto layers = tree.get_child_optional("layers")) {
     for (const auto& item : *layers) {
       board->layers.push_back(parse_source_layer(item.second));
@@ -483,8 +539,7 @@ void write_route(std::ostringstream& out, const Route& route) {
       << ",\"topology_signature\":" << route.topology_signature
       << ",\"topology_gate_count\":" << route.topology_gate_count
       << ",\"topology_gate_sequence_legal\":"
-      << (route.topology_gate_sequence_legal ? "true" : "false")
-      << ",\"points\":[";
+      << (route.topology_gate_sequence_legal ? "true" : "false") << ",\"points\":[";
   for (std::size_t index = 0; index < route.points.size(); ++index) {
     if (index != 0U) {
       out << ',';
@@ -541,17 +596,18 @@ void write_hydraulic_field(std::ostringstream& out, const HydraulicField& field)
   const auto write_values = [&](const std::vector<std::uint16_t>& values) {
     out << '[';
     for (std::size_t index = 0U; index < values.size(); ++index) {
-      if (index != 0U) out << ',';
+      if (index != 0U)
+        out << ',';
       out << values[index];
     }
     out << ']';
   };
-  out << "{\"id\":\"" << escape_json(field.id) << "\",\"net\":\""
-      << escape_json(field.net) << "\",\"layer\":\"" << escape_json(field.layer)
-      << "\",\"revision\":" << field.revision << ",\"origin_x_nm\":" << field.origin_x_nm
-      << ",\"origin_y_nm\":" << field.origin_y_nm << ",\"cell_pitch_nm\":"
-      << field.cell_pitch_nm << ",\"width\":" << field.width << ",\"height\":" << field.height
-      << ",\"stride\":" << field.stride << ",\"maximum_flow\":" << field.maximum_flow
+  out << "{\"id\":\"" << escape_json(field.id) << "\",\"net\":\"" << escape_json(field.net)
+      << "\",\"layer\":\"" << escape_json(field.layer) << "\",\"revision\":" << field.revision
+      << ",\"origin_x_nm\":" << field.origin_x_nm << ",\"origin_y_nm\":" << field.origin_y_nm
+      << ",\"cell_pitch_nm\":" << field.cell_pitch_nm << ",\"width\":" << field.width
+      << ",\"height\":" << field.height << ",\"stride\":" << field.stride
+      << ",\"maximum_flow\":" << field.maximum_flow
       << ",\"maximum_erosion\":" << field.maximum_erosion
       << ",\"maximum_terrain_height\":" << field.maximum_terrain_height
       << ",\"maximum_downstream_pressure\":" << field.maximum_downstream_pressure
@@ -590,6 +646,52 @@ void write_source_layer(std::ostringstream& out, const SourceLayer& layer) {
   out << "{\"id\":\"" << escape_json(layer.id) << "\",\"name\":\"" << escape_json(layer.name)
       << "\",\"kind\":\"" << escape_json(layer.kind) << "\",\"stack_order\":" << layer.stack_order
       << '}';
+}
+
+void write_source_stackup_sublayer(std::ostringstream& out, const SourceStackupSublayer& sublayer) {
+  out << '{';
+  bool first = true;
+  if (sublayer.thickness_nm) {
+    write_number(out, "thickness_nm", *sublayer.thickness_nm, first);
+  }
+  write_bool(out, "thickness_locked", sublayer.thickness_locked, first);
+  write_string(out, "material", sublayer.material, first);
+  if (sublayer.relative_permittivity_ppb) {
+    write_number(out, "relative_permittivity_ppb", *sublayer.relative_permittivity_ppb, first);
+  }
+  if (sublayer.loss_tangent_ppb) {
+    write_number(out, "loss_tangent_ppb", *sublayer.loss_tangent_ppb, first);
+  }
+  write_string(out, "color", sublayer.color, first);
+  out << '}';
+}
+
+void write_source_stackup_layer(std::ostringstream& out, const SourceStackupLayer& layer) {
+  out << "{\"name\":\"" << escape_json(layer.name) << "\",\"type\":\"" << escape_json(layer.type)
+      << "\",\"kind\":\"" << escape_json(layer.kind) << "\",\"board_layer\":\""
+      << escape_json(layer.board_layer) << "\",\"sublayers\":[";
+  for (std::size_t index = 0U; index < layer.sublayers.size(); ++index) {
+    if (index != 0U) {
+      out << ',';
+    }
+    write_source_stackup_sublayer(out, layer.sublayers[index]);
+  }
+  out << "]}";
+}
+
+void write_source_stackup(std::ostringstream& out, const SourceStackup& stackup) {
+  out << "{\"copper_finish\":\"" << escape_json(stackup.copper_finish)
+      << "\",\"dielectric_constraints\":" << (stackup.dielectric_constraints ? "true" : "false")
+      << ",\"edge_plating\":" << (stackup.edge_plating ? "true" : "false")
+      << ",\"castellated_pads\":" << (stackup.castellated_pads ? "true" : "false")
+      << ",\"edge_connector\":\"" << escape_json(stackup.edge_connector) << "\",\"layers\":[";
+  for (std::size_t index = 0U; index < stackup.layers.size(); ++index) {
+    if (index != 0U) {
+      out << ',';
+    }
+    write_source_stackup_layer(out, stackup.layers[index]);
+  }
+  out << "]}";
 }
 
 void write_source_net(std::ostringstream& out, const SourceNet& net) {
@@ -642,7 +744,15 @@ void write_source_board(std::ostringstream& out, const std::shared_ptr<const Sou
   }
   out << "{\"id\":\"" << escape_json(board->id) << "\",\"path\":\"" << escape_json(board->path)
       << "\",\"revision\":\"" << escape_json(board->revision)
-      << "\",\"board_schema\":" << board->board_schema << ",\"layers\":[";
+      << "\",\"board_schema\":" << board->board_schema;
+  if (board->physical_thickness_nm) {
+    out << ",\"physical_thickness_nm\":" << *board->physical_thickness_nm;
+  }
+  if (board->stackup) {
+    out << ",\"stackup\":";
+    write_source_stackup(out, *board->stackup);
+  }
+  out << ",\"layers\":[";
   for (std::size_t index = 0U; index < board->layers.size(); ++index) {
     if (index != 0U) {
       out << ',';
@@ -743,9 +853,10 @@ FLUX_ENUM_STRINGS(EventType, "snapshot", "routing_started", "routing_finished", 
                   "via_candidate_rejected", "via_assigned", "via_removed",
                   "pathfinder_iteration_started", "pathfinder_iteration_completed",
                   "conflict_added", "conflict_removed", "resource_occupancy_updated",
-                  "hydraulic_field_updated", "residual_group_updated", "checkpoint_selected", "best_checkpoint_updated",
-                  "placement_proposal_started", "placement_proposal_accepted",
-                  "placement_proposal_rejected", "search_summary", "unknown")
+                  "hydraulic_field_updated", "residual_group_updated", "checkpoint_selected",
+                  "best_checkpoint_updated", "placement_proposal_started",
+                  "placement_proposal_accepted", "placement_proposal_rejected", "search_summary",
+                  "unknown")
 FLUX_ENUM_STRINGS(RouteState, "current", "provisional", "committed", "ripped_up", "removed")
 FLUX_ENUM_STRINGS(RouteGeometry, "polyline", "quintic_ph")
 FLUX_ENUM_STRINGS(ViaState, "candidate", "selected", "contested", "rejected", "removed")

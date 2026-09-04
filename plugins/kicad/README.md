@@ -108,10 +108,13 @@ mark actual MCUs and SoCs explicitly; reference prefixes cannot distinguish thos
 policy changes search order only. Candidate placement remains preview-only and subject to the same
 post-process mechanical review and exact routing/DRC gates.
 
-`export_netclasses.py` is the first thin live-KiCad adapter. It uses the official `kicad-python`
-IPC binding to read explicit project net classes and each board net's effective constituent
-classes, then emits a deterministic source-bound snapshot for the C++ engine. It never edits or
-saves the live board.
+`export_netclasses.py` is the first thin live-KiCad adapter. Snapshot version 3 uses the official
+`kicad-python` IPC binding to read explicit project net classes and each board net's effective
+constituent classes. Because the installed official IPC messages do not expose board-wide minimum
+constraints, it separately reads the matching saved `.kicad_pro` once, captures the eight supported
+fabrication-rule fields, and binds their SHA-256 project revision alongside the board revision. It
+then emits one deterministic source-bound snapshot for the C++ engine. It never edits or saves the
+live board or project.
 
 With the board open and the KiCad API server enabled:
 
@@ -124,8 +127,8 @@ python3 plugins/kicad/export_netclasses.py \
 
 KiCad 10 requires a running GUI instance. The bridge requires the maintained `kicad-python`
 package and deliberately imports it only at the IPC boundary. The snapshot consumer verifies the
-exact board revision, complete named-net coverage, class definitions, memberships, and canonical
-rule validity before routing.
+exact board and project revisions, complete named-net coverage, class definitions, memberships,
+the complete supported board-rule set, and canonical rule validity before routing.
 
 Save the live board before capture. KiCad 10's IPC document descriptor exposes the active board
 path but not a dirty-state flag. The bridge checks that the requested and active paths match, asks

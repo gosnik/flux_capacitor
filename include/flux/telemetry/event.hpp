@@ -185,6 +185,38 @@ struct SourceLayer {
   bool operator==(const SourceLayer&) const = default;
 };
 
+struct SourceStackupSublayer {
+  std::optional<std::uint64_t> thickness_nm;
+  bool thickness_locked{false};
+  std::string material;
+  std::optional<std::uint64_t> relative_permittivity_ppb;
+  std::optional<std::uint64_t> loss_tangent_ppb;
+  std::string color;
+
+  bool operator==(const SourceStackupSublayer&) const = default;
+};
+
+struct SourceStackupLayer {
+  std::string name;
+  std::string type;
+  std::string kind;
+  std::string board_layer;
+  std::vector<SourceStackupSublayer> sublayers;
+
+  bool operator==(const SourceStackupLayer&) const = default;
+};
+
+struct SourceStackup {
+  std::vector<SourceStackupLayer> layers;
+  std::string copper_finish;
+  bool dielectric_constraints{false};
+  bool edge_plating{false};
+  bool castellated_pads{false};
+  std::string edge_connector;
+
+  bool operator==(const SourceStackup&) const = default;
+};
+
 struct SourceNet {
   std::string id;
   std::string name;
@@ -227,6 +259,8 @@ struct SourceBoard {
   std::vector<SourceLayer> layers;
   std::vector<SourceNet> nets;
   std::vector<SourcePrimitive> primitives;
+  std::optional<std::uint64_t> physical_thickness_nm;
+  std::optional<SourceStackup> stackup;
 
   bool operator==(const SourceBoard&) const = default;
 };

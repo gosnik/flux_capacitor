@@ -3560,6 +3560,74 @@ void cancellation_and_kicad_export_boundaries_fail_closed() {
   const auto contents = load_minimal_kicad_fixture();
   const auto imported = flux::io::import_kicad_pcb(contents);
   require(imported.strict(), "the canonical KiCad fixture must import without loss");
+  const auto stackup_path = std::filesystem::path{FLUX_TEST_SOURCE_DIR} /
+                            "fixtures/routing-corpus/bm_svf.kicad_pcb";
+  std::ifstream stackup_input(stackup_path, std::ios::binary);
+  const std::string stackup_contents{std::istreambuf_iterator<char>{stackup_input},
+                                     std::istreambuf_iterator<char>{}};
+  const auto stackup_import = flux::io::import_kicad_pcb(stackup_contents);
+  const auto dielectric =
+      stackup_import.board && stackup_import.board->stackup
+          ? std::find_if(stackup_import.board->stackup->layers.begin(),
+                         stackup_import.board->stackup->layers.end(), [](const auto& layer) {
+                           return layer.kind == flux::StackupLayerKind::dielectric;
+                         })
+          : std::vector<flux::StackupLayer>::const_iterator{};
+  require(!stackup_contents.empty() && stackup_import.strict() && stackup_import.board &&
+              stackup_import.board->physical_thickness == Nanometres{1'600'000} &&
+              stackup_import.board->stackup &&
+              stackup_import.board->stackup->layers.size() == 9U &&
+              dielectric != stackup_import.board->stackup->layers.end() &&
+              dielectric->sublayers.size() == 1U &&
+              dielectric->sublayers.front().thickness == Nanometres{1'510'000} &&
+              dielectric->sublayers.front().relative_permittivity_ppb == 4'500'000'000LL &&
+              dielectric->sublayers.front().loss_tangent_ppb == 20'000'000LL,
+          "KiCad stackup thickness and dielectric properties must enter the canonical board as "
+          "deterministic fixed-point physical data");
+  const auto unchanged_stackup_export = flux::io::export_kicad_candidate(
+      stackup_contents, *stackup_import.board, *stackup_import.board);
+  require(unchanged_stackup_export.ok(),
+          "source-preserving export must round-trip an unchanged represented stackup exactly");
+  auto sublayer_stackup = stackup_contents;
+  const std::string loss_tangent_property{"(loss_tangent 0.02)"};
+  const auto sublayer_insertion = sublayer_stackup.find(loss_tangent_property);
+  require(sublayer_insertion != std::string::npos,
+          "stackup fixture must retain an identifiable dielectric sublayer boundary");
+  sublayer_stackup.insert(
+      sublayer_insertion + loss_tangent_property.size(),
+      "\n\t\t\taddsublayer\n\t\t\t(thickness 0.1 locked)\n\t\t\t(material \"Resin\")\n"
+      "\t\t\t(epsilon_r 3.25)\n\t\t\t(loss_tangent 0.015)");
+  const auto sublayer_import = flux::io::import_kicad_pcb(sublayer_stackup);
+  const std::vector<flux::StackupSublayer>* imported_sublayers = nullptr;
+  if (sublayer_import.board && sublayer_import.board->stackup) {
+    const auto imported_dielectric =
+        std::find_if(sublayer_import.board->stackup->layers.begin(),
+                     sublayer_import.board->stackup->layers.end(), [](const auto& layer) {
+                       return layer.kind == flux::StackupLayerKind::dielectric;
+                     });
+    if (imported_dielectric != sublayer_import.board->stackup->layers.end()) {
+      imported_sublayers = &imported_dielectric->sublayers;
+    }
+  }
+  require(sublayer_import.strict() && imported_sublayers && imported_sublayers->size() == 2U &&
+              (*imported_sublayers)[1].thickness == Nanometres{100'000} &&
+              (*imported_sublayers)[1].thickness_locked &&
+              (*imported_sublayers)[1].relative_permittivity_ppb == 3'250'000'000LL &&
+              (*imported_sublayers)[1].loss_tangent_ppb == 15'000'000LL,
+          "KiCad addsublayer construction must preserve each dielectric material independently");
+  auto unsupported_stackup = stackup_contents;
+  const auto loss_tangent = unsupported_stackup.find("(loss_tangent 0.02)");
+  require(loss_tangent != std::string::npos,
+          "stackup fixture must retain an identifiable dielectric property");
+  unsupported_stackup.insert(loss_tangent, "(spec_frequency 1000000000)\n\t\t\t\t");
+  const auto unsupported_stackup_import = flux::io::import_kicad_pcb(unsupported_stackup);
+  require(!unsupported_stackup_import.strict() &&
+              std::any_of(unsupported_stackup_import.diagnostics.begin(),
+                          unsupported_stackup_import.diagnostics.end(), [](const auto& diagnostic) {
+                            return diagnostic.code == "unsupported_stackup_layer_property";
+                          }),
+          "unrepresented frequency-dependent stackup semantics must stop strict import with an "
+          "attributed diagnostic");
   auto unfilled_zone_contents = contents;
   const auto board_close = unfilled_zone_contents.rfind(')');
   require(board_close != std::string::npos,

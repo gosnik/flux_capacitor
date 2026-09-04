@@ -179,14 +179,14 @@
     {
       "id": "electrical.impedance",
       "title": "Stackup-aware impedance",
-      "status": "missing",
+      "status": "partial",
       "reference_evidence": ["docs/api-impedance.md", "py_router/impedance.py", "py_tools/check_impedance.py"],
-      "flux_evidence": [],
+      "flux_evidence": ["src/kicad_import.cpp", "include/flux/core/board.hpp", "docs/adr/0167-source-bound-fabrication-rules-and-stackup.md"],
       "focused_fixture": "krt.lvds-dual-clock",
       "stress_sample": "reference:kicad_files/glasgow_revC.kicad_pcb",
-      "public_commands": [],
+      "public_commands": ["flux-cli inspect-kicad"],
       "acceptance": "Source-bound stackup and impedance targets produce applicable width/gap geometry and post-route reports with stated assumptions.",
-      "gap": "No impedance calculator or public impedance workflow exists."
+      "gap": "Physical thickness and ordered fixed-point copper/dielectric stackup data now import strictly and are inspectable; no impedance calculator, target policy, width/gap synthesis, or post-route electrical report exists."
     },
     {
       "id": "placement.integrated",

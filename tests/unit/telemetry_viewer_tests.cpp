@@ -9,6 +9,7 @@
 #include <fstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -207,6 +208,20 @@ void rich_overlay_events_round_trip_and_replay() {
   source_board->revision = "fixture-board";
   source_board->board_schema = 18;
   source_board->layers.push_back({"F.Cu", "F.Cu", "copper", 0});
+  source_board->physical_thickness_nm = 1'600'000U;
+  flux::telemetry::SourceStackup source_stackup;
+  source_stackup.copper_finish = "ENIG";
+  source_stackup.dielectric_constraints = true;
+  source_stackup.edge_connector = "none";
+  source_stackup.layers.push_back(
+      {"F.Cu", "copper", "copper", "F.Cu", {{35'000U, false, {}, {}, {}, {}}}});
+  source_stackup.layers.push_back(
+      {"dielectric 1",
+       "core",
+       "dielectric",
+       {},
+       {{1'530'000U, true, "FR4", 4'500'000'000U, 20'000'000U, {}}}});
+  source_board->stackup = std::move(source_stackup);
   source_board->nets.push_back({"SIGNAL", "SIGNAL", 2});
   source_board->primitives.push_back(
       {"board-outline",
@@ -343,6 +358,14 @@ void rich_overlay_events_round_trip_and_replay() {
                       ->primitives.back()
                       .drill_offset_y_nm == -50'000,
           "replay must retain the immutable source scene while dynamic routes change");
+  const auto replayed_source = replay.state().source_boards().at("source-board:0");
+  require(replayed_source->physical_thickness_nm == 1'600'000U && replayed_source->stackup &&
+              replayed_source->stackup->copper_finish == "ENIG" &&
+              replayed_source->stackup->layers.size() == 2U &&
+              replayed_source->stackup->layers.back()
+                      .sublayers.front()
+                      .relative_permittivity_ppb == 4'500'000'000U,
+          "source stackup and fixed-point material properties must survive live/replay JSON");
 
   flux::telemetry::LiveStateHistory overlay_history;
   overlay_history.append(trace.events()[0]);

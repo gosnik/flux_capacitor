@@ -87,6 +87,105 @@ struct Importer {
              : std::nullopt;
 }
 
+// Parse a non-negative decimal without first converting through binary floating point. KiCad may
+// emit an exponent, so the decimal point and exponent are folded into one base-10 shift before a
+// deterministic half-up reduction to the requested fixed-point scale.
+[[nodiscard]] std::optional<std::int64_t> parse_scaled_decimal(std::string_view value,
+                                                               int scale_digits) {
+  if (value.empty() || scale_digits < 0 || scale_digits > 18) {
+    return std::nullopt;
+  }
+  std::size_t cursor = 0U;
+  if (value[cursor] == '+') {
+    ++cursor;
+  } else if (value[cursor] == '-') {
+    return std::nullopt;
+  }
+  std::string digits;
+  std::size_t fractional_digits = 0U;
+  bool decimal_seen = false;
+  bool digit_seen = false;
+  for (; cursor < value.size() && value[cursor] != 'e' && value[cursor] != 'E'; ++cursor) {
+    const auto character = value[cursor];
+    if (character == '.') {
+      if (decimal_seen) {
+        return std::nullopt;
+      }
+      decimal_seen = true;
+      continue;
+    }
+    if (character < '0' || character > '9') {
+      return std::nullopt;
+    }
+    digit_seen = true;
+    digits.push_back(character);
+    if (decimal_seen) {
+      ++fractional_digits;
+    }
+  }
+  if (!digit_seen) {
+    return std::nullopt;
+  }
+  int exponent = 0;
+  if (cursor < value.size()) {
+    auto exponent_text = value.substr(cursor + 1U);
+    if (exponent_text.empty()) {
+      return std::nullopt;
+    }
+    if (exponent_text.front() == '+') {
+      exponent_text.remove_prefix(1U);
+      if (exponent_text.empty()) {
+        return std::nullopt;
+      }
+    }
+    const auto parsed = std::from_chars(exponent_text.data(),
+                                        exponent_text.data() + exponent_text.size(), exponent);
+    if (parsed.ec != std::errc{} || parsed.ptr != exponent_text.data() + exponent_text.size() ||
+        exponent < -1000 || exponent > 1000) {
+      return std::nullopt;
+    }
+  }
+  const auto first_nonzero = digits.find_first_not_of('0');
+  if (first_nonzero == std::string::npos) {
+    return std::int64_t{0};
+  }
+  digits.erase(0U, first_nonzero);
+  const auto shift =
+      static_cast<long long>(exponent) - static_cast<long long>(fractional_digits) + scale_digits;
+  std::string integer_digits;
+  bool round_up = false;
+  if (shift >= 0) {
+    if (digits.size() + static_cast<std::size_t>(shift) > 19U) {
+      return std::nullopt;
+    }
+    integer_digits = digits;
+    integer_digits.append(static_cast<std::size_t>(shift), '0');
+  } else {
+    const auto kept = static_cast<long long>(digits.size()) + shift;
+    if (kept <= 0) {
+      integer_digits = "0";
+      round_up = kept == 0 && digits.front() >= '5';
+    } else {
+      integer_digits = digits.substr(0U, static_cast<std::size_t>(kept));
+      round_up = digits[static_cast<std::size_t>(kept)] >= '5';
+    }
+  }
+  std::uint64_t magnitude = 0U;
+  const auto parsed = std::from_chars(integer_digits.data(),
+                                      integer_digits.data() + integer_digits.size(), magnitude);
+  if (parsed.ec != std::errc{} || parsed.ptr != integer_digits.data() + integer_digits.size() ||
+      magnitude > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
+    return std::nullopt;
+  }
+  if (round_up) {
+    if (magnitude == static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
+      return std::nullopt;
+    }
+    ++magnitude;
+  }
+  return static_cast<std::int64_t>(magnitude);
+}
+
 [[nodiscard]] std::string content_fingerprint(std::string_view contents) {
   constexpr std::uint64_t offset_basis = 14695981039346656037ULL;
   constexpr std::uint64_t prime = 1099511628211ULL;
@@ -440,6 +539,335 @@ void import_layers(const SExpression& root, Board& board, Importer& importer) {
   }
   if (importer.copper_layer_index.empty()) {
     importer.error("missing_copper_layers", "KiCad board has no copper layers", layers->location);
+  }
+}
+
+[[nodiscard]] std::optional<bool> parse_yes_no(const SExpression& expression, Importer& importer,
+                                               std::string_view property) {
+  const auto value = atom_at(expression, 1U);
+  if (expression.children.size() != 2U) {
+    importer.error("invalid_stackup_property",
+                   std::string(property) + " requires exactly one value", expression.location);
+    return std::nullopt;
+  }
+  if (value == "yes") {
+    return true;
+  }
+  if (value == "no") {
+    return false;
+  }
+  importer.error("invalid_stackup_boolean", std::string(property) + " must be `yes` or `no`",
+                 expression.location);
+  return std::nullopt;
+}
+
+[[nodiscard]] std::optional<StackupLayerKind>
+stackup_layer_kind(const Board& board, const std::string& name, const std::string& type,
+                   std::optional<LayerId>& board_layer, Importer& importer,
+                   SourceLocation location) {
+  const auto found = std::find_if(board.layers.begin(), board.layers.end(),
+                                  [&](const auto& layer) { return layer.name == name; });
+  if (found == board.layers.end()) {
+    if (type == "core" || type == "prepreg") {
+      return StackupLayerKind::dielectric;
+    }
+    importer.error("unsupported_stackup_layer",
+                   "stackup layer `" + name +
+                       "` is neither an enabled board layer nor a "
+                       "core/prepreg dielectric",
+                   location);
+    return std::nullopt;
+  }
+  board_layer = found->id;
+  if (found->kind == LayerKind::copper) {
+    if (type != "copper") {
+      importer.error("invalid_stackup_layer_type",
+                     "copper board layer `" + name + "` must have stackup type `copper`", location);
+      return std::nullopt;
+    }
+    return StackupLayerKind::copper;
+  }
+  if (name == "F.Mask" || name == "B.Mask") {
+    return StackupLayerKind::solder_mask;
+  }
+  if (name == "F.Paste" || name == "B.Paste") {
+    return StackupLayerKind::solder_paste;
+  }
+  if (name == "F.SilkS" || name == "B.SilkS") {
+    return StackupLayerKind::silkscreen;
+  }
+  importer.error("unsupported_stackup_layer",
+                 "technical layer `" + name + "` is not a supported physical stackup layer",
+                 location);
+  return std::nullopt;
+}
+
+void import_stackup(const SExpression& root, Board& board, Importer& importer) {
+  if (const auto* general = find_child(root, "general")) {
+    if (const auto* thickness = find_child(*general, "thickness")) {
+      const auto atom = atom_at(*thickness, 1U);
+      const auto value = atom ? parse_scaled_decimal(*atom, 6) : std::nullopt;
+      if (!value || *value <= 0) {
+        importer.error("invalid_board_thickness",
+                       "general board thickness must be a positive finite decimal",
+                       thickness->location);
+      } else {
+        board.physical_thickness = Nanometres{*value};
+      }
+    }
+  }
+
+  const auto* setup = find_child(root, "setup");
+  const auto* expression = setup == nullptr ? nullptr : find_child(*setup, "stackup");
+  if (expression == nullptr) {
+    return;
+  }
+  BoardStackup stackup;
+  std::set<std::string> global_properties;
+  std::set<std::string> physical_names;
+  constexpr std::size_t maximum_stackup_layers = 128U;
+  constexpr std::size_t maximum_dielectric_sublayers = 32U;
+  for (std::size_t index = 1U; index < expression->children.size(); ++index) {
+    const auto& entry = expression->children[index];
+    if (!entry.is_list()) {
+      importer.error("invalid_stackup_entry", "stackup entries must be lists", entry.location);
+      continue;
+    }
+    const auto entry_name = head(entry);
+    if (entry_name != "layer") {
+      if (!global_properties.insert(std::string(entry_name)).second) {
+        importer.error("duplicate_stackup_property",
+                       "stackup property `" + std::string(entry_name) + "` is duplicated",
+                       entry.location);
+        continue;
+      }
+      if (entry_name == "copper_finish") {
+        const auto value = atom_at(entry, 1U);
+        if (!value || entry.children.size() != 2U) {
+          importer.error("invalid_stackup_property", "copper_finish requires one value",
+                         entry.location);
+        } else {
+          stackup.copper_finish = std::string(*value);
+        }
+      } else if (entry_name == "dielectric_constraints") {
+        if (const auto value = parse_yes_no(entry, importer, entry_name)) {
+          stackup.dielectric_constraints = *value;
+        }
+      } else if (entry_name == "edge_plating") {
+        if (const auto value = parse_yes_no(entry, importer, entry_name)) {
+          stackup.edge_plating = *value;
+        }
+      } else if (entry_name == "castellated_pads") {
+        if (const auto value = parse_yes_no(entry, importer, entry_name)) {
+          stackup.castellated_pads = *value;
+        }
+      } else if (entry_name == "edge_connector") {
+        const auto value = atom_at(entry, 1U);
+        if (entry.children.size() != 2U) {
+          importer.error("invalid_stackup_property", "edge_connector requires exactly one value",
+                         entry.location);
+        } else if (value == "yes") {
+          stackup.edge_connector = StackupEdgeConnector::in_use;
+        } else if (value == "bevelled") {
+          stackup.edge_connector = StackupEdgeConnector::bevelled;
+        } else if (value != "no") {
+          importer.error("invalid_stackup_property",
+                         "edge_connector must be `no`, `yes`, or `bevelled`", entry.location);
+        }
+      } else {
+        importer.error("unsupported_stackup_property",
+                       "stackup property `" + std::string(entry_name) +
+                           "` is not represented by the canonical board",
+                       entry.location);
+      }
+      continue;
+    }
+
+    if (stackup.layers.size() >= maximum_stackup_layers) {
+      importer.error("stackup_layer_limit", "stackup exceeds the 128-layer safety bound",
+                     entry.location);
+      continue;
+    }
+    const auto name = atom_at(entry, 1U);
+    if (!name || name->empty()) {
+      importer.error("invalid_stackup_layer", "stackup layer requires a non-empty name",
+                     entry.location);
+      continue;
+    }
+    StackupLayer layer;
+    layer.name = std::string(*name);
+    layer.sublayers.emplace_back();
+    std::vector<std::set<std::string>> properties(1U);
+    bool type_seen = false;
+    for (std::size_t property_index = 2U; property_index < entry.children.size();
+         ++property_index) {
+      const auto& property = entry.children[property_index];
+      if (property.is_atom()) {
+        if (property.value != "addsublayer") {
+          importer.error("unsupported_stackup_layer_property",
+                         "stackup layer atom `" + property.value + "` is not represented",
+                         property.location);
+          continue;
+        }
+        if (layer.sublayers.size() >= maximum_dielectric_sublayers) {
+          importer.error("stackup_sublayer_limit",
+                         "dielectric exceeds the 32-sublayer safety bound", property.location);
+          continue;
+        }
+        layer.sublayers.emplace_back();
+        properties.emplace_back();
+        continue;
+      }
+      const auto property_name = head(property);
+      if (property_name == "type") {
+        if (type_seen) {
+          importer.error("duplicate_stackup_layer_property", "stackup layer type is duplicated",
+                         property.location);
+          continue;
+        }
+        const auto value = atom_at(property, 1U);
+        if (!value || value->empty() || property.children.size() != 2U) {
+          importer.error("invalid_stackup_layer_type", "stackup layer type is empty",
+                         property.location);
+        } else {
+          layer.type = std::string(*value);
+          type_seen = true;
+        }
+        continue;
+      }
+      auto& seen = properties.back();
+      if (!seen.insert(std::string(property_name)).second) {
+        importer.error("duplicate_stackup_layer_property",
+                       "stackup sublayer property `" + std::string(property_name) +
+                           "` is duplicated",
+                       property.location);
+        continue;
+      }
+      auto& sublayer = layer.sublayers.back();
+      if (property_name == "thickness") {
+        const auto atom = atom_at(property, 1U);
+        const auto value = atom ? parse_scaled_decimal(*atom, 6) : std::nullopt;
+        if (!value || *value <= 0) {
+          importer.error("invalid_stackup_thickness",
+                         "stackup thickness must be a positive finite decimal", property.location);
+        } else {
+          sublayer.thickness = Nanometres{*value};
+        }
+        if (property.children.size() > 2U) {
+          const auto locked = atom_at(property, 2U);
+          if (locked != "locked" || property.children.size() != 3U) {
+            importer.error("unsupported_stackup_layer_property",
+                           "thickness accepts only the optional `locked` marker",
+                           property.location);
+          } else {
+            sublayer.thickness_locked = true;
+          }
+        }
+      } else if (property_name == "material") {
+        const auto value = atom_at(property, 1U);
+        if (!value || property.children.size() != 2U) {
+          importer.error("invalid_stackup_material", "material requires one value",
+                         property.location);
+        } else {
+          sublayer.material = std::string(*value);
+        }
+      } else if (property_name == "epsilon_r") {
+        const auto atom = atom_at(property, 1U);
+        const auto value = atom ? parse_scaled_decimal(*atom, 9) : std::nullopt;
+        if (!value || *value <= 0 || property.children.size() != 2U) {
+          importer.error("invalid_stackup_permittivity",
+                         "epsilon_r must be a positive finite decimal", property.location);
+        } else {
+          sublayer.relative_permittivity_ppb = *value;
+        }
+      } else if (property_name == "loss_tangent") {
+        const auto atom = atom_at(property, 1U);
+        const auto value = atom ? parse_scaled_decimal(*atom, 9) : std::nullopt;
+        if (!value || property.children.size() != 2U) {
+          importer.error("invalid_stackup_loss_tangent",
+                         "loss_tangent must be a finite non-negative decimal", property.location);
+        } else {
+          sublayer.loss_tangent_ppb = *value;
+        }
+      } else if (property_name == "color") {
+        const auto value = atom_at(property, 1U);
+        if (!value || property.children.size() != 2U) {
+          importer.error("invalid_stackup_color", "color requires one value", property.location);
+        } else {
+          sublayer.color = std::string(*value);
+        }
+      } else {
+        importer.error("unsupported_stackup_layer_property",
+                       "stackup layer property `" + std::string(property_name) +
+                           "` is not represented by the canonical board",
+                       property.location);
+      }
+    }
+    if (!type_seen) {
+      importer.error("missing_stackup_layer_type", "stackup layer is missing its type",
+                     entry.location);
+    }
+    const auto kind = stackup_layer_kind(board, layer.name, layer.type, layer.board_layer, importer,
+                                         entry.location);
+    if (kind) {
+      layer.kind = *kind;
+    }
+    if (layer.kind != StackupLayerKind::dielectric && layer.sublayers.size() != 1U) {
+      importer.error("invalid_stackup_sublayer",
+                     "only dielectric stackup layers may contain additional sublayers",
+                     entry.location);
+    }
+    if ((layer.kind == StackupLayerKind::copper || layer.kind == StackupLayerKind::dielectric) &&
+        std::any_of(layer.sublayers.begin(), layer.sublayers.end(),
+                    [](const auto& sublayer) { return !sublayer.thickness.has_value(); })) {
+      importer.error("missing_stackup_thickness",
+                     "copper and dielectric stackup layers require physical thickness",
+                     entry.location);
+    }
+    if (!physical_names.insert(layer.name).second) {
+      importer.error("duplicate_stackup_layer", "stackup layer `" + layer.name + "` is duplicated",
+                     entry.location);
+    }
+    stackup.layers.push_back(std::move(layer));
+  }
+
+  std::vector<LayerId> expected_copper;
+  for (const auto& layer : board.layers) {
+    if (layer.kind == LayerKind::copper) {
+      expected_copper.push_back(layer.id);
+    }
+  }
+  std::sort(expected_copper.begin(), expected_copper.end(), [&](const auto& lhs, const auto& rhs) {
+    return importer.copper_layer_index.at(lhs.value()) <
+           importer.copper_layer_index.at(rhs.value());
+  });
+  std::vector<LayerId> actual_copper;
+  std::vector<StackupLayerKind> electrical_sequence;
+  for (const auto& layer : stackup.layers) {
+    if (layer.kind == StackupLayerKind::copper && layer.board_layer) {
+      actual_copper.push_back(*layer.board_layer);
+      electrical_sequence.push_back(layer.kind);
+    } else if (layer.kind == StackupLayerKind::dielectric) {
+      electrical_sequence.push_back(layer.kind);
+    }
+  }
+  if (actual_copper != expected_copper) {
+    importer.error("stackup_copper_order_mismatch",
+                   "stackup copper order does not exactly match the enabled board copper layers",
+                   expression->location);
+  }
+  if (electrical_sequence.empty() || electrical_sequence.front() != StackupLayerKind::copper ||
+      electrical_sequence.back() != StackupLayerKind::copper ||
+      std::adjacent_find(electrical_sequence.begin(), electrical_sequence.end()) !=
+          electrical_sequence.end()) {
+    importer.error("invalid_stackup_sequence",
+                   "electrical stackup must alternate copper and dielectric from front to back",
+                   expression->location);
+  }
+  if (stackup.layers.empty()) {
+    importer.error("empty_stackup", "stackup contains no physical layers", expression->location);
+  } else {
+    board.stackup = std::move(stackup);
   }
 }
 
@@ -1466,6 +1894,7 @@ void import_tracks_and_vias(const SExpression& root, Board& board, Importer& imp
   board.source_revision = "kicad-" + std::string(version) + ":" + std::string(generator) + ":" +
                           std::string(fingerprint);
   import_layers(root, board, importer);
+  import_stackup(root, board, importer);
   import_nets(root, board, importer);
   infer_differential_pairs(board);
   import_outline(root, board, importer);

@@ -5467,6 +5467,12 @@ void print_import_result(const flux::io::KicadImportResult& imported) {
     std::size_t zone_fill_regions = 0;
     std::size_t zone_fill_holes = 0;
     std::size_t zones_requiring_refill = 0;
+    std::size_t stackup_dielectrics = 0;
+    if (imported.board->stackup) {
+      stackup_dielectrics = static_cast<std::size_t>(std::count_if(
+          imported.board->stackup->layers.begin(), imported.board->stackup->layers.end(),
+          [](const auto& layer) { return layer.kind == flux::StackupLayerKind::dielectric; }));
+    }
     for (const auto& zone : imported.board->zones) {
       zone_fill_regions += zone.fills.size();
       zones_requiring_refill += zone.requires_refill ? 1U : 0U;
@@ -5483,6 +5489,15 @@ void print_import_result(const flux::io::KicadImportResult& imported) {
     }
     std::cout << ",\n"
               << "  \"source_revision\": " << json_quote(imported.board->source_revision) << ",\n"
+              << "  \"physical_thickness_nm\": "
+              << (imported.board->physical_thickness
+                      ? imported.board->physical_thickness->value()
+                      : 0)
+              << ",\n"
+              << "  \"stackup_layers\": "
+              << (imported.board->stackup ? imported.board->stackup->layers.size() : 0U)
+              << ",\n"
+              << "  \"stackup_dielectrics\": " << stackup_dielectrics << ",\n"
               << "  \"board_cutouts\": " << imported.board->cutouts.size() << ",\n"
               << "  \"layers\": " << imported.board->layers.size() << ",\n"
               << "  \"nets\": " << imported.board->nets.size() << ",\n"
@@ -7898,7 +7913,7 @@ constrained_optimizer_config(const Board& board,
 }
 
 void print_help() {
-  std::cout << "flux-cli 0.136.0\n\n"
+  std::cout << "flux-cli 0.137.0\n\n"
                "Usage:\n"
                "  flux-cli version       Print the engine version\n"
                "  flux-cli capabilities --json  Print the pinned feature-parity contract\n"
@@ -8108,7 +8123,7 @@ int main(int argc, char** argv) {
   }
   const std::string_view command{argv[1]};
   if (command == "version" && argc == 2) {
-    std::cout << "flux_capacitor 0.136.0 board-schema 20\n";
+    std::cout << "flux_capacitor 0.137.0 board-schema " << flux::board_schema_version << '\n';
     return EXIT_SUCCESS;
   }
   if (command == "capabilities" && argc == 3 && std::string_view{argv[2]} == "--json") {
@@ -8123,8 +8138,8 @@ int main(int argc, char** argv) {
     const char* override_value = std::getenv("FLUX_VULKAN_DEVICE");
     std::cout << "{\n"
               << "  \"engine\": \"flux_capacitor\",\n"
-              << "  \"version\": \"0.136.0\",\n"
-              << "  \"board_schema\": 20,\n"
+              << "  \"version\": \"0.137.0\",\n"
+              << "  \"board_schema\": " << flux::board_schema_version << ",\n"
               << "  \"production_gpu_required\": true,\n"
               << "  \"gpu_available\": " << (device.available ? "true" : "false") << ",\n"
               << "  \"gpu_device\": " << json_quote(device.device_name) << ",\n"

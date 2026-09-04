@@ -104,17 +104,14 @@ ValidationReport validate_board_impl(const Board& board, bool reuse_static_zone_
       board.rules.default_differential_pair_track_width.value() <= 0 ||
       board.rules.default_differential_pair_gap.value() < 0 ||
       board.rules.default_differential_pair_via_gap.value() < 0 ||
-      board.rules.minimum_clearance.value() < 0 ||
-      board.rules.minimum_track_width.value() < 0 ||
+      board.rules.minimum_clearance.value() < 0 || board.rules.minimum_track_width.value() < 0 ||
       board.rules.minimum_via_diameter.value() < 0 ||
       board.rules.minimum_via_annular_width.value() < 0 ||
       board.rules.minimum_through_drill.value() < 0 ||
-      board.rules.copper_to_edge_clearance.value() < 0 ||
-      board.rules.hole_clearance.value() < 0 ||
+      board.rules.copper_to_edge_clearance.value() < 0 || board.rules.hole_clearance.value() < 0 ||
       board.rules.hole_to_hole_clearance.value() < 0 ||
       board.rules.minimum_via_annular_width.value() >
-          (std::numeric_limits<std::int64_t>::max() -
-           board.rules.minimum_through_drill.value()) /
+          (std::numeric_limits<std::int64_t>::max() - board.rules.minimum_through_drill.value()) /
               2) {
     add_issue(report, IssueSeverity::error, "invalid_board_design_rules",
               "board design-rule dimensions are inconsistent");
@@ -129,6 +126,84 @@ ValidationReport validate_board_impl(const Board& board, bool reuse_static_zone_
     }
     if (layer.kind == LayerKind::copper) {
       copper_layer_ids.insert(layer.id.value());
+    }
+  }
+  if (board.physical_thickness && board.physical_thickness->value() <= 0) {
+    add_issue(report, IssueSeverity::error, "invalid_board_thickness",
+              "physical board thickness must be positive when represented");
+  }
+  if (board.stackup) {
+    std::unordered_set<std::string> stackup_names;
+    std::unordered_set<std::string> stackup_board_layers;
+    std::vector<std::string> actual_copper;
+    std::vector<StackupLayerKind> electrical_sequence;
+    if (board.stackup->layers.empty() || board.stackup->layers.size() > 128U) {
+      add_issue(report, IssueSeverity::error, "invalid_stackup_size",
+                "a represented stackup must contain between one and 128 physical layers");
+    }
+    for (const auto& stackup_layer : board.stackup->layers) {
+      bool invalid = stackup_layer.name.empty() || stackup_layer.type.empty() ||
+                     !stackup_names.insert(stackup_layer.name).second ||
+                     stackup_layer.sublayers.empty() || stackup_layer.sublayers.size() > 32U;
+      if (stackup_layer.kind != StackupLayerKind::dielectric) {
+        invalid = invalid || !stackup_layer.board_layer ||
+                  !has_value(layer_ids, stackup_layer.board_layer->value()) ||
+                  !stackup_board_layers.insert(stackup_layer.board_layer->value()).second ||
+                  stackup_layer.sublayers.size() != 1U;
+      } else {
+        invalid = invalid || stackup_layer.board_layer.has_value();
+      }
+      for (const auto& sublayer : stackup_layer.sublayers) {
+        invalid =
+            invalid || (sublayer.thickness && sublayer.thickness->value() <= 0) ||
+            (sublayer.relative_permittivity_ppb && *sublayer.relative_permittivity_ppb <= 0) ||
+            (sublayer.loss_tangent_ppb && *sublayer.loss_tangent_ppb < 0);
+      }
+      if ((stackup_layer.kind == StackupLayerKind::copper ||
+           stackup_layer.kind == StackupLayerKind::dielectric) &&
+          std::any_of(stackup_layer.sublayers.begin(), stackup_layer.sublayers.end(),
+                      [](const auto& sublayer) { return !sublayer.thickness; })) {
+        invalid = true;
+      }
+      if (stackup_layer.kind == StackupLayerKind::copper) {
+        invalid = invalid || stackup_layer.type != "copper" || !stackup_layer.board_layer ||
+                  !has_value(copper_layer_ids, stackup_layer.board_layer->value());
+        if (stackup_layer.board_layer) {
+          actual_copper.push_back(stackup_layer.board_layer->value());
+        }
+        electrical_sequence.push_back(stackup_layer.kind);
+      } else if (stackup_layer.kind == StackupLayerKind::dielectric) {
+        invalid = invalid || (stackup_layer.type != "core" && stackup_layer.type != "prepreg");
+        electrical_sequence.push_back(stackup_layer.kind);
+      }
+      if (invalid) {
+        add_issue(report, IssueSeverity::error, "invalid_stackup_layer",
+                  "stackup layers must have unique identities, supported physical kinds, and "
+                  "consistent fixed-point material dimensions",
+                  {stackup_layer.name});
+      }
+    }
+    std::vector<const Layer*> expected_copper;
+    for (const auto& layer : board.layers) {
+      if (layer.kind == LayerKind::copper) {
+        expected_copper.push_back(&layer);
+      }
+    }
+    std::sort(expected_copper.begin(), expected_copper.end(),
+              [](const auto* lhs, const auto* rhs) { return lhs->stack_order < rhs->stack_order; });
+    const bool order_matches =
+        actual_copper.size() == expected_copper.size() &&
+        std::equal(actual_copper.begin(), actual_copper.end(), expected_copper.begin(),
+                   [](const auto& id, const auto* layer) { return id == layer->id.value(); });
+    const bool alternates =
+        !electrical_sequence.empty() && electrical_sequence.front() == StackupLayerKind::copper &&
+        electrical_sequence.back() == StackupLayerKind::copper &&
+        std::adjacent_find(electrical_sequence.begin(), electrical_sequence.end()) ==
+            electrical_sequence.end();
+    if (!order_matches || !alternates) {
+      add_issue(report, IssueSeverity::error, "invalid_stackup_sequence",
+                "stackup copper layers must match the enabled front-to-back layer order and "
+                "alternate with dielectric layers");
     }
   }
 
@@ -445,9 +520,8 @@ ValidationReport validate_board_impl(const Board& board, bool reuse_static_zone_
            static_cast<long double>(absolute_magnitude(pad.drill_offset.y.value())) * 2.0L +
                    static_cast<long double>(pad.drill_height.value()) >
                static_cast<long double>(pad.height.value()));
-      if (pad.width.value() <= 0 || pad.height.value() <= 0 ||
-          pad.drill_width.value() < 0 || pad.drill_height.value() < 0 || partial_drill ||
-          drill_outside_pad_bounds) {
+      if (pad.width.value() <= 0 || pad.height.value() <= 0 || pad.drill_width.value() < 0 ||
+          pad.drill_height.value() < 0 || partial_drill || drill_outside_pad_bounds) {
         add_issue(report, IssueSeverity::error, "invalid_pad_dimensions",
                   "pad dimensions must be positive and contain the complete drill bounds",
                   {pad.id.value()});

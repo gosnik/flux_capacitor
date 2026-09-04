@@ -11,7 +11,7 @@
 
 namespace flux {
 
-inline constexpr std::uint32_t board_schema_version = 20;
+inline constexpr std::uint32_t board_schema_version = 21;
 inline constexpr std::int64_t max_abs_coordinate_nm = 1'000'000'000;
 
 struct Point {
@@ -67,6 +67,49 @@ struct Layer {
   std::uint32_t stack_order{0};
 
   bool operator==(const Layer&) const = default;
+};
+
+enum class StackupLayerKind { copper, dielectric, solder_mask, solder_paste, silkscreen };
+
+// Dimensionless material values are stored as exact decimal nanounits (value * 1e9). This avoids
+// allowing platform-dependent binary floating-point parsing into canonical source identity while
+// retaining sufficient precision for later impedance and propagation-delay models.
+struct StackupSublayer {
+  std::optional<Nanometres> thickness;
+  bool thickness_locked{false};
+  std::string material;
+  std::optional<std::int64_t> relative_permittivity_ppb;
+  std::optional<std::int64_t> loss_tangent_ppb;
+  std::string color;
+
+  bool operator==(const StackupSublayer&) const = default;
+};
+
+struct StackupLayer {
+  std::string name;
+  std::string type;
+  StackupLayerKind kind{StackupLayerKind::dielectric};
+  // Dielectrics have no logical KiCad board-layer identity. Physical copper/mask/paste/silk
+  // entries bind to an enabled canonical layer instead of repeating an unverified name.
+  std::optional<LayerId> board_layer;
+  // One entry is always present. Additional entries preserve KiCad `addsublayer` dielectric
+  // construction in physical order.
+  std::vector<StackupSublayer> sublayers;
+
+  bool operator==(const StackupLayer&) const = default;
+};
+
+enum class StackupEdgeConnector { none, in_use, bevelled };
+
+struct BoardStackup {
+  std::vector<StackupLayer> layers;
+  std::string copper_finish;
+  bool dielectric_constraints{false};
+  bool edge_plating{false};
+  bool castellated_pads{false};
+  StackupEdgeConnector edge_connector{StackupEdgeConnector::none};
+
+  bool operator==(const BoardStackup&) const = default;
 };
 
 // Properties are independently inherited. Higher numeric priority wins for a property, and
@@ -327,10 +370,12 @@ struct Board {
   std::uint32_t schema_version{board_schema_version};
   std::string source_revision;
   BoardDesignRules rules;
+  std::optional<Nanometres> physical_thickness;
   Polygon outline;
   // Disjoint simple contours strictly inside outline. Board material is outline minus cutouts.
   std::vector<Polygon> cutouts;
   std::vector<Layer> layers;
+  std::optional<BoardStackup> stackup;
   std::vector<Net> nets;
   std::vector<NetClass> net_classes;
   std::vector<DifferentialPair> differential_pairs;

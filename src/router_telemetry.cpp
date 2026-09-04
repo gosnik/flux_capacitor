@@ -119,6 +119,71 @@ make_source_board_scene(const Board& board, std::string source_path) {
         layer.id.value(), layer.name, layer.kind == LayerKind::copper ? "copper" : "technical",
         layer.stack_order});
   }
+  if (board.physical_thickness) {
+    scene->physical_thickness_nm = static_cast<std::uint64_t>(board.physical_thickness->value());
+  }
+  if (board.stackup) {
+    telemetry::SourceStackup source_stackup;
+    source_stackup.copper_finish = board.stackup->copper_finish;
+    source_stackup.dielectric_constraints = board.stackup->dielectric_constraints;
+    source_stackup.edge_plating = board.stackup->edge_plating;
+    source_stackup.castellated_pads = board.stackup->castellated_pads;
+    switch (board.stackup->edge_connector) {
+    case StackupEdgeConnector::none:
+      source_stackup.edge_connector = "none";
+      break;
+    case StackupEdgeConnector::in_use:
+      source_stackup.edge_connector = "in_use";
+      break;
+    case StackupEdgeConnector::bevelled:
+      source_stackup.edge_connector = "bevelled";
+      break;
+    }
+    source_stackup.layers.reserve(board.stackup->layers.size());
+    for (const auto& layer : board.stackup->layers) {
+      telemetry::SourceStackupLayer source_layer;
+      source_layer.name = layer.name;
+      source_layer.type = layer.type;
+      source_layer.board_layer = layer.board_layer ? layer.board_layer->value() : std::string{};
+      switch (layer.kind) {
+      case StackupLayerKind::copper:
+        source_layer.kind = "copper";
+        break;
+      case StackupLayerKind::dielectric:
+        source_layer.kind = "dielectric";
+        break;
+      case StackupLayerKind::solder_mask:
+        source_layer.kind = "solder_mask";
+        break;
+      case StackupLayerKind::solder_paste:
+        source_layer.kind = "solder_paste";
+        break;
+      case StackupLayerKind::silkscreen:
+        source_layer.kind = "silkscreen";
+        break;
+      }
+      source_layer.sublayers.reserve(layer.sublayers.size());
+      for (const auto& sublayer : layer.sublayers) {
+        telemetry::SourceStackupSublayer source_sublayer;
+        if (sublayer.thickness) {
+          source_sublayer.thickness_nm = static_cast<std::uint64_t>(sublayer.thickness->value());
+        }
+        source_sublayer.thickness_locked = sublayer.thickness_locked;
+        source_sublayer.material = sublayer.material;
+        if (sublayer.relative_permittivity_ppb) {
+          source_sublayer.relative_permittivity_ppb =
+              static_cast<std::uint64_t>(*sublayer.relative_permittivity_ppb);
+        }
+        if (sublayer.loss_tangent_ppb) {
+          source_sublayer.loss_tangent_ppb = static_cast<std::uint64_t>(*sublayer.loss_tangent_ppb);
+        }
+        source_sublayer.color = sublayer.color;
+        source_layer.sublayers.push_back(std::move(source_sublayer));
+      }
+      source_stackup.layers.push_back(std::move(source_layer));
+    }
+    scene->stackup = std::move(source_stackup);
+  }
   scene->nets.reserve(board.nets.size());
   for (const auto& net : board.nets) {
     scene->nets.push_back(telemetry::SourceNet{net.id.value(), net.name, net.priority});

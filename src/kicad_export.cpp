@@ -343,7 +343,8 @@ template <typename Item>
 
 [[nodiscard]] bool same_board_snapshot(const Board& lhs, const Board& rhs) {
   return lhs.schema_version == rhs.schema_version && lhs.source_revision == rhs.source_revision &&
-         lhs.outline == rhs.outline && lhs.cutouts == rhs.cutouts && lhs.layers == rhs.layers &&
+         lhs.physical_thickness == rhs.physical_thickness && lhs.outline == rhs.outline &&
+         lhs.cutouts == rhs.cutouts && lhs.layers == rhs.layers && lhs.stackup == rhs.stackup &&
          same_kicad_nets(lhs.nets, rhs.nets) &&
          same_kicad_differential_pairs(lhs.differential_pairs, rhs.differential_pairs) &&
          same_kicad_footprints(lhs.footprints, rhs.footprints) && lhs.tracks == rhs.tracks &&
@@ -355,8 +356,9 @@ template <typename Item>
                                      KicadExportResult& result) {
   if (candidate.schema_version != source.schema_version || candidate.outline != source.outline ||
       candidate.cutouts != source.cutouts || candidate.rules != source.rules ||
-      candidate.layers != source.layers || candidate.nets != source.nets ||
-      candidate.net_classes != source.net_classes ||
+      candidate.physical_thickness != source.physical_thickness ||
+      candidate.layers != source.layers || candidate.stackup != source.stackup ||
+      candidate.nets != source.nets || candidate.net_classes != source.net_classes ||
       candidate.differential_pairs != source.differential_pairs ||
       candidate.routing_buses != source.routing_buses ||
       candidate.placement_groups != source.placement_groups ||
@@ -365,7 +367,8 @@ template <typename Item>
       candidate.keepouts != source.keepouts ||
       candidate.footprints.size() != source.footprints.size()) {
     error(result, "unsupported_design_change",
-          "candidate changes board structure, rules, layers, nets, or footprint membership");
+          "candidate changes board structure, rules, stackup, layers, nets, or footprint "
+          "membership");
     return false;
   }
   const auto candidate_footprints = by_id(candidate.footprints);
@@ -500,7 +503,9 @@ void collect_source_uuids(const SExpression& expression, std::set<std::string>& 
 [[nodiscard]] bool equivalent_after_round_trip(const Board& expected, const Board& actual,
                                                const std::map<ObjectId, ObjectId>& remapped_ids) {
   if (expected.schema_version != actual.schema_version || expected.outline != actual.outline ||
-      expected.cutouts != actual.cutouts || expected.layers != actual.layers ||
+      expected.cutouts != actual.cutouts ||
+      expected.physical_thickness != actual.physical_thickness ||
+      expected.layers != actual.layers || expected.stackup != actual.stackup ||
       !same_kicad_nets(expected.nets, actual.nets) ||
       !same_kicad_differential_pairs(expected.differential_pairs, actual.differential_pairs) ||
       !same_kicad_footprints(expected.footprints, actual.footprints) ||

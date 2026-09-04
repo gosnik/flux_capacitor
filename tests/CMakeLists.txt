@@ -120,7 +120,7 @@ if(Python3_Interpreter_FOUND AND KICAD_CLI_EXECUTABLE AND INKSCAPE_EXECUTABLE)
     TIMEOUT 7200)
 endif()
 flux_add_cli_test(flux_cli_demo "\"valid\": true" demo)
-flux_add_cli_test(flux_cli_version "board-schema 20" version)
+flux_add_cli_test(flux_cli_version "board-schema 21" version)
 flux_add_cli_test(
   flux_cli_system_info
   "\"gpu_available\": true"

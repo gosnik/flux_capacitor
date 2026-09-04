@@ -214,7 +214,7 @@ def change_set():
     return {
         "ok": True,
         "version": 1,
-        "board_schema": 20,
+        "board_schema": 21,
         "source_revision": "sha256:test-revision",
         "source_inventory": {
             "footprints": [
@@ -273,7 +273,7 @@ class CandidateBridgeTests(unittest.TestCase):
             BRIDGE.validate_change_set(reordered)
 
         stale_schema = copy.deepcopy(document)
-        stale_schema["board_schema"] = 19
+        stale_schema["board_schema"] = 20
         with self.assertRaisesRegex(BRIDGE.ChangeSetError, "unsupported board schema"):
             BRIDGE.validate_change_set(stale_schema)
 

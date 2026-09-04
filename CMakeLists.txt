@@ -6,7 +6,7 @@ endif()
 
 project(
   flux_capacitor
-  VERSION 0.132.0
+  VERSION 0.133.0
   DESCRIPTION "Integrated PCB placement and routing engine"
   LANGUAGES CXX)
 
@@ -98,6 +98,7 @@ add_library(flux_core
   src/keepout_geometry.cpp
   src/kicad_export.cpp
   src/kicad_import.cpp
+  src/kicad_refill.cpp
   src/kicad_netclass_snapshot.cpp
   src/orientation_constraints.cpp
   src/placement_move_priorities.cpp
@@ -201,6 +202,9 @@ add_executable(flux-cli apps/flux-cli/main.cpp)
 target_link_libraries(flux-cli PRIVATE flux::core)
 target_compile_features(flux-cli PRIVATE cxx_std_20)
 target_include_directories(flux-cli PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
+target_compile_definitions(
+  flux-cli PRIVATE
+    FLUX_KICAD_REFILL_HELPER_PATH="${CMAKE_CURRENT_SOURCE_DIR}/plugins/kicad/refill_zones.py")
 
 add_executable(flux-hydraulic-demo apps/flux-hydraulic-demo/main.cpp)
 target_link_libraries(flux-hydraulic-demo PRIVATE flux::core)

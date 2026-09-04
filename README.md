@@ -1754,6 +1754,13 @@ The CLI-only sampled-overflow repair is now shared as well. WorkPlans may explic
 `post_negotiation_sampled_conflict_repair`, bound its deterministic attributed conflict cones, and
 observe attempted/accepted cones and participating nets without weakening the global checkpoint
 comparator. See [`ADR 0163`](docs/adr/0163-shared-sampled-conflict-cone-repair.md).
+An explicitly terminal `refillable_zone_fills` route step now preserves its exact provisional
+candidate for a bounded KiCad-owned fill transaction. The CLI stages source rule context, invokes
+the configured KiCad Python helper without a shell, strict-imports the regenerated board, reruns
+exact internal connectivity/copper acceptance, runs external KiCad DRC, and atomically publishes
+only the fully accepted refilled artifact. Refill/tool/import/DRC failure leaves the requested path
+absent. See
+[`ADR 0164`](docs/adr/0164-atomic-work-plan-zone-refill-publication.md).
 Execution/replay remains
 withheld for any selected capability still marked partial. `flux-cli execute-work-plan-kicad BOARD
 PLAN [OUTPUT]` therefore executes only a fully qualified plan: preview mode forbids an output,

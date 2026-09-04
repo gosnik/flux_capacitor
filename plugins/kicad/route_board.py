@@ -32,6 +32,20 @@ def _run_json(command: Sequence[str], label: str) -> tuple[int, Mapping[str, Any
     return completed.returncode, document, completed.stderr.strip()
 
 
+def _run_json_report(
+    command: Sequence[str], report: pathlib.Path, label: str
+) -> tuple[int, Mapping[str, Any], str]:
+    completed = subprocess.run(command, check=False, capture_output=True, text=True)
+    try:
+        document = json.loads(report.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        detail = completed.stderr.strip() or completed.stdout.strip() or "no process output"
+        raise WorkflowError(f"{label} returned no valid JSON report: {detail}") from error
+    if not isinstance(document, Mapping):
+        raise WorkflowError(f"{label} returned a non-object JSON report")
+    return completed.returncode, document, completed.stderr.strip()
+
+
 def _resolve_new_output(path: pathlib.Path, source: pathlib.Path) -> pathlib.Path:
     parent = path.expanduser().parent.resolve(strict=True)
     output = parent / path.name
@@ -561,7 +575,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                         shutil.copy2(source_policy, staged)
                         staged_policy.append(str(staged))
                 refilled = pathlib.Path(directory) / "refilled.kicad_pcb"
-                refill_code, refill, refill_stderr = _run_json(
+                refill_report = pathlib.Path(directory) / "zone-refill.json"
+                refill_code, refill, refill_stderr = _run_json_report(
                     [
                         sys.executable,
                         str(pathlib.Path(__file__).with_name("refill_zones.py")),
@@ -569,7 +584,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                         str(provisional),
                         "--output",
                         str(refilled),
+                        "--report",
+                        str(refill_report),
                     ],
+                    refill_report,
                     "KiCad zone refill",
                 )
                 report["zone_refill"] = {

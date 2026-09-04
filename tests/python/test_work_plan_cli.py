@@ -90,6 +90,10 @@ def main() -> int:
             execution_summary["preview"] is True
             and execution_summary["internally_complete"] is True
             and execution_summary["candidate_ready_for_export"] is False
+            and execution_summary["candidate_ready_for_zone_refill"] is False
+            and execution_summary["zone_refill_required"] is False
+            and execution_summary["zone_refill_run"] is False
+            and execution_summary["zone_refill_passed"] is False
             and execution_summary["export_attempted"] is False
             and execution_summary["output"] is None
         ):
@@ -300,6 +304,7 @@ exit 5
                     "max_router_iterations": 9,
                     "post_negotiation_sampled_conflict_repair": True,
                     "priority_nets": ["SIGNAL"],
+                    "refillable_zone_fills": True,
                     "xpbd_feedback": True,
                 },
             }
@@ -337,6 +342,9 @@ exit 5
             and scoped_result["compiled_route_steps"][0]["configuration"]
             ["max_post_negotiation_sampled_conflict_repair_cones"]
             == 4
+            and scoped_result["compiled_route_steps"][0]["configuration"]
+            ["refillable_zone_fills"]
+            is True
             and scoped_result["compiled_route_steps"][0]["configuration"]
             ["xpbd_relaxation"]
             is True

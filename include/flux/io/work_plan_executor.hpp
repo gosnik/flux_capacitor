@@ -82,8 +82,9 @@ struct WorkPlanExecutionResult {
 
 // Executes currently supported route, differential-pair, bus, and validation steps on private
 // board copies. Preview never authorizes export. Every route-like step is committed to the next
-// step only after detailed exact acceptance; a failed/cancelled step leaves the prior checkpoint
-// intact and skips dependants.
+// step only after detailed exact acceptance; the sole provisional exception is an explicitly
+// terminal refill-required route that can authorize only the external refill transaction. A
+// failed/cancelled step leaves the prior checkpoint intact and skips dependants.
 [[nodiscard]] WorkPlanExecutionResult
 execute_flux_work_plan(const Board& source, const FluxWorkPlan& plan,
                        std::stop_token stop_token = {}, RouterTelemetrySink* telemetry = nullptr);

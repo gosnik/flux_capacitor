@@ -2,7 +2,7 @@
 
 ## 1. Scope and current state
 
-This document describes the implementation present in Flux Capacitor v0.132.0, using canonical board schema 19. It is a description of the working code, its execution flow, and its current limits. The ADRs under `docs/adr/` remain the detailed decision history; `plan.md` records the completed replacement of the old optional seed-guidance path. Schema 19 preserves an unfilled KiCad zone as an immutable requires-refill marker and never treats it as physical copper; only the explicitly provisional refill workflow may route such a source before KiCad refill, strict re-import, connectivity, and DRC. It also retains exact circular/oval pad-drill dimensions and pad-local offsets, using physical hole centres for non-plated obstacles and reusable plated-pad transitions.
+This document describes the implementation present in Flux Capacitor v0.133.0, using canonical board schema 19. It is a description of the working code, its execution flow, and its current limits. The ADRs under `docs/adr/` remain the detailed decision history; `plan.md` records the completed replacement of the old optional seed-guidance path. Schema 19 preserves an unfilled KiCad zone as an immutable requires-refill marker and never treats it as physical copper; only the explicitly provisional refill workflow may route such a source before KiCad refill, strict re-import, connectivity, and DRC. It also retains exact circular/oval pad-drill dimensions and pad-local offsets, using physical hole centres for non-plated obstacles and reusable plated-pad transitions.
 
 Flux is an experimental C++20 placement-and-routing engine with KiCad as its first integration. Its defining design choice is that placement and routing operate on the same board model:
 
@@ -679,6 +679,18 @@ KiCad CLI is launched through a shell-free argument vector, bounded to fifteen m
 return zero plus a bounded parseable JSON DRC report. Only then is the staged candidate atomically
 renamed to the requested output. Missing tooling, DRC violations, cancellation, malformed reports,
 or publication failure remove the staging directory and leave no final board. See ADR 0161.
+
+When the final route step explicitly enables `refillable_zone_fills`, the first staged board is
+provisional and cannot enter the ordinary publication path. A shared shell-free adapter invokes
+KiCad Python's zone filler with bounded diagnostics, runtime, and artifact size in a second private
+rule-context directory. Flux then strict-imports that artifact and repeats structural,
+connectivity, and analytic copper acceptance before the existing external KiCad DRC gate. The
+authoritative in-memory candidate changes to the refilled board only after exact internal
+acceptance, and only that board may be atomically renamed to the requested output. Refill is
+terminal within a plan because later steps would otherwise inspect stale saved-fill geometry.
+Unavailable tools, nonzero helper exit, malformed JSON, output aliases/symlinks, strict-import
+loss, opens, copper violations, DRC failure, or cancellation all withhold publication. See ADR
+0164.
 
 ### Refillable zones
 

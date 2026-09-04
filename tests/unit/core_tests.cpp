@@ -12,6 +12,7 @@
 #include "flux/core/spline_route.hpp"
 #include "flux/io/kicad_export.hpp"
 #include "flux/io/kicad_import.hpp"
+#include "flux/io/kicad_refill.hpp"
 #include "flux/io/placement_move_priorities.hpp"
 #include "flux/io/work_plan.hpp"
 #include "flux/io/work_plan_executor.hpp"
@@ -20,6 +21,7 @@
 
 #include <algorithm>
 #include <barrier>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <exception>
@@ -4684,6 +4686,84 @@ void same_net_vertical_features_are_reused_as_transition_portals() {
               through_hole_detailed.diagnostic);
 }
 
+void kicad_zone_refill_adapter_is_bounded_and_fail_closed() {
+#ifdef FLUX_TEST_PYTHON_EXECUTABLE
+  const auto nonce = static_cast<std::uint64_t>(
+      std::chrono::steady_clock::now().time_since_epoch().count());
+  const auto root = std::filesystem::temp_directory_path() /
+                    ("flux-kicad-refill-test-" + std::to_string(nonce));
+  std::error_code error;
+  require(std::filesystem::create_directory(root, error) && !error,
+          "zone-refill test must create an isolated temporary directory");
+  struct Cleanup {
+    std::filesystem::path path;
+    ~Cleanup() {
+      std::error_code ignored;
+      std::filesystem::remove_all(path, ignored);
+    }
+  } cleanup{root};
+  const auto provisional = root / "provisional.kicad_pcb";
+  {
+    std::ofstream stream(provisional, std::ios::binary);
+    stream << "provisional-board\n";
+  }
+  const auto passing_helper = root / "passing refill helper.py";
+  {
+    std::ofstream stream(passing_helper, std::ios::binary);
+    stream << R"PY(import json
+import pathlib
+import shutil
+import sys
+arguments = dict(zip(sys.argv[1::2], sys.argv[2::2]))
+shutil.copyfile(pathlib.Path(arguments["--board"]), pathlib.Path(arguments["--output"]))
+pathlib.Path(arguments["--report"]).write_text(json.dumps({"ok": True}), encoding="utf-8")
+print("non-JSON diagnostic before the dedicated report")
+)PY";
+  }
+  const auto passing_directory = root / "passing";
+  require(std::filesystem::create_directory(passing_directory, error) && !error,
+          "zone-refill test must create a passing diagnostic directory");
+  const auto passing_output = passing_directory / "refilled.kicad_pcb";
+  const auto passing = flux::io::run_kicad_zone_refill(
+      {std::filesystem::path{FLUX_TEST_PYTHON_EXECUTABLE}, passing_helper, provisional,
+       passing_output, passing_directory, std::chrono::seconds{5}, 4U * 1024U,
+       1U * 1024U * 1024U});
+  require(passing.run && passing.passed && passing.exit_code == 0 &&
+              std::filesystem::is_regular_file(passing_output),
+          "a shell-free bounded refill adapter must accept an explicit successful JSON/artifact "
+          "transaction: " + passing.diagnostic);
+
+  const auto failing_helper = root / "failing refill helper.py";
+  {
+    std::ofstream stream(failing_helper, std::ios::binary);
+    stream << "import json, sys\nprint(json.dumps({'ok': False, 'error': 'intentional'}))\n"
+              "sys.exit(5)\n";
+  }
+  const auto failing_directory = root / "failing";
+  error.clear();
+  require(std::filesystem::create_directory(failing_directory, error) && !error,
+          "zone-refill test must create a failing diagnostic directory");
+  const auto failing = flux::io::run_kicad_zone_refill(
+      {std::filesystem::path{FLUX_TEST_PYTHON_EXECUTABLE}, failing_helper, provisional,
+       failing_directory / "must-not-exist.kicad_pcb", failing_directory,
+       std::chrono::seconds{5}, 4U * 1024U, 1U * 1024U * 1024U});
+  require(failing.run && !failing.passed && failing.exit_code == 5,
+          "a nonzero refill helper result must remain a failed transaction");
+
+  const auto unavailable_directory = root / "unavailable";
+  error.clear();
+  require(std::filesystem::create_directory(unavailable_directory, error) && !error,
+          "zone-refill test must create an unavailable diagnostic directory");
+  const auto unavailable = flux::io::run_kicad_zone_refill(
+      {std::filesystem::path{FLUX_TEST_PYTHON_EXECUTABLE}, root / "missing-helper.py",
+       provisional, unavailable_directory / "must-not-exist.kicad_pcb",
+       unavailable_directory, std::chrono::seconds{5}, 4U * 1024U,
+       1U * 1024U * 1024U});
+  require(!unavailable.run && !unavailable.passed && unavailable.exit_code == -1,
+          "an unavailable refill helper must fail before a child process is launched");
+#endif
+}
+
 void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
   const auto board = two_pad_board();
   auto plan = flux::io::make_flux_work_plan_template(board, "board.kicad_pcb");
@@ -5087,6 +5167,46 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
           "a WorkPlan sampled-conflict repair budget must not be accepted when the repair "
           "transaction is disabled");
 
+  auto refill_plan = scoped_plan;
+  refill_plan.steps.front().options["refillable_zone_fills"] = true;
+  refill_plan.steps.front().options["differential_pair_skew_tuning"] = false;
+  refill_plan.steps.front().options["differential_pair_skew_tuning_batch_assignment"] = false;
+  const auto refill_compile =
+      flux::io::compile_flux_work_plan_routes(scoped_board, refill_plan);
+  require(refill_compile.ok() && refill_compile.route_steps.size() == 1U &&
+              refill_compile.route_steps.front().refillable_zone_fills &&
+              refill_compile.route_steps.front()
+                  .configuration.planner.global.treat_saved_zone_fills_as_refillable &&
+              refill_compile.route_steps.front()
+                  .configuration.planner.regional.treat_saved_zone_fills_as_refillable &&
+              refill_compile.route_steps.front()
+                  .configuration.detailed.defer_saved_zone_fill_clearance_to_refill &&
+              !refill_compile.route_steps.front()
+                   .configuration.detailed.pull_tight_45_degrees &&
+              !refill_compile.route_steps.front()
+                   .configuration.detailed.continuous_refinement &&
+              !refill_compile.route_steps.front()
+                   .configuration.detailed.topology_locked_medial_materialization,
+          "refill-required WorkPlan routing must compile the same conservative provisional "
+          "configuration as the direct KiCad workflow");
+  auto nonterminal_refill_plan = refill_plan;
+  flux::io::WorkPlanStep post_refill_validation;
+  post_refill_validation.id = "post-refill-validation";
+  post_refill_validation.kind = flux::io::WorkPlanStepKind::validation;
+  post_refill_validation.depends_on = {refill_plan.steps.front().id};
+  nonterminal_refill_plan.steps.push_back(post_refill_validation);
+  const auto nonterminal_refill_compile =
+      flux::io::compile_flux_work_plan_routes(scoped_board, nonterminal_refill_plan);
+  require(!nonterminal_refill_compile.ok() &&
+              std::any_of(nonterminal_refill_compile.diagnostics.begin(),
+                          nonterminal_refill_compile.diagnostics.end(),
+                          [](const auto& diagnostic) {
+                            return diagnostic.code ==
+                                   "invalid_work_plan_route_option_dependency";
+                          }),
+          "a refill-required route must terminate the private plan because later steps would "
+          "observe stale saved-fill geometry");
+
   auto wildcard_plan = scoped_plan;
   wildcard_plan.steps.front().selectors.net_classes.clear();
   wildcard_plan.steps.front().selectors.placement_groups.clear();
@@ -5330,6 +5450,32 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
           "work-plan execution must reroute on a copy, replace only exact unlocked source copper, "
           "and commit a deterministic exact-clean checkpoint through validation");
 
+  auto unrelated_open = connected;
+  const NetId unrelated_net{"unrelated-open"};
+  unrelated_open.nets.push_back({unrelated_net, "UNRELATED_OPEN", 0});
+  auto unrelated_start = unrelated_open.footprints.front();
+  unrelated_start.id = ObjectId{"U3-unrelated"};
+  unrelated_start.reference = "U3-unrelated";
+  unrelated_start.position = mm(20.0, 20.0);
+  unrelated_start.pads.front().id = ObjectId{"U3-unrelated-pad"};
+  unrelated_start.pads.front().net = unrelated_net;
+  auto unrelated_end = unrelated_start;
+  unrelated_end.id = ObjectId{"U4-unrelated"};
+  unrelated_end.reference = "U4-unrelated";
+  unrelated_end.position = mm(80.0, 20.0);
+  unrelated_end.pads.front().id = ObjectId{"U4-unrelated-pad"};
+  unrelated_open.footprints.push_back(std::move(unrelated_start));
+  unrelated_open.footprints.push_back(std::move(unrelated_end));
+  auto route_only_plan = executable_plan;
+  route_only_plan.steps.pop_back();
+  const auto unrelated_open_execution =
+      flux::io::execute_flux_work_plan(unrelated_open, route_only_plan);
+  require(unrelated_open_execution.ok() && !unrelated_open_execution.whole_board_accepted &&
+              !unrelated_open_execution.candidate_ready_for_export &&
+              unrelated_open_execution.final_acceptance.open_connections > 0U,
+          "selected-net step success must not authorize publication while an unrelated whole-board "
+          "connection remains open");
+
   auto preview_plan = executable_plan;
   preview_plan.mode = flux::io::WorkPlanMode::preview;
   const auto preview = flux::io::execute_flux_work_plan(connected, preview_plan);
@@ -5339,6 +5485,49 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
               preview.candidate->footprints == connected.footprints,
           "preview mode must observe an already complete selected net without replacing or "
           "export-authorizing its source copper");
+
+  auto refill_source = two_pad_board();
+  refill_source.layers.resize(1U);
+  refill_source.nets.push_back(Net{NetId{"work-plan-plane"}, "WORK_PLAN_PLANE", 0});
+  flux::CopperZone refill_zone;
+  refill_zone.id = ObjectId{"work-plan-saved-fill"};
+  refill_zone.net = NetId{"work-plan-plane"};
+  refill_zone.fills = {
+      flux::CopperZoneFill{LayerId{"F.Cu"}, rectangle(45.0, 0.0, 55.0, 80.0), {}}};
+  refill_source.zones.push_back(std::move(refill_zone));
+  auto refill_execution_plan =
+      flux::io::make_flux_work_plan_template(refill_source, "refill.kicad_pcb");
+  refill_execution_plan.mode = flux::io::WorkPlanMode::new_routing;
+  flux::io::WorkPlanStep refill_route;
+  refill_route.id = "route-before-refill";
+  refill_route.kind = flux::io::WorkPlanStepKind::route;
+  refill_route.selectors.exact_nets = {"SIGNAL"};
+  refill_route.options = {{"checkpoint_objective", std::string{"aggregate-overflow"}},
+                          {"crossing_safe_diagonal_grid_edges", false},
+                          {"direct_medial_edges", false},
+                          {"grid_pitch_nm", std::uint64_t{5'000'000U}},
+                          {"interleave_routability_feedback", false},
+                          {"max_router_iterations", std::uint64_t{2U}},
+                          {"negotiate_voronoi_lane_conflicts", false},
+                          {"physical_envelope_ordering", false},
+                          {"physical_overflow_history", false},
+                          {"refillable_zone_fills", true},
+                          {"routability_feedback_retries", std::uint64_t{0U}},
+                          {"strict_medial_topology", false}};
+  refill_execution_plan.steps = {refill_route};
+  const auto provisional_refill =
+      flux::io::execute_flux_work_plan(refill_source, refill_execution_plan);
+  require(provisional_refill.ok() && !provisional_refill.whole_board_accepted &&
+              provisional_refill.zone_refill_required &&
+              provisional_refill.candidate_ready_for_zone_refill &&
+              !provisional_refill.candidate_ready_for_export &&
+              provisional_refill.candidate && provisional_refill.steps.size() == 1U &&
+              provisional_refill.steps.front().status ==
+                  flux::io::WorkPlanStepExecutionStatus::completed &&
+              provisional_refill.steps.front().provisional_zone_refill_required,
+          "a refill-required WorkPlan must retain the exact provisional candidate privately and "
+          "authorize only the external refill transaction: " +
+              flux::io::serialize_flux_work_plan_execution_summary(provisional_refill));
 
   std::stop_source cancelled_source;
   cancelled_source.request_stop();
@@ -5383,6 +5572,8 @@ int main(int argc, char** argv) {
        physical_copper_t_junction_is_preserved_during_ph_realization},
       {"same_net_vertical_features_are_reused_as_transition_portals",
        same_net_vertical_features_are_reused_as_transition_portals},
+      {"kicad_zone_refill_adapter_is_bounded_and_fail_closed",
+       kicad_zone_refill_adapter_is_bounded_and_fail_closed},
       {"work_plan_round_trip_is_strict_source_bound_and_non_authoritative",
        work_plan_round_trip_is_strict_source_bound_and_non_authoritative},
       {"integrated_placement_rejects_proxy_improvement_that_violates_copper_rules",

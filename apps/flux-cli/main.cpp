@@ -15,6 +15,7 @@
 #include "flux/io/kicad_export.hpp"
 #include "flux/io/kicad_import.hpp"
 #include "flux/io/kicad_netclass_snapshot.hpp"
+#include "flux/io/kicad_refill.hpp"
 #include "flux/io/orientation_constraints.hpp"
 #include "flux/io/placement_envelope_constraints.hpp"
 #include "flux/io/placement_group_constraints.hpp"
@@ -5993,6 +5994,8 @@ struct WorkPlanPrintOutcome {
                     << (step.post_negotiation_sampled_conflict_repair ? "true" : "false")
                     << ", \"max_post_negotiation_sampled_conflict_repair_cones\": "
                     << step.max_post_negotiation_sampled_conflict_repair_cones
+                    << ", \"refillable_zone_fills\": "
+                    << (step.refillable_zone_fills ? "true" : "false")
                     << ", \"max_expansions_per_connection\": "
                     << planner.global.max_expansions_per_connection
                     << ", \"routability_feedback_retries\": "
@@ -6122,6 +6125,72 @@ make_work_plan_staging_directory(const std::filesystem::path& output) {
   return std::nullopt;
 }
 
+[[nodiscard]] std::optional<std::filesystem::path> resolve_kicad_python() {
+  if (const auto* configured = std::getenv("FLUX_KICAD_PYTHON"); configured != nullptr) {
+    if (*configured == '\0') {
+      return std::nullopt;
+    }
+    std::error_code error;
+    const std::filesystem::path path{configured};
+    if (std::filesystem::is_regular_file(path, error) && !error) {
+      return path;
+    }
+    // An explicit invalid interpreter is authoritative, matching FLUX_KICAD_CLI semantics.
+    return std::nullopt;
+  }
+  const auto* environment_path = std::getenv("PATH");
+  if (environment_path == nullptr) {
+    return std::nullopt;
+  }
+#ifdef _WIN32
+  constexpr char separator = ';';
+  constexpr std::array<std::string_view, 2U> executable_names{"python.exe", "python3.exe"};
+#else
+  constexpr char separator = ':';
+  constexpr std::array<std::string_view, 1U> executable_names{"python3"};
+#endif
+  std::string_view search{environment_path};
+  while (true) {
+    const auto end = search.find(separator);
+    const auto directory = search.substr(0U, end);
+    if (!directory.empty()) {
+      for (const auto executable_name : executable_names) {
+        std::error_code error;
+        const auto candidate = std::filesystem::path{directory} / executable_name;
+        if (std::filesystem::is_regular_file(candidate, error) && !error) {
+          return candidate;
+        }
+      }
+    }
+    if (end == std::string_view::npos) {
+      break;
+    }
+    search.remove_prefix(end + 1U);
+  }
+  return std::nullopt;
+}
+
+[[nodiscard]] std::optional<std::filesystem::path> resolve_kicad_refill_helper() {
+  if (const auto* configured = std::getenv("FLUX_KICAD_REFILL_HELPER"); configured != nullptr) {
+    if (*configured == '\0') {
+      return std::nullopt;
+    }
+    std::error_code error;
+    const std::filesystem::path path{configured};
+    return std::filesystem::is_regular_file(path, error) && !error
+               ? std::optional<std::filesystem::path>{path}
+               : std::nullopt;
+  }
+#ifdef FLUX_KICAD_REFILL_HELPER_PATH
+  std::error_code error;
+  const std::filesystem::path path{FLUX_KICAD_REFILL_HELPER_PATH};
+  if (std::filesystem::is_regular_file(path, error) && !error) {
+    return path;
+  }
+#endif
+  return std::nullopt;
+}
+
 [[nodiscard]] std::optional<std::string>
 read_bounded_text_file(const std::filesystem::path& path, std::size_t maximum_bytes) {
   std::error_code error;
@@ -6233,6 +6302,21 @@ run_external_kicad_drc(const std::filesystem::path& executable,
   }
   result.passed = true;
   result.diagnostic = "external KiCad DRC passed";
+  return result;
+}
+
+[[nodiscard]] flux::io::WorkPlanAcceptanceState
+work_plan_acceptance_for_board(const Board& board) {
+  const auto evaluated = flux::evaluate_board(board);
+  flux::io::WorkPlanAcceptanceState result;
+  result.structural_validation_ok = evaluated.validation.ok();
+  result.structural_issue_count = evaluated.validation.issues.size();
+  result.open_connections = evaluated.connectivity.open_connections;
+  result.unrouted_nets = evaluated.connectivity.unrouted_nets;
+  result.copper_violations = evaluated.copper_drc.violation_count();
+  result.exact_internal_acceptance = result.structural_validation_ok &&
+                                     result.open_connections == 0U &&
+                                     result.copper_violations == 0U;
   return result;
 }
 
@@ -7763,7 +7847,7 @@ constrained_optimizer_config(const Board& board,
 }
 
 void print_help() {
-  std::cout << "flux-cli 0.132.0\n\n"
+  std::cout << "flux-cli 0.133.0\n\n"
                "Usage:\n"
                "  flux-cli version       Print the engine version\n"
                "  flux-cli capabilities --json  Print the pinned feature-parity contract\n"
@@ -7973,7 +8057,7 @@ int main(int argc, char** argv) {
   }
   const std::string_view command{argv[1]};
   if (command == "version" && argc == 2) {
-    std::cout << "flux_capacitor 0.132.0 board-schema 19\n";
+    std::cout << "flux_capacitor 0.133.0 board-schema 19\n";
     return EXIT_SUCCESS;
   }
   if (command == "capabilities" && argc == 3 && std::string_view{argv[2]} == "--json") {
@@ -7988,7 +8072,7 @@ int main(int argc, char** argv) {
     const char* override_value = std::getenv("FLUX_VULKAN_DEVICE");
     std::cout << "{\n"
               << "  \"engine\": \"flux_capacitor\",\n"
-              << "  \"version\": \"0.132.0\",\n"
+              << "  \"version\": \"0.133.0\",\n"
               << "  \"board_schema\": 19,\n"
               << "  \"production_gpu_required\": true,\n"
               << "  \"gpu_available\": " << (device.available ? "true" : "false") << ",\n"
@@ -8097,11 +8181,14 @@ int main(int argc, char** argv) {
     bool output_published = false;
     if (!preview) {
       output_path = std::filesystem::path{argv[4]};
-      if (execution.candidate_ready_for_export && execution.candidate) {
+      if ((execution.candidate_ready_for_export || execution.candidate_ready_for_zone_refill) &&
+          execution.candidate) {
         exported.emplace();
         const auto export_error = [&](std::string code, std::string message) {
           exported->diagnostics.push_back({flux::io::ExportSeverity::error, std::move(code),
                                            std::move(message), {}});
+          execution.candidate_ready_for_export = false;
+          execution.candidate_ready_for_zone_refill = false;
         };
         std::error_code file_error;
         if (std::filesystem::exists(*output_path, file_error) || file_error) {
@@ -8116,33 +8203,116 @@ int main(int argc, char** argv) {
             *exported = flux::io::export_kicad_candidate_file(
                 source_path, temporary_candidate, prepared_source, *execution.candidate);
             if (exported->ok()) {
-              const auto kicad_cli = resolve_kicad_cli();
-              if (!kicad_cli) {
-                execution.external_kicad_drc_diagnostic =
-                    "external KiCad DRC is required but FLUX_KICAD_CLI and PATH provide no "
-                    "usable kicad-cli";
+              auto exact_candidate = temporary_candidate;
+              if (execution.candidate_ready_for_zone_refill) {
+                execution.candidate_ready_for_zone_refill = false;
                 execution.candidate_ready_for_export = false;
-              } else {
-                const auto drc = run_external_kicad_drc(*kicad_cli, temporary_candidate,
-                                                        staging.path(), stop_bridge.token());
-                execution.external_kicad_drc_run = drc.run;
-                execution.external_kicad_drc_passed = drc.passed;
-                execution.external_kicad_drc_exit_code = drc.exit_code;
-                execution.external_kicad_drc_executable = drc.executable;
-                execution.external_kicad_drc_diagnostic = drc.diagnostic;
-                if (!drc.passed) {
-                  execution.candidate_ready_for_export = false;
+                const auto python = resolve_kicad_python();
+                const auto helper = resolve_kicad_refill_helper();
+                if (!python) {
+                  execution.zone_refill_diagnostic =
+                      "KiCad zone refill is required but FLUX_KICAD_PYTHON and PATH provide no "
+                      "usable Python interpreter";
+                } else if (!helper) {
+                  execution.zone_refill_diagnostic =
+                      "KiCad zone refill is required but FLUX_KICAD_REFILL_HELPER and the "
+                      "installed Flux helper path provide no usable refill_zones.py";
                 } else {
-                  std::filesystem::rename(temporary_candidate, *output_path, file_error);
-                  if (file_error) {
-                    execution.candidate_ready_for_export = false;
-                    execution.external_kicad_drc_diagnostic +=
-                        "; candidate publication failed: " + file_error.message();
+                  const auto refilled_directory = staging.path() / "refilled";
+                  file_error.clear();
+                  if (!std::filesystem::create_directory(refilled_directory, file_error) ||
+                      file_error) {
+                    execution.zone_refill_diagnostic =
+                        "unable to create a private refilled-candidate staging directory";
                   } else {
-                    output_published = true;
+                    std::string refilled_context_diagnostic;
+                    if (!stage_kicad_rule_context(source_path, refilled_directory,
+                                                  refilled_context_diagnostic)) {
+                      execution.zone_refill_diagnostic = std::move(refilled_context_diagnostic);
+                    } else {
+                      const auto refilled_candidate = refilled_directory / source_path.filename();
+                      const auto refill = flux::io::run_kicad_zone_refill(
+                          {*python, *helper, temporary_candidate, refilled_candidate,
+                           refilled_directory},
+                          stop_bridge.token());
+                      execution.zone_refill_run = refill.run;
+                      execution.zone_refill_exit_code = refill.exit_code;
+                      execution.zone_refill_executable = refill.executable;
+                      execution.zone_refill_diagnostic = refill.diagnostic;
+                      if (refill.passed) {
+                        const auto refilled = flux::io::import_kicad_pcb_file(refilled_candidate);
+                        if (!refilled.strict()) {
+                          execution.zone_refill_diagnostic +=
+                              "; refilled candidate failed strict Flux re-import";
+                        } else if (std::any_of(
+                                       refilled.board->zones.begin(), refilled.board->zones.end(),
+                                       [](const auto& zone) { return zone.requires_refill; })) {
+                          execution.zone_refill_diagnostic +=
+                              "; refilled candidate still contains a requires-refill zone";
+                        } else {
+                          execution.final_acceptance =
+                              work_plan_acceptance_for_board(*refilled.board);
+                          execution.whole_board_accepted =
+                              execution.internally_complete &&
+                              execution.final_acceptance.exact_internal_acceptance;
+                          if (!execution.whole_board_accepted) {
+                            execution.zone_refill_diagnostic +=
+                                "; refilled candidate failed exact internal acceptance (" +
+                                std::to_string(execution.final_acceptance.structural_issue_count) +
+                                " structural issues, " +
+                                std::to_string(execution.final_acceptance.open_connections) +
+                                " opens, " +
+                                std::to_string(execution.final_acceptance.copper_violations) +
+                                " copper violations)";
+                          } else {
+                            execution.zone_refill_passed = true;
+                            execution.zone_refill_diagnostic +=
+                                "; strict re-import and exact internal acceptance passed";
+                            execution.candidate = std::move(*refilled.board);
+                            execution.candidate_ready_for_export = true;
+                            exact_candidate = refilled_candidate;
+                          }
+                        }
+                      }
+                    }
                   }
                 }
               }
+
+              if (execution.candidate_ready_for_export) {
+                const auto kicad_cli = resolve_kicad_cli();
+                if (!kicad_cli) {
+                  execution.external_kicad_drc_diagnostic =
+                      "external KiCad DRC is required but FLUX_KICAD_CLI and PATH provide no "
+                      "usable kicad-cli";
+                  execution.candidate_ready_for_export = false;
+                } else {
+                  const auto drc = run_external_kicad_drc(*kicad_cli, exact_candidate,
+                                                          exact_candidate.parent_path(),
+                                                          stop_bridge.token());
+                  execution.external_kicad_drc_run = drc.run;
+                  execution.external_kicad_drc_passed = drc.passed;
+                  execution.external_kicad_drc_exit_code = drc.exit_code;
+                  execution.external_kicad_drc_executable = drc.executable;
+                  execution.external_kicad_drc_diagnostic = drc.diagnostic;
+                  if (!drc.passed) {
+                    execution.candidate_ready_for_export = false;
+                  } else {
+                    file_error.clear();
+                    std::filesystem::rename(exact_candidate, *output_path, file_error);
+                    if (file_error) {
+                      execution.candidate_ready_for_export = false;
+                      execution.external_kicad_drc_diagnostic +=
+                          "; candidate publication failed: " + file_error.message();
+                    } else {
+                      output_published = true;
+                    }
+                  }
+                }
+              }
+            } else {
+              execution.candidate_ready_for_export = false;
+              execution.candidate_ready_for_zone_refill = false;
             }
           }
         } else {

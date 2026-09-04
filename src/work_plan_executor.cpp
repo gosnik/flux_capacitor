@@ -456,8 +456,7 @@ WorkPlanExecutionResult execute_impl(const Board& source, const FluxWorkPlan& pl
                                            result.zone_refill_required && result.candidate.has_value();
   result.candidate_ready_for_export = result.internally_complete && !result.preview &&
                                       !result.zone_refill_required &&
-                                      result.final_acceptance.structural_validation_ok &&
-                                      result.final_acceptance.copper_violations == 0U;
+                                      result.final_acceptance.exact_internal_acceptance;
   RouterTelemetryEvent plan_finished;
   plan_finished.kind = RouterTelemetryEventKind::search_summary;
   plan_finished.stable_id = "work-plan:" + result.plan_sha256;

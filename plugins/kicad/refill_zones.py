@@ -23,12 +23,29 @@ def _new_output(path: pathlib.Path, source: pathlib.Path) -> pathlib.Path:
     return output
 
 
+def _write_report(path: pathlib.Path | None, report: dict[str, object]) -> str:
+    serialized = json.dumps(report, indent=2, sort_keys=True)
+    if path is not None:
+        parent = path.expanduser().parent.resolve(strict=True)
+        destination = parent / path.name
+        with destination.open("x", encoding="utf-8") as stream:
+            stream.write(serialized)
+            stream.write("\n")
+    print(serialized)
+    return serialized
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="refill zones in a provisional Flux candidate using KiCad's zone filler"
     )
     parser.add_argument("--board", required=True, type=pathlib.Path)
     parser.add_argument("--output", required=True, type=pathlib.Path)
+    parser.add_argument(
+        "--report",
+        type=pathlib.Path,
+        help="write the bounded machine-readable result to a new file",
+    )
     args = parser.parse_args(argv)
 
     report: dict[str, object] = {"ok": False, "zone_refill_required": True}
@@ -58,11 +75,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "kicad_version": pcbnew.Version(),
             }
         )
-        print(json.dumps(report, indent=2, sort_keys=True))
+        _write_report(args.report, report)
         return 0
     except (ImportError, OSError, RuntimeError) as error:
         report["error"] = str(error)
-        print(json.dumps(report, indent=2, sort_keys=True))
+        try:
+            _write_report(args.report, report)
+        except OSError as report_error:
+            print(json.dumps({**report, "report_error": str(report_error)}, indent=2, sort_keys=True))
         return 2
 
 

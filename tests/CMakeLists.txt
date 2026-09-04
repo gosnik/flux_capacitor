@@ -35,6 +35,8 @@ set_tests_properties(
 
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
+  target_compile_definitions(
+    flux_unit_tests PRIVATE FLUX_TEST_PYTHON_EXECUTABLE="${Python3_EXECUTABLE}")
   add_test(
     NAME flux_cli_capabilities_manifest
     COMMAND "${Python3_EXECUTABLE}"

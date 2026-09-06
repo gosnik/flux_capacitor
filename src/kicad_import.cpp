@@ -3,6 +3,8 @@
 #include "flux/core/geometry.hpp"
 #include "flux/io/sexpr.hpp"
 
+#include <boost/json.hpp>
+
 #include <algorithm>
 #include <charconv>
 #include <cmath>
@@ -1950,7 +1952,86 @@ KicadImportResult import_kicad_pcb_file(const std::filesystem::path& path,
                                                   "unable to read KiCad board file", 1, 1});
     return result;
   }
-  return import_kicad_pcb(contents, options);
+  auto result = import_kicad_pcb(contents, options);
+  if (!result.ok()) {
+    return result;
+  }
+  auto project_path = path;
+  project_path.replace_extension(".kicad_pro");
+  const auto project_error = [&](std::string code, std::string message) {
+    result.diagnostics.push_back(
+        {ImportSeverity::error, std::move(code), std::move(message), 1, 1});
+  };
+  std::error_code file_error;
+  const bool project_exists = std::filesystem::exists(project_path, file_error);
+  if (file_error) {
+    project_error("project_file_read_failed", "unable to inspect sibling KiCad project");
+    return result;
+  }
+  if (!project_exists) {
+    return result;
+  }
+  constexpr std::uintmax_t maximum_project_bytes = 16U * 1024U * 1024U;
+  const auto project_size = std::filesystem::file_size(project_path, file_error);
+  if (file_error || project_size > maximum_project_bytes) {
+    project_error("project_file_read_failed", "sibling KiCad project is unreadable or oversized");
+    return result;
+  }
+  std::ifstream project_input(project_path, std::ios::binary);
+  std::string project_contents(static_cast<std::size_t>(project_size), '\0');
+  project_input.read(project_contents.data(), static_cast<std::streamsize>(project_size));
+  if (!project_input || project_input.peek() != std::char_traits<char>::eof()) {
+    project_error("project_file_read_failed", "unable to read complete, bounded KiCad project");
+    return result;
+  }
+  boost::system::error_code json_error;
+  const auto project = boost::json::parse(project_contents, json_error);
+  const boost::json::value* rules = &project;
+  for (const auto key : {"board", "design_settings", "rules"}) {
+    const auto* object = rules == nullptr ? nullptr : rules->if_object();
+    rules = object == nullptr ? nullptr : object->if_contains(key);
+  }
+  if (json_error || rules == nullptr || !rules->is_object()) {
+    project_error("invalid_project_rules", "KiCad project has no valid board design rules object");
+    return result;
+  }
+  struct MinimumField {
+    const char* key;
+    Nanometres BoardDesignRules::* member;
+  };
+  const MinimumField fields[] = {
+      {"min_clearance", &BoardDesignRules::minimum_clearance},
+      {"min_track_width", &BoardDesignRules::minimum_track_width},
+      {"min_via_diameter", &BoardDesignRules::minimum_via_diameter},
+      {"min_via_annular_width", &BoardDesignRules::minimum_via_annular_width},
+      {"min_through_hole_diameter", &BoardDesignRules::minimum_through_drill},
+      {"min_copper_edge_clearance", &BoardDesignRules::copper_to_edge_clearance},
+      {"min_hole_clearance", &BoardDesignRules::hole_clearance},
+      {"min_hole_to_hole", &BoardDesignRules::hole_to_hole_clearance},
+  };
+  auto candidate_rules = result.board->rules;
+  for (const auto& field : fields) {
+    const auto* value = rules->as_object().if_contains(field.key);
+    if (value == nullptr || !value->is_number()) {
+      project_error("invalid_project_rule", std::string("missing or non-numeric project rule: ") +
+                                                field.key);
+      return result;
+    }
+    const auto millimetres = value->to_number<long double>();
+    const auto nanometres = std::round(millimetres * 1'000'000.0L);
+    if (!std::isfinite(nanometres) || millimetres < 0.0L ||
+        nanometres >= static_cast<long double>(std::numeric_limits<std::int64_t>::max())) {
+      project_error("invalid_project_rule", std::string("out-of-range project rule: ") + field.key);
+      return result;
+    }
+    candidate_rules.*(field.member) = Nanometres{static_cast<std::int64_t>(nanometres)};
+  }
+  // Apply atomically. Keep board-content identity stable for strict export; the project has a
+  // separate fingerprint and its untouched bytes are bound again at final external validation.
+  result.board->rules = candidate_rules;
+  result.project_minimum_rules_applied = true;
+  result.project_rules_fingerprint = "fnv1a64:" + content_fingerprint(project_contents);
+  return result;
 }
 
 } // namespace flux::io

@@ -256,6 +256,73 @@ void source_bound_board_rules_control_geometry_and_hole_clearance() {
   return std::string{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
 }
 
+void file_import_preserves_project_minimum_rules() {
+  const auto root = std::filesystem::temp_directory_path() /
+      ("flux-project-rule-import-" +
+       std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  require(std::filesystem::create_directory(root), "project import test directory must be new");
+  struct Cleanup {
+    std::filesystem::path path;
+    ~Cleanup() { std::error_code error; std::filesystem::remove_all(path, error); }
+  } cleanup{root};
+  const auto board_path = root / "board.kicad_pcb";
+  const auto project_path = root / "board.kicad_pro";
+  const auto source = load_minimal_kicad_fixture();
+  const auto write = [](const auto& path, const std::string& contents) {
+    std::ofstream stream(path, std::ios::binary);
+    stream << contents;
+    require(static_cast<bool>(stream), "project import fixture must be written completely");
+  };
+  write(board_path, source);
+  const auto without_project = flux::io::import_kicad_pcb_file(board_path);
+  require(without_project.strict() && !without_project.project_minimum_rules_applied,
+          "standalone board import must explicitly report absent project minima");
+  const std::string project = R"JSON({"board":{"design_settings":{"rules":{
+    "min_clearance": 0.2,
+    "min_track_width": 0.7,
+    "min_via_diameter": 0.7,
+    "min_via_annular_width": 0.15,
+    "min_through_hole_diameter": 0.3,
+    "min_copper_edge_clearance": 0.5,
+    "min_hole_clearance": 0.25,
+    "min_hole_to_hole": 0.254
+  }}}})JSON";
+  write(project_path, project);
+  const auto imported = flux::io::import_kicad_pcb_file(board_path);
+  require(imported.strict() && imported.project_minimum_rules_applied &&
+              imported.project_rules_fingerprint.starts_with("fnv1a64:") &&
+              imported.board->source_revision == without_project.board->source_revision,
+          "sibling project minima must be loaded with separate rule provenance");
+  const auto& rules = imported.board->rules;
+  const auto resolved = flux::resolve_net_routing_rules(*imported.board, NetId{"any-net"});
+  require(rules.default_track_width == Nanometres{250000} &&
+              rules.default_via_diameter == Nanometres{600000} &&
+              resolved.track_width == Nanometres{700000} &&
+              resolved.via_diameter == Nanometres{700000} &&
+              rules.hole_clearance == Nanometres{250000} &&
+              rules.hole_to_hole_clearance == Nanometres{254000},
+          "project floors must constrain routing without changing nominal netclass policy");
+  const auto exported = flux::io::export_kicad_candidate(source, *imported.board, *imported.board);
+  require(exported.ok(), "project minima must preserve strict copper export round-trip identity");
+  for (const std::string replacement : {"null", "true", "\"0.7\"", "-0.7", "1e100"}) {
+    auto invalid = project;
+    const auto offset = invalid.find("\"min_track_width\": 0.7");
+    invalid.replace(offset, std::string("\"min_track_width\": 0.7").size(),
+                    "\"min_track_width\": " + replacement);
+    write(project_path, invalid);
+    const auto rejected = flux::io::import_kicad_pcb_file(board_path);
+    require(!rejected.ok() && !rejected.project_minimum_rules_applied &&
+                rejected.board->rules == without_project.board->rules,
+            "invalid project dimension must fail atomically, not leave partially loaded floors");
+  }
+  for (const std::string invalid : {"{", "{}", "{\"board\":{\"design_settings\":{\"rules\":{}}}}"}) {
+    write(project_path, invalid);
+    const auto rejected = flux::io::import_kicad_pcb_file(board_path);
+    require(!rejected.ok() && !rejected.project_minimum_rules_applied,
+            "malformed or incomplete project rules must not fall back to permissive defaults");
+  }
+}
+
 void units_remain_exact_and_saturating() {
   require(Nanometres::from_mm(1.2345674).value() == 1'234'567,
           "millimetres must quantize to integer nanometres");
@@ -6032,6 +6099,7 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
 int main(int argc, char** argv) {
   const std::vector<TestCase> tests{
       {"units_remain_exact_and_saturating", units_remain_exact_and_saturating},
+      {"file_import_preserves_project_minimum_rules", file_import_preserves_project_minimum_rules},
       {"source_bound_board_rules_control_geometry_and_hole_clearance",
        source_bound_board_rules_control_geometry_and_hole_clearance},
       {"dimensioned_pathfinder_pressure_preserves_units_and_group_fairness",

@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "date": "2026-09-06",
+  "experiment": "V18: import existing project minimum constraints before routing",
+  "hypothesis": "The canonical rule resolver and hole DRC already support project floors, but file-only corpus routing never supplies them. Importing the eight minimum constraints before topology selection will prevent illegal dimensions and expose actual routing failures upstream.",
+  "base_revision": "601228a",
+  "executable": "build/project-minimum-v18-bin/flux-cli",
+  "executable_sha256": "a9d749a7c98eb436e84ffd464d70f4ab77543a7fe50169485da80359e080cf3b",
+  "scope": "Minimum fabrication constraints only. Nominal netclass defaults are unchanged; effective netclasses/custom-rule resolution are not claimed.",
+  "verification": {
+    "focused_file_import_test": "pass: project minima, unchanged defaults, malformed/invalid values, atomic rejection, separate provenance and strict export round trip",
+    "full_core": {"passed": 35, "total": 35, "ctest_wall_seconds": 97.52},
+    "rule_context_python_tests": {"passed": 6, "total": 6},
+    "benchmark_history_python_tests": {"passed": 4, "total": 4},
+    "preflight_and_bridge_ctest": {"passed": 3, "total": 3},
+    "all_tier_source_preflight": {"passed": 5, "total": 5, "artifact": "build/project-minimum-v18-preflight-20260906"}
+  },
+  "tier0_default_run": {
+    "artifact": "build/tier0-project-minimum-v18-20260906",
+    "outcome": "failed before route search",
+    "diagnostic": "planar grid cannot preserve resolved per-net copper spacing",
+    "requested_grid_pitch_mm": 0.5,
+    "resolved_track_width_mm": 0.7,
+    "resolved_clearance_mm": 0.2,
+    "required_orthogonal_pitch_mm": 0.9,
+    "paths": 0,
+    "final_copper": false,
+    "final_kicad_drc": "not evaluated"
+  },
+  "next_experiment": "Use the derived legal 0.90 mm orthogonal sampling pitch without changing any source rule. If useful, adapt default lattice configuration to resolved rules while preserving explicit caller constraints.",
+  "decision": "Keep correctness repair; it reveals a previously hidden default-configuration failure. Do not revert to permissive unimported floors.",
+  "tier_promoted": false
+}

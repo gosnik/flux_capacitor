@@ -5460,7 +5460,10 @@ void print_import_result(const flux::io::KicadImportResult& imported) {
             << "  \"strict\": " << (imported.strict() ? "true" : "false") << ",\n"
             << "  \"lossy\": " << (imported.lossy ? "true" : "false") << ",\n"
             << "  \"import_errors\": " << errors << ",\n"
-            << "  \"import_warnings\": " << warnings;
+            << "  \"import_warnings\": " << warnings << ",\n"
+            << "  \"project_minimum_rules_applied\": "
+            << (imported.project_minimum_rules_applied ? "true" : "false") << ",\n"
+            << "  \"project_rules_fingerprint\": " << json_quote(imported.project_rules_fingerprint);
   if (imported.board) {
     const auto evaluation = flux::evaluate_board(*imported.board);
     auto keepout_count = imported.board->keepouts.size();

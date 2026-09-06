@@ -32,6 +32,10 @@ struct KicadImportResult {
   std::optional<Board> board;
   std::vector<ImportDiagnostic> diagnostics;
   bool lossy{false};
+  // File import loads sibling project fabrication minima without changing netclass defaults.
+  // This does not claim to resolve custom rules or effective netclass memberships.
+  bool project_minimum_rules_applied{false};
+  std::string project_rules_fingerprint;
 
   [[nodiscard]] bool has_errors() const;
   [[nodiscard]] bool ok() const { return board.has_value() && !has_errors(); }

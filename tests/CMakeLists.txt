@@ -61,6 +61,10 @@ if(Python3_Interpreter_FOUND)
   set_tests_properties(
     flux_routing_baseline_manifest PROPERTIES LABELS "risk;parity-contract")
   add_test(
+    NAME flux_routing_corpus_rule_context_tests
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/python/test_routing_corpus_rule_context.py")
+  add_test(
     NAME flux_work_plan_cli_contract
     COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/python/test_work_plan_cli.py"

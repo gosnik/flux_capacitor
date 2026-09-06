@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "date": "2026-09-06",
+  "board": "pt2399_delay",
+  "tier": 0,
+  "failing_stage": "rule ingestion and final external validation context",
+  "candidate": "build/tier0-resource-forward-v17-20260906/tier-0-pt2399_delay/pt2399_delay.kicad_pcb",
+  "candidate_sha256": "459bffc8258348a89eafcc275a35decdfc59e8afb1278b0731a58e0fd9df35ac",
+  "audit": "build/tier0-original-rules-audit-tTd8al",
+  "project_sha256": "ddbcc3d30ca8a4e88f38be0bb5a12f4f29f67048bd503d3e77b2e615196bab8a",
+  "validator": {"path": "/usr/bin/kicad-cli", "version": "9.0.8", "severity": "error"},
+  "before": {"rule_context": "project absent; KiCad fallback defaults", "violations": 0, "unconnected_items": 0},
+  "after": {"rule_context": "byte-identical original project", "violations": 208, "unconnected_items": 0, "categories": {"track_width": 199, "hole_to_hole": 9}},
+  "earliest_root_mechanism": "File import ignores the sibling project unless an optional netclass snapshot is supplied. The corpus supplies no snapshot. Final candidate DRC also omitted the project, hiding the resulting violations.",
+  "minimal_witnesses": [
+    {"category": "track_width", "net": "Net-(Q1-S)", "layer": "F.Cu", "position_mm": [23.0, 52.0], "required_mm": 0.7, "actual_mm": 0.25},
+    {"category": "hole_to_hole", "net": "Net-(U2-LPF1-IN)", "via_centres_mm": [[24.0, 29.5], [24.0, 29.0]], "configured_minimum_mm": 0.25, "actual_mm": 0.2}
+  ],
+  "candidate_ranking": [
+    "Bind external DRC and final artifacts to unchanged project/custom-rule sidecars; fail closed when missing or mismatched.",
+    "Load project minimum fabrication constraints before routing, reusing existing canonical rule resolution and drill DRC.",
+    "Audit effective netclass policy and custom-rule coverage separately; do not infer full project semantics from minimum-floor import."
+  ],
+  "benchmark_correction": "Previous Tier-0 green reports for this copper hash describe default-rule DRC, not the required original-project DRC. Mandatory Tier-0 qualification is currently failing, not promoted or silently removed.",
+  "rules_relaxed": false,
+  "geometry_changed_for_audit": false,
+  "tier_promoted": false
+}

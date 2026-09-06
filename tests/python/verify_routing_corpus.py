@@ -167,7 +167,38 @@ def render_failed_route_previews(
     print(f"ANALYSIS {board.stem}: {completed.stdout.strip()}")
 
 
-def require_kicad_drc(board: Path, report: Path, kicad_cli: Path) -> None:
+def stage_kicad_rule_context(source: Path, candidate: Path) -> list[dict]:
+    """Bind a renamed candidate to the original project and optional custom rules.
+
+    KiCad loads sidecars by the candidate's basename, not from the input board's
+    directory. Missing context can turn real rule violations into false passes.
+    Never rewrite a project, reduce rules, or overwrite a different sidecar.
+    """
+    context = []
+    for suffix in (".kicad_pro", ".kicad_dru"):
+        original = source.with_suffix(suffix)
+        staged = candidate.with_suffix(suffix)
+        if not original.exists():
+            require(suffix != ".kicad_pro", f"missing source KiCad project: {original}")
+            require(not staged.exists(), f"unexpected candidate rule context: {staged}")
+            continue
+        require(original.is_file(), f"source rule context is not a file: {original}")
+        expected = sha256(original)
+        if not staged.exists():
+            with original.open("rb") as input_stream, staged.open("xb") as output_stream:
+                shutil.copyfileobj(input_stream, output_stream)
+        verify_hash(staged, expected, "candidate KiCad rule context")
+        context.append({"source": str(original), "candidate": str(staged), "sha256": expected})
+    return context
+
+
+def require_kicad_drc(board: Path, report: Path, kicad_cli: Path, source: Path) -> None:
+    context = stage_kicad_rule_context(source, board)
+    write_json_once(report.with_suffix(".context.json"), {
+        "schema": 1, "source": str(source), "candidate": str(board),
+        "candidate_sha256": sha256(board), "rule_context": context,
+        "severity": "error",
+    })
     completed = subprocess.run(
         [
             str(kicad_cli),
@@ -497,8 +528,20 @@ def verify_board(
                         max_failed_route_png_results,
                     )
                 if detailed_qualified:
-                    require_kicad_drc(candidate_board, tier_dir / "kicad-drc.json", kicad_cli)
+                    try:
+                        require_kicad_drc(candidate_board, tier_dir / "kicad-drc.json",
+                                          kicad_cli, source)
+                    except RuntimeError:
+                        # Preserve rejected copper and its exact rules before the temporary
+                        # export directory is removed. It is diagnostic, never a final board.
+                        rejected = analysis_dir / "kicad-drc-rejected"
+                        rejected.mkdir(parents=True, exist_ok=False)
+                        rejected_board = rejected / candidate_board.name
+                        shutil.copy2(candidate_board, rejected_board)
+                        stage_kicad_rule_context(source, rejected_board)
+                        raise
                     shutil.copy2(candidate_board, final_board)
+                    stage_kicad_rule_context(source, final_board)
                     render_copper_layers(final_board, tier_dir / "copper", kicad_cli, inkscape)
                     print(f"RENDER {board_id}: final copper PNGs in {tier_dir / 'copper'}")
 

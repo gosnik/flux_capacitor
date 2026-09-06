@@ -4,14 +4,54 @@
 #include <algorithm>
 #include <map>
 #include <numeric>
+#include <tuple>
 
 namespace flux {
+
+std::vector<std::size_t>
+regional_template_copper_aliases(const std::vector<RegionalRouteFragment>& fragments,
+                                 const std::vector<RegionalRouteTemplate>& templates,
+                                 bool share_identical) {
+  std::vector<std::size_t> aliases(templates.size());
+  std::iota(aliases.begin(), aliases.end(), 0U);
+  if (!share_identical)
+    return aliases;
+  std::map<RegionalRouteFragmentId, const RegionalRouteFragment*> by_id;
+  for (const auto& f : fragments)
+    by_id.emplace(f.id, &f);
+  using Key = std::tuple<NetId, LayerId, Nanometres, Nanometres, bool, bool, std::vector<Point>>;
+  std::map<Key, std::size_t> identities;
+  for (std::size_t i = 0; i < templates.size(); ++i) {
+    const auto& t = templates[i];
+    const auto found = by_id.find(t.fragment);
+    if (found == by_id.end())
+      continue;
+    const auto& f = *found->second;
+    if (f.width.value() <= 0 || f.clearance.value() < 0 || f.id.net.value().empty() ||
+        t.routing_layer.value().empty())
+      continue;
+    auto points = t.topology_centerline;
+    if (points.size() < 2U && t.selected_global_topology && f.layer == t.routing_layer)
+      points = {f.start, f.end};
+    points.erase(std::unique(points.begin(), points.end()), points.end());
+    if (points.size() < 2U)
+      continue;
+    auto reverse = points;
+    std::reverse(reverse.begin(), reverse.end());
+    if (reverse < points)
+      points = std::move(reverse);
+    Key key{f.id.net,         t.routing_layer,  f.width,          f.clearance,
+            f.explicit_width, f.coupled_member, std::move(points)};
+    aliases[i] = identities.emplace(std::move(key), i).first->second;
+  }
+  return aliases;
+}
 
 std::vector<RegionalChannelDemandScope>
 regional_channel_demand_scopes(const std::vector<RegionalRouteFragment>& fragments,
                                const std::vector<RegionalChannel>& channels,
                                const std::vector<RegionalRouteTemplate>& templates,
-                               bool local_occupancy) {
+                               bool local_occupancy, bool centerline_cuts) {
   std::map<RegionalRouteFragmentId, const RegionalRouteFragment*> fragment_index;
   for (const auto& fragment : fragments)
     fragment_index.emplace(fragment.id, &fragment);
@@ -60,13 +100,15 @@ regional_channel_demand_scopes(const std::vector<RegionalRouteFragment>& fragmen
       known = known && points.size() >= 2U;
       std::vector<std::size_t> touched;
       if (known) {
-        const auto radius = static_cast<long double>(f->second->width.value()) / 2.0L +
-                            static_cast<long double>(f->second->clearance.value());
+        const auto radius = centerline_cuts
+                                ? 0.0L
+                                : static_cast<long double>(f->second->width.value()) / 2.0L +
+                                      static_cast<long double>(f->second->clearance.value());
         for (std::size_t s = 0; s < channel.cross_sections.size(); ++s) {
           const auto& wall = channel.cross_sections[s];
           // Walls are finite physical resources, not infinite transverse strips.
-          // Include envelope contact (even with an endpoint) and do not charge
-          // remote branches merely because their longitudinal projections overlap.
+          // The default includes envelope contact. The experimental cut bound
+          // includes only centerline contact; it cannot certify nearby clearance.
           for (std::size_t p = 1; p < points.size(); ++p) {
             if (geometry::segment_distance_nm(points[p - 1U], points[p], wall.first_wall,
                                               wall.second_wall) <= radius) {

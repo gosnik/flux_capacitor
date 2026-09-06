@@ -415,10 +415,17 @@ struct RegionalChannelDemandScope {
   bool localized{false};
 };
 
+// Exact whole-polyline copper identities, independent of selection order. Unknown
+// geometry stays unique. Returned representatives are portfolio vector indices.
+[[nodiscard]] std::vector<std::size_t> regional_template_copper_aliases(
+    const std::vector<RegionalRouteFragment>& fragments,
+    const std::vector<RegionalRouteTemplate>& templates, bool share_identical = true);
+
 [[nodiscard]] std::vector<RegionalChannelDemandScope> regional_channel_demand_scopes(
     const std::vector<RegionalRouteFragment>& fragments,
     const std::vector<RegionalChannel>& channels,
-    const std::vector<RegionalRouteTemplate>& templates, bool local_occupancy = true);
+    const std::vector<RegionalRouteTemplate>& templates, bool local_occupancy = true,
+    bool centerline_cuts = false);
 
 enum class RegionalBundleStopReason {
   complete,

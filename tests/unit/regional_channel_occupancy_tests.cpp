@@ -11,6 +11,63 @@ void require(bool ok, const char* message) {
   if (!ok)
     throw std::runtime_error(message);
 }
+void shared_copper_identities() {
+  RegionalRouteFragment f;
+  f.id = {NetId{"tree"}, 0, 0, 0};
+  f.layer = LayerId{"F.Cu"};
+  f.start = point(0, 0);
+  f.end = point(2'000'000, 0);
+  f.width = Nanometres{250'000};
+  f.clearance = Nanometres{200'000};
+  auto branch = f;
+  branch.id.connection_index = 1;
+  std::vector<RegionalRouteFragment> fragments{f, branch};
+  RegionalRouteTemplate first;
+  first.id = 99;
+  first.fragment = f.id;
+  first.routing_layer = f.layer;
+  RegionalRouteTemplate second = first;
+  second.id = 50;
+  second.fragment = branch.id;
+  std::vector<RegionalRouteTemplate> templates{first, second};
+  const auto shared = std::vector<std::size_t>{0, 0};
+  const auto independent = std::vector<std::size_t>{0, 1};
+  require(regional_template_copper_aliases(fragments, templates) == shared,
+          "different connections on an identical trunk must have one physical identity");
+  require(regional_template_copper_aliases(fragments, templates, false) == independent,
+          "disabled sharing must preserve independent identities");
+  templates[1].selected_global_topology = false;
+  require(regional_template_copper_aliases(fragments, templates) == independent,
+          "unknown alternative geometry must not alias the source fragment");
+  templates[1].topology_centerline = {f.end, f.end, f.start};
+  require(regional_template_copper_aliases(fragments, templates) == shared,
+          "reversal and duplicate vertices must not create extra copper");
+  for (int change = 0; change < 7; ++change) {
+    auto fs = fragments;
+    auto ts = templates;
+    if (change == 0)
+      ts[1].routing_layer = LayerId{"B.Cu"};
+    if (change == 1)
+      fs[1].width = Nanometres{300'000};
+    if (change == 2)
+      fs[1].clearance = Nanometres{250'000};
+    if (change == 3)
+      ts[1].topology_centerline.back().y = Nanometres{1};
+    if (change == 4) {
+      fs[1].id.net = NetId{"other"};
+      ts[1].fragment = fs[1].id;
+    }
+    if (change == 5)
+      fs[1].explicit_width = !fs[0].explicit_width;
+    if (change == 6)
+      fs[1].coupled_member = !fs[0].coupled_member;
+    require(regional_template_copper_aliases(fs, ts) == independent,
+            "net, layer, geometry, dimensions and routing metadata must all match");
+  }
+  templates[1].topology_centerline = {f.end, point(4'000'000, 0)};
+  require(regional_template_copper_aliases(fragments, templates) == independent,
+          "adjoining or partially shared branches must not be merged by whole-copper identity");
+}
 void check(bool reverse, bool rotate) {
   const auto transform = [&](Point p) { return rotate ? Point{p.y, p.x} : p; };
   RegionalChannel channel;
@@ -80,10 +137,64 @@ void check(bool reverse, bool rotate) {
               missing.front().template_indices.size() == 3,
           "unknown channels must remain zero-capacity resources rather than disappear");
 }
+void cut_demand_keeps_bend_clearance_separate() {
+  RegionalRouteFragment f;
+  f.id = {NetId{"bend"}, 0, 0, 0};
+  f.layer = LayerId{"F.Cu"};
+  f.start = point(-1'000'000, 1'000'000);
+  f.end = point(0, 0);
+  f.width = Nanometres{250'000};
+  f.clearance = Nanometres{200'000};
+  auto g = f;
+  g.id.fragment_index = 1;
+  g.start = f.end;
+  g.end = point(0, -1'000'000);
+  RegionalChannel channel;
+  channel.id = 8;
+  channel.layer = f.layer;
+  for (const auto y : {250'000, -500'000}) {
+    RegionalCrossSection wall;
+    wall.first_wall = point(-500'000, y);
+    wall.second_wall = point(500'000, y);
+    wall.usable_width = Nanometres{1'000'000};
+    channel.cross_sections.push_back(wall);
+  }
+  std::vector<RegionalRouteTemplate> templates;
+  for (const auto& fragment : {f, g}) {
+    RegionalRouteTemplate t;
+    t.fragment = fragment.id;
+    t.routing_layer = fragment.layer;
+    t.channel_sequence = {channel.id};
+    templates.push_back(t);
+  }
+  const auto envelope = regional_channel_demand_scopes({f, g}, {channel}, templates);
+  require(envelope.front().template_indices.size() == 2,
+          "the control must reproduce two lane charges at a one-crossing bend");
+  const auto cuts = regional_channel_demand_scopes({f, g}, {channel}, templates, true, true);
+  require(cuts.size() == 2 && cuts[0].template_indices == std::vector<std::size_t>{0} &&
+              cuts[1].template_indices == std::vector<std::size_t>{1},
+          "cut demand must separate crossing occupancy from an adjacent clearance-only tip");
+  const auto unknown = regional_channel_demand_scopes({f}, {channel}, templates, true, true);
+  require(std::all_of(unknown.begin(), unknown.end(),
+                      [](const auto& scope) {
+                        return std::find(scope.template_indices.begin(),
+                                         scope.template_indices.end(),
+                                         1) != scope.template_indices.end();
+                      }),
+          "cut demand must preserve conservative unknown geometry");
+  g.start = f.start;
+  g.end = f.end;
+  const auto competing = regional_channel_demand_scopes({f, g}, {channel}, templates, true, true);
+  require(std::any_of(competing.begin(), competing.end(),
+                      [](const auto& scope) { return scope.template_indices.size() == 2; }),
+          "two genuine crossings must still consume two demands before identity sharing");
+}
 } // namespace
 
 int main() {
   try {
+    shared_copper_identities();
+    cut_demand_keeps_bend_clearance_separate();
     for (const bool reverse : {false, true})
       for (const bool rotate : {false, true})
         check(reverse, rotate);

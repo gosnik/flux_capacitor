@@ -7,6 +7,12 @@ target_compile_definitions(
 add_test(NAME flux_unit_tests COMMAND flux_unit_tests)
 set_tests_properties(flux_unit_tests PROPERTIES TIMEOUT 600)
 
+add_executable(flux_channel_occupancy_tests unit/regional_channel_occupancy_tests.cpp)
+target_link_libraries(flux_channel_occupancy_tests PRIVATE flux::core)
+target_compile_features(flux_channel_occupancy_tests PRIVATE cxx_std_20)
+add_test(NAME flux_channel_occupancy_tests COMMAND flux_channel_occupancy_tests)
+set_tests_properties(flux_channel_occupancy_tests PROPERTIES TIMEOUT 30 LABELS "risk;routing")
+
 add_executable(
   flux_telemetry_viewer_tests
   unit/telemetry_viewer_tests.cpp

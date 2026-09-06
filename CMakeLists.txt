@@ -106,6 +106,7 @@ add_library(flux_core
   src/placement_region_constraints.cpp
   src/pns_router.cpp
   src/regional_router.cpp
+  src/regional_channel_occupancy.cpp
   src/relative_placement_constraints.cpp
   src/routability_knowledge.cpp
   src/placement_envelope_constraints.cpp

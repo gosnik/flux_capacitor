@@ -403,6 +403,23 @@ struct RegionalRouteTemplate {
   bool operator==(const RegionalRouteTemplate&) const = default;
 };
 
+// Cross sections sharing the same longitudinal support form one demand scope.
+// Template indices refer to the supplied portfolio vector, not template.id. A
+// template can occupy several scopes; missing geometric evidence retains the
+// conservative whole-channel scope. This is an allocation model, not a DRC proof.
+struct RegionalChannelDemandScope {
+  std::size_t channel_id{0U};
+  std::vector<std::size_t> cross_section_indices;
+  std::vector<std::size_t> template_indices;
+  Nanometres maximum_width;
+  bool localized{false};
+};
+
+[[nodiscard]] std::vector<RegionalChannelDemandScope> regional_channel_demand_scopes(
+    const std::vector<RegionalRouteFragment>& fragments,
+    const std::vector<RegionalChannel>& channels,
+    const std::vector<RegionalRouteTemplate>& templates, bool local_occupancy = true);
+
 enum class RegionalBundleStopReason {
   complete,
   missing_corridor_topology,

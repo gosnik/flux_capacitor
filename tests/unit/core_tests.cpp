@@ -1804,6 +1804,25 @@ void constrained_ph_rebound_avoids_inter_sample_obstacle() {
               "/min-speed=" + std::to_string(static_cast<double>(minimum_sample_speed)));
 }
 
+void parallel_spline_workers_shutdown_after_short_optimizations() {
+  flux::SplineTrajectoryOptimizationConfig config;
+  config.exact_candidate_workers = 4;
+  config.maximum_iterations = 1;
+  config.maximum_candidate_checks = 8;
+  config.maximum_multistart_attempts = 0;
+  config.maximum_adaptive_control_insertions = 0;
+  config.samples = 8;
+  for (std::size_t repetition = 0; repetition < 512; ++repetition) {
+    const std::vector<Point> points = repetition % 2 == 0
+        ? std::vector<Point>{mm(0, 0), mm(10, 0)}
+        : std::vector<Point>{mm(0, 0), mm(5, 1), mm(10, 0)};
+    auto route = flux::make_quintic_ph_route(points);
+    require(route.has_value(), "worker lifecycle fixture must construct a valid route");
+    const auto result = flux::optimize_quintic_ph_trajectory(*route, config, {});
+    require(result.legal, "short parallel optimization must retain legal geometry");
+  }
+}
+
 void obstacle_aware_diagonals_and_curves_remain_capacity_and_drc_gated() {
   Board crossing;
   crossing.source_revision = "crossing-safe-diagonal-risk-fixture";
@@ -6027,6 +6046,8 @@ int main(int argc, char** argv) {
        constrained_ph_rebound_avoids_inter_sample_obstacle},
       {"quintic_ph_geometry_preserves_invariants_and_exact_offsets",
        quintic_ph_geometry_preserves_invariants_and_exact_offsets},
+      {"parallel_spline_workers_shutdown_after_short_optimizations",
+       parallel_spline_workers_shutdown_after_short_optimizations},
       {"obstacle_aware_diagonals_and_curves_remain_capacity_and_drc_gated",
        obstacle_aware_diagonals_and_curves_remain_capacity_and_drc_gated},
       {"hydraulic_polygon_discovery_projects_into_coarse_navmesh",

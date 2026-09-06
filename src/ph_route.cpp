@@ -33,9 +33,17 @@ public:
       workers_.emplace_back([this](std::stop_token stop) { work(stop); });
   }
   ~BoundedWorkerPool() {
-    for (auto& worker : workers_)
-      worker.request_stop();
+    {
+      // Serialize the stop predicate with wait's check/unlock transition. Otherwise the
+      // notification can precede a worker entering wait and leave shutdown blocked forever.
+      std::lock_guard lock(mutex_);
+      for (auto& worker : workers_)
+        worker.request_stop();
+    }
     wake_.notify_all();
+    // Members are destroyed in reverse declaration order: explicitly join before the
+    // condition variables, task storage and mutex that the workers still reference.
+    workers_.clear();
   }
   BoundedWorkerPool(const BoundedWorkerPool&) = delete;
   BoundedWorkerPool& operator=(const BoundedWorkerPool&) = delete;

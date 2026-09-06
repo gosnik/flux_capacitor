@@ -5,6 +5,7 @@ target_compile_definitions(
   flux_unit_tests PRIVATE FLUX_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 
 add_test(NAME flux_unit_tests COMMAND flux_unit_tests)
+set_tests_properties(flux_unit_tests PROPERTIES TIMEOUT 600)
 
 add_executable(
   flux_telemetry_viewer_tests

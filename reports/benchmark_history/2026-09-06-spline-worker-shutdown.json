@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "date": "2026-09-06",
+  "git_revision": "25e3b884be9b359d9c5bf0cc4fbb6cc836fd4f82",
+  "dirty_worktree": true,
+  "experiment": "spline-exact-worker-shutdown-lifetime",
+  "failure": {
+    "test": "obstacle_aware_diagonals_and_curves_remain_capacity_and_drc_gated",
+    "observed_elapsed_seconds": 462,
+    "observed_cpu_seconds": 71,
+    "threads_waiting_on_futex": 9,
+    "action": "terminated stalled owned test process after repeated no-progress observations",
+    "stack_trace": "unavailable: ptrace attachment denied"
+  },
+  "root_mechanisms": [
+    "Stop predicate changed without the wait mutex, allowing a missed wakeup between predicate check and entering wait.",
+    "Worker vector declared before synchronization members, so automatic member destruction could destroy state before joining workers."
+  ],
+  "change": "Request stop while holding the wait mutex, notify after unlocking, explicitly join all workers before member destruction.",
+  "control": {
+    "executable": "build/worker-lifecycle-control-v16-bin/flux_unit_tests",
+    "test": "parallel_spline_workers_shutdown_after_short_optimizations",
+    "optimizations_per_run": 512,
+    "passed_runs_before_hang": 3,
+    "hung_run_timeout_seconds": 3,
+    "total_elapsed_seconds": 4.9283265929843765
+  },
+  "after": {
+    "stress_runs_passed": 40,
+    "short_optimizations_completed": 20480,
+    "per_run_timeout_seconds": 3,
+    "elapsed_seconds": 25.320942427992122,
+    "previously_stalled_crossing_regression": "pass",
+    "full_core_suite": "34/34 pass"
+  },
+  "interpretation": "The isolated lifecycle stress reproduces the shutdown defect and passes after the synchronization fix. This does not establish that earlier Tier-1 timeouts were deadlocks; their traces showed active search.",
+  "decision": "keep",
+  "routing_policy_changed": false,
+  "tier_promoted": false,
+  "sources": [
+    "https://eel.is/c++draft/thread.condition.condvar",
+    "https://eel.is/c++draft/thread.jthread.cons"
+  ]
+}

@@ -790,7 +790,9 @@ std::optional<QuinticPHSegment> interpolate_quintic_ph_segment(SplineVector star
 }
 
 [[nodiscard]] bool prepare_route_interpolation_state(QuinticPHRoute& route) {
-  if (route.control_points.size() < 2U)
+  if (route.control_points.size() < 2U ||
+      (!route.node_tangent_directions.empty() &&
+       route.node_tangent_directions.size() != route.control_points.size()))
     return false;
   route.node_parameters =
       select_quintic_ph_parameters(route.control_points, route.parameter_exponent);
@@ -816,6 +818,13 @@ std::optional<QuinticPHSegment> interpolate_quintic_ph_segment(SplineVector star
           scale(norm(direction) > 0.0L ? scale(direction, magnitude)
                                        : scale(normalized(after), magnitude),
                 route.tangent_scale);
+    }
+    if (!route.node_tangent_directions.empty()) {
+      const auto direction = route.node_tangent_directions[i];
+      if (!std::isfinite(direction.x) || !std::isfinite(direction.y))
+        return false;
+      if (norm(direction) > 0.0L)
+        route.node_derivatives[i] = scale(normalized(direction), norm(route.node_derivatives[i]));
     }
     if (!(norm(route.node_derivatives[i]) > 0.0L))
       return false;
@@ -868,7 +877,8 @@ namespace {
 
 [[nodiscard]] std::optional<QuinticPHRoute>
 make_quintic_ph_route_from_nodes(const std::vector<Point>& nodes,
-                                 const PHInterpolationConfig& config) {
+                                 const PHInterpolationConfig& config,
+                                 std::vector<SplineVector> tangent_directions = {}) {
   if (nodes.size() < 2U || !(config.tangent_scale > 0.0L) || !std::isfinite(config.tangent_scale) ||
       !std::isfinite(config.parameter_exponent))
     return std::nullopt;
@@ -882,6 +892,7 @@ make_quintic_ph_route_from_nodes(const std::vector<Point>& nodes,
         {static_cast<long double>(point.x.value()), static_cast<long double>(point.y.value())});
   }
   route.corridor_anchors = route.control_points;
+  route.node_tangent_directions = std::move(tangent_directions);
   if (!rebuild_quintic_ph_route(route))
     return std::nullopt;
   if (config.continuity == PHJoinContinuity::curvature &&
@@ -902,7 +913,8 @@ namespace {
 
 [[nodiscard]] std::optional<QuinticPHRoute>
 make_guarded_quintic_ph_route(const std::vector<Point>& polyline, Nanometres corner_guard,
-                              const PHInterpolationConfig& config, bool retain_corner) {
+                              const PHInterpolationConfig& config, bool retain_corner,
+                              bool align_runs = false) {
   const auto canonical = canonical_polyline(polyline);
   if (canonical.size() < 3U || corner_guard.value() <= 0)
     return make_quintic_ph_route(canonical, config);
@@ -928,7 +940,24 @@ make_guarded_quintic_ph_route(const std::vector<Point>& polyline, Nanometres cor
   // would collapse them back into the source corner, allowing a following Hermite span to bow
   // outside a narrow selected portal. Regional seeds retain the apex as an exact obstacle-side
   // witness; finished corner rounding omits it so a C1 curve can bridge the trimmed incident runs.
-  return make_quintic_ph_route_from_nodes(guarded, config);
+  if (!align_runs)
+    return make_quintic_ph_route_from_nodes(guarded, config);
+  std::vector<SplineVector> tangent_directions;
+  tangent_directions.reserve(guarded.size());
+  const auto direction = [](Point a, Point b) {
+    return normalized(SplineVector{static_cast<long double>(b.x.value() - a.x.value()),
+                                    static_cast<long double>(b.y.value() - a.y.value())});
+  };
+  tangent_directions.push_back(direction(canonical[0], canonical[1]));
+  for (std::size_t i = 1U; i + 1U < canonical.size(); ++i) {
+    tangent_directions.push_back(direction(canonical[i - 1U], canonical[i]));
+    if (retain_corner)
+      tangent_directions.push_back({});
+    tangent_directions.push_back(direction(canonical[i], canonical[i + 1U]));
+  }
+  tangent_directions.push_back(
+      direction(canonical[canonical.size() - 2U], canonical.back()));
+  return make_quintic_ph_route_from_nodes(guarded, config, std::move(tangent_directions));
 }
 
 } // namespace
@@ -944,6 +973,12 @@ std::optional<QuinticPHRoute>
 make_corner_rounded_quintic_ph_route(const std::vector<Point>& polyline, Nanometres corner_guard,
                                      const PHInterpolationConfig& config) {
   return make_guarded_quintic_ph_route(polyline, corner_guard, config, false);
+}
+
+std::optional<QuinticPHRoute>
+make_run_aligned_quintic_ph_route(const std::vector<Point>& polyline, Nanometres corner_guard,
+                                 const PHInterpolationConfig& config) {
+  return make_guarded_quintic_ph_route(polyline, corner_guard, config, false, true);
 }
 
 bool enforce_quintic_ph_continuity(QuinticPHRoute& route, PHJoinContinuity continuity,
@@ -1085,6 +1120,8 @@ bool insert_quintic_ph_interpolation_node(QuinticPHRoute& route, long double par
     return false;
   if (route.node_parameters.size() != route.control_points.size() ||
       route.node_derivatives.size() != route.control_points.size() ||
+      (!route.node_tangent_directions.empty() &&
+       route.node_tangent_directions.size() != route.control_points.size()) ||
       std::any_of(route.node_parameters.begin(), route.node_parameters.end(),
                   [&](auto existing) { return std::abs(existing - parameter) < 1.0e-12L; }))
     return false;
@@ -1103,6 +1140,11 @@ bool insert_quintic_ph_interpolation_node(QuinticPHRoute& route, long double par
       candidate.node_parameters.begin() + static_cast<std::ptrdiff_t>(insert_at), parameter);
   candidate.node_derivatives.insert(
       candidate.node_derivatives.begin() + static_cast<std::ptrdiff_t>(insert_at), derivative);
+  if (!candidate.node_tangent_directions.empty()) {
+    candidate.node_tangent_directions.insert(
+        candidate.node_tangent_directions.begin() + static_cast<std::ptrdiff_t>(insert_at),
+        normalized(derivative));
+  }
   if (candidate.corridor_anchors.size() == route.control_points.size()) {
     candidate.corridor_anchors.insert(
         candidate.corridor_anchors.begin() + static_cast<std::ptrdiff_t>(insert_at), position);

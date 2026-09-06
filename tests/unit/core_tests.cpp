@@ -6125,11 +6125,50 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
           "a pre-requested stop token must cancel before routing and preserve the source checkpoint");
 }
 
+void corner_blends_preserve_straight_run_tangents() {
+  for (const auto sign : {-1.0L, 1.0L}) {
+    const std::vector<Point> points{mm(10.0 * sign, 10.0), mm(20.0 * sign, 10.0),
+                                    mm(20.0 * sign, 30.0), mm(10.0 * sign, 30.0)};
+    const auto ordinary = flux::make_corner_rounded_quintic_ph_route(
+        points, Nanometres::from_mm(1.0));
+    auto aligned = flux::make_run_aligned_quintic_ph_route(points, Nanometres::from_mm(1.0));
+    require(ordinary && aligned, "both corner seed families must interpolate the micro-route");
+    const auto maximum_outward = [sign](const auto& route) {
+      long double result = -std::numeric_limits<long double>::infinity();
+      for (std::size_t i = 0U; i <= 512U; ++i)
+        result = std::max(result, sign * flux::evaluate_quintic_ph(route, i / 512.0L).x);
+      return result;
+    };
+    require(maximum_outward(*ordinary) > 20050000.0L,
+            "bisector shoulder tangents must reproduce an outward bow beyond a 50um margin");
+    const auto check = [&] {
+      require(aligned->tangent_continuous && maximum_outward(*aligned) <= 20000000.01L &&
+                  flux::certify_quintic_ph_shape(*aligned).legal,
+              "run-aligned shoulders must keep the connecting PH run straight and regular");
+      require(aligned->node_tangent_directions.size() == aligned->control_points.size(),
+              "Hermite direction constraints must stay aligned with interpolation nodes");
+    };
+    check();
+    require(flux::rebuild_quintic_ph_route(*aligned), "aligned seed must rebuild");
+    check();
+    require(flux::insert_quintic_ph_interpolation_node(*aligned, 0.5L),
+            "the straight PH span must support exact adaptive insertion");
+    check();
+    require(flux::rebuild_quintic_ph_route(*aligned), "inserted direction constraints must rebuild");
+    check();
+    auto malformed = *aligned;
+    malformed.node_tangent_directions.pop_back();
+    require(!flux::rebuild_quintic_ph_route(malformed),
+            "misaligned Hermite direction metadata must fail closed");
+  }
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
   const std::vector<TestCase> tests{
       {"units_remain_exact_and_saturating", units_remain_exact_and_saturating},
+      {"corner_blends_preserve_straight_run_tangents", corner_blends_preserve_straight_run_tangents},
       {"multisource_terminal_membership_preserves_access_preference_order",
        multisource_terminal_membership_preserves_access_preference_order},
       {"file_import_preserves_project_minimum_rules", file_import_preserves_project_minimum_rules},

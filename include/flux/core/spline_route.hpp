@@ -68,6 +68,11 @@ struct QuinticPHRoute {
   PHJoinContinuity requested_continuity{PHJoinContinuity::tangent};
   bool tangent_continuous{false};
   bool curvature_continuous{false};
+  // Optional per-node Hermite direction constraints (zero means automatic).
+  // Shoulder nodes of a corner blend retain the incident run direction so a
+  // rounded corner cannot bow the intervening straight span across a boundary.
+  // Magnitudes remain derived from the local parameterization after deformation.
+  std::vector<SplineVector> node_tangent_directions;
 };
 
 struct SplineSample {
@@ -325,6 +330,9 @@ struct SplineFittedPiece {
 [[nodiscard]] std::optional<QuinticPHRoute> make_corner_rounded_quintic_ph_route(
     const std::vector<Point>& polyline, Nanometres corner_guard,
     const PHInterpolationConfig& config = {});
+[[nodiscard]] std::optional<QuinticPHRoute>
+make_run_aligned_quintic_ph_route(const std::vector<Point>& polyline, Nanometres corner_guard,
+                                 const PHInterpolationConfig& config = {});
 [[nodiscard]] bool rebuild_quintic_ph_route(QuinticPHRoute& route);
 // Rebuilds the bounded PH support of one changed interpolation node. Falls back to a complete
 // rebuild when the existing prepared chain is structurally unavailable.

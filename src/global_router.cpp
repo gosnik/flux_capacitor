@@ -14212,9 +14212,13 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
                              [&connected, selected_node, &task](const Terminal& terminal) {
                                const auto terminal_index =
                                    static_cast<std::size_t>(&terminal - task.terminals.data());
+                               // Access nodes retain geometric preference order (radius, then
+                               // distance), not numeric node order. Preserve that ordering and
+                               // test membership without a binary-search partition assumption.
                                return !connected[terminal_index] &&
-                                      std::binary_search(terminal.grid_nodes.begin(),
-                                                         terminal.grid_nodes.end(), selected_node);
+                                      std::find(terminal.grid_nodes.begin(),
+                                                terminal.grid_nodes.end(), selected_node) !=
+                                          terminal.grid_nodes.end();
                              });
             if (selected == task.terminals.end()) {
               record_connection_failure(

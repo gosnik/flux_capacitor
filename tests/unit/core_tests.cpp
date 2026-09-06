@@ -323,6 +323,37 @@ void file_import_preserves_project_minimum_rules() {
   }
 }
 
+void multisource_terminal_membership_preserves_access_preference_order() {
+  auto board = two_pad_board();
+  board.outline = rectangle(0.0, 0.0, 20.0, 20.0);
+  board.footprints[0].position = mm(5.0, 5.0);
+  board.footprints[1].position = mm(5.3, 8.0);
+  for (auto& footprint : board.footprints) {
+    footprint.courtyard = local_rectangle(1.0, 1.0);
+  }
+  board.rules.minimum_track_width = Nanometres{700000};
+  GlobalRouterConfig config;
+  config.grid_pitch = Nanometres{900000};
+  config.max_iterations = 1U;
+  config.max_pin_escape_grid_radius = 3U;
+  config.max_pin_access_nodes_per_terminal = 16U;
+  config.diversify_pin_access_rings = true;
+  config.use_multisource_steiner_growth = true;
+  config.hard_capacity_start_iteration = 1U;
+  const auto routed = flux::route_global(board, config);
+  require(routed.diversified_pin_access_nodes > 0U &&
+              !routed.hard_capacity_pass_summaries.empty(),
+          "terminal ownership regression must exercise preference-ordered adaptive access: " +
+              routed.diagnostic);
+  for (const auto& pass : routed.hard_capacity_pass_summaries) {
+    require(pass.connection_failures.empty() && pass.unrouted_nets.empty(),
+            "a found multi-source path must retain its terminal owner across adaptive rings");
+  }
+  const auto copper = flux::materialize_detailed_route(board, routed);
+  require(routed.complete() && copper.complete() && copper.copper_drc.violation_count() == 0U,
+          "adaptive terminal membership must preserve exact connected copper legality");
+}
+
 void units_remain_exact_and_saturating() {
   require(Nanometres::from_mm(1.2345674).value() == 1'234'567,
           "millimetres must quantize to integer nanometres");
@@ -6099,6 +6130,8 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
 int main(int argc, char** argv) {
   const std::vector<TestCase> tests{
       {"units_remain_exact_and_saturating", units_remain_exact_and_saturating},
+      {"multisource_terminal_membership_preserves_access_preference_order",
+       multisource_terminal_membership_preserves_access_preference_order},
       {"file_import_preserves_project_minimum_rules", file_import_preserves_project_minimum_rules},
       {"source_bound_board_rules_control_geometry_and_hole_clearance",
        source_bound_board_rules_control_geometry_and_hole_clearance},

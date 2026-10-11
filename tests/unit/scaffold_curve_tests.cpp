@@ -37,6 +37,86 @@ void materializes_complete_scaffold_without_regional_plan() {
   require(detailed.candidate->vias.size() == 1U && detailed.candidate->vias.front().position == mm(12, 8), "certified scaffold must retain exact via site");
   require(detailed.candidate->tracks.size() == 4U && detailed.candidate->tracks.front().start == mm(2, 2) && detailed.candidate->tracks.front().end == mm(2, 8) && detailed.candidate->tracks.back().start == mm(12, 18) && detailed.candidate->tracks.back().end == mm(24, 18), "certified scaffold must retain terminal approach directions and planar topology");
 }
+void explicit_nominal_widths_match_implicit_certified_scaffold() {
+  const auto source = board();
+  GlobalRoutePath implicit;
+  implicit.net = NetId{"scaffold"}; implicit.legal_scaffold = true;
+  implicit.points = {{mm(2, 2), LayerId{"F.Cu"}}, {mm(2, 8), LayerId{"F.Cu"}},
+                     {mm(12, 8), LayerId{"F.Cu"}}, {mm(12, 8), LayerId{"B.Cu"}},
+                     {mm(12, 18), LayerId{"B.Cu"}}, {mm(24, 18), LayerId{"B.Cu"}}};
+  auto explicit_nominal = implicit;
+  explicit_nominal.segment_widths.assign(implicit.points.size() - 1U, source.rules.default_track_width);
+  explicit_nominal.segment_width_kinds.assign(implicit.points.size() - 1U, GlobalRouteSegmentWidthKind::nominal);
+  const auto plan_for = [](GlobalRoutePath path) {
+    RoutingPlanResult plan;
+    plan.legal_scaffold_complete = true; plan.paths = {std::move(path)};
+    plan.coarse_global.stop_reason = GlobalRouterStopReason::complete;
+    return plan;
+  };
+  DetailedRouterConfig config;
+  config.pull_tight_45_degrees = true; config.continuous_refinement = true;
+  config.residual_bend_repair = false;
+  const auto implicit_result = materialize_detailed_route(source, plan_for(implicit), config);
+  const auto explicit_result = materialize_detailed_route(source, plan_for(explicit_nominal), config);
+  require(implicit_result.complete() && explicit_result.complete() && implicit_result.candidate && explicit_result.candidate &&
+              implicit_result.copper_drc.ok() && explicit_result.copper_drc.ok(),
+          "explicit nominal certified widths must materialize like implicit nominal widths");
+  require(implicit_result.candidate->tracks == explicit_result.candidate->tracks &&
+              implicit_result.candidate->vias == explicit_result.candidate->vias &&
+              implicit_result.candidate->track_arcs == explicit_result.candidate->track_arcs &&
+              implicit_result.candidate->track_beziers == explicit_result.candidate->track_beziers,
+          "nominal width metadata must preserve certified multilayer copper and topology");
+}
+void malformed_certified_width_metadata_is_rejected() {
+  const auto source = board();
+  GlobalRoutePath path;
+  path.net = NetId{"scaffold"}; path.legal_scaffold = true;
+  path.points = {{mm(2, 2), LayerId{"F.Cu"}}, {mm(2, 8), LayerId{"F.Cu"}},
+                 {mm(12, 8), LayerId{"F.Cu"}}, {mm(12, 8), LayerId{"B.Cu"}},
+                 {mm(12, 18), LayerId{"B.Cu"}}, {mm(24, 18), LayerId{"B.Cu"}}};
+  path.segment_widths = {source.rules.default_track_width};
+  path.segment_width_kinds = {GlobalRouteSegmentWidthKind::nominal};
+  RoutingPlanResult plan;
+  plan.legal_scaffold_complete = true; plan.paths = {path};
+  plan.coarse_global.stop_reason = GlobalRouterStopReason::complete;
+  const auto detailed = materialize_detailed_route(source, plan, {});
+  require(!detailed.complete() && detailed.stop_reason == DetailedRouterStopReason::invalid_path,
+          "misaligned certified width metadata must remain invalid");
+}
+void unbacked_neck_down_metadata_is_rejected() {
+  const auto source = board();
+  for (int policy = 0; policy < 3; ++policy) {
+    GlobalRoutePath path;
+    path.net = NetId{"scaffold"}; path.legal_scaffold = true;
+    path.points = {{mm(2, 2), LayerId{"F.Cu"}}, {mm(12, 2), LayerId{"F.Cu"}}};
+    if (policy != 0) {
+      path.segment_widths = {Nanometres{0}};
+      path.segment_width_kinds = {GlobalRouteSegmentWidthKind::nominal};
+    }
+    if (policy == 2) path.segment_width_kinds.front() = GlobalRouteSegmentWidthKind::terminal_neck_down;
+    else path.terminal_neck_down_segments = 1U;
+    RoutingPlanResult plan;
+    plan.legal_scaffold_complete = true; plan.paths = {path};
+    plan.coarse_global.stop_reason = GlobalRouterStopReason::complete;
+    const auto detailed = materialize_detailed_route(source, plan, {});
+    require(!detailed.complete() && detailed.stop_reason == DetailedRouterStopReason::invalid_path,
+            "neck-down metadata without explicit narrowed widths must remain invalid");
+  }
+}
+void invalid_certified_layer_transition_is_rejected() {
+  const auto source = board();
+  GlobalRoutePath path;
+  path.net = NetId{"scaffold"}; path.legal_scaffold = true;
+  path.points = {{mm(2, 2), LayerId{"F.Cu"}}, {mm(2, 8), LayerId{"F.Cu"}},
+                 {mm(12, 8), LayerId{"F.Cu"}}, {mm(12.1, 8), LayerId{"B.Cu"}},
+                 {mm(12, 18), LayerId{"B.Cu"}}, {mm(24, 18), LayerId{"B.Cu"}}};
+  RoutingPlanResult plan;
+  plan.legal_scaffold_complete = true; plan.paths = {path};
+  plan.coarse_global.stop_reason = GlobalRouterStopReason::complete;
+  const auto detailed = materialize_detailed_route(source, plan, {});
+  require(!detailed.complete() && detailed.stop_reason == DetailedRouterStopReason::invalid_path,
+          "non-coincident certified layer transitions must remain invalid");
+}
 void failed_curve_fit_retains_scaffold_and_unrelated_copper() {
   auto source = board();
   source.nets.push_back({NetId{"unrelated"}, "unrelated", 2U});
@@ -214,4 +294,4 @@ void residual_bend_repair_skips_floating_closed_chain() {
           "a floating closed chain must keep its ambiguous audited seam untouched");
 }
 } // namespace
-int main() { materializes_complete_scaffold_without_regional_plan(); failed_curve_fit_retains_scaffold_and_unrelated_copper(); residual_bend_repair_uses_exact_fillet_after_ph_rejection(); residual_bend_repair_rejects_blocked_corner_without_mutating_copper(); residual_bend_repair_preserves_existing_routing(); residual_bend_repair_handles_pad_anchored_closed_chain(); residual_bend_repair_skips_floating_closed_chain(); return EXIT_SUCCESS; }
+int main() { materializes_complete_scaffold_without_regional_plan(); explicit_nominal_widths_match_implicit_certified_scaffold(); malformed_certified_width_metadata_is_rejected(); unbacked_neck_down_metadata_is_rejected(); invalid_certified_layer_transition_is_rejected(); failed_curve_fit_retains_scaffold_and_unrelated_copper(); residual_bend_repair_uses_exact_fillet_after_ph_rejection(); residual_bend_repair_rejects_blocked_corner_without_mutating_copper(); residual_bend_repair_preserves_existing_routing(); residual_bend_repair_handles_pad_anchored_closed_chain(); residual_bend_repair_skips_floating_closed_chain(); return EXIT_SUCCESS; }

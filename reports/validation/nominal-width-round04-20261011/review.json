@@ -1,0 +1,7 @@
+{
+  "reviewer": "joint_review",
+  "status": "closed",
+  "finding": "Unbacked neck-down metadata could bypass width-aware validation for empty or zero widths.",
+  "resolution": "Fail closed when metadata is nonnominal without a positive explicit width; add three negative fixtures.",
+  "remaining_findings": []
+}

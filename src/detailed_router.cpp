@@ -4162,8 +4162,22 @@ void accumulate_committed_spline_route_metrics(DetailedRouteResult& target,
                   [](Nanometres width) { return width.value() < 0; })) {
     return false;
   }
-  const bool width_aware = std::any_of(path.segment_widths.begin(), path.segment_widths.end(),
-                                       [](Nanometres width) { return width.value() > 0; });
+  // Search paths may spell out the nominal width on every edge, including via edges.
+  // That is the same policy as an implicit-width path, not an unaccounted neck-down.
+  // Keep non-nominal kinds/counters on the strict width-aware validation path.
+  const bool explicit_nominal_policy =
+      std::all_of(path.segment_widths.begin(), path.segment_widths.end(),
+          [track_width](Nanometres width) { return width.value() == 0 || width == track_width; }) &&
+      std::all_of(path.segment_width_kinds.begin(), path.segment_width_kinds.end(),
+          [](GlobalRouteSegmentWidthKind kind) { return kind == GlobalRouteSegmentWidthKind::nominal; }) &&
+      path.terminal_neck_down_segments == 0U && path.medial_neck_down_segments == 0U &&
+      path.corridor_neck_down_segments == 0U;
+  const bool width_aware = !explicit_nominal_policy &&
+      std::any_of(path.segment_widths.begin(), path.segment_widths.end(),
+                  [](Nanometres width) { return width.value() > 0; });
+  if (!explicit_nominal_policy && !width_aware) {
+    return false;
+  }
   const auto explicit_width_segments = static_cast<std::size_t>(std::count_if(
       path.segment_widths.begin(), path.segment_widths.end(),
       [track_width](Nanometres width) { return width.value() > 0 && width < track_width; }));
@@ -6671,7 +6685,8 @@ materialize_impl(const Board& source, const GlobalRouteResult& global,
         result.diagnostic = "detailed routing cancelled during materialization";
       } else {
         result.stop_reason = DetailedRouterStopReason::invalid_path;
-        result.diagnostic = "global path contains an invalid layer transition";
+        result.diagnostic = "path materialization rejected geometry or width metadata; net=" +
+            path.net.value() + "; connection=" + std::to_string(path.connection_index);
       }
       return result;
     }

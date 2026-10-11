@@ -1,0 +1,12 @@
+{
+  "round": 4,
+  "failure": "certified scaffold fails materialization before curved output",
+  "hypothesis": "Explicit nominal per-edge widths are mistaken for a neck-down policy and rejected because no narrowed segments exist.",
+  "experiment": "Treat aligned nominal widths/kinds with zero neck-down counters as implicit nominal policy; preserve actual layer/geometry checks.",
+  "baseline": {
+    "tier0": "51/51 scaffold requests, zero physical opens, detailed invalid_path",
+    "tier1": "88/88 scaffold requests, zero physical opens, detailed invalid_path"
+  },
+  "success_criterion": "Curved final copper with zero physical opens and benchmark KiCad DRC acceptance on Tier 0 and Tier 1.",
+  "status": "validation_pending"
+}

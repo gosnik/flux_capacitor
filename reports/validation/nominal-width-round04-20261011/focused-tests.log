@@ -1,0 +1,17 @@
+Test project /home/adam/qtbits/flux_capacitor/build/release
+    Start   6: flux_routing_engine_experiment_tests
+1/4 Test   #6: flux_routing_engine_experiment_tests ...   Passed    0.69 sec
+    Start 170: flux_copper_scaffold_tests
+2/4 Test #170: flux_copper_scaffold_tests .............   Passed    1.61 sec
+    Start 171: flux_scaffold_curve_tests
+3/4 Test #171: flux_scaffold_curve_tests ..............   Passed    1.79 sec
+    Start 172: flux_scaffold_collision_tests
+4/4 Test #172: flux_scaffold_collision_tests ..........   Passed    0.01 sec
+
+100% tests passed, 0 tests failed out of 4
+
+Label Time Summary:
+risk       =   4.10 sec*proc (4 tests)
+routing    =   4.10 sec*proc (4 tests)
+
+Total Test time (real) =   4.11 sec

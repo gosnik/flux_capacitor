@@ -1,0 +1,99 @@
+{
+  "round": 4,
+  "status": "tier0_pass_tier1_curve_incomplete",
+  "binary_sha256": "575a2acc911ab9bf25a72b717d6853a80f84990d46c2c276465b2cd7a20952d3",
+  "tiers": {
+    "tier0": {
+      "detail-result": {
+        "seconds": 63.60397165897302,
+        "complete": true,
+        "stop_reason": "complete",
+        "diagnostic": "quintic PH curve routes materialized as connected DRC-clean native line/arc copper",
+        "open_connections": 0,
+        "copper_violations": 0,
+        "added_tracks": 169,
+        "added_track_arcs": 23,
+        "added_track_beziers": 394,
+        "added_vias": 3,
+        "unrounded_non_junction_bends": 0,
+        "residual_bend_repair_attempted": 23,
+        "residual_bend_repair_accepted": 23
+      },
+      "global-result": {
+        "seconds": 18.190731933980715,
+        "complete": true,
+        "stop_reason": "complete",
+        "diagnostic": "",
+        "open_connections": null,
+        "copper_violations": null,
+        "added_tracks": null,
+        "added_track_arcs": null,
+        "added_track_beziers": null,
+        "added_vias": null,
+        "unrounded_non_junction_bends": null,
+        "residual_bend_repair_attempted": null,
+        "residual_bend_repair_accepted": null,
+        "scaffold": {
+          "request_count": 51,
+          "satisfied_connections": 51,
+          "physical_open_connections": 0,
+          "physical_unrouted_nets": 0
+        }
+      },
+      "kicad": {
+        "path": "reports/validation/nominal-width-round04-20261011/tier0/tier-0-pt2399_delay/kicad-drc.json",
+        "diagnostic_only": false,
+        "violations": 0,
+        "unconnected_items": 0,
+        "categories": {}
+      },
+      "runner_exit": "0"
+    },
+    "tier1": {
+      "detail-result": {
+        "seconds": 273.28580192499794,
+        "complete": false,
+        "stop_reason": "invalid_path",
+        "diagnostic": "materialized curved route retains 103 non-junction direction changes without quintic PH curve realization; routing engine: exhausted",
+        "open_connections": 0,
+        "copper_violations": 0,
+        "added_tracks": 550,
+        "added_track_arcs": 34,
+        "added_track_beziers": 396,
+        "added_vias": 67,
+        "unrounded_non_junction_bends": 103,
+        "residual_bend_repair_attempted": 34,
+        "residual_bend_repair_accepted": 34
+      },
+      "global-result": {
+        "seconds": 104.63348704203963,
+        "complete": true,
+        "stop_reason": "complete",
+        "diagnostic": "",
+        "open_connections": null,
+        "copper_violations": null,
+        "added_tracks": null,
+        "added_track_arcs": null,
+        "added_track_beziers": null,
+        "added_vias": null,
+        "unrounded_non_junction_bends": null,
+        "residual_bend_repair_attempted": null,
+        "residual_bend_repair_accepted": null,
+        "scaffold": {
+          "request_count": 88,
+          "satisfied_connections": 88,
+          "physical_open_connections": 0,
+          "physical_unrouted_nets": 0
+        }
+      },
+      "kicad": {
+        "path": "reports/validation/nominal-width-round04-20261011/tier1/failed-route-png/bm_svf/detailed-rejected/kicad-drc.json",
+        "diagnostic_only": true,
+        "violations": 0,
+        "unconnected_items": 0,
+        "categories": {}
+      },
+      "runner_exit": "1"
+    }
+  }
+}

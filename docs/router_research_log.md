@@ -9607,3 +9607,21 @@ The original Tier-0 runner rejected 51 paths against its fixed expected50 count 
 Both boards now fail detailed materialization with generic `invalid_path` before curve completion (Tier1 105.849 s; Tier0 18.490 s). This is a real detailed-output regression, not a qualified pass. No final KiCad DRC was reached. Evidence points to a handoff mismatch: scaffold compact/grid paths carry explicit nominal segment widths, whereas detailed materialization requires any explicit positive width vector to contain a narrower-than-nominal segment. Its generic diagnostic mislabels all materialization failures as an invalid layer transition.
 
 Decision: preserve this experimental checkpoint because exact physical connectivity improved to zero opens, but do not promote either tier or claim preserved curved output. Next round must correct nominal-width handoff semantics and validate actual curves and DRC.
+
+## Round 04 — Normalize explicit nominal width metadata
+
+### Failure and hypothesis
+Round 03 certified both scaffolds with zero physical opens, but detailed materialization rejected paths before curve conversion. Search explicitly records the nominal width for every edge; the consumer treated any positive width vector as neck-down metadata and required at least one narrower segment. This is a representation contract defect, not evidence of an impossible via transition.
+
+### Experiment
+Interpret aligned nominal widths (including implicit-zero entries), nominal kinds and zero neck-down counters as the existing nominal-width policy. Keep metadata alignment, actual layer transitions, non-nominal width checks, exact copper validation and final DRC gates. Improve the rejection diagnostic to identify net and connection without claiming every failure is a layer transition.
+
+### Verification
+A certified multilayer A/B fixture compares explicit and implicit nominal copper. Negative fixtures retain malformed metadata and non-coincident layer-transition rejection. Validation and sequential telemetry tier runs are recorded in `reports/validation/nominal-width-round04-20261011`; results pending.
+
+### Round 04 results and decision
+Strict build and four focused suites passed; independent review closed an additional fail-open case for unbacked neck-down metadata. The intended historical red-test probe was inconclusive because an initial test syntax failure delayed linking until after the library rebuilt; do not count it as a red reproduction.
+
+Tier 0 is qualified again: global 18.191 s, detailed 63.604 s, zero opens/internal violations, 394 Béziers, 23 arcs, 3 vias, zero unrounded non-junction bends, and external KiCad DRC passes. Both copper layer images were inspected: smooth bends, with some broad detours left for later optimization.
+
+Tier 1 passes the metadata handoff and preserves zero opens/internal violations, but fails the curved-output gate after 273.286 s: 396 Béziers, 34 arcs, 67 vias, 103 remaining straight bends. Global scaffold takes 104.633 s with 88/88 requests. Residual bend repair accepted all 34 attempted corners, suggesting coverage/budget rather than local infeasibility is now the first mechanism to investigate. Keep this narrow contract fix; do not promote Tier 1.

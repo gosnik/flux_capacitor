@@ -1,0 +1,14 @@
+{
+  "build": "passed",
+  "tests": {
+    "passed": 4,
+    "failed": 0,
+    "targets": [
+      "flux_copper_scaffold_tests",
+      "flux_scaffold_curve_tests",
+      "flux_scaffold_collision_tests",
+      "flux_routing_engine_experiment_tests"
+    ]
+  },
+  "historical_red_probe": "inconclusive: initial test compile had missing initializer braces; retry linked the updated library. Do not treat as an old-code failure reproduction."
+}

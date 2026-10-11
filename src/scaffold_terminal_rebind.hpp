@@ -16,7 +16,8 @@ struct ScaffoldTerminalRebind {
 };
 
 // Deliberately narrow: derives only direct selected-coarse-producer pad rebinds for observed
-// zero-attachment abstract endpoints.  It never substitutes a nearest pad.
+// zero-attachment abstract endpoints, or budget-exhausted branches of physically connected
+// producers. It never substitutes a nearest pad.
 [[nodiscard]] std::pair<std::vector<GlobalRoutePath>, std::vector<ScaffoldTerminalRebind>>
 derive_scaffold_terminal_rebinds(const Board&, const CopperScaffoldResult&,
                                const std::vector<std::string>& attempted_proofs = {},

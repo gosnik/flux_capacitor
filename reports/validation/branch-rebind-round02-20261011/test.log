@@ -1,0 +1,11 @@
+Test project /home/adam/qtbits/flux_capacitor/build/release
+    Start 6: flux_routing_engine_experiment_tests
+1/1 Test #6: flux_routing_engine_experiment_tests ...   Passed    0.72 sec
+
+100% tests passed, 0 tests failed out of 1
+
+Label Time Summary:
+risk       =   0.72 sec*proc (1 test)
+routing    =   0.72 sec*proc (1 test)
+
+Total Test time (real) =   0.72 sec

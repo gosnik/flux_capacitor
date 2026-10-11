@@ -1,0 +1,23 @@
+	Command being timed: "python3 tests/python/verify_routing_corpus.py --flux-cli reports/validation/branch-rebind-round02-20261011/flux-cli --corpus tests/fixtures/routing-corpus --level all --board bm_svf --artifacts reports/validation/branch-rebind-round02-20261011/tier1 --track-geometry curved --routing-timeout-seconds 900 --planning-timeout-seconds 960 --detailed-timeout-seconds 960 --telemetry-level diagnostic --telemetry-record-dir reports/validation/branch-rebind-round02-20261011/tier1/telemetry --failed-route-png-dir reports/validation/branch-rebind-round02-20261011/tier1/failed-route-png --failed-route-png-mode both --max-failed-route-png-results 4"
+	User time (seconds): 931.39
+	System time (seconds): 51.48
+	Percent of CPU this job got: 108%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 15:04.57
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 1382404
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 158
+	Minor (reclaiming a frame) page faults: 31819508
+	Voluntary context switches: 1668037
+	Involuntary context switches: 6408
+	Swaps: 0
+	File system inputs: 19654
+	File system outputs: 1656704
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

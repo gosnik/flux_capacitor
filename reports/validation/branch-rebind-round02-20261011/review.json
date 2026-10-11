@@ -1,0 +1,6 @@
+{
+  "reviewer": "joint_review",
+  "status": "no_material_findings",
+  "scope": "Expansion-exhausted branch rebind and focused tests",
+  "safety": "Producer satisfaction and exact connectivity required; no nearest-pad substitution; real target outside source component."
+}

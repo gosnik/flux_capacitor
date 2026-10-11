@@ -59,8 +59,8 @@ std::size_t plus(std::size_t a, std::size_t b) {
   });
 }
 
-// Rebind only a request that has already proved its literal abstract endpoint physically
-// inaccessible.  A producer must contain that point exactly on the selected same-layer coarse
+// Rebind an inaccessible abstract endpoint, or a bounded search aimed at an obsolete branch
+// of an already connected producer. A producer must contain that point on selected same-layer coarse
 // geometry and expose a real pad endpoint.  This is intentionally not a nearest-pad search.
 [[nodiscard]] std::pair<std::vector<GlobalRoutePath>, std::vector<ScaffoldTerminalRebind>>
 rebind_exhausted_scaffold_terminals(const Board& board, const CopperScaffoldResult& retained) {
@@ -72,8 +72,13 @@ rebind_exhausted_scaffold_terminals(const Board& board, const CopperScaffoldResu
     const auto& request = retained.requests[index];
     const auto& evidence = retained.request_evidence[index];
     if (request.points.size() < 2U || !evidence.access_evaluated ||
-        evidence.termination != CopperScaffoldSearchTermination::attachment_exhausted ||
-        evidence.target_endpoint_contained_by_copper || evidence.target_legal_attachments != 0U) continue;
+        evidence.target_endpoint_contained_by_copper) continue;
+    const bool inaccessible =
+        evidence.termination == CopperScaffoldSearchTermination::attachment_exhausted &&
+        evidence.target_legal_attachments == 0U;
+    const bool exhausted_branch_search =
+        evidence.termination == CopperScaffoldSearchTermination::expansion_budget_exhausted;
+    if (!inaccessible && !exhausted_branch_search) continue;
     const auto orphan = request.points.back();
     if (endpoint_is_real_pad(pads, request.net, orphan)) continue;
     // The source component must not already contain the chosen pad: that would certify only a
@@ -83,6 +88,12 @@ rebind_exhausted_scaffold_terminals(const Board& board, const CopperScaffoldResu
       if (producer == index) continue;
       const auto& path = retained.requests[producer];
       if (path.net != request.net || path.points.size() < 2U) continue;
+      // A legal grid attachment says nothing about whether the old branch point remains on
+      // its producer's copper. For budget failures require both retained satisfaction and
+      // exact physical connectivity of that producer before changing the obligation.
+      if (!inaccessible &&
+          (std::find(retained.satisfied_indices.begin(), retained.satisfied_indices.end(), producer) ==
+               retained.satisfied_indices.end() || !scaffold_request_connected(retained.copper, path))) continue;
       bool contains = false;
       for (std::size_t segment = 1U; segment < path.points.size(); ++segment)
         contains = contains || point_on_same_layer_segment(orphan, path.points[segment - 1U], path.points[segment]);

@@ -1,0 +1,67 @@
+{
+  "status": "complete",
+  "baseline_commit": "6a9ae7f",
+  "implementation": "proof-backed rebind of expansion-exhausted orphan branches",
+  "build": "passed strict release CLI and engine experiment tests",
+  "tests": {
+    "flux_routing_engine_experiment_tests": "passed"
+  },
+  "review": "no material findings",
+  "benchmark_session_id": 64054,
+  "sequence": [
+    "tier0",
+    "tier1"
+  ],
+  "telemetry": "diagnostic",
+  "track_geometry": "curved",
+  "goal_achieved": false,
+  "checkpoint": "Commit/tag/push after results before next implementation round",
+  "tier0_global": {
+    "duration_seconds": 107.58885658200597,
+    "request_count": 50,
+    "satisfied_connections": 50,
+    "physical_open_connections": 1,
+    "matches_round01_physical_outcome": true
+  },
+  "tier0_detail": {
+    "seconds": 324.58469072001753,
+    "physical_opens": 0,
+    "internal_copper_violations": 0,
+    "beziers": 199,
+    "kicad_violations": 0,
+    "kicad_unconnected_items": 0,
+    "qualification": "incomplete_global_route (unchanged)",
+    "copper_layers_visually_inspected": [
+      "F.Cu",
+      "B.Cu"
+    ]
+  },
+  "tier1_intermediate": {
+    "seconds": 102.594912,
+    "declared_requests_satisfied": 78,
+    "declared_requests_total": 78,
+    "physical_completion_certified": false
+  },
+  "tier1": {
+    "duration_seconds": 900.2028196899919,
+    "engine_outcome": "timed-out",
+    "qualified": false,
+    "request_count": 78,
+    "satisfied_connections": 78,
+    "physical_open_connections": 10,
+    "physical_unrouted_nets": 7,
+    "tracks": 853,
+    "vias": 56,
+    "peak_rss_kib": 1382404,
+    "terminal_rebinds": 5,
+    "terminal_rebind_proofs": [
+      "request=60; producer=52; net=kicad-net-12; layer=F.Cu; orphan=57390000,54940000; terminal=57150000,54102000; physical-context=2",
+      "request=66; producer=63; net=kicad-net-1; layer=F.Cu; orphan=52840000,82890000; terminal=50673000,81915000; physical-context=2",
+      "request=69; producer=63; net=kicad-net-1; layer=F.Cu; orphan=52190000,82240000; terminal=50673000,81915000; physical-context=2",
+      "request=71; producer=68; net=kicad-net-1; layer=F.Cu; orphan=69090000,55590000; terminal=68298000,53848000; physical-context=2",
+      "request=73; producer=65; net=kicad-net-1; layer=F.Cu; orphan=56740000,90690000; terminal=55499000,92202000; physical-context=2"
+    ],
+    "final_curved_copper_and_drc": "not reached"
+  },
+  "decision": "retain proof-backed branch correction; refine by appending residual physical component obligations. Runtime regression explicitly not accepted as final performance."
+}

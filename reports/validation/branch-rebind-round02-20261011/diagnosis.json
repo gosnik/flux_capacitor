@@ -1,0 +1,47 @@
+{
+  "baseline_commit": "6a9ae7f",
+  "failure": "Search targets absent coarse branch coordinates after their producer takes a physical detour. Legal grid access does not prove target copper membership.",
+  "evidence": [
+    {
+      "request": 60,
+      "net": "kicad-net-12",
+      "producer": 52,
+      "producer_satisfied": true,
+      "target_nm": [
+        57390000,
+        54940000
+      ],
+      "layer": "F.Cu",
+      "termination": "expansion_budget_exhausted",
+      "target_legal_attachments": 1,
+      "target_contained": false
+    },
+    {
+      "request": 69,
+      "net": "kicad-net-1",
+      "producer": 63,
+      "producer_satisfied": true,
+      "target_nm": [
+        52190000,
+        82240000
+      ],
+      "layer": "F.Cu",
+      "termination": "expansion_budget_exhausted",
+      "target_legal_attachments": 1,
+      "target_contained": false
+    }
+  ],
+  "hypothesis": "Rebind failed orphan branch requests using exact producer provenance and physical component proof instead of requiring zero grid attachments.",
+  "alternatives_ranked": [
+    "Proof-backed producer-component rebind (selected, minimal representation fix)",
+    "Append residual actual-pad obligations (next, addresses remaining physical coverage gap)",
+    "Increase search allowance (rejected here: cannot restore semantic membership of empty branch point)"
+  ],
+  "research": [
+    {
+      "source": "https://docs.kicad.org/7.0/en/pcbnew/pcbnew.html",
+      "relevance": "Routing targets actual connected items/ratsnest anchors; supports distinction between electrical connectivity and fixed geometric waypoint. This experiment uses Flux exact producer proofs rather than nearest-anchor substitution."
+    }
+  ],
+  "success_criterion": "Reduce missing requests/physical opens without discarding checked peers or introducing copper violations. Full Tier1 pass remains separate final curved/DRC criterion."
+}

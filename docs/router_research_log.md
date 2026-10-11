@@ -9559,3 +9559,27 @@ manifest and source snapshot were restored from baseline commit a649f0f; the rep
 binary was isolated and the unavailable original binary is explicitly documented in
 joint-passages-20261011/artifact-integrity.json. Git source/tag isolation remained intact.
 Structured round history: reports/benchmark_history/2026-10-11-compact-search.json.
+
+## Round 02 — Rebind budget-exhausted orphan branches
+
+### Failure and hypothesis
+Round 01 (`6a9ae7f`) retained 76/78 requests and 13 physical opens on Tier 1. Requests 60 and 69 exhausted search toward F.Cu points absent from copper, although each had one legal grid attachment. Exact canonical segment containment identifies satisfied producer requests 52 and 63 respectively. The former zero-attachment-only trigger mistook grid accessibility for meaningful electrical attachment.
+
+### Ranked approaches and research
+1. Rebind using exact coarse producer provenance plus verified physical producer connectivity (selected).
+2. Append missing physical component obligations without replacing checked canonical demands (next separate experiment).
+3. Increase search budget (not selected: it does not repair stale target semantics).
+KiCad's [routing documentation](https://docs.kicad.org/7.0/en/pcbnew/pcbnew.html) describes connections to actual pads/tracks/ratsnest anchors. Flux retains its stricter producer proof rather than adopting nearest-pad substitution.
+
+### Change and safety
+Expansion-budget failures may now use the existing producer rebind only when the target is absent from copper and the exact same-net, same-layer coarse producer is both retained as satisfied and physically connected under the canonical connectivity query. The replacement remains a real producer pad outside the source component. Existing zero-attachment behavior is unchanged. Focused tests cover stale satisfaction evidence, unchecked producer, physically present target, exact provenance, and loop rejection. Independent review found no material issue.
+
+### Validation
+In progress; artifacts isolated in `reports/validation/branch-rebind-round02-20261011`. Tier benchmarks will run sequentially with telemetry and curved geometry. Full physical connectivity and final KiCad DRC remain the goal; request completion alone is not promotion.
+
+Tier 0 completed: global 107.589 s, 50/50 declared requests and one physical open; detailed 324.585 s, zero opens and internal copper violations, 199 Bézier curves and zero unrounded joints. Diagnostic KiCad DRC reports zero violations/unconnected items. Both copper-layer renders were inspected and show baseline-equivalent smooth geometry. Qualification still reports `incomplete_global_route`; this pre-existing mismatch is not a new regression and is not promoted as a passing tier. Peak RSS 1,455,040 KiB.
+
+### Round 02 final result and decision
+Tier 1 reached 78/78 declared requests with 10 physical opens across 7 nets (round 01: 76/78, 13 opens). Retained copper contains 853 tracks and 56 vias. The engine timed out at 900.203 s versus 329.070 s previously; peak RSS rose from 997,624 to 1,382,404 KiB. Five terminal rebinds were recorded, including the two newly admitted request/producer pairs 60/52 and 69/63. The final checkpoint has zero new search expansions because it reused checked paths; this is not the total run search cost.
+
+The semantic hypothesis is supported: actual physical opens decreased, not merely request counts. Retain the correction, but performance and completion remain unresolved. All declared requests being satisfied leaves no missing-request basis for targeted scaffold repair, while whole-board certification still rejects the ten physical opens. The engine consequently spends the remaining allowance exploring global/regional alternatives. Next experiment: append residual physical pad-component demands while preserving every checked canonical request and avoiding duplication of pending edges. Do not promote Tier 1 or claim final curved-copper/DRC acceptance.

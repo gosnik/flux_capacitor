@@ -660,6 +660,23 @@ void direct_scaffold_terminal_rebind_is_bounded_and_preserves_peers() {
   const auto bypass = derive_scaffold_terminal_rebinds(board, retained);
   require(bypass.second.size() == 1U && bypass.first[0] == producer,
           "a satisfied producer bypassing its abstract branch point still needs a terminal binding");
+  retained.request_evidence[1].termination = CopperScaffoldSearchTermination::expansion_budget_exhausted;
+  retained.request_evidence[1].target_legal_attachments = 1U;
+  require(derive_scaffold_terminal_rebinds(board, retained).second.size() == 1U,
+          "a legal grid attachment must not pin a failed branch to obsolete producer geometry");
+  retained.satisfied_indices.clear();
+  require(derive_scaffold_terminal_rebinds(board, retained).second.empty(),
+          "a budget failure must not rebind to an unchecked producer");
+  retained.satisfied_indices = {0U};
+  const auto checked_copper = retained.copper;
+  retained.copper = board;
+  require(derive_scaffold_terminal_rebinds(board, retained).second.empty(),
+          "a satisfaction index alone must not substitute for physical producer connectivity");
+  retained.copper = checked_copper;
+  retained.request_evidence[1].target_endpoint_contained_by_copper = true;
+  require(derive_scaffold_terminal_rebinds(board, retained).second.empty(),
+          "a branch still present in copper must keep its physical target");
+  retained.request_evidence[1].target_endpoint_contained_by_copper = false;
   auto checkpoint = retained;
   checkpoint.requests = bypass.first;
   require(scaffold_preserves_satisfied_requests(checkpoint, retained),

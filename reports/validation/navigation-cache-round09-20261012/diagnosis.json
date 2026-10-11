@@ -1,0 +1,12 @@
+{
+  "baseline_commit": "178a9c5",
+  "tier": 1,
+  "board": "bm_svf",
+  "failure": "Slow end-to-end detailed routing: 351.669s, materialization253.24s",
+  "hypothesis": "Repeated obstacle extraction and clearance expansion for identical net/layer/width keys within immutable spline snapshots wastes preparation",
+  "experiment": "Pass-scoped navigation region reuse with exact output comparison and timings",
+  "success_criterion": "Lower actual detail-command runtime, identical copper, lower-tier exact and KiCad DRC pass",
+  "baseline_candidate_checks": 245806,
+  "baseline_curve_tasks": 179,
+  "telemetry_bytes_detail": 149483118
+}

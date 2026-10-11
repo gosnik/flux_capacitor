@@ -544,6 +544,59 @@ void generated_tail_cleanup_preserves_source_curve_net() {
                         source.track_arcs.front()) != result.candidate->track_arcs.end(),
           "source curved copper must exclude ambiguous cleanup on its net");
 }
+void spline_navigation_cache_preserves_parallel_copper() {
+  const auto source = board();
+  RoutingPlanResult plan;
+  plan.legal_scaffold_complete = true;
+  plan.coarse_global.stop_reason = GlobalRouterStopReason::complete;
+  for (std::size_t index = 0; index < 3U; ++index) {
+    GlobalRoutePath path;
+    path.net = NetId{"scaffold"}; path.legal_scaffold = true;
+    path.connection_index = index;
+    const LayerId layer{index == 2U ? "B.Cu" : "F.Cu"};
+    const double x = index == 1U ? 12.0 : 2.0;
+    path.points = {{mm(x, 2), layer}, {mm(x, 6), layer}, {mm(x + 4, 6), layer}};
+    plan.paths.push_back(std::move(path));
+  }
+  DetailedRouterConfig config;
+  config.circular_arc_refinement = true;
+  config.enable_generated_tail_cleanup = false;
+  config.prefer_gpu_spline_trajectory = false;
+  config.max_spline_trajectory_iterations = 1U;
+  config.max_spline_trajectory_candidate_checks = 16U;
+  config.retry_failed_spline_routes_after_commits = false;
+  config.spline_route_workers = 1U;
+  config.reuse_spline_navigation_preparation = false;
+  const auto uncached = materialize_detailed_route(source, plan, config);
+  config.reuse_spline_navigation_preparation = true;
+  config.spline_route_workers = 3U;
+  const auto cached = materialize_detailed_route(source, plan, config);
+  require(uncached.candidate && cached.candidate && uncached.copper_drc.ok() && cached.copper_drc.ok(),
+          "cached and uncached curve realization must both retain legal copper");
+  require(uncached.stop_reason == cached.stop_reason &&
+              uncached.candidate->tracks == cached.candidate->tracks &&
+              uncached.candidate->track_arcs == cached.candidate->track_arcs &&
+              uncached.candidate->track_beziers == cached.candidate->track_beziers &&
+              uncached.candidate->vias == cached.candidate->vias,
+          "snapshot preparation reuse and parallel workers must preserve exact output");
+  require(cached.spline_navigation_preparation_hits == 1U &&
+              cached.spline_navigation_preparation_builds == 2U &&
+              uncached.spline_navigation_preparation_builds == 3U &&
+              uncached.spline_navigation_preparation_hits == 0U,
+          "same-net same-layer runs must share preparation without mixing copper layers");
+  auto distinct_source = source;
+  auto distinct_plan = plan;
+  for (std::size_t index = 1U; index < distinct_plan.paths.size(); ++index) {
+    const auto name = "distinct-" + std::to_string(index);
+    distinct_source.nets.push_back({NetId{name}, name, 1U});
+    distinct_plan.paths[index].net = NetId{name};
+  }
+  const auto unique = materialize_detailed_route(distinct_source, distinct_plan, config);
+  require(unique.candidate && unique.copper_drc.ok() &&
+              unique.spline_navigation_preparation_hits == 0U &&
+              unique.spline_navigation_preparation_builds == 3U,
+          "single-consumer keys must not retain cached geometry or share across nets");
+}
 
 } // namespace
-int main() { generated_tail_cleanup_preserves_finite_width_via_contact(); generated_tail_cleanup_retains_required_interior_t_and_other_layer(); generated_tail_cleanup_preserves_via_attachment_and_budget(); generated_tail_cleanup_preserves_source_curve_net(); materializes_complete_scaffold_without_regional_plan(); explicit_nominal_widths_match_implicit_certified_scaffold(); malformed_certified_width_metadata_is_rejected(); unbacked_neck_down_metadata_is_rejected(); invalid_certified_layer_transition_is_rejected(); failed_curve_fit_retains_scaffold_and_unrelated_copper(); residual_bend_repair_uses_exact_fillet_after_ph_rejection(); residual_bend_batches_resume_without_charging_collinear_points(); residual_bend_batches_resume_across_chains(); residual_bend_repair_rejects_blocked_corner_without_mutating_copper(); residual_bend_repair_preserves_existing_routing(); residual_bend_repair_handles_pad_anchored_closed_chain(); residual_bend_repair_skips_floating_closed_chain(); generated_tail_cleanup_prunes_pad_rooted_interior_spur(); generated_tail_cleanup_preserves_padless_component(); return EXIT_SUCCESS; }
+int main() { spline_navigation_cache_preserves_parallel_copper(); generated_tail_cleanup_preserves_finite_width_via_contact(); generated_tail_cleanup_retains_required_interior_t_and_other_layer(); generated_tail_cleanup_preserves_via_attachment_and_budget(); generated_tail_cleanup_preserves_source_curve_net(); materializes_complete_scaffold_without_regional_plan(); explicit_nominal_widths_match_implicit_certified_scaffold(); malformed_certified_width_metadata_is_rejected(); unbacked_neck_down_metadata_is_rejected(); invalid_certified_layer_transition_is_rejected(); failed_curve_fit_retains_scaffold_and_unrelated_copper(); residual_bend_repair_uses_exact_fillet_after_ph_rejection(); residual_bend_batches_resume_without_charging_collinear_points(); residual_bend_batches_resume_across_chains(); residual_bend_repair_rejects_blocked_corner_without_mutating_copper(); residual_bend_repair_preserves_existing_routing(); residual_bend_repair_handles_pad_anchored_closed_chain(); residual_bend_repair_skips_floating_closed_chain(); generated_tail_cleanup_prunes_pad_rooted_interior_spur(); generated_tail_cleanup_preserves_padless_component(); return EXIT_SUCCESS; }

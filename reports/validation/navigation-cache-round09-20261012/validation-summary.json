@@ -1,0 +1,14 @@
+{
+  "build": "pass",
+  "focused_suites": {
+    "flux_scaffold_curve_tests": "pass",
+    "flux_routing_engine_experiment_tests": "pass",
+    "flux_copper_scaffold_tests": "pass",
+    "flux_scaffold_collision_tests": "pass"
+  },
+  "independent_review": "pass after fallback accounting and bounded cache retention fixes",
+  "tier0": "qualified; exact copper byte-identical to Round08",
+  "tier1": "qualified; exact copper byte-identical to Round08",
+  "tier2": "not rerun; unchanged pre-materialization failure retained from Round07",
+  "performance": "single-run detailed-command elapsed reductions4.30%/4.35%; worker timings must not be added as serial wall components"
+}

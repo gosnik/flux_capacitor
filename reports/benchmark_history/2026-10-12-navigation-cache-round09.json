@@ -1,0 +1,212 @@
+{
+  "binary_sha256": "16a12137ffa30eee94c14ce416ad225c19c1ab67733213e158d352fa02f9a5b5",
+  "configuration": {
+    "curved": true,
+    "lower_tier_iterations": "manifest/default",
+    "routing_timeout_seconds": 900,
+    "sequential": true,
+    "telemetry": "diagnostic"
+  },
+  "diagnosis": {
+    "baseline_candidate_checks": 245806,
+    "baseline_commit": "178a9c5",
+    "baseline_curve_tasks": 179,
+    "board": "bm_svf",
+    "experiment": "Pass-scoped navigation region reuse with exact output comparison and timings",
+    "failure": "Slow end-to-end detailed routing: 351.669s, materialization253.24s",
+    "hypothesis": "Repeated obstacle extraction and clearance expansion for identical net/layer/width keys within immutable spline snapshots wastes preparation",
+    "success_criterion": "Lower actual detail-command runtime, identical copper, lower-tier exact and KiCad DRC pass",
+    "telemetry_bytes_detail": 149483118,
+    "tier": 1
+  },
+  "experiment": "immutable-spline-navigation-cache",
+  "frozen_source_manifest_sha256": "f1bc2289a38e867969e5cff17e576308441179862c75f8bad3ba741eb9cbe265",
+  "git_revision": "178a9c545ea191775284fb34c769088a36d5cb5f",
+  "round": 9,
+  "tiers": {
+    "tier0": {
+      "available": true,
+      "boards": [
+        {
+          "board": "pt2399_delay",
+          "complete": true,
+          "final_counts": {
+            "added_differential_pair_skew_tuning_length_nm": 0,
+            "added_track_arcs": 22,
+            "added_track_beziers": 402,
+            "added_tracks": 157,
+            "added_vias": 3,
+            "unrounded_curve_tangent_bends": 0,
+            "unrounded_non_junction_bends": 0,
+            "unrounded_straight_track_bends": 0
+          },
+          "final_curves": {
+            "added_track_arcs": 22,
+            "added_track_beziers": 402,
+            "attempted_circular_arc_candidates": 80,
+            "attempted_circular_arc_corners": 523
+          },
+          "global_runtime_seconds": 19.26949981303187,
+          "internal_violations": 0,
+          "kicad_drc": {
+            "categories": {},
+            "path": "/home/adam/qtbits/flux_capacitor/reports/validation/navigation-cache-round09-20261012/tier0/tier-0-pt2399_delay/kicad-drc.json",
+            "unconnected_items": 0,
+            "violations": 0
+          },
+          "level": 0,
+          "missing_termination_counts": {},
+          "open_connections": 0,
+          "peak_rss_kib": 613308,
+          "preparation": {
+            "configured_reuse_spline_navigation_preparation": true,
+            "generated_tail_cleanup_microseconds": 10331,
+            "spline_g2_promotion_microseconds": 2957510,
+            "spline_navigation_preparation_builds": 55,
+            "spline_navigation_preparation_hits": 21,
+            "spline_navigation_preparation_microseconds": 33441347,
+            "spline_realization_microseconds": 42985757,
+            "spline_trajectory_microseconds": 37445185
+          },
+          "qualified": true,
+          "runtime_seconds": 62.542786112986505,
+          "scaffold": {
+            "compact_search_attempts": 1,
+            "compact_search_expansions": 24,
+            "compact_search_fallbacks": 0,
+            "compact_search_successes": 1,
+            "complete": true,
+            "coupled_victim_exchanges_accepted": 0,
+            "coupled_victim_exchanges_attempted": 0,
+            "displacement_accepted": 0,
+            "displacement_attempts": 0,
+            "exchange_rollbacks": 0,
+            "expansions": 24,
+            "goal_rejections": 0,
+            "joint_group_accepted": 0,
+            "joint_group_attempts": 0,
+            "missing_connections": 0,
+            "missing_indices": [],
+            "physical_open_connections": 0,
+            "physical_unrouted_nets": 0,
+            "request_count": 51,
+            "retained_paths": 51,
+            "routed_connections": 51,
+            "satisfied_connections": 51,
+            "searched_connections": 1,
+            "source_attachments": 128,
+            "target_attachments": 128,
+            "victim_exchanges_accepted": 0,
+            "victim_exchanges_attempted": 0
+          },
+          "status": "qualified",
+          "stop_reason": "complete",
+          "tail_cleanup": {
+            "configured_generated_tail_cleanup": true,
+            "configured_max_generated_tail_cleanup_candidates": 256,
+            "configured_max_generated_tail_cleanup_split_tracks": 4096,
+            "generated_tail_cleanup_budget_exhausted": false,
+            "generated_tail_cleanup_candidates": 0,
+            "generated_tail_cleanup_microseconds": 10331,
+            "generated_tail_cleanup_removed_chains": 0,
+            "generated_tail_cleanup_removed_tracks": 0,
+            "generated_tail_cleanup_skipped_protected": 0
+          }
+        }
+      ],
+      "runner_exit": "0"
+    },
+    "tier1": {
+      "available": true,
+      "boards": [
+        {
+          "board": "bm_svf",
+          "complete": true,
+          "final_counts": {
+            "added_differential_pair_skew_tuning_length_nm": 0,
+            "added_track_arcs": 104,
+            "added_track_beziers": 413,
+            "added_tracks": 440,
+            "added_vias": 57,
+            "unrounded_curve_tangent_bends": 0,
+            "unrounded_non_junction_bends": 0,
+            "unrounded_straight_track_bends": 0
+          },
+          "final_curves": {
+            "added_track_arcs": 104,
+            "added_track_beziers": 413,
+            "attempted_circular_arc_candidates": 283,
+            "attempted_circular_arc_corners": 780
+          },
+          "global_runtime_seconds": 98.5327598429867,
+          "internal_violations": 0,
+          "kicad_drc": {
+            "categories": {},
+            "path": "/home/adam/qtbits/flux_capacitor/reports/validation/navigation-cache-round09-20261012/tier1/tier-1-bm_svf/kicad-drc.json",
+            "unconnected_items": 0,
+            "violations": 0
+          },
+          "level": 1,
+          "missing_termination_counts": {},
+          "open_connections": 0,
+          "peak_rss_kib": 665992,
+          "preparation": {
+            "configured_reuse_spline_navigation_preparation": true,
+            "generated_tail_cleanup_microseconds": 1288517,
+            "spline_g2_promotion_microseconds": 1474505,
+            "spline_navigation_preparation_builds": 100,
+            "spline_navigation_preparation_hits": 79,
+            "spline_navigation_preparation_microseconds": 127951104,
+            "spline_realization_microseconds": 236513745,
+            "spline_trajectory_microseconds": 79239684
+          },
+          "qualified": true,
+          "runtime_seconds": 336.38551975396695,
+          "scaffold": {
+            "compact_search_attempts": 9,
+            "compact_search_expansions": 32664,
+            "compact_search_fallbacks": 0,
+            "compact_search_successes": 9,
+            "complete": true,
+            "coupled_victim_exchanges_accepted": 0,
+            "coupled_victim_exchanges_attempted": 0,
+            "displacement_accepted": 0,
+            "displacement_attempts": 0,
+            "exchange_rollbacks": 0,
+            "expansions": 32664,
+            "goal_rejections": 0,
+            "joint_group_accepted": 0,
+            "joint_group_attempts": 0,
+            "missing_connections": 0,
+            "missing_indices": [],
+            "physical_open_connections": 0,
+            "physical_unrouted_nets": 0,
+            "request_count": 90,
+            "retained_paths": 90,
+            "routed_connections": 90,
+            "satisfied_connections": 90,
+            "searched_connections": 12,
+            "source_attachments": 1152,
+            "target_attachments": 1152,
+            "victim_exchanges_accepted": 0,
+            "victim_exchanges_attempted": 0
+          },
+          "status": "qualified",
+          "stop_reason": "complete",
+          "tail_cleanup": {
+            "configured_generated_tail_cleanup": true,
+            "configured_max_generated_tail_cleanup_candidates": 256,
+            "configured_max_generated_tail_cleanup_split_tracks": 4096,
+            "generated_tail_cleanup_budget_exhausted": false,
+            "generated_tail_cleanup_candidates": 12,
+            "generated_tail_cleanup_microseconds": 1288517,
+            "generated_tail_cleanup_removed_chains": 11,
+            "generated_tail_cleanup_removed_tracks": 30,
+            "generated_tail_cleanup_skipped_protected": 0
+          }
+        }
+      ],
+      "runner_exit": "0"
+    }
+  }
+}

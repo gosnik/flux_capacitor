@@ -101,6 +101,9 @@ struct DetailedRouterConfig {
   // realization boundary where each task has enough work to amortize scheduling and board copies.
   std::size_t spline_exact_candidate_workers{1};
   std::size_t spline_route_workers{4};
+  // Reuse only immutable free-space/offset preparation among spline tasks in one realization
+  // pass.  Per-run NavMesh construction and route search remain independent.
+  bool reuse_spline_navigation_preparation{true};
   // One bounded retry of still-unrounded chains after neighbouring curve transactions commit.
   // No-progress passes stop immediately; accepted copper remains immutable within each batch.
   bool retry_failed_spline_routes_after_commits{true};
@@ -205,6 +208,12 @@ struct DetailedRouteResult {
   std::size_t generated_tail_cleanup_removed_tracks{0};
   std::size_t generated_tail_cleanup_skipped_protected{0};
   bool generated_tail_cleanup_budget_exhausted{false};
+  std::size_t spline_navigation_preparation_builds{0};
+  std::size_t spline_navigation_preparation_hits{0};
+  std::uint64_t spline_navigation_preparation_microseconds{0U};
+  std::uint64_t spline_trajectory_microseconds{0U};
+  std::uint64_t generated_tail_cleanup_microseconds{0U};
+  std::uint64_t spline_realization_microseconds{0U};
   std::size_t spline_committed_context_retry_tasks{0};
   std::size_t spline_committed_context_retry_commits{0};
   std::size_t added_vias{0};

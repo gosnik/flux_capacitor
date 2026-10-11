@@ -16,12 +16,15 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <limits>
 #include <map>
+#include <memory>
+#include <mutex>
 #include <numbers>
 #include <numeric>
 #include <optional>
@@ -1928,6 +1931,26 @@ struct PendingSplineRun {
   SplineRun run;
 };
 
+struct SplineNavigationPreparation {
+  bool complete{false};
+  bool regions_are_offset{false};
+  std::vector<OffsetFreeSpaceRegion> regions;
+  std::string diagnostic;
+};
+
+struct SplineNavigationPreparationEntry {
+  std::size_t remaining_consumers{0U};
+  std::size_t consumers{0U};
+  std::mutex mutex;
+  std::shared_ptr<const SplineNavigationPreparation> preparation;
+};
+
+struct SplineNavigationPreparationCache {
+  using Key = std::tuple<NetId, LayerId, Nanometres>;
+  std::mutex mutex;
+  std::map<Key, std::shared_ptr<SplineNavigationPreparationEntry>> entries;
+};
+
 [[nodiscard]] std::size_t split_tracks_at_exact_same_net_branches(Board& board,
                                                                   std::set<std::string>& used_ids,
                                                                   const std::set<std::string>& protected_ids,
@@ -3421,21 +3444,17 @@ first_spline_collision(const CopperDrcReport& report,
   return result;
 }
 
-[[nodiscard]] bool refine_spline_run(Board& board, const Board& navigation_board, const NetId& net,
-                                     const SplineRun& run, const std::string& base,
-                                     std::set<std::string>& used_ids, DetailedRouteResult& result,
-                                     const DetailedRouterConfig& config,
-                                     std::stop_token stop_token) {
+[[nodiscard]] SplineNavigationPreparation prepare_spline_navigation(
+    const Board& navigation_board, const NetId& net, const SplineRun& run,
+    const DetailedRouterConfig& config) {
+  SplineNavigationPreparation preparation;
   const auto extracted = extract_polygonal_board_free_space(
-      navigation_board,
-      BoardFreeSpaceExtractionConfig{run.layer, net, true, true,
-                                     !config.defer_saved_zone_fill_clearance_to_refill});
+      navigation_board, BoardFreeSpaceExtractionConfig{run.layer, net, true, true,
+                                                        !config.defer_saved_zone_fill_clearance_to_refill});
   if (!extracted.complete()) {
-    ++result.spline_navmesh_failures;
-    result.spline_navmesh_last_diagnostic = extracted.diagnostic.empty()
-                                                ? "unrepresented detailed routing obstacle"
-                                                : extracted.diagnostic;
-    return false;
+    preparation.diagnostic = extracted.diagnostic.empty() ? "unrepresented detailed routing obstacle"
+                                                          : extracted.diagnostic;
+    return preparation;
   }
   const auto route_radius = Nanometres{(run.width.value() + 1) / 2};
   const auto center_clearance =
@@ -3456,21 +3475,77 @@ first_spline_collision(const CopperDrcReport& report,
               : route_radius);
   }
   const auto offset = offset_polygonal_free_space(extracted.domain, offset_config);
-  std::vector<OffsetFreeSpaceRegion> navigation_regions;
-  bool navigation_regions_are_offset = offset.ok();
+  preparation.regions_are_offset = offset.ok();
   if (offset.ok()) {
-    navigation_regions = offset.regions;
-  } else {
-    const auto unioned = offset_polygonal_free_space(
-        extracted.domain, FreeSpaceOffsetConfig{Nanometres{0}, 1'000'000U});
-    if (!unioned.ok()) {
-      ++result.spline_navmesh_failures;
-      result.spline_navmesh_last_diagnostic = offset.diagnostic + "; " + unioned.diagnostic;
-      return false;
+    preparation.regions = offset.regions;
+    preparation.complete = true;
+    return preparation;
+  }
+  const auto unioned = offset_polygonal_free_space(
+      extracted.domain, FreeSpaceOffsetConfig{Nanometres{0}, 1'000'000U});
+  if (!unioned.ok()) {
+    preparation.diagnostic = offset.diagnostic + "; " + unioned.diagnostic;
+    return preparation;
+  }
+  preparation.regions = unioned.regions;
+  preparation.diagnostic = offset.diagnostic;
+  preparation.complete = true;
+  return preparation;
+}
+
+[[nodiscard]] bool refine_spline_run(Board& board, const Board& navigation_board, const NetId& net,
+                                     const SplineRun& run, const std::string& base,
+                                     std::set<std::string>& used_ids, DetailedRouteResult& result,
+                                     const DetailedRouterConfig& config,
+                                     std::stop_token stop_token,
+                                     SplineNavigationPreparationCache* preparation_cache = nullptr) {
+  std::shared_ptr<SplineNavigationPreparationEntry> entry;
+  if (preparation_cache != nullptr) {
+    const SplineNavigationPreparationCache::Key key{net, run.layer, run.width};
+    std::scoped_lock lock(preparation_cache->mutex);
+    const auto found = preparation_cache->entries.find(key);
+    if (found != preparation_cache->entries.end()) {
+      entry = found->second;
+      if (entry->remaining_consumers < entry->consumers)
+        ++result.spline_navigation_preparation_hits;
+      // Active consumers retain their shared pointer. The map need not retain geometry after
+      // the final scheduled consumer acquires it, even while another consumer is still building.
+      if (--entry->remaining_consumers == 0U)
+        preparation_cache->entries.erase(found);
     }
-    navigation_regions = unioned.regions;
+  }
+  const auto build_preparation = [&] {
+    const auto started = std::chrono::steady_clock::now();
+    auto prepared = std::make_shared<const SplineNavigationPreparation>(
+        prepare_spline_navigation(navigation_board, net, run, config));
+    ++result.spline_navigation_preparation_builds;
+    result.spline_navigation_preparation_microseconds +=
+        static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - started).count());
+    return prepared;
+  };
+  std::shared_ptr<const SplineNavigationPreparation> shared_preparation;
+  if (entry) {
+    std::scoped_lock entry_lock(entry->mutex);
+    if (!entry->preparation) entry->preparation = build_preparation();
+    shared_preparation = entry->preparation;
+  } else {
+    shared_preparation = build_preparation();
+  }
+  const auto& preparation = *shared_preparation;
+  if (!preparation.complete) {
+    ++result.spline_navmesh_failures;
+    result.spline_navmesh_last_diagnostic = preparation.diagnostic;
+    return false;
+  }
+  const auto route_radius = Nanometres{(run.width.value() + 1) / 2};
+  const auto center_clearance =
+      Nanometres{route_radius.value() + navigation_board.rules.copper_to_edge_clearance.value()};
+  const auto& navigation_regions = preparation.regions;
+  const bool navigation_regions_are_offset = preparation.regions_are_offset;
+  if (!navigation_regions_are_offset) {
     ++result.spline_navmesh_certificate_fallbacks;
-    result.spline_navmesh_last_diagnostic = offset.diagnostic;
+    result.spline_navmesh_last_diagnostic = preparation.diagnostic;
   }
   std::optional<NavMeshRouteResult> navigation;
   std::optional<PreparedNavMeshDomain> prepared_navigation;
@@ -3845,8 +3920,12 @@ first_spline_collision(const CopperDrcReport& report,
   }
   ++result.spline_trajectory_attempts;
   const auto spline_before_optimization = *spline;
+  const auto trajectory_started = std::chrono::steady_clock::now();
   const auto optimized = optimize_quintic_ph_trajectory(*spline, trajectory_config,
                                                         clearance_evaluator, route_constraint);
+  result.spline_trajectory_microseconds +=
+      static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::steady_clock::now() - trajectory_started).count());
   result.spline_trajectory_control_moves += optimized.accepted_control_moves;
   result.spline_trajectory_candidate_checks += optimized.candidate_checks;
   result.spline_paired_obstacle_support_recoveries += optimized.paired_obstacle_support_recoveries;
@@ -4147,8 +4226,12 @@ first_spline_collision(const CopperDrcReport& report,
         pending_pns_tracks += pns.moved_tracks;
         pending_pns_vias += pns.moved_vias;
         pending_pns_doglegs += pns.added_dogleg_tracks;
+        const auto refit_started = std::chrono::steady_clock::now();
         const auto refitted =
             optimize_quintic_ph_trajectory(*spline, trajectory_config, clearance_evaluator);
+        result.spline_trajectory_microseconds +=
+            static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - refit_started).count());
         result.spline_trajectory_control_moves += refitted.accepted_control_moves;
         result.spline_trajectory_candidate_checks += refitted.candidate_checks;
         result.spline_paired_obstacle_support_recoveries += refitted.paired_obstacle_support_recoveries;
@@ -4318,6 +4401,10 @@ void accumulate_spline_route_attempt_metrics(DetailedRouteResult& target,
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_refits);
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_navmesh_routes);
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_navmesh_failures);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_navigation_preparation_builds);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_navigation_preparation_hits);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_navigation_preparation_microseconds);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_trajectory_microseconds);
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_navmesh_refined_parents);
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_navmesh_refined_leaves);
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_navmesh_rejected_leaves);
@@ -6963,6 +7050,7 @@ materialize_impl(const Board& source, const GlobalRouteResult& global,
   // Larger boards retain their original topology; ordinary curved realization remains available.
   const bool cleanup_requested = config.enable_generated_tail_cleanup &&
                                  config.max_generated_tail_cleanup_candidates > 0U;
+  const auto cleanup_started = std::chrono::steady_clock::now();
   const auto cleanup_split_limit = std::min<std::size_t>(4096U,
       config.max_generated_tail_cleanup_split_tracks);
   const bool run_generated_tail_cleanup = cleanup_requested &&
@@ -6992,6 +7080,11 @@ materialize_impl(const Board& source, const GlobalRouteResult& global,
       return result;
     }
   }
+  if (cleanup_requested) {
+    result.generated_tail_cleanup_microseconds +=
+        static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - cleanup_started).count());
+  }
 
   // Realize complete degree-two routes against one immutable, board-complete copper snapshot.
   // NavMesh preparation, PH optimization, recursive certificates, arc fitting and bounded PNS are
@@ -7003,6 +7096,7 @@ materialize_impl(const Board& source, const GlobalRouteResult& global,
   if (use_circular_arc_refinement && !run_generated_tail_cleanup) {
     result.added_tracks += split_tracks_at_exact_same_net_branches(candidate, used_ids, curve_protected_track_ids, stop_token);
   }
+  const auto spline_realization_started = std::chrono::steady_clock::now();
   const auto realization_passes = config.retry_failed_spline_routes_after_commits ? 2U : 1U;
   for (std::size_t realization_pass = 0U;
        use_circular_arc_refinement && realization_pass < realization_passes; ++realization_pass) {
@@ -7028,6 +7122,23 @@ materialize_impl(const Board& source, const GlobalRouteResult& global,
     const auto candidate_budget_per_route =
         std::max<std::size_t>(1U, config.max_spline_candidate_checks /
                                       std::max<std::size_t>(1U, board_level_spline_runs.size()));
+    std::unique_ptr<SplineNavigationPreparationCache> navigation_preparation_cache;
+    if (config.reuse_spline_navigation_preparation) {
+      navigation_preparation_cache = std::make_unique<SplineNavigationPreparationCache>();
+      std::map<SplineNavigationPreparationCache::Key, std::size_t> consumers;
+      for (const auto& pending : board_level_spline_runs)
+        ++consumers[{pending.net, pending.run.layer, pending.run.width}];
+      // Only repeated keys benefit. Retention is bounded by the shared worker budget, not
+      // by board net count; select keys in stable order and release after their last consumer.
+      const auto max_entries = 2U * std::max<std::size_t>(1U, worker_count);
+      for (const auto& [key, count] : consumers) {
+        if (count < 2U) continue;
+        if (navigation_preparation_cache->entries.size() >= max_entries) break;
+        auto entry = std::make_shared<SplineNavigationPreparationEntry>();
+        entry->remaining_consumers = entry->consumers = count;
+        navigation_preparation_cache->entries.emplace(key, std::move(entry));
+      }
+    }
     std::atomic<std::size_t> next_task{0U};
     const auto run_task = [&] {
       while (!stop_token.stop_requested()) {
@@ -7044,7 +7155,7 @@ materialize_impl(const Board& source, const GlobalRouteResult& global,
           local_config.max_spline_candidate_checks = candidate_budget_per_route;
           if (refine_spline_run(local_board, spline_navigation_board, pending.net, pending.run,
                                 pending.base, local_used_ids, completed.metrics, local_config,
-                                stop_token)) {
+                                stop_token, navigation_preparation_cache.get())) {
             completed.delta = make_spline_route_delta(spline_navigation_board, local_board);
           }
         } catch (...) {
@@ -7226,6 +7337,9 @@ materialize_impl(const Board& source, const GlobalRouteResult& global,
     result.diagnostic = "detailed routing cancelled during residual bend repair";
     return result;
   }
+  result.spline_realization_microseconds +=
+      static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::steady_clock::now() - spline_realization_started).count());
 
   const auto skew_tuning_status = [&]() {
     if (!config.differential_pair_skew_tuning) {
@@ -7293,6 +7407,12 @@ materialize_impl(const Board& source, const GlobalRouteResult& global,
     fallback.spline_g2_promotions = result.spline_g2_promotions;
     fallback.spline_g2_fallbacks = result.spline_g2_fallbacks;
     fallback.spline_g2_promotion_microseconds = result.spline_g2_promotion_microseconds;
+    fallback.spline_navigation_preparation_builds += result.spline_navigation_preparation_builds;
+    fallback.spline_navigation_preparation_hits += result.spline_navigation_preparation_hits;
+    fallback.spline_navigation_preparation_microseconds += result.spline_navigation_preparation_microseconds;
+    fallback.spline_trajectory_microseconds += result.spline_trajectory_microseconds;
+    fallback.generated_tail_cleanup_microseconds += result.generated_tail_cleanup_microseconds;
+    fallback.spline_realization_microseconds += result.spline_realization_microseconds;
     fallback.regional_native_spline_runs_materialized =
         result.regional_native_spline_runs_materialized;
     fallback.regional_native_track_segments_materialized =

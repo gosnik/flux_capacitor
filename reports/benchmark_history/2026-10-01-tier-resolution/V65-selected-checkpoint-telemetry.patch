@@ -1,0 +1,154 @@
+--- a/src/regional_router.cpp
++++ b/src/regional_router.cpp
+@@ -16961,6 +16961,15 @@
+   RoutabilityKnowledge knowledge;
+   knowledge.history = config.global.routability_history;
+   knowledge.success_history = config.global.hydraulic_success_history;
++  std::set<std::string> published_global_route_ids;
++  const auto global_route_id = [](const GlobalRoutePath& path) {
++    return "global-route:" + path.net.value() + ':' + std::to_string(path.connection_index);
++  };
++  const auto track_published_global_routes = [&](const GlobalRouteResult& global) {
++    for (const auto& path : global.paths) {
++      published_global_route_ids.insert(global_route_id(path));
++    }
++  };
+   std::vector<RoutingPlanFeedbackProbe> feedback_probes;
+   std::optional<RoutingPlanResult> best;
+   // The global router retains a pass-local beam.  Keep a second, small beam across physical
+@@ -17181,6 +17190,41 @@
+     if (telemetry == nullptr) {
+       return;
+     }
++    std::set<std::string> selected_route_ids;
++    for (const auto& path : selected.paths) {
++      const auto id = global_route_id(path);
++      selected_route_ids.insert(id);
++      published_global_route_ids.insert(id);
++      RouterTelemetryEvent route;
++      route.kind = RouterTelemetryEventKind::route_candidate_selected;
++      route.stable_id = id;
++      route.net = path.net;
++      route.route_revision = selected.selected_iteration;
++      route.route_family = "selected";
++      route.route_lifecycle = "active";
++      const auto rules = resolve_net_routing_rules(board, path.net);
++      route.route_width_nm =
++          static_cast<std::uint64_t>(std::max<std::int64_t>(0, rules.track_width.value()));
++      route.route_points.reserve(path.points.size());
++      for (const auto& point : path.points) {
++        route.route_points.push_back(
++            RouterTelemetryPathPoint{point.position.x.value(), point.position.y.value(), point.layer});
++      }
++      route.detail = "selected global polyline; planning geometry, not committed copper";
++      static_cast<void>(telemetry->try_emit(std::move(route)));
++    }
++    for (const auto& id : published_global_route_ids) {
++      if (selected_route_ids.contains(id)) {
++        continue;
++      }
++      RouterTelemetryEvent removed;
++      removed.kind = RouterTelemetryEventKind::route_removed;
++      removed.stable_id = id;
++      removed.route_family = "selected";
++      removed.route_lifecycle = "active";
++      removed.detail = "global route absent from retained feedback checkpoint";
++      static_cast<void>(telemetry->try_emit(std::move(removed)));
++    }
+     RouterTelemetryEvent checkpoint;
+     checkpoint.kind = RouterTelemetryEventKind::checkpoint_selected;
+     checkpoint.iteration = selected.selected_iteration;
+@@ -17323,6 +17367,7 @@
+             : full_strength_epoch
+                 ? route_global_with_sampled_conflict_repair(board, global_config, 2U, stop_token, telemetry)
+                 : route_global(board, global_config, stop_token, telemetry);
++    track_published_global_routes(probed_global);
+     cumulative_global_iterations += probed_global.iterations;
+     feedback_probe.cumulative_global_iterations = cumulative_global_iterations;
+     candidate.cheap_physical_probes = pass + 1U;
+@@ -17338,6 +17383,7 @@
+                                      feedback_fell_back_to_full_global, affected_count));
+       feedback_probes.push_back(std::move(feedback_probe));
+       attach_feedback_probes(candidate);
++      publish_feedback_selection(candidate.coarse_global);
+       return candidate;
+     }
+     if (probed_global.stop_reason == GlobalRouterStopReason::invalid_input) {
+@@ -17350,6 +17396,7 @@
+                                      feedback_fell_back_to_full_global, affected_count));
+       feedback_probes.push_back(std::move(feedback_probe));
+       attach_feedback_probes(candidate);
++      publish_feedback_selection(candidate.coarse_global);
+       return candidate;
+     }
+ 
+@@ -17812,6 +17859,7 @@
+   exhausted.global_feedback_passes = global_feedback_passes;
+   exhausted.regional_feedback_passes = regional_feedback_passes;
+   exhausted.routability_feedback_budget_exhausted = true;
++  publish_feedback_selection(exhausted.coarse_global);
+   return exhausted;
+ }
+ 
+--- a/tests/unit/core_tests.cpp
++++ b/tests/unit/core_tests.cpp
+@@ -5031,7 +5031,9 @@
+   repeated_physics_config.full_strength_first_pass = true;
+   repeated_physics_config.global.max_iterations = 3U;
+   repeated_physics_config.max_routability_feedback_retries = 2U;
+-  const auto repeated_physics = flux::plan_routes(crossing, repeated_physics_config);
++  CollectingTelemetrySink repeated_physics_telemetry;
++  const auto repeated_physics =
++      flux::plan_routes(crossing, repeated_physics_config, {}, &repeated_physics_telemetry);
+   require(!repeated_physics.complete() && repeated_physics.feedback_probes.size() == 3U &&
+               repeated_physics.cumulative_global_iterations == 3U &&
+               repeated_physics.feedback_probes.front().next_feedback_affected_nets >= 2U &&
+@@ -5045,6 +5047,48 @@
+                         });
+                   }),
+           "failed physical windows must drive bounded rip-up/replan epochs with physics enabled every time");
++  std::map<std::string, std::vector<flux::RouterTelemetryPathPoint>> replayed_global_paths;
++  std::map<std::string, std::vector<flux::RouterTelemetryPathPoint>> last_global_attempt_paths;
++  const auto is_global_route = [](const flux::RouterTelemetryEvent& event) {
++    return event.stable_id.starts_with("global-route:");
++  };
++  for (const auto& event : repeated_physics_telemetry.events) {
++    if (event.kind == flux::RouterTelemetryEventKind::route_removed && is_global_route(event)) {
++      replayed_global_paths.erase(event.stable_id);
++    } else if (event.kind == flux::RouterTelemetryEventKind::route_candidate_selected &&
++               is_global_route(event)) {
++      replayed_global_paths.insert_or_assign(event.stable_id, event.route_points);
++    }
++    if (event.kind == flux::RouterTelemetryEventKind::global_routing_finished) {
++      last_global_attempt_paths = replayed_global_paths;
++    }
++  }
++  std::map<std::string, std::vector<flux::RouterTelemetryPathPoint>> retained_global_paths;
++  for (const auto& path : repeated_physics.coarse_global.paths) {
++    std::vector<flux::RouterTelemetryPathPoint> points;
++    points.reserve(path.points.size());
++    for (const auto& point : path.points)
++      points.push_back({point.position.x.value(), point.position.y.value(), point.layer});
++    retained_global_paths.emplace(
++        "global-route:" + path.net.value() + ':' + std::to_string(path.connection_index),
++        std::move(points));
++  }
++  require(replayed_global_paths == retained_global_paths,
++          "replayed active global-route telemetry must exactly restore the retained coarse "
++          "checkpoint and exclude paths from a later discarded attempt");
++  for (const auto& [id, ignored] : last_global_attempt_paths) {
++    static_cast<void>(ignored);
++    if (retained_global_paths.contains(id)) {
++      continue;
++    }
++    require(std::any_of(repeated_physics_telemetry.events.begin(), repeated_physics_telemetry.events.end(),
++                        [&](const auto& event) {
++                          return event.kind == flux::RouterTelemetryEventKind::route_removed &&
++                                 event.stable_id == id;
++                        }),
++            "a global-route ID absent from the retained checkpoint must be removed from the "
++            "discarded final attempt");
++  }
+   auto straight_feedback_config = repeated_physics_config;
+   straight_feedback_config.curved_tracks = false;
+   const auto straight_feedback = flux::plan_routes(crossing, straight_feedback_config);

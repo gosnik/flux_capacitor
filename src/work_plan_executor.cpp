@@ -69,6 +69,8 @@ namespace json = boost::json;
 void remove_authorized_routing(Board& board, const std::set<NetId>& nets) {
   std::erase_if(board.tracks,
                 [&nets](const auto& track) { return !track.locked && nets.contains(track.net); });
+  std::erase_if(board.track_beziers,
+                [&nets](const auto& curve) { return !curve.locked && nets.contains(curve.net); });
   std::erase_if(board.track_arcs,
                 [&nets](const auto& arc) { return !arc.locked && nets.contains(arc.net); });
   std::erase_if(board.vias,
@@ -507,15 +509,18 @@ WorkPlanExecutionResult execute_impl(const Board& source, const FluxWorkPlan& pl
           step_result.replacement_nets.assign(replacement.begin(), replacement.end());
           auto planning_board = current;
           remove_authorized_routing(planning_board, replacement);
-          auto routing = route->post_negotiation_sampled_conflict_repair
-                             ? plan_routes_with_sampled_conflict_repair(
-                                   planning_board, configuration.planner,
-                                   route->max_post_negotiation_sampled_conflict_repair_cones,
-                                   stop_token, telemetry)
-                             : plan_routes(planning_board, configuration.planner, stop_token,
-                                           telemetry);
-          auto detailed =
-              materialize_detailed_route(current, routing, configuration.detailed, stop_token);
+          PersistentRoutingSessionConfig session_config;
+          session_config.planner = configuration.planner;
+          session_config.detailed = configuration.detailed;
+          session_config.max_final_feedback_passes = route->max_final_routability_feedback_passes;
+          session_config.post_negotiation_sampled_conflict_repair =
+              route->post_negotiation_sampled_conflict_repair;
+          session_config.max_post_negotiation_sampled_conflict_repair_cones =
+              route->max_post_negotiation_sampled_conflict_repair_cones;
+          auto session = run_persistent_routing_session(planning_board, current, session_config,
+                                                        stop_token, telemetry);
+          auto routing = std::move(session.routing);
+          auto detailed = std::move(session.detailed);
           step_result.global_unrouted_nets = routing.coarse_global.unrouted_nets.size();
           step_result.global_overflow = routing.coarse_global.total_overflow;
           step_result.global_cost = routing.coarse_global.total_cost;
@@ -527,50 +532,12 @@ WorkPlanExecutionResult execute_impl(const Board& source, const FluxWorkPlan& pl
               routing.coarse_global.post_negotiation_cone_repairs_accepted;
           step_result.post_negotiation_cone_repair_nets_attempted =
               routing.coarse_global.post_negotiation_cone_repair_nets_attempted;
-          const bool coarse_topology_complete =
-              routing.coarse_global.unrouted_nets.empty() &&
-              routing.coarse_global.unaccepted_selected_voronoi_lane_transitions == 0U;
-          if (coarse_topology_complete && routing.coarse_global.total_overflow == 0U &&
-              detailed.stop_reason == DetailedRouterStopReason::incomplete_global_route &&
-              !stop_token.stop_requested()) {
-            // Regional realization is an optimization and conflict-repair boundary, not a new
-            // legality authority. A complete zero-overflow coarse checkpoint must retain the
-            // conventional polyline transaction promised by the detailed router when regional
-            // lane/bundle evidence is unavailable. Exact whole-board gates remain unchanged.
-            step_result.coarse_polyline_fallback_attempted = true;
-            auto coarse_candidate = routing.coarse_global;
-            // A retained feedback checkpoint can satisfy the global router's exact completion
-            // tuple without carrying the terminal stop tag from the pass that first produced it.
-            // Reassert only that same tuple on the private fallback copy; no occupancy, topology,
-            // path, or physical evidence is altered.
-            coarse_candidate.stop_reason = GlobalRouterStopReason::complete;
-            coarse_candidate.diagnostic =
-                "zero-overflow coarse checkpoint awaiting conventional detailed materialization";
-            auto coarse_detailed = materialize_detailed_route(
-                current, coarse_candidate, configuration.detailed, stop_token);
-            if (coarse_detailed.complete()) {
-              detailed = std::move(coarse_detailed);
-              step_result.coarse_polyline_fallback_accepted = true;
-            } else {
-              // Preserve the physically more informative conventional rejection. Copper
-              // violations continue into the sampled-graph transaction below; other exact gate
-              // failures remain the step diagnostic.
-              detailed = std::move(coarse_detailed);
-            }
-          }
-          if (!route->post_negotiation_sampled_conflict_repair && !detailed.complete() &&
-              !detailed.provisional_zone_refill_candidate() &&
-              !detailed.routability_diagnoses.empty() && !stop_token.stop_requested()) {
-            auto feedback = refine_materialization_with_routability_feedback(
-                planning_board, current, std::move(routing), std::move(detailed),
-                configuration.planner, configuration.detailed,
-                route->max_final_routability_feedback_passes, stop_token, telemetry);
-            routing = std::move(feedback.routing);
-            detailed = std::move(feedback.detailed);
-            step_result.global_unrouted_nets = routing.coarse_global.unrouted_nets.size();
-            step_result.global_overflow = routing.coarse_global.total_overflow;
-            step_result.global_cost = routing.coarse_global.total_cost;
-          }
+          step_result.coarse_polyline_fallback_attempted =
+              session.coarse_polyline_fallback_attempted;
+          step_result.coarse_polyline_fallback_accepted = session.coarse_polyline_fallback_accepted;
+          step_result.global_unrouted_nets = routing.coarse_global.unrouted_nets.size();
+          step_result.global_overflow = routing.coarse_global.total_overflow;
+          step_result.global_cost = routing.coarse_global.total_cost;
           step_result.final_routability_feedback_attempted =
               detailed.final_routability_feedback_attempted;
           step_result.final_routability_feedback_selected =
@@ -584,8 +551,8 @@ WorkPlanExecutionResult execute_impl(const Board& source, const FluxWorkPlan& pl
           const bool final_coarse_topology_complete =
               routing.coarse_global.unrouted_nets.empty() &&
               routing.coarse_global.unaccepted_selected_voronoi_lane_transitions == 0U;
-          if (!route->post_negotiation_sampled_conflict_repair &&
-              final_coarse_topology_complete && routing.coarse_global.total_overflow == 0U &&
+          if (!route->post_negotiation_sampled_conflict_repair && final_coarse_topology_complete &&
+              routing.coarse_global.total_overflow == 0U &&
               detailed.stop_reason == DetailedRouterStopReason::copper_violations &&
               !stop_token.stop_requested()) {
             step_result.sampled_fallback_attempted = true;
@@ -615,8 +582,7 @@ WorkPlanExecutionResult execute_impl(const Board& source, const FluxWorkPlan& pl
               !routing.coarse_global.complete() && !routing.coarse_global.paths.empty() &&
               !stop_token.stop_requested()) {
             step_result.incomplete_diagnostic_preview_attempted = true;
-            step_result.incomplete_diagnostic_preview_paths =
-                routing.coarse_global.paths.size();
+            step_result.incomplete_diagnostic_preview_paths = routing.coarse_global.paths.size();
             auto preview_global = routing.coarse_global;
             preview_global.stop_reason = GlobalRouterStopReason::complete;
             preview_global.unrouted_nets.clear();
@@ -627,8 +593,8 @@ WorkPlanExecutionResult execute_impl(const Board& source, const FluxWorkPlan& pl
             preview_config.topology_locked_medial_materialization = false;
             preview_config.differential_pair_skew_tuning = false;
             preview_config.differential_pair_skew_tuning_batch_assignment = false;
-            auto preview_detailed = materialize_detailed_route(
-                current, preview_global, preview_config, stop_token);
+            auto preview_detailed =
+                materialize_detailed_route(current, preview_global, preview_config, stop_token);
             if (preview_detailed.candidate) {
               incomplete_diagnostic_candidate = std::move(*preview_detailed.candidate);
               step_result.incomplete_diagnostic_preview_available = true;
@@ -652,10 +618,9 @@ WorkPlanExecutionResult execute_impl(const Board& source, const FluxWorkPlan& pl
             current = std::move(*detailed.candidate);
             step_result.status = WorkPlanStepExecutionStatus::completed;
             step_result.diagnostic = detailed.diagnostic;
-          } else if (route->refillable_zone_fills &&
-                     detailed.provisional_zone_refill_candidate() && detailed.candidate &&
-                     detailed.validation.ok() && detailed.connectivity.open_connections == 0U &&
-                     detailed.copper_drc.ok()) {
+          } else if (route->refillable_zone_fills && detailed.provisional_zone_refill_candidate() &&
+                     detailed.candidate && detailed.validation.ok() &&
+                     detailed.connectivity.open_connections == 0U && detailed.copper_drc.ok()) {
             current = std::move(*detailed.candidate);
             step_result.provisional_zone_refill_required = true;
             step_result.status = WorkPlanStepExecutionStatus::completed;

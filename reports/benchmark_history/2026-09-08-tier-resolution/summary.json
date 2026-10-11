@@ -1,0 +1,58 @@
+{
+  "schema": 1,
+  "experiments": [
+    "V55",
+    "V56",
+    "V57",
+    "V58",
+    "V59",
+    "V60"
+  ],
+  "git_revision": "94aa691ad89576d1c0ac07a5346020da21fc9d06",
+  "working_tree_dirty": true,
+  "tier_frontier": 1,
+  "all_tiers_complete": false,
+  "tier0_qualified": true,
+  "tier0_artifacts": "build/tier-resolution-v60/final-tier0",
+  "tier1_status": "unqualified; completed V60 32-state control/candidate comparison, 256-state follow-up timed out",
+  "tier1_artifacts": "build/tier-resolution-v60/standalone-candidate",
+  "tier1_parameters": {
+    "iterations": 2,
+    "physical_feedback_retries": 0,
+    "max_regional_bundle_states": 32,
+    "planning_timeout_seconds": 600
+  },
+  "pad_geometry_parity": "V56-pad-geometry-parity.json",
+  "old_preview_open_parity": "V56-open-detection-parity.json",
+  "v55_decision": "Deferred and reverted; geometry error precedes scheduling.",
+  "v56_decision": "Keep: independent KiCad parity, known-good reference connectivity, and Tier 0 qualification verified.",
+  "release_cli_sha256": "bd023a2d6bc0048bbd9381620ecd09125c65636af2d901ebb6857ce60cb90c59",
+  "performance_caveat": "Benchmark overlaps a small build and regression tests; runtime is not isolated.",
+  "verification": {
+    "release_core": "51/51",
+    "broader_tests": "127/134; same seven known baseline demo failures",
+    "release_tier0": "qualified",
+    "release_artifacts": "build/tier-resolution-v60/final-tier0",
+    "debug_tier0": "qualified",
+    "debug_artifacts": "build/tier-resolution-v60/debug-tier0",
+    "debug_micro": "pass",
+    "regression_red_control": "Final via-scope test fails when linked to preserved old regional code",
+    "diff_check": "pass"
+  },
+  "diagnostic_kicad": {
+    "errors": 241,
+    "unconnected": 0,
+    "ordinary_angles_only": false,
+    "report": "V60-frontier-external-verification.json",
+    "qualification": false
+  },
+  "v57_decision": "Keep: correct copper/hole offset conversion; all 50 core tests and differential pad/drill cases pass.",
+  "v58_decision": "Diagnostic only: 6 fewer external errors and vias, but 265 errors remain; no production routing heuristic added.",
+  "historical_comparison_limit": "Pre-V56 bm_svf metrics used eight mirrored pad anchors. Old internal zero-open claims do not establish connectivity to the actual KiCad pads; all previous external rejection results remain unchanged.",
+  "tier1_duration_seconds": 161.58697779600334,
+  "tier1_result": "V59-V60-benchmarks.json",
+  "frontier_diagnosis": "frontier-diagnosis.json",
+  "ongoing_runs": [],
+  "v59_decision": "Reverted: local access improvement worsened assembled physical scenes.",
+  "v60_decision": "Kept: exact via failures and attached branch ownership reach regional scope; controlled selected unmapped pairs100\u21920."
+}

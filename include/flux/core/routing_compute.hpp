@@ -141,6 +141,10 @@ struct RoutingComputeChordBatchResult {
   bool used_gpu{false};
   bool cpu_fallback{false};
   std::string diagnostic;
+  // Number of bounded GPU launches and pairwise chord/boundary checks completed by them.
+  // These remain zero for CPU-only classification and are advisory telemetry only.
+  std::size_t gpu_batch_count{0U};
+  std::size_t gpu_work_items{0U};
 
   [[nodiscard]] bool ok() const { return diagnostic.empty(); }
 };
@@ -577,6 +581,9 @@ struct RoutingXpbdParticle {
   std::int64_t corridor_anchor_x_nm{0};
   std::int64_t corridor_anchor_y_nm{0};
   std::int64_t corridor_radius_nm{0};
+  // Point-owner clearance (not an expanded radius). AVBD uses this for via disks;
+  // ordinary XPBD segment contacts continue to use RoutingXpbdSegment::clearance_nm.
+  std::int64_t clearance_nm{0};
 };
 
 struct RoutingXpbdSegment {

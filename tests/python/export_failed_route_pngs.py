@@ -77,6 +77,13 @@ def run(command: list[str]) -> None:
         )
 
 
+def kicad_cli_command(executable: Path) -> list[str]:
+    command = [str(executable)]
+    if executable.name.lower().endswith(".appimage"):
+        command.append("kicad-cli")
+    return command
+
+
 def read_near_results(trace: Path, limit: int) -> tuple[list[NearResult], list[dict]]:
     retained: list[NearResult] = []
     failure_categories: dict[str, list[NearResult]] = {
@@ -318,7 +325,7 @@ def render_svg_png(
 ) -> None:
     run(
         [
-            str(kicad_cli),
+            *kicad_cli_command(kicad_cli),
             "pcb",
             "export",
             "svg",

@@ -1,0 +1,8 @@
+{
+  "schema": "flux_extended_capture_diagnosis_v1",
+  "status": "finished_with_interrupted_runs",
+  "benchmark_history": "reports/benchmark_history/2026-10-08-curved-extended.json",
+  "visual_audit": "reports/diagnoses/2026-10-08-curved-extended-visual.json",
+  "human_report": "reports/diagnoses/2026-10-08-curved-extended.md",
+  "interrupted_debug_control": "reports/diagnoses/2026-10-08-curved-extended-debug-control.json"
+}

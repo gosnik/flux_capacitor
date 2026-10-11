@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "board": "pt2399_delay",
+  "tier": 0,
+  "artifact": "build/tier0-fresh-scope-v21-20260906",
+  "failing_stage": "multi-source search result to terminal ownership mapping",
+  "smallest_implicated_net": "kicad-net-5",
+  "terminal_positions_nm": [[42700000, 41000000], [43000000, 44000000]],
+  "layers": ["F.Cu", "B.Cu"],
+  "corridor_resource": "No specific congested resource implicated for this net",
+  "evidence": {
+    "failure_reason": "unmatched_multisource_terminal",
+    "expansions": 4,
+    "first_in_attempted_order": true,
+    "hard_capacity_blockers": [],
+    "other_repeated_open_nets": ["kicad-net-6", "kicad-net-7", "kicad-net-8", "kicad-net-9", "kicad-net-12", "kicad-net-14", "kicad-net-15"],
+    "selected_connected_checkpoint": {"paths": 50, "opens": 0, "drc_violations": 50},
+    "fresh_later_epoch_checkpoint": {"opens": 8, "drc_violations": 2}
+  },
+  "classification": "A found path is rejected as having no owning terminal; this is not search exhaustion or evidence of physical infeasibility.",
+  "source_mechanism": "filter_pin_access retains nodes in radius/manhattan preference order. The multi-source result lookup uses binary_search on that non-numerically-sorted vector. It may reject a selected start that is actually a member.",
+  "ranked_fixes": [
+    "Use linear membership for the bounded preference-ordered access vector, preserving candidate ordering.",
+    "Sort access vectors numerically after selection; valid membership but changes search tie ordering more broadly.",
+    "Add an auxiliary membership set; unnecessary allocation for the default 16-element bounded domain."
+  ],
+  "minimum_experiment": "Deterministic multi-source micro-board with diversified access rings and static seeds disabled; demonstrate unmatched ownership before the fix and legal connected copper afterward. Re-run corrected-rule Tier 0 at the same four-epoch budget.",
+  "success_criterion": "Remove false unmatched-terminal failures without accepting any previously illegal path. Final tier promotion still requires original-project KiCad DRC.",
+  "tier_promoted": false
+}

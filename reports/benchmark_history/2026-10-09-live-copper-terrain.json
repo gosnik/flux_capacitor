@@ -1,0 +1,161 @@
+{
+  "date": "2026-10-09",
+  "experiment": "Default height evolution with replacement live-copper terrain feedback",
+  "git_revision": "94aa691ad89576d1c0ac07a5346020da21fc9d06",
+  "dirty_worktree": true,
+  "requested_change": {
+    "global_terrain_default": true,
+    "droplet_override": "--no-terrain-height-evolution",
+    "feedback_boundary": "completed engine actions",
+    "occupancy_semantics": "replace snapshot; exclude same-net and other-layer copper; regenerate next global proposals"
+  },
+  "comparison_report": "reports/benchmark_history/2026-10-09-height-evolution.json",
+  "limitations": [
+    "Snapshots are advisory pressure; exact polygon mask and copper DRC unchanged.",
+    "Intra-pass rip-ups are reflected at the next completed checkpoint, not each PathFinder queue operation.",
+    "Arc/Bezier pressure uses bounding envelopes; maximum resolved board clearance is conservative advisory pressure, not an exact pairwise DRC model.",
+    "Default selection is user-requested, not a tier promotion.",
+    "Snapshot changes conservatively invalidate all incremental route reuse; regional invalidation is a future performance optimization.",
+    "195.61s wall time exceeds the 180s cooperative deadline; an in-flight stage took time to reach cancellation.",
+    "Benchmark precedes explicit {} default initializer cleanup (terrain config, snapshot fields, B\u00e9zier control points) only; runtime defaults unchanged."
+  ],
+  "validation": {
+    "release_build": "passed after final initializer cleanup",
+    "core": {
+      "passed": 64,
+      "total": 64,
+      "elapsed_seconds": 85.45,
+      "note": "Final routing logic; before behavior-preserving explicit initializer cleanup."
+    },
+    "focused_terrain": {
+      "passed": 3,
+      "total": 3,
+      "final_initializer_cleanup_recheck": "3/3 passed, confirmed CTest log"
+    },
+    "cli_selection": {
+      "passed": 4,
+      "total": 4
+    },
+    "independent_review": "No remaining material issues after cycle-key, bounds and netclass fixes.",
+    "viewer_build": "passed; no work required (viewer links telemetry rather than routing core)",
+    "kicad_drc": {
+      "exit_code": 0,
+      "violations": 0,
+      "unconnected_items": 0,
+      "original_project_rules": true,
+      "artifact": "build/terrain-feedback-validation/terrain-tier0-detail-drc.json"
+    },
+    "development_build": "passed; build/dev/flux-cli updated for run_tiers.sh"
+  },
+  "run": {
+    "board": "pt2399_delay",
+    "tier": 0,
+    "configuration": {
+      "max_router_iterations": 3,
+      "max_expansions": 50000,
+      "max_static_seed_workers": 2,
+      "routing_timeout_ms": 180000,
+      "curved_tracks": true,
+      "explicit_terrain_flag": false
+    },
+    "elapsed_seconds": 195.61,
+    "peak_rss_kib": 548664,
+    "exit_code": 5,
+    "artifact": "build/terrain-feedback-validation/terrain-tier0-detail.stdout",
+    "preview": "build/terrain-feedback-validation/terrain-tier0-detail.kicad_pcb",
+    "metrics": {
+      "complete": false,
+      "stop_reason": "invalid_path",
+      "configured_live_copper_terrain_revision": 0,
+      "static_seed_height_evolution_attempts": 48,
+      "static_seed_height_evolution_invoked": 46,
+      "static_seed_height_evolution_accepted": 46,
+      "static_seed_height_evolution_iterations": 460,
+      "static_seed_height_evolution_changed_cells": 553963,
+      "static_seed_height_evolution_expanded_nodes": 39889,
+      "added_tracks": 48,
+      "added_track_beziers": 178,
+      "unrounded_non_junction_bends": 9,
+      "added_vias": 3,
+      "open_connections": 0,
+      "copper_violations": 0,
+      "routing_engine_outcome": "timed-out"
+    },
+    "attempts": [
+      {
+        "action": "global",
+        "work_units": 7715,
+        "elapsed_microseconds": 17295585,
+        "live_copper_terrain_revision": 0,
+        "live_copper_terrain_features": 0,
+        "live_copper_terrain_provisional": false,
+        "quality_before": 18446744073709551615,
+        "quality_after": 3,
+        "accepted": true,
+        "diagnostic": "split global checkpoint"
+      },
+      {
+        "action": "quantized-probe",
+        "work_units": 0,
+        "elapsed_microseconds": 104276,
+        "live_copper_terrain_revision": 1,
+        "live_copper_terrain_features": 575,
+        "live_copper_terrain_provisional": true,
+        "quality_before": 18446744073709551615,
+        "quality_after": 8,
+        "accepted": true,
+        "diagnostic": "split global checkpoint"
+      },
+      {
+        "action": "regional",
+        "work_units": 32653,
+        "elapsed_microseconds": 46215585,
+        "live_copper_terrain_revision": 1,
+        "live_copper_terrain_features": 575,
+        "live_copper_terrain_provisional": true,
+        "quality_before": 18446744073709551615,
+        "quality_after": 0,
+        "accepted": true,
+        "diagnostic": "selected global paths require regional physical packing"
+      },
+      {
+        "action": "materialize",
+        "work_units": 1136,
+        "elapsed_microseconds": 70263197,
+        "live_copper_terrain_revision": 2,
+        "live_copper_terrain_features": 568,
+        "live_copper_terrain_provisional": true,
+        "quality_before": 18446744073709551615,
+        "quality_after": 0,
+        "accepted": true,
+        "diagnostic": "selected global paths require regional physical packing"
+      },
+      {
+        "action": "feedback-global",
+        "work_units": 6605,
+        "elapsed_microseconds": 15568812,
+        "live_copper_terrain_revision": 3,
+        "live_copper_terrain_features": 232,
+        "live_copper_terrain_provisional": false,
+        "quality_before": 3,
+        "quality_after": 0,
+        "accepted": true,
+        "diagnostic": "split global checkpoint"
+      },
+      {
+        "action": "quantized-probe",
+        "work_units": 0,
+        "elapsed_microseconds": 78930,
+        "live_copper_terrain_revision": 4,
+        "live_copper_terrain_features": 541,
+        "live_copper_terrain_provisional": true,
+        "quality_before": 18446744073709551615,
+        "quality_after": 56,
+        "accepted": true,
+        "diagnostic": "split global checkpoint"
+      }
+    ]
+  },
+  "interpretation": "Feedback dataflow verified: later global action used exact snapshot revision 3 with 232 features, reducing global overflow 3->0. Subsequent quantized copper probe score worsened 8->56. Retained best preview has 9 unsmoothed joints and remains incomplete; no tier promotion or routing-quality improvement established.",
+  "decision": "Keep user-requested default and replacement feedback. Exact legality gates unchanged. Further geometry/portfolio work remains necessary."
+}

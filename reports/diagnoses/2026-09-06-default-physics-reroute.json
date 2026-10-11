@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "board": "pt2399_delay",
+  "tier": 0,
+  "experiment": "default repeated physics/rip-up policy",
+  "failure_stage": "physical feedback and upstream connection recovery",
+  "mechanisms": [
+    "Previous full-strength policy reverted to discrete-only probes on intermediate retries",
+    "Retained outside-copper blocker nets were absent from window-only upstream diagnoses",
+    "Repeated global repair can reduce exact oracle conflicts while leaving required connections open"
+  ],
+  "implicated_nets": null,
+  "physical_region": null,
+  "layers": null,
+  "resources": null,
+  "minimal_conflict_set_status": "Not established for the repeated-repair topology; exact retained candidate/blocker pairs are exported by diagnostic telemetry",
+  "alternative_route_evidence": "Normal N1 planning probe accepted a native scene; this is not final-board KiCad validation",
+  "policy_control": {
+    "total_iteration_budget": 6,
+    "feedback_retry_limit": 4,
+    "planning_timeout_seconds": 600,
+    "completed_feedback_epochs": 3,
+    "first_epoch_oracle_violations": 32,
+    "first_epoch_oracle_opens": 0,
+    "second_epoch_oracle_violations": 0,
+    "second_epoch_oracle_opens": 9,
+    "xpbd_observed_after_upstream_replan": true,
+    "final_board": null,
+    "final_kicad_drc": "not_evaluated"
+  },
+  "normal_planning_probe": {
+    "duration_seconds": 435.3837577400118,
+    "iteration_budget": 1,
+    "paths": 50,
+    "unrouted_nets": 0,
+    "regional_complete_assignments": 3,
+    "regional_scope_retries": 2,
+    "native_scene_manifest_available": true,
+    "native_scene_conflicts": 0,
+    "clearance_shadow_overflow": 19,
+    "routing_plan_complete": true,
+    "final_kicad_drc": "not_evaluated"
+  },
+  "normal_detail_audit": {
+    "iteration_budget": 30,
+    "status": "manually_cancelled_after_audit_cap",
+    "audit_cap_seconds": 600,
+    "elapsed_observed_before_termination_seconds": 608,
+    "unchanged_corpus_timeout_seconds": 2400,
+    "last_completed_epoch_oracle_violations": 58,
+    "last_completed_epoch_oracle_opens": 10,
+    "final_kicad_drc": "not_evaluated",
+    "full_budget_outcome": "unknown"
+  },
+  "next_hypothesis": "Preserve or recover required connections during mature hard-capacity feedback; do not optimize violation counts alone",
+  "tier_promoted": false
+}

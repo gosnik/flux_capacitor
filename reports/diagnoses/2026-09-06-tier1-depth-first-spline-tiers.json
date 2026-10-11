@@ -1,0 +1,90 @@
+{
+  "schema": 1,
+  "board": "bm_svf",
+  "tier": 1,
+  "frontier_stage": "fourth-checkpoint-regional-spline-realization",
+  "classification": [
+    "search-scheduling",
+    "spline-realization",
+    "fallback-tier-ordering"
+  ],
+  "experiment": {
+    "name": "in-batch frozen-scope escalation",
+    "decision": "revert",
+    "hypothesis": "A selected exact outside-copper blocker can terminate the remaining large native batch and immediately enlarge regional ownership.",
+    "v6_cli_sha256": "888fc4c9ec12aa82bc2e7a19b0d73202f32fe5ed0fbbb7a5a3123e1358298995",
+    "v7_cli_sha256": "c66f2ba805331ff99e3ae4b465f855942b3fb8ffc057daf724268d06e7243dc1",
+    "v8_cli_sha256": "8a9fe2a85287c313e07a52155073e49ca019ea6130d71231c4bdd8ed14a84f01",
+    "v9_cli_sha256": "001991b9460d4b17024003811958dde687a698b9ac9817233fbdbcda3f80c383"
+  },
+  "tier0_controls": {
+    "v6": {
+      "status": "failed",
+      "cause": "rank-zero scope interruption changed the regional handoff",
+      "native_spline_runs": 14,
+      "unrounded_non_junction_bends": 30,
+      "opens": 0,
+      "artifact": "build/tier0-in-batch-scope-v6-20260906"
+    },
+    "v7": {
+      "status": "failed",
+      "cause": "removing the batch barrier was insufficient because rank-zero interruption still fired in earlier physical epochs",
+      "native_spline_runs": 14,
+      "unrounded_non_junction_bends": 30,
+      "opens": 0,
+      "artifact": "build/tier0-in-batch-scope-v7-20260906"
+    },
+    "v8": {
+      "status": "passed",
+      "scope_interrupt_minimum_windows": 8,
+      "observed_windows": 4,
+      "scope_triggers": 0,
+      "native_spline_runs": 10,
+      "tracks": 75,
+      "arcs": 299,
+      "vias": 5,
+      "opens": 0,
+      "internal_copper_violations": 0,
+      "kicad_drc_violations": 0,
+      "output_sha256": "459bffc8258348a89eafcc275a35decdfc59e8afb1278b0731a58e0fd9df35ac",
+      "artifact": "build/tier0-in-batch-scope-v8-20260906"
+    }
+  },
+  "tier1_v9": {
+    "status": "diagnostic_timeout",
+    "timeout_seconds": 1200,
+    "artifact": "build/tier1-in-batch-scope-v9-20260906",
+    "scope_escalations": 0,
+    "epoch_completion_seconds": [38.641561, 210.460106, 265.629857],
+    "oracle_violations": [764, 1297, 2216],
+    "oracle_opens": [0, 0, 0],
+    "fourth_epoch": {
+      "windows": 25,
+      "fragments": 226,
+      "owned_fragments": 226,
+      "corridors": 89,
+      "alternatives": 649,
+      "windows_ready_seconds": 333.606091,
+      "portfolio_ready_seconds": 705.597553
+    },
+    "candidate_progress_at_timeout": {
+      "windows_with_16_candidate_starts": [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17],
+      "meaning": "Each listed window consumed the full eight-candidate active tier and an eight-candidate fallback tier before the batch completed."
+    },
+    "representative_transient_witness": {
+      "candidate": "kicad-net-5:3:0:5",
+      "blocker": "kicad-net-9:1:0:6",
+      "layer": "F.Cu",
+      "observed_ranks": [2, 3, 4],
+      "first_observation_seconds": 748.638742,
+      "selected_for_scope_expansion": false
+    },
+    "final_kicad_drc": "not_evaluated"
+  },
+  "interpretation": {
+    "hypothesis_result": "disproven",
+    "earliest_supported_mechanism": "The native fallback tiers are scheduled depth-first inside each window. Many windows exhaust both tiers while later windows remain uncharacterised. Candidate-level outside blockers are common but were not decisive selected failures.",
+    "next_hypothesis": "Run the active native tier breadth-first across every independent window, reduce a complete first-tier checkpoint, then apply fallback tiers only to the remaining failed windows in parallel. Preserve every fallback and exact legality gate; change ordering only."
+  },
+  "tier_promoted": false
+}

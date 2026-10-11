@@ -1,0 +1,775 @@
+{
+  "schema": 1,
+  "experiment": "early-scope-interrupted-controls",
+  "notes": [
+    "Both processes were absent on resumption; no final run-result was published. Unknown termination cause, not a timeout or tier verdict."
+  ],
+  "runs": [
+    {
+      "root": "build/tier1-full-baseline-20260906",
+      "metadata": {
+        "artifact_contract": {
+          "analysis_pngs_required_for_routing": true,
+          "failed_route_png_mode": "both",
+          "files_write_once": true,
+          "max_failed_route_png_results": 1,
+          "source_boards_immutable": true,
+          "telemetry_level": null,
+          "telemetry_required_for_routing": true
+        },
+        "capability_contract": {
+          "reference": {
+            "commit": "e239e067c204870b4ac570fc9e931a374bdfd5b4",
+            "project": "KiCadRoutingTools",
+            "repository": "https://github.com/drandyhaas/KiCadRoutingTools",
+            "version": "0.21.5"
+          },
+          "schema": "flux_parity_manifest",
+          "schema_version": 1,
+          "sha256": "d8b57b3e1ba5c761fa2c610ffea1aa2e1f70f845f988ab7e92fbceca36fda5d0"
+        },
+        "corpus": {
+          "manifest_sha256": "e5685277e3917f4a153d29a2214afb717b13b41395bcf48b04f555adb923bede",
+          "path": "/home/adam/qtbits/flux_capacitor/tests/fixtures/routing-corpus",
+          "source_corpus": {
+            "commit": "661c88b3c3b0ebc9ade65eab63d30b1cde217fb4",
+            "discussion": "https://github.com/drandyhaas/KiCadRoutingTools/discussions/117",
+            "repository": "drandyhaas/KiCadRoutingTools",
+            "stress_directory": "https://github.com/drandyhaas/KiCadRoutingTools/tree/main/tests/stress"
+          }
+        },
+        "created_utc": "2026-09-06T01:34:35.628887+00:00",
+        "environment": {
+          "flux": {
+            "board_schema": 21,
+            "engine": "flux_capacitor",
+            "gpu_api_version_raw": 4211017,
+            "gpu_available": true,
+            "gpu_device": "NVIDIA GeForce RTX 5080",
+            "gpu_device_id": 11266,
+            "gpu_device_type": "discrete",
+            "gpu_diagnostic": "",
+            "gpu_driver_version_raw": 2496987136,
+            "gpu_override": null,
+            "gpu_vendor_id": 4318,
+            "production_gpu_required": true,
+            "version": "0.140.0"
+          },
+          "flux_vulkan_device_override": null,
+          "inkscape": {
+            "available": true,
+            "command": [
+              "/snap/bin/inkscape",
+              "--version"
+            ],
+            "returncode": 0,
+            "stderr": "",
+            "stdout": "Inkscape 1.4.4 (dcaf3e7d9e, 2026-05-05)"
+          },
+          "kicad_cli": {
+            "available": true,
+            "command": [
+              "/usr/bin/kicad-cli",
+              "--version"
+            ],
+            "returncode": 0,
+            "stderr": "",
+            "stdout": "9.0.8"
+          },
+          "platform": "Linux-7.0.0-31-generic-x86_64-with-glibc2.43",
+          "python": "3.14.4 (main, Jun 18 2026, 14:25:02) [GCC 15.2.0]"
+        },
+        "executable": {
+          "path": "/home/adam/qtbits/flux_capacitor/build/tier1-full-baseline-bin/flux-cli",
+          "sha256": "a207a0253daff3a0e09a663b9b85f86c2cf6b4a94ca054bfbfa5b2822fd0129e"
+        },
+        "invocation": [
+          "/home/adam/qtbits/flux_capacitor/tests/python/verify_routing_corpus.py",
+          "--flux-cli",
+          "build/tier1-full-baseline-bin/flux-cli",
+          "--corpus",
+          "tests/fixtures/routing-corpus",
+          "--board",
+          "bm_svf",
+          "--artifacts",
+          "build/tier1-full-baseline-20260906",
+          "--kicad-cli",
+          "/usr/bin/kicad-cli",
+          "--inkscape",
+          "/snap/bin/inkscape",
+          "--max-failed-route-png-results",
+          "1"
+        ],
+        "mode": "routing",
+        "schema": "flux_routing_baseline",
+        "schema_version": 1,
+        "selection": {
+          "boards": [
+            {
+              "effective_planning_timeout_seconds": 7200,
+              "id": "bm_svf",
+              "level": 1,
+              "project_sha256": "04856904fe9070f7decd33b676d3f58e44676b6c930e65fa8a16f0ddd65d54db",
+              "qualification": "detailed_complete",
+              "reference_sha256": "52317a66f7442b3b260f07ff1b7c16dd94f99c088c61533b81698cbda6d4d77b",
+              "router_args": [
+                "--crossing-safe-diagonal-grid",
+                "--direct-medial",
+                "--grid-pitch-nm",
+                "650000",
+                "--xpbd-relaxation",
+                "--xpbd-feedback",
+                "--atomic-net-trees",
+                "--hard-capacity-start-iteration",
+                "4",
+                "--max-hard-capacity-ripup-attempts-per-pass",
+                "8",
+                "--max-hard-capacity-ripup-nets-per-attempt",
+                "8",
+                "--max-hard-capacity-conflict-set-states-per-attempt",
+                "256",
+                "--terminal-escape-proximity-cost",
+                "500",
+                "--rollback-failed-hard-capacity-ripup",
+                "--defer-hard-capacity-ripup-victims-to-pass-tail",
+                "--protect-recovered-hard-capacity-ripup-nets"
+              ],
+              "source_sha256": "308ce5513cb6b2b33820648a0062a54f548f6b3c13d856cdcd9b7c3ac8a20d2a",
+              "status": "unlocked"
+            }
+          ],
+          "explicit_boards": [
+            "bm_svf"
+          ],
+          "iteration_budget_override": null,
+          "level": "unlocked",
+          "planning_timeout_override_seconds": null,
+          "strict_medial_control_override": false
+        }
+      },
+      "outcome": {
+        "status": "not_reported",
+        "complete": false,
+        "detail": "No run-result.json; termination cause and final outcome are unknown."
+      },
+      "planning_records": [],
+      "detailed_records": [],
+      "epoch_telemetry": [
+        {
+          "artifact": "build/tier1-full-baseline-20260906/tier-1-bm_svf/telemetry/bm_svf-global.jsonl",
+          "messages": [
+            "interleaved routing epoch started: pathfinder_budget=1, retained_portfolios=0, physical_history_entries=0",
+            "interleaved routing epoch completed: regional_candidates=1, history_entries=296, history_pressure=1830232, quantized_oracle_violations=684, quantized_oracle_opens=5",
+            "interleaved routing epoch started: pathfinder_budget=8, retained_portfolios=1, physical_history_entries=296"
+          ],
+          "events": [
+            {
+              "monotonic_time_us": 1772,
+              "message": "interleaved routing epoch started: pathfinder_budget=1, retained_portfolios=0, physical_history_entries=0"
+            },
+            {
+              "monotonic_time_us": 3120160628,
+              "message": "interleaved routing epoch completed: regional_candidates=1, history_entries=296, history_pressure=1830232, quantized_oracle_violations=684, quantized_oracle_opens=5"
+            },
+            {
+              "monotonic_time_us": 3120261292,
+              "message": "interleaved routing epoch started: pathfinder_budget=8, retained_portfolios=1, physical_history_entries=296"
+            }
+          ],
+          "event_counts": {
+            "RoutingStarted": 1,
+            "snapshot": 445,
+            "SearchSummary": 5920,
+            "RouteCandidateSelected": 3565,
+            "HydraulicFieldUpdated": 108,
+            "NetQueued": 50,
+            "PathFinderIterationStarted": 9,
+            "RouteRippedUp": 31,
+            "PathFinderIterationCompleted": 9,
+            "ConflictAdded": 648,
+            "ResidualGroupUpdated": 108,
+            "ViaCandidateGenerated": 1634,
+            "ViaAssigned": 89,
+            "CheckpointSelected": 1
+          },
+          "regional_progress": [
+            {
+              "monotonic_time_us": 39408564,
+              "message": "regional conflict extraction and joint physical packing started"
+            },
+            {
+              "monotonic_time_us": 39408673,
+              "message": "regional fragments constructed: fragments=406"
+            },
+            {
+              "monotonic_time_us": 39409422,
+              "message": "exact copper repair scope: witnesses=146, mapped_pairs=135, unmapped_pairs=3"
+            },
+            {
+              "monotonic_time_us": 39411067,
+              "message": "regional conflict graph constructed: edges=129, components=20"
+            },
+            {
+              "monotonic_time_us": 39411457,
+              "message": "ordinary regional windows constructed: windows=23, fragments=117, owned=114"
+            },
+            {
+              "monotonic_time_us": 39597534,
+              "message": "ordinary regional corridors constructed: channels=55"
+            },
+            {
+              "monotonic_time_us": 306941121,
+              "message": "ordinary regional bundle portfolio prepared: assignments=23, alternative_templates=483"
+            },
+            {
+              "monotonic_time_us": 466933390,
+              "message": "ordinary regional spline realization completed: splines=72"
+            },
+            {
+              "monotonic_time_us": 466934184,
+              "message": "conflict-directed exact master: window=0, round=1, core_fragments=8, no_goods=0"
+            },
+            {
+              "monotonic_time_us": 610451260,
+              "message": "residual conflict cones constructed: cones=4, windows=4"
+            },
+            {
+              "monotonic_time_us": 610451280,
+              "message": "residual cone corridors constructed: window=0"
+            },
+            {
+              "monotonic_time_us": 875119464,
+              "message": "residual cone portfolio prepared: window=0, assignments=1"
+            },
+            {
+              "monotonic_time_us": 875119709,
+              "message": "residual cone spline realization completed: window=0, splines=0"
+            },
+            {
+              "monotonic_time_us": 875120998,
+              "message": "residual cone corridors constructed: window=1"
+            },
+            {
+              "monotonic_time_us": 942983188,
+              "message": "residual cone portfolio prepared: window=1, assignments=1"
+            },
+            {
+              "monotonic_time_us": 1536715756,
+              "message": "residual cone spline realization completed: window=1, splines=15"
+            },
+            {
+              "monotonic_time_us": 1536715759,
+              "message": "residual cone corridors constructed: window=9"
+            },
+            {
+              "monotonic_time_us": 1546728889,
+              "message": "residual cone portfolio prepared: window=9, assignments=1"
+            },
+            {
+              "monotonic_time_us": 1668968215,
+              "message": "residual cone spline realization completed: window=9, splines=7"
+            },
+            {
+              "monotonic_time_us": 1668968217,
+              "message": "residual cone corridors constructed: window=16"
+            },
+            {
+              "monotonic_time_us": 1670401179,
+              "message": "residual cone portfolio prepared: window=16, assignments=1"
+            },
+            {
+              "monotonic_time_us": 1723077862,
+              "message": "residual cone spline realization completed: window=16, splines=2"
+            },
+            {
+              "monotonic_time_us": 1723145496,
+              "message": "regional conflict extraction and joint physical packing started"
+            },
+            {
+              "monotonic_time_us": 1723145501,
+              "message": "regional fragments constructed: fragments=406"
+            },
+            {
+              "monotonic_time_us": 1723145503,
+              "message": "exact copper repair scope: witnesses=205, mapped_pairs=194, unmapped_pairs=3"
+            },
+            {
+              "monotonic_time_us": 1723145505,
+              "message": "regional conflict graph constructed: edges=187, components=10"
+            },
+            {
+              "monotonic_time_us": 1723145513,
+              "message": "ordinary regional windows constructed: windows=11, fragments=152, owned=151"
+            },
+            {
+              "monotonic_time_us": 1723333051,
+              "message": "ordinary regional corridors constructed: channels=39"
+            },
+            {
+              "monotonic_time_us": 2028476793,
+              "message": "ordinary regional bundle portfolio prepared: assignments=11, alternative_templates=318"
+            },
+            {
+              "monotonic_time_us": 2186869854,
+              "message": "ordinary regional spline realization completed: splines=41"
+            },
+            {
+              "monotonic_time_us": 2186870802,
+              "message": "conflict-directed exact master: window=1, round=1, core_fragments=6, no_goods=8"
+            },
+            {
+              "monotonic_time_us": 2253701656,
+              "message": "conflict-directed exact master: window=1, round=2, core_fragments=6, no_goods=16"
+            },
+            {
+              "monotonic_time_us": 2318973592,
+              "message": "conflict-directed exact master: window=1, round=3, core_fragments=6, no_goods=24"
+            },
+            {
+              "monotonic_time_us": 2385604150,
+              "message": "regional conflict extraction and joint physical packing started"
+            },
+            {
+              "monotonic_time_us": 2385604250,
+              "message": "regional fragments constructed: fragments=406"
+            },
+            {
+              "monotonic_time_us": 2385605269,
+              "message": "exact copper repair scope: witnesses=222, mapped_pairs=211, unmapped_pairs=3"
+            },
+            {
+              "monotonic_time_us": 2385607553,
+              "message": "regional conflict graph constructed: edges=204, components=7"
+            },
+            {
+              "monotonic_time_us": 2385608527,
+              "message": "ordinary regional windows constructed: windows=8, fragments=158, owned=157"
+            },
+            {
+              "monotonic_time_us": 2385786387,
+              "message": "ordinary regional corridors constructed: channels=33"
+            },
+            {
+              "monotonic_time_us": 2542763277,
+              "message": "ordinary regional bundle portfolio prepared: assignments=8, alternative_templates=241"
+            },
+            {
+              "monotonic_time_us": 2717633660,
+              "message": "ordinary regional spline realization completed: splines=17"
+            },
+            {
+              "monotonic_time_us": 2717634461,
+              "message": "conflict-directed exact master: window=1, round=1, core_fragments=8, no_goods=8"
+            },
+            {
+              "monotonic_time_us": 2849956517,
+              "message": "conflict-directed exact master: window=1, round=2, core_fragments=8, no_goods=16"
+            },
+            {
+              "monotonic_time_us": 2982219417,
+              "message": "conflict-directed exact master: window=1, round=3, core_fragments=8, no_goods=24"
+            },
+            {
+              "monotonic_time_us": 3180677287,
+              "message": "regional conflict extraction and joint physical packing started"
+            },
+            {
+              "monotonic_time_us": 3180677806,
+              "message": "regional fragments constructed: fragments=533"
+            },
+            {
+              "monotonic_time_us": 3180681643,
+              "message": "exact copper repair scope: witnesses=398, mapped_pairs=390, unmapped_pairs=2"
+            },
+            {
+              "monotonic_time_us": 3180688827,
+              "message": "regional conflict graph constructed: edges=445, components=25"
+            },
+            {
+              "monotonic_time_us": 3180690774,
+              "message": "ordinary regional windows constructed: windows=25, fragments=267, owned=267"
+            },
+            {
+              "monotonic_time_us": 3181084358,
+              "message": "ordinary regional corridors constructed: channels=72"
+            }
+          ],
+          "non_authoritative_last_snapshot": {
+            "monotonic_time_us": 3180489200,
+            "metrics": {
+              "iteration": 0,
+              "total_nets": 25,
+              "routed_nets": 25,
+              "unrouted_nets": 0,
+              "total_groups": 7,
+              "routed_groups": 0,
+              "unrouted_groups": 0,
+              "sampled_overflow": 75,
+              "corridor_overflow": 12,
+              "physical_overflow_nm": 19417298,
+              "clearance_shadow_conflicts": 431,
+              "regional_conflicts": 311,
+              "route_cost": 639369,
+              "vias": 33,
+              "rip_ups": 20,
+              "search_expansions": 0,
+              "selected_checkpoint": 0,
+              "best_checkpoint": 0,
+              "selected_is_best": false
+            }
+          }
+        }
+      ]
+    },
+    {
+      "root": "build/tier1-early-scope-v2-20260906",
+      "metadata": {
+        "artifact_contract": {
+          "analysis_pngs_required_for_routing": true,
+          "failed_route_png_mode": "both",
+          "files_write_once": true,
+          "max_failed_route_png_results": 1,
+          "source_boards_immutable": true,
+          "telemetry_level": null,
+          "telemetry_required_for_routing": true
+        },
+        "capability_contract": {
+          "reference": {
+            "commit": "e239e067c204870b4ac570fc9e931a374bdfd5b4",
+            "project": "KiCadRoutingTools",
+            "repository": "https://github.com/drandyhaas/KiCadRoutingTools",
+            "version": "0.21.5"
+          },
+          "schema": "flux_parity_manifest",
+          "schema_version": 1,
+          "sha256": "d8b57b3e1ba5c761fa2c610ffea1aa2e1f70f845f988ab7e92fbceca36fda5d0"
+        },
+        "corpus": {
+          "manifest_sha256": "e5685277e3917f4a153d29a2214afb717b13b41395bcf48b04f555adb923bede",
+          "path": "/home/adam/qtbits/flux_capacitor/tests/fixtures/routing-corpus",
+          "source_corpus": {
+            "commit": "661c88b3c3b0ebc9ade65eab63d30b1cde217fb4",
+            "discussion": "https://github.com/drandyhaas/KiCadRoutingTools/discussions/117",
+            "repository": "drandyhaas/KiCadRoutingTools",
+            "stress_directory": "https://github.com/drandyhaas/KiCadRoutingTools/tree/main/tests/stress"
+          }
+        },
+        "created_utc": "2026-09-06T02:06:54.749686+00:00",
+        "environment": {
+          "flux": {
+            "board_schema": 21,
+            "engine": "flux_capacitor",
+            "gpu_api_version_raw": 4211017,
+            "gpu_available": true,
+            "gpu_device": "NVIDIA GeForce RTX 5080",
+            "gpu_device_id": 11266,
+            "gpu_device_type": "discrete",
+            "gpu_diagnostic": "",
+            "gpu_driver_version_raw": 2496987136,
+            "gpu_override": null,
+            "gpu_vendor_id": 4318,
+            "production_gpu_required": true,
+            "version": "0.140.0"
+          },
+          "flux_vulkan_device_override": null,
+          "inkscape": {
+            "available": true,
+            "command": [
+              "/snap/bin/inkscape",
+              "--version"
+            ],
+            "returncode": 0,
+            "stderr": "",
+            "stdout": "Inkscape 1.4.4 (dcaf3e7d9e, 2026-05-05)"
+          },
+          "kicad_cli": {
+            "available": true,
+            "command": [
+              "/usr/bin/kicad-cli",
+              "--version"
+            ],
+            "returncode": 0,
+            "stderr": "",
+            "stdout": "9.0.8"
+          },
+          "platform": "Linux-7.0.0-31-generic-x86_64-with-glibc2.43",
+          "python": "3.14.4 (main, Jun 18 2026, 14:25:02) [GCC 15.2.0]"
+        },
+        "executable": {
+          "path": "/home/adam/qtbits/flux_capacitor/build/release/flux-cli",
+          "sha256": "e44f6f83c0e98654aecb03d36bb8b90c5a26333eb0b792856f9c41fb7053e967"
+        },
+        "invocation": [
+          "/home/adam/qtbits/flux_capacitor/tests/python/verify_routing_corpus.py",
+          "--flux-cli",
+          "build/release/flux-cli",
+          "--corpus",
+          "tests/fixtures/routing-corpus",
+          "--board",
+          "bm_svf",
+          "--artifacts",
+          "build/tier1-early-scope-v2-20260906",
+          "--prioritize-frozen-scope-expansion",
+          "--kicad-cli",
+          "/usr/bin/kicad-cli",
+          "--inkscape",
+          "/snap/bin/inkscape",
+          "--max-failed-route-png-results",
+          "1"
+        ],
+        "mode": "routing",
+        "schema": "flux_routing_baseline",
+        "schema_version": 1,
+        "selection": {
+          "boards": [
+            {
+              "effective_planning_timeout_seconds": 7200,
+              "id": "bm_svf",
+              "level": 1,
+              "project_sha256": "04856904fe9070f7decd33b676d3f58e44676b6c930e65fa8a16f0ddd65d54db",
+              "qualification": "detailed_complete",
+              "reference_sha256": "52317a66f7442b3b260f07ff1b7c16dd94f99c088c61533b81698cbda6d4d77b",
+              "router_args": [
+                "--crossing-safe-diagonal-grid",
+                "--direct-medial",
+                "--grid-pitch-nm",
+                "650000",
+                "--xpbd-relaxation",
+                "--xpbd-feedback",
+                "--atomic-net-trees",
+                "--hard-capacity-start-iteration",
+                "4",
+                "--max-hard-capacity-ripup-attempts-per-pass",
+                "8",
+                "--max-hard-capacity-ripup-nets-per-attempt",
+                "8",
+                "--max-hard-capacity-conflict-set-states-per-attempt",
+                "256",
+                "--terminal-escape-proximity-cost",
+                "500",
+                "--rollback-failed-hard-capacity-ripup",
+                "--defer-hard-capacity-ripup-victims-to-pass-tail",
+                "--protect-recovered-hard-capacity-ripup-nets",
+                "--prioritize-frozen-scope-expansion"
+              ],
+              "source_sha256": "308ce5513cb6b2b33820648a0062a54f548f6b3c13d856cdcd9b7c3ac8a20d2a",
+              "status": "unlocked"
+            }
+          ],
+          "explicit_boards": [
+            "bm_svf"
+          ],
+          "iteration_budget_override": null,
+          "level": "unlocked",
+          "planning_timeout_override_seconds": null,
+          "strict_medial_control_override": false
+        }
+      },
+      "outcome": {
+        "status": "not_reported",
+        "complete": false,
+        "detail": "No run-result.json; termination cause and final outcome are unknown."
+      },
+      "planning_records": [],
+      "detailed_records": [],
+      "epoch_telemetry": [
+        {
+          "artifact": "build/tier1-early-scope-v2-20260906/tier-1-bm_svf/telemetry/bm_svf-global.jsonl",
+          "messages": [
+            "interleaved routing epoch started: pathfinder_budget=1, retained_portfolios=0, physical_history_entries=0",
+            "interleaved routing epoch completed: regional_candidates=1, history_entries=276, history_pressure=3452, quantized_oracle_violations=684, quantized_oracle_opens=5",
+            "interleaved routing epoch started: pathfinder_budget=8, retained_portfolios=1, physical_history_entries=276"
+          ],
+          "events": [
+            {
+              "monotonic_time_us": 1821,
+              "message": "interleaved routing epoch started: pathfinder_budget=1, retained_portfolios=0, physical_history_entries=0"
+            },
+            {
+              "monotonic_time_us": 563004409,
+              "message": "interleaved routing epoch completed: regional_candidates=1, history_entries=276, history_pressure=3452, quantized_oracle_violations=684, quantized_oracle_opens=5"
+            },
+            {
+              "monotonic_time_us": 563085284,
+              "message": "interleaved routing epoch started: pathfinder_budget=8, retained_portfolios=1, physical_history_entries=276"
+            }
+          ],
+          "event_counts": {
+            "RoutingStarted": 1,
+            "snapshot": 411,
+            "SearchSummary": 4560,
+            "RouteCandidateSelected": 2741,
+            "HydraulicFieldUpdated": 107,
+            "NetQueued": 50,
+            "PathFinderIterationStarted": 9,
+            "RouteRippedUp": 23,
+            "PathFinderIterationCompleted": 9,
+            "ConflictAdded": 799,
+            "ResidualGroupUpdated": 99,
+            "ViaCandidateGenerated": 715,
+            "ViaAssigned": 55,
+            "CheckpointSelected": 1
+          },
+          "regional_progress": [
+            {
+              "monotonic_time_us": 66878834,
+              "message": "regional conflict extraction and joint physical packing started"
+            },
+            {
+              "monotonic_time_us": 66879028,
+              "message": "regional fragments constructed: fragments=406"
+            },
+            {
+              "monotonic_time_us": 66879743,
+              "message": "exact copper repair scope: witnesses=146, mapped_pairs=135, unmapped_pairs=3"
+            },
+            {
+              "monotonic_time_us": 66881370,
+              "message": "regional conflict graph constructed: edges=129, components=20"
+            },
+            {
+              "monotonic_time_us": 66881762,
+              "message": "ordinary regional windows constructed: windows=23, fragments=117, owned=114"
+            },
+            {
+              "monotonic_time_us": 67113376,
+              "message": "ordinary regional corridors constructed: channels=55"
+            },
+            {
+              "monotonic_time_us": 401534356,
+              "message": "ordinary regional bundle portfolio prepared: assignments=23, alternative_templates=483"
+            },
+            {
+              "monotonic_time_us": 562919732,
+              "message": "ordinary regional spline realization completed: splines=72"
+            },
+            {
+              "monotonic_time_us": 562920603,
+              "message": "ordinary native rejection identifies a new outside blocker; deferring same-scope topology/residual repair until ownership expands; retries_remaining=2"
+            },
+            {
+              "monotonic_time_us": 562995595,
+              "message": "regional conflict extraction and joint physical packing started"
+            },
+            {
+              "monotonic_time_us": 562995601,
+              "message": "regional fragments constructed: fragments=406"
+            },
+            {
+              "monotonic_time_us": 562995603,
+              "message": "exact copper repair scope: witnesses=205, mapped_pairs=194, unmapped_pairs=3"
+            },
+            {
+              "monotonic_time_us": 562995605,
+              "message": "regional conflict graph constructed: edges=187, components=10"
+            },
+            {
+              "monotonic_time_us": 562995606,
+              "message": "ordinary regional windows constructed: windows=11, fragments=152, owned=151"
+            },
+            {
+              "monotonic_time_us": 562995608,
+              "message": "regional size bound requires global replanning: window=0, nets=15/12, fragments=84/64"
+            },
+            {
+              "monotonic_time_us": 643886712,
+              "message": "regional conflict extraction and joint physical packing started"
+            },
+            {
+              "monotonic_time_us": 643886727,
+              "message": "regional fragments constructed: fragments=526"
+            },
+            {
+              "monotonic_time_us": 643889542,
+              "message": "exact copper repair scope: witnesses=323, mapped_pairs=315, unmapped_pairs=2"
+            },
+            {
+              "monotonic_time_us": 643895044,
+              "message": "regional conflict graph constructed: edges=355, components=23"
+            },
+            {
+              "monotonic_time_us": 643896154,
+              "message": "ordinary regional windows constructed: windows=23, fragments=242, owned=242"
+            },
+            {
+              "monotonic_time_us": 643896159,
+              "message": "regional size bound requires global replanning: window=0, nets=9/12, fragments=73/64"
+            },
+            {
+              "monotonic_time_us": 643896160,
+              "message": "regional size bound requires global replanning: window=1, nets=13/12, fragments=62/64"
+            },
+            {
+              "monotonic_time_us": 644038963,
+              "message": "regional conflict extraction and joint physical packing started"
+            },
+            {
+              "monotonic_time_us": 644039145,
+              "message": "regional fragments constructed: fragments=406"
+            },
+            {
+              "monotonic_time_us": 644040376,
+              "message": "exact copper repair scope: witnesses=146, mapped_pairs=135, unmapped_pairs=3"
+            },
+            {
+              "monotonic_time_us": 644042574,
+              "message": "regional conflict graph constructed: edges=129, components=20"
+            },
+            {
+              "monotonic_time_us": 644043111,
+              "message": "ordinary regional windows constructed: windows=23, fragments=117, owned=114"
+            },
+            {
+              "monotonic_time_us": 644257230,
+              "message": "ordinary regional corridors constructed: channels=55"
+            },
+            {
+              "monotonic_time_us": 926190388,
+              "message": "ordinary regional bundle portfolio prepared: assignments=23, alternative_templates=483"
+            },
+            {
+              "monotonic_time_us": 1098787766,
+              "message": "ordinary regional spline realization completed: splines=73"
+            },
+            {
+              "monotonic_time_us": 1098790504,
+              "message": "conflict-directed exact master: window=0, round=1, core_fragments=8, no_goods=0"
+            },
+            {
+              "monotonic_time_us": 1181412183,
+              "message": "residual conflict cones constructed: cones=4, windows=4"
+            },
+            {
+              "monotonic_time_us": 1181412442,
+              "message": "residual cone corridors constructed: window=0"
+            }
+          ],
+          "non_authoritative_last_snapshot": {
+            "monotonic_time_us": 1098617282,
+            "metrics": {
+              "iteration": 0,
+              "total_nets": 25,
+              "routed_nets": 25,
+              "unrouted_nets": 0,
+              "total_groups": 23,
+              "routed_groups": 0,
+              "unrouted_groups": 0,
+              "sampled_overflow": 65,
+              "corridor_overflow": 3,
+              "physical_overflow_nm": 8796190,
+              "clearance_shadow_conflicts": 391,
+              "regional_conflicts": 355,
+              "route_cost": 473249,
+              "vias": 55,
+              "rip_ups": 12,
+              "search_expansions": 0,
+              "selected_checkpoint": 0,
+              "best_checkpoint": 0,
+              "selected_is_best": false
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

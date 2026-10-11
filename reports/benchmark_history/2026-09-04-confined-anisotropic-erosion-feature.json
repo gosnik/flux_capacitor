@@ -1,0 +1,51 @@
+{
+  "schema": "flux_feature_qualification",
+  "schema_version": 1,
+  "date": "2026-09-04",
+  "git_revision": "25e3b884be9b359d9c5bf0cc4fbb6cc836fd4f82",
+  "dirty_worktree": true,
+  "feature": "confined_anisotropic_conflict_erosion",
+  "unit_verification": {
+    "anisotropic_cpu_gpu_integer_equivalence": "pass",
+    "polygon_discovery_and_exact_projection": "pass",
+    "concurrent_gpu_batch_equivalence": "pass",
+    "conflict_directed_regional_trigger_and_invariants": "pass"
+  },
+  "tier_0": {
+    "board": "pt2399_delay",
+    "artifact_root": "build/anisotropic-tier0-20260904",
+    "performance_canonical": false,
+    "performance_note": "A second full corpus process shared the host and GPU.",
+    "global": {
+      "outcome": "pass",
+      "duration_seconds": 309.7553888768889,
+      "paths": 50,
+      "unrouted_nets": 0,
+      "total_overflow": 0,
+      "sampled_overflow": 0,
+      "corridor_overflow": 0,
+      "clearance_shadow_conflicts": 0,
+      "confined_anisotropic_erosion_checks": 0
+    },
+    "detailed": {
+      "outcome": "fail",
+      "stop_reason": "invalid_path",
+      "candidate_available": true,
+      "validation_errors": 0,
+      "open_connections": 0,
+      "copper_violations": 0,
+      "added_tracks": 127,
+      "added_track_arcs": 47,
+      "added_vias": 4,
+      "unrounded_non_junction_bends": 7,
+      "failed_route": "net=kicad-net-3;layer=B.Cu;base=flux-board-spline-38",
+      "failed_stage": "trajectory",
+      "final_shape_violations": 1,
+      "final_unintended_inflections": 1,
+      "diagnostic": "materialized curved route retains 7 non-junction direction changes without quintic PH curve realization"
+    },
+    "external_kicad_drc": "not_run_after_incomplete_detailed_route",
+    "qualification": "fail"
+  },
+  "causal_attribution": "The new regional feature was dormant on Tier 0 (zero checks). Its shared hydraulic defaults remained isotropic, and focused tests proved byte-identical CPU/Vulkan fields. The observed Tier-0 failure is the current dirty worktree's separate PH trajectory/shape frontier, not conflict erosion."
+}

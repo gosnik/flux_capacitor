@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "board": "bm_svf",
+  "reference": {
+    "pcb": "tests/fixtures/routing-corpus/reference/bm_svf.kicad_pcb",
+    "sha256": "52317a66f7442b3b260f07ff1b7c16dd94f99c088c61533b81698cbda6d4d77b",
+    "inventory": {"segments": 389, "vias": 55},
+    "method": "KiCad pcbnew BOARD.GetTracks(), exact netcode; lengths from PCB_TRACK.GetLength(); unique via sites by position"
+  },
+  "v67_selected_coarse": {
+    "telemetry": "build/tier-resolution-20261001-v67/bounded-tier1-r1/tier-1-bm_svf/telemetry/bm_svf-global.jsonl",
+    "snapshot_sequence": 5956,
+    "proof": "build/tier-resolution-20261001-v67/selected-coarse-replay.jsonl",
+    "paths": 78, "opens": 0, "tracks": 1292, "vias": 46,
+    "method": "selected/active point-bearing routes in telemetry snapshot; layer lengths from consecutive points; unique via sites from layer transitions",
+    "note": "Logical route lengths can overlap and are not physical copper totals; this is not a topology-equivalence claim."
+  },
+  "nets": {
+    "1": {"reference_mm":{"F.Cu":21.235,"B.Cu":173.187},"reference_unique_vias":9,"v67_mm":{"F.Cu":118.365,"B.Cu":152.639},"v67_unique_vias":8},
+    "4": {"reference_mm":{"F.Cu":34.935,"B.Cu":3.872},"reference_unique_vias":3,"v67_mm":{"F.Cu":24.948,"B.Cu":20.915},"v67_unique_vias":2},
+    "5": {"reference_mm":{"F.Cu":57.879,"B.Cu":3.625},"reference_unique_vias":1,"v67_mm":{"F.Cu":16.639,"B.Cu":129.228},"v67_unique_vias":4},
+    "7": {"reference_mm":{"F.Cu":43.155,"B.Cu":0},"reference_unique_vias":0,"v67_mm":{"F.Cu":72.57,"B.Cu":8.823},"v67_unique_vias":2},
+    "11": {"reference_mm":{"F.Cu":57.415,"B.Cu":0},"reference_unique_vias":0,"v67_mm":{"F.Cu":74.805,"B.Cu":32.05},"v67_unique_vias":0},
+    "12": {"reference_mm":{"F.Cu":22.832,"B.Cu":78.708},"reference_unique_vias":5,"v67_mm":{"F.Cu":138.566,"B.Cu":60.749},"v67_unique_vias":2},
+    "13": {"reference_mm":{"F.Cu":66.699,"B.Cu":2.585},"reference_unique_vias":2,"v67_mm":{"F.Cu":53.917,"B.Cu":59.173},"v67_unique_vias":5},
+    "14": {"reference_mm":{"F.Cu":5.893,"B.Cu":4.673},"reference_unique_vias":1,"v67_mm":{"F.Cu":30.675,"B.Cu":5.763},"v67_unique_vias":0},
+    "16": {"reference_mm":{"F.Cu":13.279,"B.Cu":94.573},"reference_unique_vias":7,"v67_mm":{"F.Cu":62.261,"B.Cu":92.988},"v67_unique_vias":5},
+    "25": {"reference_mm":{"F.Cu":35.806,"B.Cu":6.836},"reference_unique_vias":4,"v67_mm":{"F.Cu":17.547,"B.Cu":77.832},"v67_unique_vias":1},
+    "26": {"reference_mm":{"F.Cu":19.087,"B.Cu":4.934},"reference_unique_vias":4,"v67_mm":{"F.Cu":13.258,"B.Cu":33.571},"v67_unique_vias":1}
+  }
+}

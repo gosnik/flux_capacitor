@@ -1,0 +1,119 @@
+{
+  "schema": 1,
+  "source_corpus": {
+    "repository": "drandyhaas/KiCadRoutingTools",
+    "commit": "ec2bf0e1021c0ed95c45b14664d02c56777a0974",
+    "stress_directory": "https://github.com/drandyhaas/KiCadRoutingTools/tree/ec2bf0e1021c0ed95c45b14664d02c56777a0974/tests/stress"
+  },
+  "preparation": {
+    "method": "KiCadRoutingTools tests/stress/prep_set2.py",
+    "kicad_version": "9.0.8",
+    "compatibility_change": "Passed null OUTLINE_ERROR_HANDLER before the allow-arcs boolean to match the KiCad 9 GetBoardPolygonOutlines overload. Resolved swig_compat import against the pinned checkout.",
+    "result": "Normalized source and retained routed reference; stripped tracks, vias and copper zones, retained rule areas; rebuilt Edge.Cuts and removed non-routing board graphics. Original PCB and project retained under source/. Source rules and placements were not edited."
+  },
+  "purpose": "Proposed replacements for levels 2-4; separate from the active benchmark ladder. Locked and not routing-qualified.",
+  "boards": [
+    {
+      "id": "ft2232h_jtag",
+      "level": 2,
+      "status": "locked",
+      "qualification": "detailed_complete",
+      "kicad_routing_tools_set": "set5",
+      "repo": "thecasterian/FT2232-JTAG-UART",
+      "commit": "503ddfb760f8fc75196cef801b0203f5e2b00d07",
+      "path": "Rev.A/ft2232h-jtag-uart.kicad_pcb",
+      "source_url": "https://raw.githubusercontent.com/thecasterian/FT2232-JTAG-UART/503ddfb760f8fc75196cef801b0203f5e2b00d07/Rev.A/ft2232h-jtag-uart.kicad_pcb",
+      "license": "BSD-3-Clause",
+      "license_file": "licenses/ft2232h_jtag.txt",
+      "license_source_url": "https://raw.githubusercontent.com/thecasterian/FT2232-JTAG-UART/503ddfb760f8fc75196cef801b0203f5e2b00d07/LICENSE",
+      "source_sha256": "2324185ca57850e90dd36d831a1fc847be9a5382a3160c684e0bf7b4a2839441",
+      "board_sha256": "882c35ac781cf8fc292dc025b8d22944077cc54002c6c73cf2613056f8b8b95b",
+      "reference_sha256": "6c7736712837b03b9855cea32d6652f6592398640fea86e4f390645cab43eb08",
+      "project_sha256": "00edffa7cc27d9c31b57714ce3a5cdff5f68a89425071f2b353672767939f237",
+      "license_sha256": "f13e0f99552413df5793df2fb30d737afe2bc80c3ef13f48731ae5675e670fab",
+      "expected": {
+        "footprints": 41,
+        "nets": 62,
+        "tracks": 0,
+        "vias": 0,
+        "zones": 0,
+        "open_connections": 117,
+        "max_core_validation_errors": 0,
+        "max_track_arcs": 0
+      },
+      "curved_expected": {
+        "min_track_arcs": 1,
+        "max_unrounded_non_junction_bends": 0
+      },
+      "note": "FT2232H dual JTAG/UART adapter: compact 64-pin fine-pitch fanout and USB interface; clean routed reference."
+    },
+    {
+      "id": "gb_nintendo_power",
+      "level": 3,
+      "status": "locked",
+      "qualification": "detailed_complete",
+      "kicad_routing_tools_set": "set24",
+      "repo": "RWeick/DMG-A20-01-Nintendo-Power-Cartridge",
+      "commit": "85b24c7d2eff4973f8333ba6e65c3ce02eb74a1c",
+      "path": "DMG-A20-01.kicad_pcb",
+      "source_url": "https://raw.githubusercontent.com/RWeick/DMG-A20-01-Nintendo-Power-Cartridge/85b24c7d2eff4973f8333ba6e65c3ce02eb74a1c/DMG-A20-01.kicad_pcb",
+      "license": "GPL-3.0-only",
+      "license_file": "licenses/gb_nintendo_power.txt",
+      "license_source_url": "https://raw.githubusercontent.com/RWeick/DMG-A20-01-Nintendo-Power-Cartridge/85b24c7d2eff4973f8333ba6e65c3ce02eb74a1c/LICENSE",
+      "source_sha256": "cd556e973c1e56588ca5673c2f2480d5a9f054fd1025c51f3ce083a44b29207b",
+      "board_sha256": "068464af04d5e63c87b70fbebbd155c35bc64411c2cee683f7c96a10d900eb7d",
+      "reference_sha256": "b3baf4d5d5dbf651e8ef8dc8659fc260a25175f4746cf42ac666628ce5015994",
+      "project_sha256": "701eb343408e933b989365af667b0771ff37ed1b41dac99d6c69d3926f78b403",
+      "license_sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+      "expected": {
+        "footprints": 22,
+        "nets": 72,
+        "tracks": 0,
+        "vias": 0,
+        "zones": 0,
+        "open_connections": 148,
+        "max_core_validation_errors": 0,
+        "max_track_arcs": 0
+      },
+      "curved_expected": {
+        "min_track_arcs": 1,
+        "max_unrounded_non_junction_bends": 0
+      },
+      "note": "Nintendo Power Game Boy flash cartridge: 80-pad IC and parallel memory buses; original reference has one starved thermal, two copper-edge violations and one open, all removed-copper issues."
+    },
+    {
+      "id": "nascom_eprom_80bus",
+      "level": 4,
+      "status": "locked",
+      "qualification": "detailed_complete",
+      "kicad_routing_tools_set": "set23",
+      "repo": "codesqueak/EPROM_Card",
+      "commit": "dfb8a674e2897479aab17d956dff47495f1089c6",
+      "path": "kicad/80bus.kicad_pcb",
+      "source_url": "https://raw.githubusercontent.com/codesqueak/EPROM_Card/dfb8a674e2897479aab17d956dff47495f1089c6/kicad/80bus.kicad_pcb",
+      "license": "CERN-OHL-S-2.0",
+      "license_file": "licenses/nascom_eprom_80bus.txt",
+      "license_source_url": "https://raw.githubusercontent.com/codesqueak/EPROM_Card/dfb8a674e2897479aab17d956dff47495f1089c6/LICENSE",
+      "source_sha256": "4c3ff03fe1f0465481273d768ff2617cff87e7d2f17b4f8362c06f93dea925d2",
+      "board_sha256": "9643c1614510fec42da90165ab3c9a99f4bbb2e7103db6b680659987370b8659",
+      "reference_sha256": "cd0cddc88cb454fe9ef713507aec073158c9ec16751fcf2ca311cd2265b3fb68",
+      "project_sha256": "11001c7d528621af1303081fd46ff1f0f15e7dc8b8b9a3b526ea735bcfe4b6fb",
+      "license_sha256": "9a9fe411d9be2e1778c5dc15a3e38440e865ccc0074edaf66f37b9079d7f58f6",
+      "expected": {
+        "footprints": 79,
+        "nets": 155,
+        "tracks": 0,
+        "vias": 0,
+        "zones": 0,
+        "open_connections": 415,
+        "max_core_validation_errors": 0,
+        "max_track_arcs": 0
+      },
+      "curved_expected": {
+        "min_track_arcs": 1,
+        "max_unrounded_non_junction_bends": 0
+      },
+      "note": "Nascom/Gemini EPROM card: 415 connections across repeated DIP sockets and a large card-edge bus; clean routed reference."
+    }
+  ]
+}

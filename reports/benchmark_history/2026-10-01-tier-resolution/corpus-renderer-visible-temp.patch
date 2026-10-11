@@ -1,0 +1,17 @@
+--- a/tests/python/run_routing_corpus_ctest.py
++++ b/tests/python/run_routing_corpus_ctest.py
+@@ -18,7 +18,13 @@
+     parser.add_argument("--inkscape", required=True, type=Path)
+     args = parser.parse_args()
+ 
+-    with tempfile.TemporaryDirectory(prefix=f"flux-corpus-{args.level}-") as temporary:
++    # Snap-packaged renderers cannot see the host's /tmp. Keep disposable artifacts beside
++    # the built executable so they share the build tree's visibility and permissions.
++    artifact_parent = args.flux_cli.resolve().parent / "ctest-corpus-artifacts"
++    artifact_parent.mkdir(parents=True, exist_ok=True)
++    with tempfile.TemporaryDirectory(
++        prefix=f"flux-corpus-{args.level}-", dir=artifact_parent
++    ) as temporary:
+         completed = subprocess.run(
+             [
+                 sys.executable,

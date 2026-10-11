@@ -1,0 +1,106 @@
+{
+  "schema": "flux_benchmark_history",
+  "schema_version": 1,
+  "date": "2026-09-05T17:33:46+08:00",
+  "git_revision": "25e3b884be9b359d9c5bf0cc4fbb6cc836fd4f82",
+  "working_tree_modified": true,
+  "experiment": "fair geometric-G2 PH selection and single native-copper handoff",
+  "configuration": {
+    "tier": 0,
+    "max_router_iterations": 30,
+    "max_expansions": 50000,
+    "max_static_seed_workers": 2,
+    "search_diversification": true,
+    "telemetry_level": "diagnostic",
+    "curved_materialization": true,
+    "prefer_g2_ph_splines": true,
+    "native_arc_materialization_authority": true,
+    "refine_open_intervals_around_native_spans": true
+  },
+  "board": {
+    "id": "pt2399_delay",
+    "tier": 0,
+    "status": "failed",
+    "stop_reason": "copper_violations",
+    "global": {
+      "runtime_seconds": 187.62217503399734,
+      "paths": 50,
+      "unrouted_nets": 0,
+      "routing_plan_complete": true,
+      "total_overflow": 16,
+      "corridor_overflow": 0,
+      "regional_spline_candidate_available": true,
+      "regional_native_windows_checked": 6,
+      "regional_native_pieces_checked": 114,
+      "regional_native_copper_violations": 9,
+      "regional_native_legal_windows": 5,
+      "regional_centerline_certificate_pairs": 1655,
+      "regional_rational_offset_exact_pairs": 0,
+      "regional_spline_realization_seconds": 48.901279
+    },
+    "detailed": {
+      "runtime_seconds_from_telemetry": 383.15438,
+      "complete": false,
+      "open_connections": 0,
+      "validation_errors": 0,
+      "copper_violations": 19,
+      "copper_violation_counts": {
+        "track_clearance": 2,
+        "track_track_arc_clearance": 17
+      },
+      "added_tracks": 240,
+      "added_track_arcs": 40,
+      "added_vias": 1,
+      "unrounded_non_junction_bends": 147,
+      "g2_promotion_attempts": 4,
+      "g2_promotions": 0,
+      "g2_fallbacks": 4,
+      "regional_native_spline_runs_materialized": 12,
+      "regional_native_track_segments_materialized": 10,
+      "regional_native_track_arcs_materialized": 40,
+      "first_violation": {
+        "code": "track_track_arc_clearance",
+        "required_clearance_nm": 450000,
+        "actual_distance_nm": 233171,
+        "object_ids": [
+          "flux-route-kicad-net-19-0-track-3",
+          "flux-route-kicad-net-3-13-regional-native-arc-2"
+        ]
+      }
+    },
+    "intermediate_full_path_freeze": {
+      "runtime_seconds_from_telemetry": 366.859332,
+      "copper_violations": 29,
+      "added_tracks": 368,
+      "added_track_arcs": 40,
+      "interpretation": "Protecting an entire connection around a native span retained avoidable raster geometry. Restricting immutability to the exact native interval reduced tracks and full-scene violations."
+    },
+    "kicad_drc": {
+      "run": false,
+      "reason": "internal represented-copper DRC rejected the candidate before publication"
+    },
+    "failure_stage": "full-board exact detailed copper after native regional handoff",
+    "diagnostic": "The certified regional primitives crossed the handoff unchanged, but local-window acceptance did not include all non-window route copper. Full-board DRC therefore exposed arc-to-track conflicts and correctly withheld the board."
+  },
+  "verification": {
+    "core_unit_suite": {
+      "outcome": "pass",
+      "runtime_seconds": 119.83
+    },
+    "focused_tests": [
+      "quintic_ph_geometry_preserves_invariants_and_exact_offsets",
+      "curved_ph_materialization_is_exact_and_drc_clean",
+      "global_to_detailed_route_is_transactional_and_capacity_gated",
+      "obstacle_aware_diagonals_and_curves_remain_capacity_and_drc_gated"
+    ]
+  },
+  "interpretation": "The representation-boundary hypothesis is supported: detailed routing consumed 12 certified PH realizations as their exact 40 arcs and 10 straight pieces instead of re-fitting them. Refining the open intervals around those immutable spans reduced full-scene violations from 29 to 19 and tracks from 368 to 240, but Tier 0 is not qualified. The next experiment must evaluate native candidates against complete-board route context or feed the resulting cross-window arc/track conflicts back into regional selection.",
+  "artifacts": {
+    "root": "build/fair-g2-native-handoff-tier0",
+    "global_result": "tier-0-pt2399_delay/global-result.json",
+    "global_telemetry": "tier-0-pt2399_delay/telemetry/pt2399_delay-global.jsonl",
+    "qualified_harness_detail_telemetry": "tier-0-pt2399_delay/telemetry/pt2399_delay-detail.jsonl",
+    "refined_open_interval_detail_telemetry": "pt2399_delay-third-detail.jsonl",
+    "analysis": "tier-0-pt2399_delay/analysis/global"
+  }
+}

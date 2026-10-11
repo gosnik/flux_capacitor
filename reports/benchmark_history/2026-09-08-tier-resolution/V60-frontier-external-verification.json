@@ -1,0 +1,284 @@
+{
+  "authoritative": false,
+  "qualified": false,
+  "scene_provenance": {
+    "authoritative": false,
+    "source_snapshot_sequence": 569,
+    "source_fragments_matched": 496,
+    "window_contexts": 19,
+    "full_multilayer_plans": 31,
+    "fragment_replacements": 153,
+    "production_proof": {
+      "seconds": 375.970938,
+      "diagnostic": "straight regional copper checked: straight regional transaction rejected by exact copper proof: violations=812, opens=0"
+    },
+    "restriction": "reconstruction must reproduce the production exact oracle before interpretation; cannot qualify a tier"
+  },
+  "reproduced_exact_proof": {
+    "authoritative": false,
+    "source_revision": "kicad-20241229:pcbnew:61194dd059bfb26a",
+    "snapshot_sequence": 1,
+    "pitch_nm": 1,
+    "paths": 78,
+    "materialized": 78,
+    "malformed": 0,
+    "tracks": 1202,
+    "vias": 60,
+    "drc_violations": 812,
+    "categories": {
+      "hole_clearance": 47,
+      "hole_to_hole_clearance": 3,
+      "track_clearance": 674,
+      "track_via_clearance": 88
+    },
+    "opens": 0,
+    "diagnoses": 227,
+    "elapsed_us": 128012,
+    "open_net_ids": [],
+    "largest_pair_groups": [
+      {
+        "net_pair_and_layer": "kicad-net-13:kicad-net-14:F.Cu",
+        "coalesced_diagnoses": 19,
+        "max_deficit_nm": 525000,
+        "witness_id": "quantized-copper:via_site_exhausted:change_via_site:F.Cu:55:82:track_via_clearance:kicad-net-13/2/run:kicad-net-14/2/via:kicad-net-13:kicad-net-14",
+        "witness_bounds_nm": [
+          55052499,
+          82277499,
+          55827501,
+          83502501
+        ],
+        "first_source_pair": [
+          {
+            "net": "kicad-net-13",
+            "connection_index": 2,
+            "segment_index": 1,
+            "start_nm": [
+              55440000,
+              81915000
+            ],
+            "end_nm": [
+              55440000,
+              83540000
+            ]
+          },
+          {
+            "net": "kicad-net-14",
+            "connection_index": 2,
+            "segment_index": 4,
+            "start_nm": [
+              55590000,
+              82890000
+            ],
+            "end_nm": [
+              55490002,
+              82790002
+            ]
+          }
+        ]
+      },
+      {
+        "net_pair_and_layer": "kicad-net-1:kicad-net-13:B.Cu",
+        "coalesced_diagnoses": 17,
+        "max_deficit_nm": 621966,
+        "witness_id": "quantized-copper:via_site_exhausted:change_via_site:B.Cu:67:84:track_via_clearance:kicad-net-1/7/via:kicad-net-13/3/run:kicad-net-1:kicad-net-13",
+        "witness_bounds_nm": [
+          67254016,
+          83890000,
+          68375984,
+          85450984
+        ],
+        "first_source_pair": [
+          {
+            "net": "kicad-net-1",
+            "connection_index": 7,
+            "segment_index": 7,
+            "start_nm": [
+              67790000,
+              84840000
+            ],
+            "end_nm": [
+              67790000,
+              85490000
+            ]
+          },
+          {
+            "net": "kicad-net-13",
+            "connection_index": 3,
+            "segment_index": 16,
+            "start_nm": [
+              67690000,
+              84015000
+            ],
+            "end_nm": [
+              67940000,
+              84265000
+            ]
+          }
+        ]
+      },
+      {
+        "net_pair_and_layer": "kicad-net-1:kicad-net-4:B.Cu",
+        "coalesced_diagnoses": 14,
+        "max_deficit_nm": 675000,
+        "witness_id": "quantized-copper:via_site_exhausted:change_via_site:B.Cu:50:84:track_via_clearance:kicad-net-1/3/via:kicad-net-4/1/run:kicad-net-1:kicad-net-4",
+        "witness_bounds_nm": [
+          49552499,
+          84152499,
+          50927501,
+          85527501
+        ],
+        "first_source_pair": [
+          {
+            "net": "kicad-net-1",
+            "connection_index": 3,
+            "segment_index": 7,
+            "start_nm": [
+              50240000,
+              84840000
+            ],
+            "end_nm": [
+              51055901,
+              84024099
+            ]
+          },
+          {
+            "net": "kicad-net-4",
+            "connection_index": 1,
+            "segment_index": 5,
+            "start_nm": [
+              50890000,
+              84190000
+            ],
+            "end_nm": [
+              48940000,
+              86140000
+            ]
+          }
+        ]
+      },
+      {
+        "net_pair_and_layer": "kicad-net-14:kicad-net-5:B.Cu",
+        "coalesced_diagnoses": 13,
+        "max_deficit_nm": 675000,
+        "witness_id": "quantized-copper:via_site_exhausted:change_via_site:B.Cu:52:84:track_via_clearance:kicad-net-14/0/via:kicad-net-5/1/run:kicad-net-14:kicad-net-5",
+        "witness_bounds_nm": [
+          51727499,
+          84152499,
+          52877501,
+          85527501
+        ],
+        "first_source_pair": [
+          {
+            "net": "kicad-net-14",
+            "connection_index": 0,
+            "segment_index": 3,
+            "start_nm": [
+              52190000,
+              84840000
+            ],
+            "end_nm": [
+              52890000,
+              84840000
+            ]
+          },
+          {
+            "net": "kicad-net-5",
+            "connection_index": 1,
+            "segment_index": 14,
+            "start_nm": [
+              54990000,
+              87640000
+            ],
+            "end_nm": [
+              52190000,
+              84840000
+            ]
+          }
+        ]
+      },
+      {
+        "net_pair_and_layer": "kicad-net-1:kicad-net-12:F.Cu",
+        "coalesced_diagnoses": 12,
+        "max_deficit_nm": 450000,
+        "witness_id": "quantized-copper:quantization_clearance:change_lane_order:F.Cu:56:90:track_clearance:kicad-net-1/2/run:kicad-net-12/0/run:kicad-net-1:kicad-net-12",
+        "witness_bounds_nm": [
+          56389999,
+          90339999,
+          57415001,
+          91592001
+        ],
+        "first_source_pair": [
+          {
+            "net": "kicad-net-1",
+            "connection_index": 2,
+            "segment_index": 4,
+            "start_nm": [
+              56740000,
+              92202000
+            ],
+            "end_nm": [
+              56740000,
+              90690000
+            ]
+          },
+          {
+            "net": "kicad-net-12",
+            "connection_index": 0,
+            "segment_index": 1,
+            "start_nm": [
+              56740000,
+              91242000
+            ],
+            "end_nm": [
+              56740000,
+              90690000
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "detail": {
+    "authoritative": false,
+    "snapshot_sequence": 1,
+    "paths": 78,
+    "detail_complete": false,
+    "tracks": 745,
+    "arcs": 0,
+    "vias": 60,
+    "validation_errors": 0,
+    "opens": 0,
+    "drc_violations": 436,
+    "diagnostic": "materialized route violates represented copper rules",
+    "preview_written": true
+  },
+  "kicad": {
+    "version": "9.0.8",
+    "counts": {
+      "error:hole_to_hole": 3,
+      "error:clearance": 95,
+      "error:tracks_crossing": 65,
+      "error:shorting_items": 78,
+      "warning:silk_over_copper": 8,
+      "warning:text_height": 22,
+      "warning:lib_footprint_mismatch": 27,
+      "warning:lib_footprint_issues": 7,
+      "warning:track_dangling": 3
+    },
+    "errors": 241,
+    "warnings": 67,
+    "unconnected": 0
+  },
+  "angles": {
+    "horizontal": 197,
+    "vertical": 222,
+    "diagonal_45": 324,
+    "other": 2
+  },
+  "arcs": 0,
+  "vias": 60,
+  "route_length_nm": 1072132715,
+  "ordinary_angles_passed": false,
+  "same_source_rules": true,
+  "project_rules_sha256": "04856904fe9070f7decd33b676d3f58e44676b6c930e65fa8a16f0ddd65d54db"
+}

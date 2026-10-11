@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "board": "pt2399_delay",
+  "tier": 0,
+  "net": "kicad-net-17",
+  "layer": "F.Cu",
+  "stage": "PH interpolation seed generation",
+  "source_chain": "reports/diagnoses/2026-09-06-tier0-net17-chain.json",
+  "source_vertical_run_x_nm": 15900000,
+  "source_spare_clearance_nm": 49998,
+  "quarter_mm_corner_guard_seed": {"worst_x_nm": 15633991, "worst_y_nm": 56400000, "outward_displacement_nm": 266009, "signed_clearance_nm": -216011, "sampled_outside_count": 55, "shape_violations": 5},
+  "guard_sweep_nm": [125000, 250000, 500000, 1000000],
+  "guard_sweep_signed_clearance_nm": [-172935, -216011, -253409, -272823],
+  "classification": "geometric seed construction error, not merely conservative guard certification",
+  "mechanism": "Automatic bisector tangents at corner-trim shoulder nodes also bend the intervening long straight run toward the board edge",
+  "ranked_candidates": ["Add a run-aligned Hermite seed that preserves incident straight-run tangent directions", "Optimize constrained nodal derivatives jointly with positions", "Regenerate upstream topology if tangent-constrained seeds still cannot fit"],
+  "experiment": "Bounded additional seed family only when the existing portfolio has no exact-legal seed; retain all current shape, corridor, topology, native copper and KiCad gates",
+  "authoritative": false,
+  "qualification_changed": false
+}

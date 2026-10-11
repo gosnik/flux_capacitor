@@ -238,6 +238,20 @@ void error(KicadChangeSetResult& result, std::string code, std::string message,
   return result;
 }
 
+[[nodiscard]] std::string serialize_track_bezier(const TrackBezier& bezier, std::string_view uuid,
+                                                  std::string_view net_name) {
+  std::string result = "(gr_curve\n    (pts\n      (xy " + format_nm(bezier.start.x) + " " +
+                       format_nm(bezier.start.y) + ") (xy " + format_nm(bezier.control1.x) + " " +
+                       format_nm(bezier.control1.y) + ") (xy " + format_nm(bezier.control2.x) + " " +
+                       format_nm(bezier.control2.y) + ") (xy " + format_nm(bezier.end.x) + " " +
+                       format_nm(bezier.end.y) + ")\n    )\n    (stroke (width " +
+                       format_nm(bezier.width) + ") (type default))\n    (layer " +
+                       quote_string(bezier.layer.value()) + ")\n";
+  if (bezier.locked) result += "    (locked)\n";
+  result += "    (net " + quote_string(net_name) + ")\n    (uuid " + quote_string(uuid) + ")\n  )";
+  return result;
+}
+
 [[nodiscard]] std::optional<std::pair<LayerId, LayerId>> via_end_layers(const Via& via,
                                                                         const Board& source) {
   std::vector<std::pair<std::uint32_t, LayerId>> layers;
@@ -348,7 +362,8 @@ template <typename Item>
          same_kicad_nets(lhs.nets, rhs.nets) &&
          same_kicad_differential_pairs(lhs.differential_pairs, rhs.differential_pairs) &&
          same_kicad_footprints(lhs.footprints, rhs.footprints) && lhs.tracks == rhs.tracks &&
-         lhs.track_arcs == rhs.track_arcs && lhs.vias == rhs.vias && lhs.zones == rhs.zones &&
+         lhs.track_arcs == rhs.track_arcs && lhs.track_beziers == rhs.track_beziers &&
+         lhs.vias == rhs.vias && lhs.zones == rhs.zones &&
          lhs.keepouts == rhs.keepouts;
 }
 
@@ -421,6 +436,16 @@ template <typename Item>
       return false;
     }
   }
+  const auto candidate_beziers = by_id(candidate.track_beziers);
+  for (const auto& original : source.track_beziers) {
+    if (!original.locked) continue;
+    const auto found = candidate_beziers.find(original.id);
+    if (found == candidate_beziers.end() || *found->second != original) {
+      error(result, "locked_track_bezier_changed",
+            "candidate removed or modified a locked track bezier", {original.id.value()});
+      return false;
+    }
+  }
   const auto candidate_vias = by_id(candidate.vias);
   for (const auto& original : source.vias) {
     if (!original.locked) {
@@ -443,6 +468,28 @@ source_objects(const SExpression& root, std::string_view object_head, std::strin
   std::size_t index = 0;
   for (const auto* expression : find_children(root, object_head)) {
     auto token = stable_token(*expression, std::string(fallback) + std::to_string(index++));
+    auto& occurrence = occurrences[token];
+    ++occurrence;
+    if (occurrence != 1U) {
+      token += "#" + std::to_string(occurrence);
+    }
+    result.emplace(ObjectId{std::move(token)}, expression);
+  }
+  return result;
+}
+
+// Only electrical curves have a canonical TrackBezier. Keep this selection in lockstep with the
+// strict importer so an earlier unnetted drawing curve cannot shift fallback IDs for an electrical
+// curve without a UUID.
+[[nodiscard]] std::map<ObjectId, const SExpression*> source_track_bezier_objects(const SExpression& root) {
+  std::map<ObjectId, const SExpression*> result;
+  std::map<std::string, std::size_t> occurrences;
+  std::size_t index = 0;
+  for (const auto* expression : find_children(root, "gr_curve")) {
+    if (find_child(*expression, "net") == nullptr) {
+      continue;
+    }
+    auto token = stable_token(*expression, "track-bezier-" + std::to_string(index++));
     auto& occurrence = occurrences[token];
     ++occurrence;
     if (occurrence != 1U) {
@@ -514,6 +561,7 @@ void collect_source_uuids(const SExpression& expression, std::set<std::string>& 
   }
   auto expected_tracks = expected.tracks;
   auto expected_arcs = expected.track_arcs;
+  auto expected_beziers = expected.track_beziers;
   auto expected_vias = expected.vias;
   for (auto& track : expected_tracks) {
     if (const auto found = remapped_ids.find(track.id); found != remapped_ids.end()) {
@@ -530,18 +578,26 @@ void collect_source_uuids(const SExpression& expression, std::set<std::string>& 
       arc.id = found->second;
     }
   }
+  for (auto& bezier : expected_beziers) {
+    if (const auto found = remapped_ids.find(bezier.id); found != remapped_ids.end()) {
+      bezier.id = found->second;
+    }
+  }
   const auto compare_id = [](const auto& lhs, const auto& rhs) { return lhs.id < rhs.id; };
   std::sort(expected_tracks.begin(), expected_tracks.end(), compare_id);
   std::sort(expected_arcs.begin(), expected_arcs.end(), compare_id);
+  std::sort(expected_beziers.begin(), expected_beziers.end(), compare_id);
   std::sort(expected_vias.begin(), expected_vias.end(), compare_id);
   auto actual_tracks = actual.tracks;
   auto actual_arcs = actual.track_arcs;
+  auto actual_beziers = actual.track_beziers;
   auto actual_vias = actual.vias;
   std::sort(actual_tracks.begin(), actual_tracks.end(), compare_id);
   std::sort(actual_arcs.begin(), actual_arcs.end(), compare_id);
+  std::sort(actual_beziers.begin(), actual_beziers.end(), compare_id);
   std::sort(actual_vias.begin(), actual_vias.end(), compare_id);
   return expected_tracks == actual_tracks && expected_arcs == actual_arcs &&
-         expected_vias == actual_vias;
+         expected_beziers == actual_beziers && expected_vias == actual_vias;
 }
 
 } // namespace
@@ -653,12 +709,15 @@ KicadExportResult export_kicad_candidate(std::string_view source_contents, const
 
   const auto source_track_syntax = source_objects(root, "segment", "track-");
   const auto source_arc_syntax = source_objects(root, "arc", "track-arc-");
+  const auto source_bezier_syntax = source_track_bezier_objects(root);
   const auto source_via_syntax = source_objects(root, "via", "via-");
   const auto source_tracks = by_id(source.tracks);
   const auto source_arcs = by_id(source.track_arcs);
+  const auto source_beziers = by_id(source.track_beziers);
   const auto source_vias = by_id(source.vias);
   const auto candidate_tracks = by_id(candidate.tracks);
   const auto candidate_arcs = by_id(candidate.track_arcs);
+  const auto candidate_beziers = by_id(candidate.track_beziers);
   const auto candidate_vias = by_id(candidate.vias);
   std::set<std::string> used_uuids;
   collect_source_uuids(root, used_uuids);
@@ -732,6 +791,32 @@ KicadExportResult export_kicad_candidate(std::string_view source_contents, const
                        serialize_track_arc(*replacement->second, uuid, *ordinal)});
     }
   }
+  for (const auto& [id, original] : source_beziers) {
+    const auto syntax = source_bezier_syntax.find(id);
+    if (syntax == source_bezier_syntax.end()) {
+      error(result, "track_bezier_mapping_failed",
+            "source track bezier cannot be mapped to source syntax", {id.value()});
+      return result;
+    }
+    const auto replacement = candidate_beziers.find(id);
+    if (replacement == candidate_beziers.end()) {
+      edits.push_back({syntax->second->location.offset, syntax->second->end_offset, {}});
+    } else if (*replacement->second != *original) {
+      const auto net = std::find_if(source.nets.begin(), source.nets.end(),
+                                    [&replacement](const auto& candidate_net) {
+                                      return candidate_net.id == replacement->second->net &&
+                                             !candidate_net.name.empty();
+                                    });
+      if (net == source.nets.end()) {
+        error(result, "unknown_route_net", "track bezier net has no KiCad name", {id.value()});
+        return result;
+      }
+      const auto uuid = assign_uuid(id, source, used_uuids, result, true);
+      remapped_ids.emplace(id, ObjectId{uuid});
+      edits.push_back({syntax->second->location.offset, syntax->second->end_offset,
+                       serialize_track_bezier(*replacement->second, uuid, net->name)});
+    }
+  }
 
   for (const auto& track : candidate.tracks) {
     if (source_tracks.contains(track.id)) {
@@ -774,6 +859,22 @@ KicadExportResult export_kicad_candidate(std::string_view source_contents, const
     const auto uuid = assign_uuid(arc.id, source, used_uuids, result);
     remapped_ids.emplace(arc.id, ObjectId{uuid});
     insertion += "\n  " + serialize_track_arc(arc, uuid, *ordinal);
+  }
+  for (const auto& bezier : candidate.track_beziers) {
+    if (source_beziers.contains(bezier.id)) {
+      continue;
+    }
+    const auto net = std::find_if(source.nets.begin(), source.nets.end(), [&bezier](const auto& candidate_net) {
+      return candidate_net.id == bezier.net && !candidate_net.name.empty();
+    });
+    if (net == source.nets.end()) {
+      error(result, "unknown_route_net", "new track bezier net has no KiCad name",
+            {bezier.id.value()});
+      return result;
+    }
+    const auto uuid = assign_uuid(bezier.id, source, used_uuids, result);
+    remapped_ids.emplace(bezier.id, ObjectId{uuid});
+    insertion += "\n  " + serialize_track_bezier(bezier, uuid, net->name);
   }
   if (result.has_errors()) {
     return result;
@@ -950,6 +1051,20 @@ KicadChangeSetResult make_kicad_change_set(std::string_view source_contents,
     return KicadTrackArcChangeState{arc.id,     *name,   arc.layer, arc.start,
                                     arc.middle, arc.end, arc.width, arc.locked};
   };
+  const auto bezier_state =
+      [&find_net_name, &result](const TrackBezier& bezier) -> std::optional<KicadTrackBezierChangeState> {
+    if (!is_uuid(bezier.id.value())) {
+      error(result, "change_set_invalid_live_id", "track bezier has no KiCad UUID for live lookup",
+            {bezier.id.value()});
+      return std::nullopt;
+    }
+    const auto name = find_net_name(bezier.net, bezier.id);
+    if (!name) {
+      return std::nullopt;
+    }
+    return KicadTrackBezierChangeState{bezier.id, *name, bezier.layer, bezier.start, bezier.control1,
+                                       bezier.control2, bezier.end, bezier.width, bezier.locked};
+  };
   const auto via_state = [&find_net_name,
                           &result](const Via& via) -> std::optional<KicadViaChangeState> {
     if (!is_uuid(via.id.value())) {
@@ -1013,6 +1128,13 @@ KicadChangeSetResult make_kicad_change_set(std::string_view source_contents,
     }
     change_set.source_track_arcs.push_back(*state);
   }
+  for (const auto& item : by_id(source.track_beziers)) {
+    const auto state = bezier_state(*item.second);
+    if (!state) {
+      return result;
+    }
+    change_set.source_track_beziers.push_back(*state);
+  }
   for (const auto& item : by_id(source.vias)) {
     const auto state = via_state(*item.second);
     if (!state) {
@@ -1023,6 +1145,8 @@ KicadChangeSetResult make_kicad_change_set(std::string_view source_contents,
 
   if (!append_changes(source.tracks, candidate.tracks, track_state, change_set.tracks) ||
       !append_changes(source.track_arcs, candidate.track_arcs, arc_state, change_set.track_arcs) ||
+      !append_changes(source.track_beziers, candidate.track_beziers, bezier_state,
+                      change_set.track_beziers) ||
       !append_changes(source.vias, candidate.vias, via_state, change_set.vias)) {
     return result;
   }

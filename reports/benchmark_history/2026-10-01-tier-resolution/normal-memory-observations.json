@@ -1,0 +1,27 @@
+{
+  "observation_scope": "bounded live samples; observed high-water lower bound before completion",
+  "samples": [
+    {
+      "timestamp": "2026-10-01T15:54:06+08:00",
+      "processes": {
+        "1083453": {"VmPeak_kB": 1524332, "VmHWM_kB": 553112, "VmRSS_kB": 553112, "elapsed": "39:02", "pcpu": 91.7, "pmem": 1.7, "state": "Rl"},
+        "1125593": {"VmPeak_kB": 1440412, "VmHWM_kB": 517584, "VmRSS_kB": 508284, "elapsed": "10:03", "pcpu": 91.5, "pmem": 1.6, "state": "Rl"}
+      }
+    },
+    {
+      "timestamp": "2026-10-01T15:54:59+08:00",
+      "processes": {
+        "1083453": {"VmPeak_kB": 1524332, "VmHWM_kB": 553132, "VmRSS_kB": 553132, "elapsed": "39:55", "pcpu": 91.2, "pmem": 1.7, "state": "Rl"},
+        "1125593": {"VmPeak_kB": 1440412, "VmHWM_kB": 517584, "VmRSS_kB": 509492, "elapsed": "10:57", "pcpu": 92.2, "pmem": 1.6, "state": "Rl"}
+      }
+    },
+    {
+      "timestamp": "2026-10-01T15:55:45+08:00",
+      "processes": {
+        "1083453": {"VmPeak_kB": 1548392, "VmHWM_kB": 564732, "VmRSS_kB": 550716, "elapsed": "40:41", "pcpu": 91.4, "pmem": 1.7, "state": "Rl"},
+        "1125593": {"VmPeak_kB": 1440412, "VmHWM_kB": 517584, "VmRSS_kB": 515816, "elapsed": "11:42", "pcpu": 92.7, "pmem": 1.6, "state": "Rl"}
+      }
+    }
+  ],
+  "limitations": "VmHWM/VmPeak are values observed at sample time; these are not whole-run maxima unless a final completion sample is obtained. Processes may disappear before later samples."
+}

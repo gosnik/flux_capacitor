@@ -12,6 +12,7 @@ struct BoardFreeSpaceExtractionConfig {
   LayerId layer;
   NetId routed_net;
   bool include_existing_copper{true};
+  // When false this is an all-owner physical map; routed_net is unused and may be empty.
   bool omit_same_net_copper{true};
   // Saved zone fills are physical copper by default. An explicit transactional KiCad workflow
   // may omit them while planning, but must refill and revalidate the exported candidate.

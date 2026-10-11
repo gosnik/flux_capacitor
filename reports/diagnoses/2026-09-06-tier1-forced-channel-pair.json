@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "board": "bm_svf",
+  "tier": 1,
+  "artifact": "build/tier1-forward-check-v16b-20260906/tier-1-bm_svf/telemetry/bm_svf-global.jsonl",
+  "context": "regional-bundle-context:ordinary:0",
+  "occurrence": 1,
+  "failing_stage": "regional discrete channel-capacity allocation",
+  "window": 0,
+  "channel": 61,
+  "layer": "F.Cu",
+  "fragments": [
+    {"id": ["kicad-net-25", 0, 2, 0], "start_nm": [65840000, 56240000], "end_nm": [65840000, 55372000]},
+    {"id": ["kicad-net-26", 0, 0, 17], "start_nm": [66490000, 54290000], "end_nm": [65840000, 54940000]}
+  ],
+  "width_nm_per_fragment": 250000,
+  "clearance_nm_per_fragment": 200000,
+  "maximum_recorded_channel_width_nm": 1092000,
+  "aggregate_required_width_nm": 1100000,
+  "aggregate_deficit_nm": 8000,
+  "forced_prefix_domains": 20,
+  "both_fragment_domain_sizes": 1,
+  "control_replay": {"states": 20, "choices": 0, "exhausted": false, "lane_capacity_pruned": 1},
+  "forward_replay": {"states": 20, "choices": 0, "exhausted": false, "lane_capacity_pruned": 1, "pairwise_access_checks": 219},
+  "interpretation": "Both policies prove the current discrete portfolio infeasible before producing a leaf. Raising the search budget cannot create missing alternatives for these forced occupants.",
+  "limits": [
+    "This is a minimal pair for the recorded aggregate channel inequality, not a minimum whole-board physical unsatisfiable core.",
+    "The fragments are not parallel full-length strips. The aggregate model may be conservative; true geometric capacity has not been proved insufficient.",
+    "No legal alternative has been certified. No clearance or channel capacity has been relaxed."
+  ],
+  "next_candidates": [
+    "Use the violated channel's forced occupants to request topology columns before spline realization.",
+    "Test longitudinally local cross-section occupancy against exact copper geometry on a micro-board.",
+    "Feed an exhausted regional domain back to upstream complete-run rerouting."
+  ],
+  "tier_promoted": false
+}

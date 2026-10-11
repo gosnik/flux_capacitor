@@ -24,6 +24,8 @@ enum class RouterTelemetryLevel { normal, diagnostic, trace };
 enum class RouterTelemetryEventKind {
   routing_started,
   routing_finished,
+  routing_completed,
+  copper_generated,
   global_routing_started,
   global_routing_finished,
   pathfinder_iteration_started,
@@ -60,6 +62,19 @@ struct RouterTelemetryPathPoint {
   bool operator==(const RouterTelemetryPathPoint&) const = default;
 };
 
+// One exact retained leaf from the adaptive rectilinear NavMesh. The compact bounds form avoids
+// copying a general polygon through the non-authoritative event queue.
+struct RouterTelemetryNavMeshCell {
+  std::int64_t minimum_x_nm{0};
+  std::int64_t minimum_y_nm{0};
+  std::int64_t maximum_x_nm{0};
+  std::int64_t maximum_y_nm{0};
+  LayerId layer;
+  std::uint32_t refinement_level{0};
+
+  bool operator==(const RouterTelemetryNavMeshCell&) const = default;
+};
+
 enum class RouterTelemetryRouteGeometry { polyline, quintic_ph };
 
 // Compact semantic evidence copied from an authoritative algorithm boundary. Unused fields stay
@@ -80,6 +95,7 @@ struct RouterTelemetryEvent {
   RouterTelemetryRouteGeometry route_geometry{RouterTelemetryRouteGeometry::polyline};
   std::uint32_t spline_degree{0};
   std::vector<RouterTelemetryPathPoint> spline_control_points;
+  std::vector<RouterTelemetryNavMeshCell> navmesh_cells;
   std::uint64_t topology_signature{0};
   std::size_t topology_gate_count{0U};
   bool topology_gate_sequence_legal{false};
@@ -110,6 +126,21 @@ struct RouterTelemetryEvent {
   std::size_t ripup_count{0};
   std::uint64_t route_cost{0};
   std::size_t search_expansions{0};
+  std::size_t unresolved_packing_obligations{0};
+  bool packing_obligation_budget_exhausted{false};
+  // Allows regional search summaries to update packing evidence independently of global metrics.
+  bool packing_obligations_update{false};
+  // Optional phase-local work evidence for search summaries. A blank phase means absent.
+  // Explicit update distinguishes clearing a regional highlight from unrelated telemetry.
+  bool region_update{false};
+  bool region_active{false};
+  std::int64_t region_minimum_x_nm{0}, region_minimum_y_nm{0};
+  std::int64_t region_maximum_x_nm{0}, region_maximum_y_nm{0};
+  std::vector<LayerId> region_layers;
+  std::vector<NetId> region_nets;
+  std::string progress_phase;
+  std::uint64_t progress_work_units{0};
+  std::uint64_t progress_elapsed_us{0};
   std::size_t total_groups{0};
   std::size_t regional_conflicts{0};
   std::string priority_stage;
@@ -158,8 +189,14 @@ public:
   // effects.
   [[nodiscard]] virtual bool accepts(RouterTelemetryLevel level) const noexcept = 0;
 
-  // Producers never wait. False means the observation was dropped; routing must ignore it.
+  // Producers never wait. This may be called concurrently by routing workers; false means the
+  // observation was dropped and routing must ignore it.
   [[nodiscard]] virtual bool try_emit(RouterTelemetryEvent event) noexcept = 0;
+
+  // Optional observer-only copper snapshot publication. Generic routing code may call this at
+  // safe retained-state checkpoints without knowing whether its telemetry sink has a viewer.
+  // Implementations must contain all failures; the router never depends on this observation.
+  virtual void publish_generated_copper(const Board&, std::string) {}
 };
 
 struct RouterTelemetryConfig {
@@ -194,9 +231,23 @@ struct RouterTelemetryState {
   std::size_t ripup_count{0};
   std::uint64_t route_cost{0};
   std::size_t search_expansions{0};
+  std::size_t unresolved_packing_obligations{0};
+  bool packing_obligation_budget_exhausted{false};
+  std::string progress_phase;
+  std::uint64_t progress_work_units{0};
+  std::uint64_t progress_elapsed_us{0};
+  bool region_update{false};
+  bool region_active{false};
+  std::int64_t region_minimum_x_nm{0}, region_minimum_y_nm{0};
+  std::int64_t region_maximum_x_nm{0}, region_maximum_y_nm{0};
+  std::vector<LayerId> region_layers;
+  std::vector<NetId> region_nets;
+  std::string region_group_id;
+  std::string region_label;
   NetId active_net;
   std::string source_identity;
   bool routing_finished{false};
+  bool routing_completed{false};
   bool dynamic_state_included{false};
   bool source_state_included{false};
   std::vector<std::shared_ptr<const telemetry::SourceBoard>> source_boards;
@@ -239,6 +290,9 @@ public:
   // Publishes immutable source geometry before routing starts. Scene preparation occurs on the
   // caller/main thread; JSON serialization and socket I/O remain on the telemetry thread.
   void publish_source_board(const Board& board, std::string source_path);
+  // Publishes the complete resulting copper as a separately toggleable immutable viewer scene,
+  // followed by a CopperGenerated milestone. This remains diagnostic and non-authoritative.
+  void publish_generated_copper(const Board& board, std::string detail) override;
   void stop() noexcept;
   [[nodiscard]] RouterTelemetryState state() const;
   [[nodiscard]] RouterTelemetryStatistics statistics() const;

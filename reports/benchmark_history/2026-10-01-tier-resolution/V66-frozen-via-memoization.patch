@@ -1,0 +1,54 @@
+--- a/src/regional_router.cpp
++++ b/src/regional_router.cpp
+@@ -2049,38 +2049,49 @@ select_access_geometry(const Board& board, const RegionalRouteResult& regional,
+   struct FrozenCopperViaCandidateConflict {
+     const RegionalRouteFragment* blocker{nullptr};
+     Nanometres clearance_deficit;
+     std::string_view code;
+   };
++  std::map<std::size_t, std::optional<FrozenCopperViaCandidateConflict>>
++      frozen_copper_conflict_cache;
+   const auto frozen_copper_conflict = [&](const RegionalViaChoice* via)
+       -> std::optional<FrozenCopperViaCandidateConflict> {
+     if (via == nullptr) {
+       return std::nullopt;
+     }
++    if (frozen_fragments.empty()) {
++      return std::nullopt;
++    }
++    if (const auto found = frozen_copper_conflict_cache.find(via->id);
++        found != frozen_copper_conflict_cache.end()) {
++      return found->second;
++    }
++    std::optional<FrozenCopperViaCandidateConflict> conflict;
+     for (const auto* fragment : frozen_fragments) {
+       if (fragment->id.net == via->net ||
+           std::find(via->span.begin(), via->span.end(), fragment->layer) == via->span.end()) {
+         continue;
+       }
+       const auto via_diameter = static_cast<long double>(via->diameter.value());
+       const auto fragment_width = static_cast<long double>(fragment->width.value());
+       const auto copper_required =
+           (via_diameter + fragment_width) / 2.0L +
+           static_cast<long double>(pairwise_clearance(via->net, fragment->id.net).value());
+       const auto drill_required =
+           (static_cast<long double>(via->drill.value()) + fragment_width) / 2.0L +
+           static_cast<long double>(board.rules.hole_clearance.value());
+       const auto required = std::max(copper_required, drill_required);
+       const auto actual =
+           geometry::point_segment_distance_nm(via->site, fragment->start, fragment->end);
+       if (actual < required) {
+         const auto deficit = std::clamp<long double>(
+             std::ceil(required - actual), 0.0L,
+             static_cast<long double>(std::numeric_limits<std::int64_t>::max()));
+-        return FrozenCopperViaCandidateConflict{
++        conflict = FrozenCopperViaCandidateConflict{
+             fragment, Nanometres{static_cast<std::int64_t>(deficit)},
+             drill_required > copper_required ? "frozen-via-hole-clearance"
+                                              : "frozen-via-copper-clearance"};
++        break;
+       }
+     }
+-    return std::nullopt;
++    return frozen_copper_conflict_cache.emplace(via->id, std::move(conflict)).first->second;
+   };

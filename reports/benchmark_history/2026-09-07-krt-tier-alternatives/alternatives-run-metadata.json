@@ -1,0 +1,149 @@
+{
+  "artifact_contract": {
+    "analysis_pngs_required_for_routing": true,
+    "failed_route_png_mode": "both",
+    "files_write_once": true,
+    "max_failed_route_png_results": 8,
+    "source_boards_immutable": true,
+    "telemetry_level": null,
+    "telemetry_required_for_routing": true
+  },
+  "capability_contract": {
+    "reference": {
+      "commit": "e239e067c204870b4ac570fc9e931a374bdfd5b4",
+      "project": "KiCadRoutingTools",
+      "repository": "https://github.com/drandyhaas/KiCadRoutingTools",
+      "version": "0.21.5"
+    },
+    "schema": "flux_parity_manifest",
+    "schema_version": 1,
+    "sha256": "d8b57b3e1ba5c761fa2c610ffea1aa2e1f70f845f988ab7e92fbceca36fda5d0"
+  },
+  "corpus": {
+    "manifest_sha256": "3f7013716000b2a1bbd469ae796f115b6fd528f47646e51e85730793578f0e4c",
+    "path": "/home/adam/qtbits/flux_capacitor/tests/fixtures/routing-corpus/alternatives",
+    "source_corpus": {
+      "commit": "ec2bf0e1021c0ed95c45b14664d02c56777a0974",
+      "repository": "drandyhaas/KiCadRoutingTools",
+      "stress_directory": "https://github.com/drandyhaas/KiCadRoutingTools/tree/ec2bf0e1021c0ed95c45b14664d02c56777a0974/tests/stress"
+    }
+  },
+  "created_utc": "2026-09-07T10:58:27.116085+00:00",
+  "environment": {
+    "flux": {
+      "board_schema": 21,
+      "engine": "flux_capacitor",
+      "gpu_api_version_raw": 4211017,
+      "gpu_available": true,
+      "gpu_device": "NVIDIA GeForce RTX 5080",
+      "gpu_device_id": 11266,
+      "gpu_device_type": "discrete",
+      "gpu_diagnostic": "",
+      "gpu_driver_version_raw": 2496987136,
+      "gpu_override": null,
+      "gpu_vendor_id": 4318,
+      "production_gpu_required": true,
+      "version": "0.140.0"
+    },
+    "flux_vulkan_device_override": null,
+    "inkscape": {
+      "available": true,
+      "command": [
+        "/snap/bin/inkscape",
+        "--version"
+      ],
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "Inkscape 1.4.4 (dcaf3e7d9e, 2026-05-05)"
+    },
+    "kicad_cli": {
+      "available": true,
+      "command": [
+        "/usr/bin/kicad-cli",
+        "--version"
+      ],
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "9.0.8"
+    },
+    "platform": "Linux-7.0.0-31-generic-x86_64-with-glibc2.43",
+    "python": "3.14.4 (main, Jun 18 2026, 14:25:02) [GCC 15.2.0]"
+  },
+  "executable": {
+    "path": "/home/adam/qtbits/flux_capacitor/build/dev/flux-cli",
+    "sha256": "9debe448d545944824693e02bdf25d63d9bd6fade53a17758a0aae521f748b28"
+  },
+  "git_revision": {
+    "available": true,
+    "command": [
+      "git",
+      "-C",
+      "/home/adam/qtbits/flux_capacitor",
+      "rev-parse",
+      "HEAD"
+    ],
+    "returncode": 0,
+    "stderr": "",
+    "stdout": "94aa691ad89576d1c0ac07a5346020da21fc9d06"
+  },
+  "invocation": [
+    "/home/adam/qtbits/flux_capacitor/tests/python/verify_routing_corpus.py",
+    "--flux-cli",
+    "build/dev/flux-cli",
+    "--corpus",
+    "tests/fixtures/routing-corpus/alternatives",
+    "--level",
+    "all",
+    "--preflight-only",
+    "--artifacts",
+    "build/krt-tier-alternatives-strict-preflight"
+  ],
+  "mode": "preflight",
+  "schema": "flux_routing_baseline",
+  "schema_version": 1,
+  "selection": {
+    "boards": [
+      {
+        "effective_planning_timeout_seconds": 180,
+        "id": "ft2232h_jtag",
+        "level": 2,
+        "project_sha256": "00edffa7cc27d9c31b57714ce3a5cdff5f68a89425071f2b353672767939f237",
+        "qualification": "detailed_complete",
+        "reference_sha256": "6c7736712837b03b9855cea32d6652f6592398640fea86e4f390645cab43eb08",
+        "router_args": [],
+        "source_sha256": "882c35ac781cf8fc292dc025b8d22944077cc54002c6c73cf2613056f8b8b95b",
+        "status": "locked"
+      },
+      {
+        "effective_planning_timeout_seconds": 180,
+        "id": "gb_nintendo_power",
+        "level": 3,
+        "project_sha256": "701eb343408e933b989365af667b0771ff37ed1b41dac99d6c69d3926f78b403",
+        "qualification": "detailed_complete",
+        "reference_sha256": "b3baf4d5d5dbf651e8ef8dc8659fc260a25175f4746cf42ac666628ce5015994",
+        "router_args": [],
+        "source_sha256": "068464af04d5e63c87b70fbebbd155c35bc64411c2cee683f7c96a10d900eb7d",
+        "status": "locked"
+      },
+      {
+        "effective_planning_timeout_seconds": 180,
+        "id": "nascom_eprom_80bus",
+        "level": 4,
+        "project_sha256": "11001c7d528621af1303081fd46ff1f0f15e7dc8b8b9a3b526ea735bcfe4b6fb",
+        "qualification": "detailed_complete",
+        "reference_sha256": "cd0cddc88cb454fe9ef713507aec073158c9ec16751fcf2ca311cd2265b3fb68",
+        "router_args": [],
+        "source_sha256": "9643c1614510fec42da90165ab3c9a99f4bbb2e7103db6b680659987370b8659",
+        "status": "locked"
+      }
+    ],
+    "explicit_boards": [],
+    "grid_pitch_nm_control_override": null,
+    "iteration_budget_override": null,
+    "level": "all",
+    "planning_timeout_override_seconds": null,
+    "sampled_control_override": false,
+    "strict_medial_control_override": false,
+    "track_geometry": "straight"
+  }
+}

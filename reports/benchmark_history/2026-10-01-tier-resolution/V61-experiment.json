@@ -1,0 +1,110 @@
+{
+  "schema": 1,
+  "experiment": "V61",
+  "date_utc": "2026-10-01T04:52:22.072327+00:00",
+  "git_revision": "94aa691ad89576d1c0ac07a5346020da21fc9d06",
+  "working_tree_dirty": true,
+  "board": "bm_svf",
+  "tier": 1,
+  "failure_stage": "regional physical checkpoint retention",
+  "failure_evidence": {
+    "scope_overwrite": "analyze_regional_conflicts unconditionally replaces result with each retry",
+    "historical_checked_scenes": [
+      707,
+      791,
+      808
+    ],
+    "historical_source": "reports/benchmark_history/2026-09-08-tier-resolution/V56-completed-tier1.json",
+    "fresh_coarse_replay": {
+      "paths": 78,
+      "opens": 0,
+      "drc_violations": 491,
+      "categories": {
+        "track_clearance": 420,
+        "track_via_clearance": 47,
+        "hole_clearance": 24
+      },
+      "artifact": "frozen-baseline.json",
+      "limitation": "Saved selected coarse allocation, not assembled regional native scene"
+    }
+  },
+  "ranked_candidates": [
+    {
+      "rank": 1,
+      "mechanism": "Retry overwrites best measured scene; incomplete assignment count can outrank whole-scene physical quality",
+      "experiment": "Explicit scene evaluation flags; retain best physical checkpoint separately from latest expanded search state",
+      "expected_benefit": "Measured scene and correct diagnoses survive failed retries; physical quality does not regress within a scope-retry sequence",
+      "downside": "Extra retained RegionalRouteResult memory; greedy incumbent can stall if also used as exploration state",
+      "mitigation": "Latest trial continues independent scope expansion"
+    },
+    {
+      "rank": 2,
+      "mechanism": "Straight assembled conflicts arrive only in final feedback epoch",
+      "experiment": "One bounded early straight scene after import and ownership fixes, then global replan",
+      "expected_benefit": "True native/lane/via failures can change corridor choices before final epoch",
+      "downside": "Extra early regional runtime; V55 deferred due import error; must establish feasible fixture"
+    },
+    {
+      "rank": 3,
+      "mechanism": "Fixed diagonal-first elbow fails continuous packing",
+      "experiment": "Bounded paired octilinear posture alternatives in complete assembled scene",
+      "expected_benefit": "Legal bends without topology rewrite",
+      "downside": "Can move conflicts elsewhere; V59 failed whole-scene alternative must not be repeated"
+    },
+    {
+      "rank": 4,
+      "mechanism": "Spatial cost history fails to exclude incompatible route combinations",
+      "experiment": "Source-owner-specific conflict-directed net portfolio replacement",
+      "expected_benefit": "Changes actual participating corridor/layer/via choice",
+      "downside": "Combinatorial growth and missing route diversity"
+    }
+  ],
+  "hypothesis": "Retaining the best completely assessed physical checkpoint atomically with its geometry and diagnoses will prevent later expanded or worse regional scopes from discarding measurable progress.",
+  "research": [
+    {
+      "technique": "MAPF-LNS2 incumbent-preserving destroy/repair",
+      "source": "https://ojs.aaai.org/index.php/AAAI/article/view/21266",
+      "implementation": "https://raw.githubusercontent.com/Jiaoyang-Li/MAPF-LNS2/master/src/LNS.cpp",
+      "assumptions": "Discrete time-dependent agents; PCB copper is static continuous and layer-dependent, so adapt acceptance/rollback idea only",
+      "complexity": "O(attempt result size) additional retention; no new routing search",
+      "integration": "regional scope retry orchestration and routing-plan checkpoint comparator",
+      "licence": "Concept-only adaptation; no source copied",
+      "minimum_experiment": "checked vs unknown synthetic checkpoint; bounded frontier before/after"
+    },
+    {
+      "technique": "TritonRoute separation of assignment and DRC search/repair",
+      "source": "https://openroad.readthedocs.io/en/latest/main/src/drt/README.html",
+      "assumptions": "Mostly track-based IC routing, distinct pin-access/track-assignment/detail repair phases",
+      "integration": "Physical assessment controls retention after discrete packing",
+      "complexity": "Existing exact scene cost, no extra scene evaluations",
+      "licence": "Concept-only adaptation; no source copied"
+    }
+  ],
+  "success_criterion": "Previously checked scenes survive worse/unassembled retries; final measured metrics improve or are preserved, zero new opens; Tier0 remains externally qualified.",
+  "regression_criterion": "Any false complete/unknown-as-zero state, lower-tier regression, worse retained scene or unjustified cost increase.",
+  "status": "implemented; local proof and Tier0 pass; bounded frontier unchanged and still unqualified",
+  "baseline_snapshot": "build/tier-resolution-20261001-start-snapshot",
+  "baseline_run": "build/tier-resolution-20261001-baseline-tier1",
+  "bounded_before": "build/tier-resolution-20261001-bounded-before",
+  "validation": {
+    "core_tests": "52/52",
+    "tier0": "qualified, clean external KiCad DRC, 243 tracks, 5 vias",
+    "bounded_before": {
+      "duration_seconds": 433.630702,
+      "build": "dev",
+      "coarse_errors": 491,
+      "opens": 0,
+      "assessed_regional_scene": false
+    },
+    "bounded_after": {
+      "duration_seconds": 135.116187,
+      "build": "release",
+      "coarse_errors": 491,
+      "opens": 0,
+      "assessed_regional_scene": false,
+      "scope_attempts": 1
+    },
+    "runtime_comparison": "different build configurations; not a speedup claim"
+  },
+  "decision": "keep correctness fix; physical improvement remains unproven in bounded board run"
+}

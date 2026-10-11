@@ -1,36 +1,275 @@
+#include "flux/core/bezier_copper.hpp"
+#include <stdexcept>
+#include "flux/core/cpu_worker_budget.hpp"
+#include "flux/core/routing_kernel.hpp"
 #include "flux/core/regional_router.hpp"
+#include "flux/core/layered_navmesh.hpp"
 
 #include "flux/core/board_free_space.hpp"
 #include "flux/core/copper_geometry.hpp"
+#include "flux/core/connectivity.hpp"
 #include "flux/core/drc.hpp"
 #include "flux/core/free_space_offset.hpp"
 #include "flux/core/keepout_geometry.hpp"
+#include "flux/core/quantized_copper_oracle.hpp"
+#include "flux/core/regional_candidate_policy.hpp"
+#include "flux/core/regional_candidate_ranker.hpp"
+#include "flux/core/repair_subset.hpp"
+#include "flux/core/regional_channel_spatial_index.hpp"
+#include "flux/core/regional_repair_scheduler.hpp"
 #include "flux/core/router_telemetry.hpp"
 #include "flux/core/routing_compute.hpp"
+#include "flux/core/routing_avbd.hpp"
 #include "flux/core/routing_rules.hpp"
+#include "flux/core/routing_feedback.hpp"
 #include "flux/core/validation.hpp"
+#include "regional_source_index.hpp"
+
+#include <boost/json.hpp>
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <bit>
 #include <chrono>
 #include <cmath>
+#include <deque>
+#include <exception>
 #include <functional>
 #include <iterator>
 #include <limits>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <numeric>
 #include <optional>
 #include <set>
+#include <sstream>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <tuple>
 #include <unordered_map>
 #include <utility>
 
 namespace flux {
 namespace {
+
+thread_local const RegionalDecisionObserver* active_regional_decision_observer = nullptr;
+
+void emit_regional_decision(RegionalDecisionPhase phase, const RegionalRouteResult* result,
+                            bool scene_evaluated, std::string diagnostic = {},
+                            std::optional<RegionalExperimentMetadata> experiment = std::nullopt) {
+  if (active_regional_decision_observer != nullptr && *active_regional_decision_observer) {
+    RegionalDecisionPoint point;
+    point.phase = phase;
+    point.scene_evaluated = scene_evaluated;
+    point.diagnostic = std::move(diagnostic);
+    point.experiment = std::move(experiment);
+    if (result != nullptr) point.checkpoint = std::make_shared<RegionalRouteResult>(*result);
+    (*active_regional_decision_observer)(point);
+  }
+  routing_kernel_decision_point();
+}
+
+constexpr std::size_t regional_experiment_dependency_limit = 32U;
+
+[[nodiscard]] RegionalExperimentMetadata regional_experiment_metadata(
+    const RegionalRoutingWindow& window, const RegionalBundleAssignment& assignment,
+    std::size_t batch_ordinal) {
+  RegionalExperimentMetadata metadata;
+  metadata.window_id = window.id;
+  metadata.batch_ordinal = batch_ordinal;
+  metadata.candidate_available =
+      assignment.complete() && !assignment.spline_candidate_shortlist.empty();
+  auto& dependencies = metadata.dependencies;
+  dependencies.owned_fragment_count = window.owned_fragments.size();
+  dependencies.conflict_edge_count = window.conflict_edges.size();
+  dependencies.owned_fragments.assign(
+      window.owned_fragments.begin(),
+      window.owned_fragments.begin() +
+          static_cast<std::ptrdiff_t>(std::min(window.owned_fragments.size(),
+                                               regional_experiment_dependency_limit)));
+  dependencies.conflict_edges.assign(
+      window.conflict_edges.begin(),
+      window.conflict_edges.begin() +
+          static_cast<std::ptrdiff_t>(std::min(window.conflict_edges.size(),
+                                               regional_experiment_dependency_limit)));
+  dependencies.selected_templates.assign(
+      assignment.selected_templates.begin(),
+      assignment.selected_templates.begin() +
+          static_cast<std::ptrdiff_t>(std::min(assignment.selected_templates.size(),
+                                               regional_experiment_dependency_limit)));
+  dependencies.access_blockers.assign(
+      assignment.partial_access_blockers.begin(),
+      assignment.partial_access_blockers.begin() +
+          static_cast<std::ptrdiff_t>(std::min(assignment.partial_access_blockers.size(),
+                                               regional_experiment_dependency_limit)));
+  dependencies.access_budget_exhausted =
+      assignment.partial_access_assignment_exhaustions != 0U ||
+      assignment.stop_reason == RegionalBundleStopReason::state_budget_exhausted;
+  metadata.access_infeasible = !dependencies.access_budget_exhausted &&
+                               !metadata.candidate_available &&
+                               assignment.stop_reason == RegionalBundleStopReason::no_fitting_lane_order &&
+                               assignment.partial_forward_domain_wipeouts != 0U;
+  return metadata;
+}
+
+void emit_regional_experiment_window_completed(const RegionalRouteResult& result,
+                                               const RegionalRoutingWindow& window,
+                                               const RegionalBundleAssignment& assignment,
+                                               std::size_t batch_ordinal,
+                                               std::string_view phase) {
+  auto metadata = regional_experiment_metadata(window, assignment, batch_ordinal);
+  emit_regional_decision(
+      RegionalDecisionPhase::experiment_window_completed, &result, false,
+      std::string(phase) + " regional window assignment committed: window=" +
+          std::to_string(window.id) + ", candidate=" +
+          std::to_string(metadata.candidate_available ? 1U : 0U) + ", access_infeasible=" +
+          std::to_string(metadata.access_infeasible ? 1U : 0U),
+      std::move(metadata));
+}
+
+class ScopedRegionalDecisionObserver {
+public:
+  explicit ScopedRegionalDecisionObserver(const RegionalDecisionObserver& observer)
+      : previous_(active_regional_decision_observer) {
+    active_regional_decision_observer = &observer;
+  }
+  ~ScopedRegionalDecisionObserver() { active_regional_decision_observer = previous_; }
+private:
+  const RegionalDecisionObserver* previous_;
+};
+
+void attach_active_region(RouterTelemetryEvent& event, const RegionalRoutingWindow& window) {
+  event.region_update = true;
+  event.region_active = true;
+  event.group_id = "regional-window:" + std::to_string(window.id);
+  event.region_minimum_x_nm = window.bounds.minimum.x.value();
+  event.region_minimum_y_nm = window.bounds.minimum.y.value();
+  event.region_maximum_x_nm = window.bounds.maximum.x.value();
+  event.region_maximum_y_nm = window.bounds.maximum.y.value();
+  event.region_layers = window.layers;
+  event.region_nets = window.nets;
+}
+void publish_active_region(RouterTelemetrySink* sink, const RegionalRoutingWindow& window,
+                           std::string_view phase) {
+  if (sink == nullptr) return;
+  RouterTelemetryEvent event;
+  event.kind = RouterTelemetryEventKind::search_summary;
+  event.stable_id = "regional-active-window";
+  attach_active_region(event, window);
+  event.detail = std::string(phase) + "; window=" + std::to_string(window.id);
+  static_cast<void>(sink->try_emit(std::move(event)));
+}
+
+struct CandidateSplineFailureProfile {
+  std::size_t short_routes{0U};
+  std::size_t topology{0U};
+  std::size_t shape{0U};
+  std::size_t mutual{0U};
+  std::size_t quantization{0U};
+};
+
+[[nodiscard]] CandidateSplineFailureProfile
+candidate_spline_failure_profile(const RegionalBundleAssignment& candidate) {
+  return CandidateSplineFailureProfile{
+      static_cast<std::size_t>(std::count_if(
+          candidate.spline_realizations.begin(), candidate.spline_realizations.end(),
+          [](const auto& realization) { return realization.centerline.size() < 2U; })),
+      static_cast<std::size_t>(std::count_if(
+          candidate.spline_realizations.begin(), candidate.spline_realizations.end(),
+          [](const auto& realization) { return !realization.topology_legal; })),
+      static_cast<std::size_t>(std::count_if(
+          candidate.spline_realizations.begin(), candidate.spline_realizations.end(),
+          [](const auto& realization) { return !realization.shape_legal; })),
+      static_cast<std::size_t>(std::count_if(
+          candidate.spline_realizations.begin(), candidate.spline_realizations.end(),
+          [](const auto& realization) { return !realization.mutually_legal; })),
+      static_cast<std::size_t>(std::count_if(
+          candidate.spline_realizations.begin(), candidate.spline_realizations.end(),
+          [](const auto& realization) { return !realization.quantized_mutually_legal; }))};
+}
+
+[[nodiscard]] RegionalCandidateFeatureVector regional_candidate_features(
+    const RegionalRouteResult& regional, const RegionalBundleAssignment& assignment,
+    const RegionalBundleSelection& selection) {
+  std::size_t alternative_templates = 0U;
+  std::size_t selected_global_templates = 0U;
+  std::size_t channel_steps = 0U;
+  std::size_t layer_transitions = 0U;
+  std::uint64_t topology_cost = 0U;
+  std::uint64_t lower_bound_length_nm = 0U;
+  std::set<LayerId> layers;
+  for (const auto template_id : selection.templates) {
+    if (template_id >= assignment.templates.size())
+      continue;
+    const auto& candidate = assignment.templates[template_id];
+    alternative_templates += candidate.selected_global_topology ? 0U : 1U;
+    selected_global_templates += candidate.selected_global_topology ? 1U : 0U;
+    channel_steps += candidate.channel_sequence.size();
+    layer_transitions += candidate.layer_sequence.empty() ? 0U : candidate.layer_sequence.size() - 1U;
+    topology_cost = topology_cost > std::numeric_limits<std::uint64_t>::max() - candidate.topology_cost
+                        ? std::numeric_limits<std::uint64_t>::max()
+                        : topology_cost + candidate.topology_cost;
+    lower_bound_length_nm =
+        lower_bound_length_nm >
+                std::numeric_limits<std::uint64_t>::max() - candidate.lower_bound_length_nm
+            ? std::numeric_limits<std::uint64_t>::max()
+            : lower_bound_length_nm + candidate.lower_bound_length_nm;
+    layers.insert(candidate.routing_layer);
+    layers.insert(candidate.layer_sequence.begin(), candidate.layer_sequence.end());
+  }
+  auto minimum_lane_slack_nm = std::numeric_limits<std::int64_t>::max();
+  for (const auto& cross_section : selection.packed_cross_sections) {
+    minimum_lane_slack_nm = std::min(
+        minimum_lane_slack_nm,
+        cross_section.usable_width.value() - cross_section.packed_width.value());
+    layers.insert(cross_section.layer);
+  }
+  if (selection.packed_cross_sections.empty())
+    minimum_lane_slack_nm = 0;
+
+  std::size_t contested_vias = 0U;
+  std::size_t maximum_via_competitors = 0U;
+  for (const auto choice_id : selection.via_choices) {
+    const auto choice = std::find_if(regional.via_choices.begin(), regional.via_choices.end(),
+                                     [&](const auto& value) { return value.id == choice_id; });
+    if (choice == regional.via_choices.end())
+      continue;
+    const auto evidence = std::find_if(
+        regional.via_region_evidence.begin(), regional.via_region_evidence.end(),
+        [&](const auto& value) {
+          return value.region_id == choice->region_id && value.net == choice->net;
+        });
+    if (evidence != regional.via_region_evidence.end()) {
+      contested_vias += evidence->contested ? 1U : 0U;
+      maximum_via_competitors =
+          std::max(maximum_via_competitors, evidence->competing_regions);
+    }
+  }
+
+  return RegionalCandidateFeatureVector{
+      static_cast<double>(selection.candidate_heuristic_rank),
+      static_cast<double>(selection.templates.size()),
+      static_cast<double>(selection.via_choices.size()),
+      static_cast<double>(selection.packed_cross_sections.size()),
+      static_cast<double>(selection.via_alternative_switches),
+      static_cast<double>(selection.template_conflicts),
+      static_cast<double>(selection.residual_conflicts),
+      static_cast<double>(alternative_templates),
+      static_cast<double>(selected_global_templates),
+      static_cast<double>(layers.size()),
+      static_cast<double>(channel_steps),
+      static_cast<double>(layer_transitions),
+      static_cast<double>(topology_cost),
+      static_cast<double>(lower_bound_length_nm) / 1'000'000.0,
+      static_cast<double>(minimum_lane_slack_nm) / 1'000'000.0,
+      static_cast<double>(contested_vias),
+      static_cast<double>(maximum_via_competitors),
+      static_cast<double>(assignment.bundle_search_states),
+  };
+}
 
 [[nodiscard]] geometry::AxisAlignedBounds segment_bounds(Point start, Point end) {
   return geometry::AxisAlignedBounds{Point{std::min(start.x, end.x), std::min(start.y, end.y)},
@@ -60,6 +299,71 @@ namespace {
       Point{std::max(lhs.maximum.x, rhs.maximum.x), std::max(lhs.maximum.y, rhs.maximum.y)}};
 }
 
+[[nodiscard]] std::optional<geometry::AxisAlignedBounds> physical_object_bounds(
+    const Board& board, const ObjectId& id) {
+  const auto inflate = [](geometry::AxisAlignedBounds bounds, std::int64_t amount) {
+    const auto subtract = [amount](Nanometres value) {
+      return Nanometres{value.value() < std::numeric_limits<std::int64_t>::min() + amount
+                             ? std::numeric_limits<std::int64_t>::min()
+                             : value.value() - amount};
+    };
+    const auto add = [amount](Nanometres value) {
+      return Nanometres{value.value() > std::numeric_limits<std::int64_t>::max() - amount
+                             ? std::numeric_limits<std::int64_t>::max()
+                             : value.value() + amount};
+    };
+    return geometry::AxisAlignedBounds{
+        Point{subtract(bounds.minimum.x), subtract(bounds.minimum.y)},
+        Point{add(bounds.maximum.x), add(bounds.maximum.y)}};
+  };
+  const auto points_bounds = [](std::initializer_list<Point> points) {
+    auto it = points.begin();
+    geometry::AxisAlignedBounds bounds{*it, *it};
+    for (++it; it != points.end(); ++it)
+      bounds = union_bounds(bounds, geometry::AxisAlignedBounds{*it, *it});
+    return bounds;
+  };
+  const auto half_width = [](Nanometres width) {
+    return std::max<std::int64_t>(0, (width.value() + 1) / 2);
+  };
+  for (const auto& track : board.tracks)
+    if (track.id == id) return inflate(segment_bounds(track.start, track.end), half_width(track.width));
+  for (const auto& arc : board.track_arcs)
+    if (arc.id == id) {
+      auto bounds = points_bounds({arc.start, arc.middle, arc.end});
+      for (const auto point : geometry::circular_arc_extrema(arc.start, arc.middle, arc.end))
+        bounds = union_bounds(bounds, geometry::AxisAlignedBounds{point, point});
+      return inflate(bounds, half_width(arc.width));
+    }
+  for (const auto& curve : board.track_beziers)
+    if (curve.id == id)
+      return inflate(points_bounds({curve.start, curve.control1, curve.control2, curve.end}),
+                     half_width(curve.width));
+  for (const auto& via : board.vias)
+    if (via.id == id)
+      return inflate(geometry::AxisAlignedBounds{via.position, via.position}, half_width(via.diameter));
+  for (const auto& footprint : board.footprints)
+    for (const auto& pad : footprint.pads)
+      if (pad.id == id) {
+        const auto center = geometry::transform_point(pad.local_position, footprint.position,
+                                                       footprint.rotation, footprint.side);
+        const auto radius = static_cast<std::int64_t>(std::ceil(std::hypotl(
+            static_cast<long double>(pad.width.value()) / 2.0L,
+            static_cast<long double>(pad.height.value()) / 2.0L)));
+        return inflate(geometry::AxisAlignedBounds{center, center}, radius);
+      }
+  for (const auto& zone : board.zones)
+    if (zone.id == id) {
+      std::optional<geometry::AxisAlignedBounds> bounds;
+      for (const auto& fill : zone.fills)
+        for (const auto point : fill.area.vertices)
+          bounds = bounds ? union_bounds(*bounds, geometry::AxisAlignedBounds{point, point})
+                          : geometry::AxisAlignedBounds{point, point};
+      return bounds;
+    }
+  return std::nullopt;
+}
+
 [[nodiscard]] bool bounds_touch(const geometry::AxisAlignedBounds& lhs,
                                 const geometry::AxisAlignedBounds& rhs) {
   constexpr std::int64_t guard = 1;
@@ -87,6 +391,15 @@ namespace {
 [[nodiscard]] std::vector<RegionalRouteFragment> make_fragments(const Board& board,
                                                                 const GlobalRouteResult& global) {
   std::vector<RegionalRouteFragment> result;
+  // A collinear vertex may be another connection's tree attachment. It is an electrical
+  // boundary, even though it contributes no bend to this path. Keep it as a fragment endpoint
+  // so a detour or layer excursion cannot move the trunk away from the attached branch.
+  std::set<std::tuple<NetId, LayerId, Point>> connection_endpoints;
+  for (const auto& path : global.paths) {
+    if (path.points.empty()) continue;
+    for (const auto& point : {path.points.front(), path.points.back()})
+      connection_endpoints.emplace(path.net, point.layer, point.position);
+  }
   const auto collinear_forward = [](Point first, Point middle, Point last) {
     const auto first_x = static_cast<long double>(middle.x.value() - first.x.value());
     const auto first_y = static_cast<long double>(middle.y.value() - first.y.value());
@@ -132,10 +445,15 @@ namespace {
       if (path.segment_widths.size() + 1U == path.points.size() &&
           path.segment_widths[point_index - 1U].value() > 0) {
         width = path.segment_widths[point_index - 1U];
-        explicit_width = true;
         if (path.segment_width_kinds.size() == path.segment_widths.size()) {
           width_kind = path.segment_width_kinds[point_index - 1U];
         }
+        // Edge-aligned width vectors are now complete routing provenance and therefore include
+        // ordinary nominal copper. Only an actual width reduction or a non-nominal selection kind
+        // is source-bound neck-down authority. Treating every populated vector as explicit froze
+        // all normal fragments out of same-layer detours, erosion columns, and layer/via swaps.
+        explicit_width =
+            width != rules.track_width || width_kind != GlobalRouteSegmentWidthKind::nominal;
       }
       if (!result.empty()) {
         auto& prior = result.back();
@@ -143,11 +461,13 @@ namespace {
             prior.id.run_index == run_index && prior.layer == first.layer &&
             prior.end == first.position && prior.width == width &&
             prior.explicit_width == explicit_width && prior.width_kind == width_kind &&
+            !connection_endpoints.contains({path.net, first.layer, first.position}) &&
             collinear_forward(prior.start, prior.end, second.position)) {
           prior.end = second.position;
           prior.bounds =
               union_bounds(prior.bounds, segment_bounds(first.position, second.position));
           prior.ends_at_terminal = point_index == *last_planar_edge;
+          prior.last_source_segment = point_index - 1U;
           continue;
         }
       }
@@ -156,7 +476,7 @@ namespace {
           first.layer, first.position, second.position, width, rules.clearance,
           segment_bounds(first.position, second.position), point_index == *first_planar_edge,
           point_index == *last_planar_edge, coupled_net(board, path.net), explicit_width,
-          width_kind});
+          width_kind, point_index - 1U, point_index - 1U});
     }
   }
   std::sort(result.begin(), result.end(),
@@ -217,6 +537,8 @@ constexpr std::uint8_t clearance_shadow_evidence = 1U;
 constexpr std::uint8_t sampled_capacity_evidence = 2U;
 constexpr std::uint8_t corridor_capacity_evidence = 4U;
 constexpr std::uint8_t physical_capacity_evidence = 8U;
+constexpr std::uint8_t exact_copper_evidence = 16U;
+constexpr std::uint8_t packing_unresolved_evidence = 32U;
 
 [[nodiscard]] std::uint64_t observed_length(const ConflictReference& first,
                                             const ConflictReference& second) {
@@ -227,7 +549,9 @@ constexpr std::uint8_t physical_capacity_evidence = 8U;
 }
 
 [[nodiscard]] bool valid_config(const RegionalRouterConfig& config) {
-  return config.window_margin.value() >= 0 && config.max_conflict_fragments_per_window > 0U &&
+  return (!config.expand_frozen_copper_scope || config.frozen_copper_context) &&
+         (!config.frozen_copper_context || config.native_arc_materialization_authority) &&
+         config.max_physical_scope_retries <= 8U && config.window_margin.value() >= 0 && config.max_conflict_fragments_per_window > 0U &&
          config.max_nets_per_window > 0U && config.max_templates_per_fragment > 0U &&
          config.max_terminal_choices_per_terminal > 0U &&
          config.max_via_regions_per_fragment > 0U && config.max_via_sites_per_region > 0U &&
@@ -235,11 +559,23 @@ constexpr std::uint8_t physical_capacity_evidence = 8U;
          config.max_selected_via_site_checks_per_region > 0U &&
          config.max_access_assignment_states > 0U && config.max_access_blockers_per_window > 0U &&
          config.max_layer_sequences_per_fragment > 0U && config.max_bundle_search_states > 0U &&
-         config.max_lane_order_states > 0U && config.max_spline_sweeps > 0U &&
+         config.max_straight_portfolio_checks <= 4'096U &&
+         config.max_lane_order_states > 0U && config.max_spline_window_workers > 0U &&
+         config.max_spline_exact_candidate_workers > 0U &&
+         config.max_spline_candidate_workers > 0U &&
+         config.estimated_spline_window_scratch_bytes > 0U &&
+         config.max_spline_sweeps > 0U &&
          config.max_exact_transactions > 0U && config.navmesh_cell_pitch.value() > 0 &&
          config.max_navmesh_cells_per_template > 0U &&
          config.max_navmesh_expansions_per_template > 0U &&
-         config.max_alternative_template_checks > 0U && config.max_joint_repair_windows > 0U &&
+         config.max_alternative_template_checks > 0U &&
+         (!config.enable_early_physical_feedback ||
+          (config.max_early_alternative_template_checks > 0U &&
+           config.max_early_physical_windows > 0U &&
+           config.max_early_bundle_search_states > 0U &&
+           config.max_early_access_assignment_states > 0U &&
+           config.max_early_lane_order_states > 0U)) &&
+         config.max_joint_repair_windows > 0U &&
          config.max_joint_repair_fragments_per_window > 0U &&
          config.max_joint_alternative_template_checks > 0U &&
          config.max_joint_templates_per_fragment > config.max_templates_per_fragment &&
@@ -252,6 +588,14 @@ constexpr std::uint8_t physical_capacity_evidence = 8U;
          config.max_joint_spline_fallback_waves > 0U &&
          config.max_local_routability_diagnoses > 0U &&
          config.max_residual_cone_template_coverage_states > 0U &&
+         config.max_conflict_directed_topology_windows > 0U &&
+         config.max_conflict_directed_fragments_per_window > 0U &&
+         (config.max_confined_anisotropic_erosion_checks == 0U ||
+          (config.max_confined_anisotropic_candidates_per_fragment > 0U &&
+           config.confined_anisotropy_per_mille > 1'000U &&
+           config.confined_anisotropy_per_mille <= 16'000U &&
+           config.confined_erosion_blocker_pressure > 0U &&
+           config.confined_erosion_lane_prior > 0U)) &&
          config.max_spline_portfolio_windows >= config.max_joint_repair_windows &&
          config.max_same_layer_detour_offsets > 0U &&
          config.max_adaptive_pair_shove_checks_per_window > 0U &&
@@ -265,8 +609,15 @@ constexpr std::uint8_t physical_capacity_evidence = 8U;
            config.xpbd.maximum_candidate_pairs > 0U &&
            config.max_xpbd_obstacle_segments_per_window > 0U &&
            config.max_xpbd_interpolation_nodes_per_route > 2U &&
+           (!config.enable_early_physical_feedback ||
+            config.max_early_xpbd_interpolation_nodes_per_route > 2U) &&
            config.xpbd.stretch_compliance >= 0.0L && config.xpbd.bend_compliance >= 0.0L &&
-           config.xpbd.clearance_compliance >= 0.0L && config.xpbd.corridor_compliance >= 0.0L));
+           config.xpbd.clearance_compliance >= 0.0L && config.xpbd.corridor_compliance >= 0.0L)) &&
+         (!config.enable_avbd_relaxation ||
+          (config.avbd.iterations > 0U && config.avbd.maximum_contacts > 0U &&
+           config.avbd.maximum_particles > 0U && config.avbd.initial_penalty > 0.0L &&
+           config.avbd.maximum_penalty >= config.avbd.initial_penalty &&
+           config.avbd.penalty_growth >= 1.0L));
 }
 
 void populate_components(RegionalRouteResult& result) {
@@ -733,6 +1084,7 @@ void populate_windows(const Board& board, RegionalRouteResult& result) {
   result.geometrically_split_windows = 0U;
   result.coupled_window_merges = 0U;
   result.uncuttable_oversized_blocks = 0U;
+  result.admitted_physical_repair_requests = 0U;
   const auto prepared_outline = geometry::prepare_polygon(board.outline);
   if (!prepared_outline.valid()) {
     return;
@@ -742,12 +1094,63 @@ void populate_windows(const Board& board, RegionalRouteResult& result) {
     fragments.emplace(fragment.id, &fragment);
   }
   std::vector<RegionalConflictBlock> window_blocks;
+  std::set<std::size_t> jointly_owned_edges;
+  // Exact physical interactions define an indivisible repair component. Splitting at an
+  // articulation would freeze one participant of the same obligation in another window.
+  for (const auto& component : result.components) {
+    if (std::none_of(component.conflict_edges.begin(), component.conflict_edges.end(),
+                     [&](auto edge) { return result.conflict_edges[edge].exact_copper_sample_count > 0U; }))
+      continue;
+    window_blocks.push_back(regional_block_from_edges(result, {}, component.conflict_edges));
+    jointly_owned_edges.insert(component.conflict_edges.begin(), component.conflict_edges.end());
+  }
   for (const auto& block : result.biconnected_blocks) {
+    if (std::any_of(block.conflict_edges.begin(), block.conflict_edges.end(),
+                    [&](auto edge) { return jointly_owned_edges.contains(edge); })) continue;
     const auto partitions = partition_block_edges(result, block, result.geometrically_split_windows,
                                                   result.uncuttable_oversized_blocks);
     for (auto edges : partitions) {
       window_blocks.push_back(regional_block_from_edges(result, block, std::move(edges)));
     }
+  }
+  // Failed physical scaffolds have no selected-global conflict edge. Admit each demand as a
+  // singleton repair block, bounded by its verified immutable blocker geometry. A demand already
+  // owned by an ordinary exact-conflict block remains there, avoiding duplicate replacements.
+  std::set<RegionalRouteFragmentId> already_owned;
+  for (const auto& block : window_blocks)
+    already_owned.insert(block.fragments.begin(), block.fragments.end());
+  auto repair_requests = result.configured.physical_scaffold_requests;
+  std::sort(repair_requests.begin(), repair_requests.end(), [](const auto& lhs, const auto& rhs) {
+    return std::tie(lhs.net, lhs.connection_index, lhs.blocker_objects) <
+           std::tie(rhs.net, rhs.connection_index, rhs.blocker_objects);
+  });
+  repair_requests.erase(std::unique(repair_requests.begin(), repair_requests.end()),
+                        repair_requests.end());
+  for (const auto& request : repair_requests) {
+    routing_kernel_checkpoint();
+    RegionalConflictBlock block;
+    block.id = window_blocks.size();
+    block.nets = {request.net};
+    bool has_bounds = false;
+    for (const auto& fragment : result.fragments) {
+      if (fragment.id.net != request.net || fragment.id.connection_index != request.connection_index)
+        continue;
+      if (already_owned.contains(fragment.id)) continue;
+      block.fragments.push_back(fragment.id);
+      block.conflict_bounds = has_bounds ? union_bounds(block.conflict_bounds, fragment.bounds)
+                                         : fragment.bounds;
+      has_bounds = true;
+    }
+    if (block.fragments.empty()) continue;
+    for (const auto& blocker : request.blocker_objects) {
+      const auto bounds = physical_object_bounds(board, blocker);
+      if (!bounds) continue;  // Stale attribution cannot create a synthetic owner.
+      block.conflict_bounds = union_bounds(block.conflict_bounds, *bounds);
+    }
+    std::sort(block.fragments.begin(), block.fragments.end());
+    already_owned.insert(block.fragments.begin(), block.fragments.end());
+    window_blocks.push_back(std::move(block));
+    ++result.admitted_physical_repair_requests;
   }
   std::map<RegionalRouteFragmentId, std::size_t> block_memberships;
   for (const auto& block : window_blocks) {
@@ -1344,6 +1747,14 @@ void offset_residual_retry_ids_for_append(RegionalRouteResult& retry,
     for (auto& selection : assignment.spline_candidate_reserve) {
       remap_selection(selection);
     }
+    for (auto& summary : assignment.spline_candidate_summaries) {
+      for (auto& choice : summary.via_choices) {
+        choice += via_offset;
+      }
+      for (auto& region : summary.via_assignment_region_order) {
+        region += via_region_offset;
+      }
+    }
     for (auto& blocker : assignment.partial_access_blockers) {
       remap_optional(blocker.first_via_choice, via_offset);
       remap_optional(blocker.second_via_choice, via_offset);
@@ -1364,6 +1775,22 @@ merge_residual_cone_checkpoint(const RegionalRouteResult& ordinary, RegionalRout
   const auto reused_assignments = combined.bundle_assignments.size();
   const auto recomputed_assignments = retry.bundle_assignments.size();
   offset_residual_retry_ids_for_append(retry, combined);
+  // A retry window may deliberately promote an articulation/context fragment which was owned by
+  // a neighbouring ordinary window.  Transfer that fragment's publication authority before the
+  // retry is appended.  Merely removing the retry's source window leaves the neighbouring
+  // assignment as a second writer, even though it was solved against an older fixed-boundary
+  // position; final transaction assembly then (correctly) rejects the two different
+  // realizations.  Frozen context remains in both local solves for clearance certification, but
+  // exactly one window may emit copper for each promoted fragment.
+  std::set<RegionalRouteFragmentId> retry_owned_fragments;
+  for (const auto& window : retry.windows) {
+    retry_owned_fragments.insert(window.owned_fragments.begin(), window.owned_fragments.end());
+  }
+  for (auto& window : combined.windows) {
+    std::erase_if(window.owned_fragments, [&](const auto& fragment) {
+      return retry_owned_fragments.contains(fragment);
+    });
+  }
   combined.windows.insert(combined.windows.end(), std::make_move_iterator(retry.windows.begin()),
                           std::make_move_iterator(retry.windows.end()));
   combined.channels.insert(combined.channels.end(), std::make_move_iterator(retry.channels.begin()),
@@ -1404,20 +1831,63 @@ merge_residual_cone_checkpoint(const RegionalRouteResult& ordinary, RegionalRout
   combined.lane_solver_analytical_rejections += retry.lane_solver_analytical_rejections;
   combined.lane_solver_budget_exhaustions += retry.lane_solver_budget_exhaustions;
   combined.partial_lane_capacity_pruned_states += retry.partial_lane_capacity_pruned_states;
+  combined.frozen_copper_via_pruned_states += retry.frozen_copper_via_pruned_states;
+  combined.frozen_copper_via_rejected_states += retry.frozen_copper_via_rejected_states;
+  combined.lane_precedence_rejected_states += retry.lane_precedence_rejected_states;
+  combined.confined_anisotropic_erosion_checks += retry.confined_anisotropic_erosion_checks;
+  combined.confined_anisotropic_erosion_accepted += retry.confined_anisotropic_erosion_accepted;
+  combined.confined_anisotropic_erosion_rejected += retry.confined_anisotropic_erosion_rejected;
+  combined.confined_anisotropic_erosion_gpu_routes +=
+      retry.confined_anisotropic_erosion_gpu_routes;
+  combined.confined_anisotropic_erosion_cpu_routes +=
+      retry.confined_anisotropic_erosion_cpu_routes;
+  combined.confined_anisotropic_erosion_exact_chords +=
+      retry.confined_anisotropic_erosion_exact_chords;
+  combined.spline_topology_seed_gpu_batches += retry.spline_topology_seed_gpu_batches;
+  combined.spline_topology_seed_gpu_fallbacks += retry.spline_topology_seed_gpu_fallbacks;
+  combined.spline_topology_seed_gpu_candidates += retry.spline_topology_seed_gpu_candidates;
+  combined.spline_topology_seed_exact_candidates += retry.spline_topology_seed_exact_candidates;
+  combined.spline_topology_seed_construction_rejections +=
+      retry.spline_topology_seed_construction_rejections;
+  combined.spline_topology_seed_corridor_rejections +=
+      retry.spline_topology_seed_corridor_rejections;
+  combined.spline_topology_seed_cell_rejections += retry.spline_topology_seed_cell_rejections;
+  combined.spline_topology_seed_gate_rejections += retry.spline_topology_seed_gate_rejections;
+  combined.spline_topology_seed_shape_rejections += retry.spline_topology_seed_shape_rejections;
   combined.spline_interpolation_gpu_batches += retry.spline_interpolation_gpu_batches;
   combined.spline_interpolation_gpu_fallbacks += retry.spline_interpolation_gpu_fallbacks;
   combined.spline_interpolation_gpu_candidates += retry.spline_interpolation_gpu_candidates;
   combined.spline_interpolation_exact_candidates += retry.spline_interpolation_exact_candidates;
   combined.spline_geometry_cache_hits += retry.spline_geometry_cache_hits;
   combined.spline_geometry_cache_misses += retry.spline_geometry_cache_misses;
+  combined.spline_window_tasks += retry.spline_window_tasks;
+  combined.spline_window_workers =
+      std::max(combined.spline_window_workers, retry.spline_window_workers);
+  combined.spline_incremental_segments_reused += retry.spline_incremental_segments_reused;
+  combined.spline_incremental_segments_rebuilt += retry.spline_incremental_segments_rebuilt;
+  combined.spline_route_certificate_cache_hits += retry.spline_route_certificate_cache_hits;
+  combined.spline_route_certificate_cache_misses += retry.spline_route_certificate_cache_misses;
+  combined.spline_centerline_certificate_pairs += retry.spline_centerline_certificate_pairs;
+  combined.spline_centerline_separation_proofs += retry.spline_centerline_separation_proofs;
+  combined.spline_centerline_collision_proofs += retry.spline_centerline_collision_proofs;
+  combined.spline_centerline_ambiguous_pairs += retry.spline_centerline_ambiguous_pairs;
+  combined.spline_centerline_certificate_nodes += retry.spline_centerline_certificate_nodes;
+  combined.spline_centerline_simd_batches += retry.spline_centerline_simd_batches;
+  combined.spline_centerline_simd_lanes += retry.spline_centerline_simd_lanes;
+  combined.spline_centerline_multiprecision_comparisons +=
+      retry.spline_centerline_multiprecision_comparisons;
   combined.spline_offset_broadphase_batches += retry.spline_offset_broadphase_batches;
   combined.spline_offset_broadphase_gpu_batches += retry.spline_offset_broadphase_gpu_batches;
   combined.spline_offset_broadphase_rejections += retry.spline_offset_broadphase_rejections;
   combined.spline_offset_exact_pairs += retry.spline_offset_exact_pairs;
   combined.spline_offset_subdivision_nodes += retry.spline_offset_subdivision_nodes;
   combined.spline_offset_isolated_leaf_pairs += retry.spline_offset_isolated_leaf_pairs;
-  combined.spline_offset_node_budget_exhaustions +=
-      retry.spline_offset_node_budget_exhaustions;
+  combined.spline_offset_node_budget_exhaustions += retry.spline_offset_node_budget_exhaustions;
+  combined.native_arc_windows_checked += retry.native_arc_windows_checked;
+  combined.native_arc_fit_failures += retry.native_arc_fit_failures;
+  combined.native_arc_pieces_checked += retry.native_arc_pieces_checked;
+  combined.native_arc_copper_violations += retry.native_arc_copper_violations;
+  combined.native_arc_legal_windows += retry.native_arc_legal_windows;
   combined.spline_interpolation_rank_us += retry.spline_interpolation_rank_us;
   combined.spline_interpolation_exact_us += retry.spline_interpolation_exact_us;
   combined.spline_adaptive_assessment_us += retry.spline_adaptive_assessment_us;
@@ -1427,6 +1897,23 @@ merge_residual_cone_checkpoint(const RegionalRouteResult& ordinary, RegionalRout
   combined.xpbd_windows_attempted += retry.xpbd_windows_attempted;
   combined.xpbd_unconflicted_candidates_skipped += retry.xpbd_unconflicted_candidates_skipped;
   combined.xpbd_windows_improved += retry.xpbd_windows_improved;
+  combined.xpbd_subset_assessments += retry.xpbd_subset_assessments;
+  combined.xpbd_subset_repairs_retained += retry.xpbd_subset_repairs_retained;
+  combined.xpbd_subset_groups_retained += retry.xpbd_subset_groups_retained;
+  combined.avbd_windows_attempted += retry.avbd_windows_attempted;
+  combined.avbd_proposals_improved += retry.avbd_proposals_improved;
+  combined.avbd_windows_improved += retry.avbd_windows_improved;
+  combined.avbd_contacts += retry.avbd_contacts;
+  combined.avbd_duplicate_reductions += retry.avbd_duplicate_reductions;
+  combined.avbd_colors += retry.avbd_colors;
+  combined.avbd_local_block_solves += retry.avbd_local_block_solves;
+  combined.avbd_duals += retry.avbd_duals;
+  combined.avbd_penalty_updates += retry.avbd_penalty_updates;
+  combined.avbd_maximum_degree =
+      std::max(combined.avbd_maximum_degree, retry.avbd_maximum_degree);
+  combined.avbd_moved_rigid_owners += retry.avbd_moved_rigid_owners;
+  combined.avbd_capacity_rejections += retry.avbd_capacity_rejections;
+  combined.avbd_solve_us += retry.avbd_solve_us;
   combined.xpbd_windows_legalized += retry.xpbd_windows_legalized;
   combined.xpbd_gpu_invocations += retry.xpbd_gpu_invocations;
   combined.xpbd_cpu_fallbacks += retry.xpbd_cpu_fallbacks;
@@ -1575,7 +2062,10 @@ enum class RegionalAccessFailureReason {
   invalid_choice,
   terminal_pair,
   via_pair,
-  terminal_via
+  terminal_via,
+  // The active regional window treats this retained fragment as immutable. This is distinct
+  // from a malformed candidate: another via site can remain a legal access assignment.
+  frozen_copper_via
 };
 
 [[nodiscard]] bool regional_via_spans_overlap(const RegionalViaChoice& first,
@@ -1587,14 +2077,62 @@ enum class RegionalAccessFailureReason {
 
 [[nodiscard]] bool regional_via_choices_conflict(const RegionalViaChoice& first,
                                                  const RegionalViaChoice& second,
-                                                 Nanometres clearance) {
+                                                 Nanometres clearance, Nanometres first_width,
+                                                 Nanometres second_width) {
   if (first.net == second.net || !regional_via_spans_overlap(first, second)) {
     return false;
   }
   const auto required =
       static_cast<long double>(first.diameter.value() + second.diameter.value()) / 2.0L +
       static_cast<long double>(clearance.value());
-  return geometry::point_distance_nm(first.site, second.site) < required;
+  if (geometry::point_distance_nm(first.site, second.site) < required) {
+    return true;
+  }
+  const auto via_runup_conflicts = [&](const RegionalViaChoice& via,
+                                       const RegionalViaChoice& runup_owner,
+                                       Nanometres runup_width) {
+    const auto required_distance =
+        static_cast<long double>(via.diameter.value() + runup_width.value()) / 2.0L +
+        static_cast<long double>(clearance.value());
+    for (const auto& runup : runup_owner.attached_runups) {
+      if (std::find(via.span.begin(), via.span.end(), runup.layer) == via.span.end()) {
+        continue;
+      }
+      for (std::size_t edge = 1U; edge < runup.centerline.size(); ++edge) {
+        if (geometry::point_segment_distance_nm(via.site, runup.centerline[edge - 1U],
+                                                runup.centerline[edge]) < required_distance) {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+  if (via_runup_conflicts(first, second, second_width) ||
+      via_runup_conflicts(second, first, first_width)) {
+    return true;
+  }
+  const auto runup_required =
+      static_cast<long double>(first_width.value() + second_width.value()) / 2.0L +
+      static_cast<long double>(clearance.value());
+  for (const auto& first_runup : first.attached_runups) {
+    for (const auto& second_runup : second.attached_runups) {
+      if (first_runup.layer != second_runup.layer) {
+        continue;
+      }
+      for (std::size_t first_edge = 1U; first_edge < first_runup.centerline.size(); ++first_edge) {
+        for (std::size_t second_edge = 1U; second_edge < second_runup.centerline.size();
+             ++second_edge) {
+          if (geometry::segment_distance_nm(
+                  first_runup.centerline[first_edge - 1U], first_runup.centerline[first_edge],
+                  second_runup.centerline[second_edge - 1U],
+                  second_runup.centerline[second_edge]) < runup_required) {
+            return true;
+          }
+        }
+      }
+    }
+  }
+  return false;
 }
 
 [[nodiscard]] bool regional_terminal_via_conflict(const RegionalTerminalChoice& terminal,
@@ -1625,16 +2163,36 @@ struct RegionalAccessSelection {
   bool exhausted{false};
   std::optional<std::pair<std::size_t, std::size_t>> via_pair_blocker;
   std::optional<std::pair<std::size_t, std::size_t>> terminal_via_blocker;
+  struct FrozenCopperViaConflict {
+    std::pair<NetId, std::size_t> via_region;
+    RegionalRouteFragmentId blocker;
+    LayerId layer;
+    Nanometres clearance_deficit;
+    std::string code;
+  };
+  std::optional<FrozenCopperViaConflict> frozen_copper_conflict;
 
   [[nodiscard]] bool legal() const { return failure == RegionalAccessFailureReason::none; }
+};
+
+// Board-rule preparation is immutable for the lifetime of one regional enumeration context.
+// Geometry-specific data remains inside select_access_geometry(), where it is scoped to the
+// selected templates and window.
+struct RegionalAccessPreparationCache {
+  std::map<std::pair<NetId, NetId>, Nanometres> pairwise_clearances;
+  std::map<NetId, Nanometres> net_widths;
 };
 
 [[nodiscard]] RegionalAccessSelection
 select_access_geometry(const Board& board, const RegionalRouteResult& regional,
                        const RegionalRoutingWindow& window,
                        const std::vector<RegionalRouteTemplate>& templates,
-                       const std::vector<std::size_t>& selected, std::size_t maximum_states) {
+                       const std::vector<std::size_t>& selected, std::size_t maximum_states,
+                       bool relax_equivalent_via_representatives = false,
+                       RegionalAccessPreparationCache* shared_preparation = nullptr) {
   RegionalAccessSelection result;
+  RegionalAccessPreparationCache local_preparation;
+  auto& preparation = shared_preparation == nullptr ? local_preparation : *shared_preparation;
   std::vector<const RegionalTerminalChoice*> terminal_choices;
   struct ViaVariable {
     std::pair<NetId, std::size_t> key;
@@ -1697,7 +2255,19 @@ select_access_geometry(const Board& board, const RegionalRouteResult& regional,
           }
         }
       } else {
-        allowed.push_back(&*found);
+        if (relax_equivalent_via_representatives) {
+          // A third, earlier fragment can select another representative of this physical
+          // site with a different runup. Pairwise impossibility is monotone only if the
+          // relaxed query admits every representative the complete selection could use.
+          for (const auto& candidate : regional.via_choices) {
+            if (candidate.net == found->net && candidate.region_id == found->region_id &&
+                candidate.site == found->site && candidate.span == found->span) {
+              allowed.push_back(&candidate);
+            }
+          }
+        } else {
+          allowed.push_back(&*found);
+        }
       }
       if (variable.candidates.empty()) {
         variable.candidates = std::move(allowed);
@@ -1713,18 +2283,90 @@ select_access_geometry(const Board& board, const RegionalRouteResult& regional,
       }
     }
   }
-  std::map<std::pair<NetId, NetId>, Nanometres> pairwise_clearances;
   const auto pairwise_clearance = [&](NetId first, NetId second) {
     if (second < first) {
       std::swap(first, second);
     }
     const auto key = std::pair{first, second};
-    const auto found = pairwise_clearances.find(key);
-    if (found != pairwise_clearances.end()) {
+    const auto found = preparation.pairwise_clearances.find(key);
+    if (found != preparation.pairwise_clearances.end()) {
       return found->second;
     }
-    return pairwise_clearances.emplace(key, resolve_pairwise_clearance(board, first, second))
-        .first->second;
+    return preparation.pairwise_clearances
+        .emplace(key, resolve_pairwise_clearance(board, first, second)).first->second;
+  };
+  const auto net_width = [&](const NetId& net) {
+    const auto found = preparation.net_widths.find(net);
+    return found != preparation.net_widths.end()
+               ? found->second
+               : preparation.net_widths.emplace(net, resolve_net_routing_rules(board, net).track_width)
+                     .first->second;
+  };
+  // This is deliberately restricted to the window's frozen-copper contract. Owned routes
+  // still receive lane packing and continuous displacement, so their coarse centerlines cannot
+  // reject an otherwise legal selected-via assignment here.
+  std::vector<const RegionalRouteFragment*> frozen_fragments;
+  // Frozen foreign centerlines are only a valid obstacle contract while each window receives an
+  // independent native spline proof. Straight realization assembles every window's replacement
+  // into one scene, where another window may legitimately move this coarse fragment.
+  if (regional.configured.frozen_copper_context && regional.configured.enable_spline_realization) {
+    frozen_fragments.reserve(regional.fragments.size());
+    for (const auto& fragment : regional.fragments) {
+      if (!std::binary_search(window.owned_fragments.begin(), window.owned_fragments.end(),
+                              fragment.id) &&
+          fragment.start != fragment.end && fragment.width.value() > 0) {
+        frozen_fragments.push_back(&fragment);
+      }
+    }
+  }
+  struct FrozenCopperViaCandidateConflict {
+    const RegionalRouteFragment* blocker{nullptr};
+    Nanometres clearance_deficit;
+    std::string_view code;
+  };
+  std::map<std::size_t, std::optional<FrozenCopperViaCandidateConflict>>
+      frozen_copper_conflict_cache;
+  const auto frozen_copper_conflict = [&](const RegionalViaChoice* via)
+      -> std::optional<FrozenCopperViaCandidateConflict> {
+    if (via == nullptr) {
+      return std::nullopt;
+    }
+    if (frozen_fragments.empty()) {
+      return std::nullopt;
+    }
+    if (const auto found = frozen_copper_conflict_cache.find(via->id);
+        found != frozen_copper_conflict_cache.end()) {
+      return found->second;
+    }
+    std::optional<FrozenCopperViaCandidateConflict> conflict;
+    for (const auto* fragment : frozen_fragments) {
+      if (fragment->id.net == via->net ||
+          std::find(via->span.begin(), via->span.end(), fragment->layer) == via->span.end()) {
+        continue;
+      }
+      const auto via_diameter = static_cast<long double>(via->diameter.value());
+      const auto fragment_width = static_cast<long double>(fragment->width.value());
+      const auto copper_required =
+          (via_diameter + fragment_width) / 2.0L +
+          static_cast<long double>(pairwise_clearance(via->net, fragment->id.net).value());
+      const auto drill_required =
+          (static_cast<long double>(via->drill.value()) + fragment_width) / 2.0L +
+          static_cast<long double>(board.rules.hole_clearance.value());
+      const auto required = std::max(copper_required, drill_required);
+      const auto actual =
+          geometry::point_segment_distance_nm(via->site, fragment->start, fragment->end);
+      if (actual < required) {
+        const auto deficit = std::clamp<long double>(
+            std::ceil(required - actual), 0.0L,
+            static_cast<long double>(std::numeric_limits<std::int64_t>::max()));
+        conflict = FrozenCopperViaCandidateConflict{
+            fragment, Nanometres{static_cast<std::int64_t>(deficit)},
+            drill_required > copper_required ? "frozen-via-hole-clearance"
+                                             : "frozen-via-copper-clearance"};
+        break;
+      }
+    }
+    return frozen_copper_conflict_cache.emplace(via->id, std::move(conflict)).first->second;
   };
   for (std::size_t first = 0U; first < terminal_choices.size(); ++first) {
     const auto* lhs = terminal_choices[first];
@@ -1811,11 +2453,18 @@ select_access_geometry(const Board& board, const RegionalRouteResult& regional,
   const auto terminal_legal = [&](const RegionalViaChoice* via) {
     return terminal_conflict(via) == nullptr;
   };
+  const auto frozen_copper_legal = [&](const RegionalViaChoice* via) {
+    return !frozen_copper_conflict(via).has_value();
+  };
+  const auto base_legal = [&](const RegionalViaChoice* via) {
+    return terminal_legal(via) && frozen_copper_legal(via);
+  };
   const auto assigned_conflict =
       [&](const RegionalViaChoice* via,
           const std::vector<const RegionalViaChoice*>& assigned) -> const RegionalViaChoice* {
     const auto found = std::find_if(assigned.begin(), assigned.end(), [&](const auto* prior) {
-      return regional_via_choices_conflict(*prior, *via, pairwise_clearance(prior->net, via->net));
+      return regional_via_choices_conflict(*prior, *via, pairwise_clearance(prior->net, via->net),
+                                           net_width(prior->net), net_width(via->net));
     });
     return found == assigned.end() ? nullptr : *found;
   };
@@ -1842,6 +2491,7 @@ select_access_geometry(const Board& board, const RegionalRouteResult& regional,
         budget_exhausted = true;
         return false;
       }
+      routing_kernel_checkpoint();
       ++result.states;
       const auto* candidate = ordered_variables[variable].candidates[candidate_index];
       if (const auto* terminal = terminal_conflict(candidate); terminal != nullptr) {
@@ -1849,6 +2499,13 @@ select_access_geometry(const Board& board, const RegionalRouteResult& regional,
           result.failure = RegionalAccessFailureReason::terminal_via;
         }
         result.terminal_via_blocker = std::pair{terminal->id, candidate->id};
+        continue;
+      }
+      if (const auto frozen = frozen_copper_conflict(candidate); frozen) {
+        result.failure = RegionalAccessFailureReason::frozen_copper_via;
+        result.frozen_copper_conflict = {{candidate->net, candidate->region_id},
+                                         frozen->blocker->id, frozen->blocker->layer,
+                                         frozen->clearance_deficit, std::string(frozen->code)};
         continue;
       }
       if (const auto* prior = assigned_conflict(candidate, assigned); prior != nullptr) {
@@ -1859,20 +2516,20 @@ select_access_geometry(const Board& board, const RegionalRouteResult& regional,
       assigned.push_back(candidate);
       bool forward_legal = true;
       for (std::size_t future = variable + 1U; future < ordered_variables.size(); ++future) {
-        const auto has_terminal_legal_option =
+        const auto has_base_legal_option =
             std::any_of(ordered_variables[future].candidates.begin(),
-                        ordered_variables[future].candidates.end(), terminal_legal);
+                        ordered_variables[future].candidates.end(), base_legal);
         const auto has_compatible_option = std::any_of(
             ordered_variables[future].candidates.begin(),
             ordered_variables[future].candidates.end(), [&](const auto* option) {
-              return terminal_legal(option) && compatible_with_assigned(option, assigned);
+              return base_legal(option) && compatible_with_assigned(option, assigned);
             });
         if (!has_compatible_option) {
-          result.failure = has_terminal_legal_option ? RegionalAccessFailureReason::via_pair
-                                                     : RegionalAccessFailureReason::terminal_via;
-          if (has_terminal_legal_option) {
+          result.failure = has_base_legal_option ? RegionalAccessFailureReason::via_pair
+                                                  : RegionalAccessFailureReason::terminal_via;
+          if (has_base_legal_option) {
             for (const auto* option : ordered_variables[future].candidates) {
-              if (!terminal_legal(option)) {
+              if (!base_legal(option)) {
                 continue;
               }
               if (const auto* prior = assigned_conflict(option, assigned); prior != nullptr) {
@@ -1881,7 +2538,23 @@ select_access_geometry(const Board& board, const RegionalRouteResult& regional,
               }
             }
           } else {
+            const auto frozen = std::find_if(
+                ordered_variables[future].candidates.begin(),
+                ordered_variables[future].candidates.end(), [&](const auto* option) {
+                  return terminal_legal(option) && !frozen_copper_legal(option);
+                });
+            if (frozen != ordered_variables[future].candidates.end()) {
+              result.failure = RegionalAccessFailureReason::frozen_copper_via;
+              const auto conflict = frozen_copper_conflict(*frozen);
+              result.frozen_copper_conflict = {{(*frozen)->net, (*frozen)->region_id},
+                                               conflict->blocker->id, conflict->blocker->layer,
+                                               conflict->clearance_deficit,
+                                               std::string(conflict->code)};
+            }
             for (const auto* option : ordered_variables[future].candidates) {
+              if (result.failure == RegionalAccessFailureReason::frozen_copper_via) {
+                break;
+              }
               if (const auto* terminal = terminal_conflict(option); terminal != nullptr) {
                 result.terminal_via_blocker = std::pair{terminal->id, option->id};
                 break;
@@ -1912,27 +2585,133 @@ select_access_geometry(const Board& board, const RegionalRouteResult& regional,
   return result;
 }
 
-[[nodiscard]] bool polygon_bounds_overlap(const Polygon& first, const Polygon& second) {
-  const auto first_prepared = geometry::prepare_polygon(first);
-  const auto second_prepared = geometry::prepare_polygon(second);
-  return first_prepared.valid() && second_prepared.valid() &&
-         first_prepared.bounds.overlaps(second_prepared.bounds) &&
-         geometry::polygons_overlap(first_prepared, second_prepared);
+void record_frozen_copper_access_witness(
+    std::vector<RegionalFrozenCopperConflict>& witnesses, const RegionalAccessSelection& access,
+    const RegionalRouteResult& regional, const RegionalRoutingWindow& window,
+    const std::vector<RegionalRouteTemplate>& templates) {
+  if (access.failure != RegionalAccessFailureReason::frozen_copper_via ||
+      !access.frozen_copper_conflict) {
+    return;
+  }
+  const auto owned = [&](const RegionalRouteFragmentId& id) {
+    return std::binary_search(window.owned_fragments.begin(), window.owned_fragments.end(), id);
+  };
+  if (owned(access.frozen_copper_conflict->blocker)) {
+    return;
+  }
+  std::set<RegionalRouteFragmentId> candidates;
+  // A forward rejection can occur before every incident template is selected. Collect the
+  // complete owned via group atomically, then let scope expansion bound witness groups.
+  for (const auto& route_template : templates) {
+    if (!owned(route_template.fragment)) {
+      continue;
+    }
+    const auto matches_region = std::any_of(
+        route_template.via_choices.begin(), route_template.via_choices.end(),
+        [&](const auto via_id) {
+          const auto via = std::find_if(regional.via_choices.begin(), regional.via_choices.end(),
+                                        [&](const auto& item) { return item.id == via_id; });
+          return via != regional.via_choices.end() &&
+                 std::pair{via->net, via->region_id} == access.frozen_copper_conflict->via_region;
+        });
+    if (matches_region && route_template.fragment.net != access.frozen_copper_conflict->blocker.net) {
+      candidates.insert(route_template.fragment);
+    }
+  }
+  for (const auto& candidate : candidates) {
+    RegionalFrozenCopperConflict witness{candidate, access.frozen_copper_conflict->blocker,
+                                          access.frozen_copper_conflict->layer,
+                                          access.frozen_copper_conflict->clearance_deficit,
+                                          access.frozen_copper_conflict->code};
+    const auto prior = std::find_if(witnesses.begin(), witnesses.end(), [&](const auto& item) {
+      return item.candidate == witness.candidate && item.blocker == witness.blocker &&
+             item.layer == witness.layer && item.code == witness.code;
+    });
+    if (prior != witnesses.end()) {
+      prior->clearance_deficit = std::max(prior->clearance_deficit, witness.clearance_deficit);
+    } else {
+      witnesses.push_back(std::move(witness));
+    }
+  }
 }
 
-[[nodiscard]] bool corridor_cells_overlap(const RegionalChannel& channel,
-                                          const RoutingGeometricCorridorRun& corridor) {
-  return std::any_of(
-      channel.topology_cells.begin(), channel.topology_cells.end(), [&corridor](const auto& first) {
-        return std::any_of(
-            corridor.topology_cells.begin(), corridor.topology_cells.end(),
-            [&first](const auto& second) { return polygon_bounds_overlap(first, second); });
-      });
+[[nodiscard]] bool corridor_cells_overlap(
+    const std::vector<geometry::PreparedPolygon>& first,
+    const std::vector<geometry::PreparedPolygon>& second) {
+  return std::any_of(first.begin(), first.end(), [&second](const auto& first_cell) {
+    return first_cell.valid() && std::any_of(second.begin(), second.end(), [&](const auto& second_cell) {
+      return second_cell.valid() && first_cell.bounds.overlaps(second_cell.bounds) &&
+             geometry::polygons_overlap(first_cell, second_cell);
+    });
+  });
 }
+
+struct RegionalAlternativeDomainCache;
+[[nodiscard]] std::vector<std::optional<Nanometres>> assess_cached_regional_chords(
+    const Board& board, const NetId& net, const LayerId& layer,
+    const std::vector<std::pair<Point, Point>>& chords, RegionalRouteResult& result,
+    RegionalAlternativeDomainCache& cache);
 
 void populate_channels(const Board& board, const GlobalRouteResult& global,
-                       RegionalRouteResult& result) {
+                       RegionalRouteResult& result, RegionalAlternativeDomainCache& domain_cache) {
+  const auto channels_started = std::chrono::steady_clock::now();
+  ++result.candidate_pipeline_stats.channel_construction_invocations;
   result.channels.clear();
+  // Channel topology cells are immutable until this construction pass appends a corridor. Keep
+  // their prepared BVHs beside the public channel representation so repeated merge candidates
+  // never rebuild the same geometry. The cache is local to this result revision.
+  std::vector<std::vector<geometry::PreparedPolygon>> prepared_channel_cells;
+  std::map<LayerId, detail::RegionalChannelSpatialIndex> channel_spatial_index;
+  const auto append_prepared_cells = [&](std::size_t channel_index,
+                                         const std::vector<geometry::PreparedPolygon>& cells) {
+    if (channel_index >= prepared_channel_cells.size()) {
+      return;
+    }
+    auto& destination = prepared_channel_cells[channel_index];
+    destination.insert(destination.end(), cells.begin(), cells.end());
+    const auto& layer = result.channels[channel_index].layer;
+    for (const auto& cell : cells) {
+      channel_spatial_index[layer].append(channel_index, cell);
+    }
+  };
+  const auto first_overlapping_channel =
+      [&](const LayerId& layer, const std::vector<geometry::PreparedPolygon>& incoming,
+          const auto& accepts_channel) -> std::optional<std::size_t> {
+    ++result.candidate_pipeline_stats.channel_spatial_index_queries;
+    const auto index = channel_spatial_index.find(layer);
+    const auto candidates = index == channel_spatial_index.end()
+                                ? std::vector<std::size_t>{}
+                                : index->second.query(incoming, result.channels.size());
+    std::vector<std::size_t> eligible;
+    for (const auto channel_index : candidates) {
+      if (result.channels[channel_index].layer == layer &&
+          accepts_channel(result.channels[channel_index]) &&
+          channel_index < prepared_channel_cells.size()) {
+        eligible.push_back(channel_index);
+      }
+    }
+    // Test a bounded immutable slice concurrently only when the index leaves enough work.
+    // Channels are merged by this caller after stable reduction, never by a worker.
+    auto lease = eligible.size() >= 8U
+                     ? acquire_cpu_workers(4U, result.configured.max_spline_cpu_workers)
+                     : CpuWorkerLease{};
+    if (lease.workers() < 2U) lease = {};
+    const auto batch_size = lease.workers() >= 2U ? lease.workers() * 2U : 1U;
+    for (std::size_t begin = 0U; begin < eligible.size(); begin += batch_size) {
+      const auto count = std::min(batch_size, eligible.size() - begin);
+      std::vector<unsigned char> overlaps(count, 0U);
+      run_bounded_routing_tasks(count, lease.workers(), {}, [&](std::size_t slot) {
+        routing_kernel_checkpoint();
+        overlaps[slot] = corridor_cells_overlap(
+            prepared_channel_cells[eligible[begin + slot]], incoming);
+      });
+      result.candidate_pipeline_stats.channel_exact_overlap_checks += count;
+      for (std::size_t slot = 0U; slot < count; ++slot) {
+        if (overlaps[slot] != 0U) return eligible[begin + slot];
+      }
+    }
+    return std::nullopt;
+  };
   std::map<std::pair<NetId, std::size_t>, std::vector<RegionalRouteFragmentId>> path_fragments;
   for (const auto& fragment : result.fragments) {
     path_fragments[{fragment.id.net, fragment.id.connection_index}].push_back(fragment.id);
@@ -1948,6 +2727,7 @@ void populate_channels(const Board& board, const GlobalRouteResult& global,
       std::transform(corridor.topology_cells.begin(), corridor.topology_cells.end(),
                      std::back_inserter(prepared_corridor_cells),
                      [](const auto& cell) { return geometry::prepare_polygon(cell); });
+      result.candidate_pipeline_stats.channel_prepared_cells += prepared_corridor_cells.size();
       const auto fragment_traverses_corridor = [&](const RegionalRouteFragment& fragment) {
         const geometry::AxisAlignedBounds segment_bounds{
             Point{Nanometres{std::min(fragment.start.x.value(), fragment.end.x.value())},
@@ -1975,24 +2755,28 @@ void populate_channels(const Board& board, const GlobalRouteResult& global,
                fragment.start == corridor.lane_centerline.front() &&
                fragment.end == corridor.lane_centerline.back();
       };
-      auto channel = std::find_if(
-          result.channels.begin(), result.channels.end(), [&corridor](const auto& existing) {
-            return existing.layer == corridor.layer && corridor_cells_overlap(existing, corridor);
-          });
-      if (channel == result.channels.end()) {
+      const auto channel_index = first_overlapping_channel(
+          corridor.layer, prepared_corridor_cells, [](const RegionalChannel&) { return true; });
+      if (!channel_index) {
         result.channels.push_back(RegionalChannel{});
-        channel = std::prev(result.channels.end());
+        auto channel = std::prev(result.channels.end());
         channel->id = result.channels.size() - 1U;
         channel->layer = corridor.layer;
         channel->topology_cells = corridor.topology_cells;
         channel->portals = corridor.portals;
+        prepared_channel_cells.emplace_back();
+        append_prepared_cells(result.channels.size() - 1U, prepared_corridor_cells);
       } else {
+        auto channel = result.channels.begin() + static_cast<std::ptrdiff_t>(*channel_index);
         channel->topology_cells.insert(channel->topology_cells.end(),
                                        corridor.topology_cells.begin(),
                                        corridor.topology_cells.end());
         channel->portals.insert(channel->portals.end(), corridor.portals.begin(),
                                 corridor.portals.end());
+        append_prepared_cells(*channel_index, prepared_corridor_cells);
       }
+      auto channel = result.channels.begin() + static_cast<std::ptrdiff_t>(
+                                                   channel_index.value_or(result.channels.size() - 1U));
       const auto found = path_fragments.find({path.net, path.connection_index});
       if (found != path_fragments.end()) {
         for (const auto& fragment_id : found->second) {
@@ -2052,6 +2836,34 @@ void populate_channels(const Board& board, const GlobalRouteResult& global,
       governed_fragments.insert(window.fragments.begin(), window.fragments.end());
     }
   }
+  if (result.configured.local_channel_occupancy) {
+    // Cell overlap alone can attach a boundary fragment to a merged channel
+    // whose every sampled wall is remote. Regenerate that fragment's physical
+    // section through the existing certified fallback below, instead of making
+    // it an unknown occupant of every remote section in the channel.
+    for (auto& channel : result.channels) {
+      if (channel.cross_sections.empty()) continue;
+      std::erase_if(channel.occupants, [&](const auto& id) {
+        if (!governed_fragments.contains(id)) return false;
+        const auto fragment = std::find_if(result.fragments.begin(), result.fragments.end(),
+                                           [&](const auto& f) { return f.id == id; });
+        if (fragment == result.fragments.end() || fragment->width.value() <= 0 ||
+            fragment->clearance.value() < 0 || fragment->start == fragment->end) return false;
+        const auto radius = result.configured.centerline_channel_cuts ? 0.0L :
+            static_cast<long double>(fragment->width.value()) / 2.0L + fragment->clearance.value();
+        return std::none_of(channel.cross_sections.begin(), channel.cross_sections.end(),
+                            [&](const auto& s) {
+          return s.first_wall == s.second_wall ||
+                 geometry::segment_distance_nm(fragment->start, fragment->end,
+                                                s.first_wall, s.second_wall) <= radius;
+        });
+      });
+      std::erase_if(channel.fragment_topology_bindings, [&](const auto& binding) {
+        return std::find(channel.occupants.begin(), channel.occupants.end(), binding.fragment) ==
+               channel.occupants.end();
+      });
+    }
+  }
   const auto has_channel = [&](const RegionalRouteFragmentId& fragment) {
     return std::any_of(result.channels.begin(), result.channels.end(), [&](const auto& channel) {
       return std::find(channel.occupants.begin(), channel.occupants.end(), fragment) !=
@@ -2107,22 +2919,24 @@ void populate_channels(const Board& board, const GlobalRouteResult& global,
     if (!geometry::is_simple_polygon(cell)) {
       return false;
     }
-    auto channel =
-        std::find_if(result.channels.begin(), result.channels.end(), [&](const auto& existing) {
-          return existing.layer == fragment.layer &&
-                 conflicts_with_channel(fragment.id, existing) &&
-                 std::any_of(existing.topology_cells.begin(), existing.topology_cells.end(),
-                             [&](const auto& existing_cell) {
-                               return polygon_bounds_overlap(existing_cell, cell);
-                             });
+    const auto prepared_cell = geometry::prepare_polygon(cell);
+    ++result.candidate_pipeline_stats.channel_prepared_cells;
+    const std::vector<geometry::PreparedPolygon> prepared_cells{prepared_cell};
+    const auto channel_index = first_overlapping_channel(
+        fragment.layer, prepared_cells, [&](const RegionalChannel& existing) {
+          return conflicts_with_channel(fragment.id, existing);
         });
-    if (channel == result.channels.end()) {
+    if (!channel_index) {
       result.channels.push_back(RegionalChannel{});
-      channel = std::prev(result.channels.end());
+      auto channel = std::prev(result.channels.end());
       channel->id = result.channels.size() - 1U;
       channel->layer = fragment.layer;
+      prepared_channel_cells.emplace_back();
     }
+    auto channel = result.channels.begin() + static_cast<std::ptrdiff_t>(
+                                                   channel_index.value_or(result.channels.size() - 1U));
     channel->topology_cells.push_back(cell);
+    append_prepared_cells(channel_index.value_or(result.channels.size() - 1U), prepared_cells);
     if (std::find(channel->occupants.begin(), channel->occupants.end(), fragment.id) ==
         channel->occupants.end()) {
       channel->occupants.push_back(fragment.id);
@@ -2146,19 +2960,13 @@ void populate_channels(const Board& board, const GlobalRouteResult& global,
     return true;
   };
   for (const auto& [key, fragments] : missing_by_domain) {
-    const auto extracted = extract_polygonal_board_free_space(
-        board,
-        BoardFreeSpaceExtractionConfig{key.second, key.first, true, true,
-                                       !result.configured.treat_saved_zone_fills_as_refillable});
-    if (!extracted.complete()) {
-      continue;
-    }
     std::vector<std::pair<Point, Point>> chords;
     chords.reserve(fragments.size());
     for (const auto* fragment : fragments) {
       chords.emplace_back(fragment->start, fragment->end);
     }
-    const auto certificates = assess_free_space_chords(extracted.domain, chords);
+    const auto certificates = assess_cached_regional_chords(
+        board, key.first, key.second, chords, result, domain_cache);
     for (std::size_t index = 0U; index < fragments.size(); ++index) {
       const auto* fragment = fragments[index];
       const auto& certificate = certificates[index];
@@ -2190,6 +2998,9 @@ void populate_channels(const Board& board, const GlobalRouteResult& global,
       ++result.fragments_without_channel_topology;
     }
   }
+  result.candidate_pipeline_stats.channel_construction_us.add_nanoseconds(
+      static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now() - channels_started).count()));
 }
 
 [[nodiscard]] std::size_t inversion_count(const std::vector<RegionalRouteFragmentId>& current,
@@ -2209,24 +3020,147 @@ void populate_channels(const Board& board, const GlobalRouteResult& global,
   return inversions;
 }
 
-struct RegionalBundleChoicePortfolio {
-  std::vector<std::vector<std::size_t>> choices;
-  std::vector<RegionalAccessBlocker> access_blockers;
-  std::size_t states{0};
-  std::size_t access_pruned_states{0};
-  std::size_t access_assignment_states{0};
-  std::size_t access_assignment_exhaustions{0};
-  std::size_t terminal_pair_pruned_states{0};
-  std::size_t via_pair_pruned_states{0};
-  std::size_t terminal_via_pruned_states{0};
-  std::size_t lane_capacity_pruned_states{0};
-  bool exhausted{false};
+// Stable physical identity for one finite regional-master solution. Template and via ordinals are
+// local derived IDs and may be renumbered when conflict-directed column generation rebuilds a
+// window, so lazy no-good clauses compare the decisions themselves rather than those ordinals.
+struct RegionalTemplateStateKey {
+  RegionalRouteFragmentId fragment;
+  LayerId routing_layer;
+  std::vector<LayerId> layer_sequence;
+  std::uint64_t topology_signature{0U};
+  std::vector<Point> topology_centerline;
+  // Terminal choice IDs are regenerated with regional columns. Preserve their geometry rather
+  // than the ephemeral ID so an exact failure cannot suppress a different pad escape that
+  // happens to enter the same corridor sequence.
+  std::optional<Point> entry_terminal_portal;
+  std::vector<Point> entry_terminal_access_path;
+  std::optional<Point> exit_terminal_portal;
+  std::vector<Point> exit_terminal_access_path;
+
+  auto operator<=>(const RegionalTemplateStateKey&) const = default;
+};
+
+struct RegionalViaStateKey {
+  NetId net;
+  Point site;
+  std::vector<LayerId> span;
+
+  auto operator<=>(const RegionalViaStateKey&) const = default;
+};
+
+struct RegionalLaneStateKey {
+  LayerId layer;
+  Point first_wall;
+  Point second_wall;
+  std::vector<RegionalRouteFragmentId> order;
+  // The lane order alone is insufficient to name the realized PH candidate: changing a packed
+  // centre offset can change its physical copper while preserving every corridor signature.
+  // Keep the exact offsets in a no-good identity so one rejected realization cannot suppress a
+  // distinct geometry with the same topology and ordering.
+  std::vector<RegionalLanePlacement> placements;
+
+  auto operator<=>(const RegionalLaneStateKey&) const = default;
+};
+
+struct RegionalDiscreteStateKey {
+  std::vector<RegionalTemplateStateKey> templates;
+  std::vector<RegionalViaStateKey> vias;
+  std::vector<RegionalLaneStateKey> lanes;
+
+  auto operator<=>(const RegionalDiscreteStateKey&) const = default;
+};
+
+using RegionalNoGoodClauses = std::map<std::size_t, std::set<RegionalDiscreteStateKey>>;
+
+[[nodiscard]] RegionalDiscreteStateKey
+regional_discrete_state_key(const RegionalRouteResult& regional,
+                            const std::vector<RegionalRouteTemplate>& templates,
+                            const RegionalBundleSelection& selection) {
+  RegionalDiscreteStateKey key;
+  key.templates.reserve(selection.templates.size());
+  for (const auto template_id : selection.templates) {
+    if (template_id >= templates.size())
+      continue;
+    const auto& route_template = templates[template_id];
+    const auto terminal_geometry = [&](const std::optional<std::size_t>& choice_id) {
+      const auto choice = choice_id
+                              ? std::find_if(regional.terminal_choices.begin(),
+                                             regional.terminal_choices.end(), [&](const auto& value) {
+                                               return value.id == *choice_id;
+                                             })
+                              : regional.terminal_choices.end();
+      return std::pair{choice == regional.terminal_choices.end() ? std::optional<Point>{}
+                                                               : std::optional<Point>{choice->portal},
+                       choice == regional.terminal_choices.end() ? std::vector<Point>{}
+                                                               : choice->access_path};
+    };
+    auto [entry_portal, entry_access_path] = terminal_geometry(route_template.terminal_entry_choice);
+    auto [exit_portal, exit_access_path] = terminal_geometry(route_template.terminal_exit_choice);
+    key.templates.push_back(RegionalTemplateStateKey{
+        route_template.fragment, route_template.routing_layer, route_template.layer_sequence,
+        route_template.topology_signature.fingerprint, route_template.topology_centerline,
+        std::move(entry_portal), std::move(entry_access_path), std::move(exit_portal),
+        std::move(exit_access_path)});
+  }
+  std::sort(key.templates.begin(), key.templates.end());
+  key.vias.reserve(selection.via_choices.size());
+  for (const auto choice_id : selection.via_choices) {
+    const auto via = std::find_if(regional.via_choices.begin(), regional.via_choices.end(),
+                                  [&](const auto& candidate) { return candidate.id == choice_id; });
+    if (via != regional.via_choices.end())
+      key.vias.push_back(RegionalViaStateKey{via->net, via->site, via->span});
+  }
+  std::sort(key.vias.begin(), key.vias.end());
+  key.vias.erase(std::unique(key.vias.begin(), key.vias.end()), key.vias.end());
+  key.lanes.reserve(selection.packed_cross_sections.size());
+  for (const auto& cross_section : selection.packed_cross_sections) {
+    auto first = cross_section.first_wall;
+    auto second = cross_section.second_wall;
+    auto order = cross_section.ordered_occupants;
+    auto placements = cross_section.placements;
+    if (second < first) {
+      std::swap(first, second);
+      std::reverse(order.begin(), order.end());
+      for (auto& placement : placements) {
+        placement.center_offset_nm = -placement.center_offset_nm;
+      }
+    }
+    std::sort(placements.begin(), placements.end(), [](const auto& lhs, const auto& rhs) {
+      return lhs.fragment != rhs.fragment ? lhs.fragment < rhs.fragment
+                                          : lhs.center_offset_nm < rhs.center_offset_nm;
+    });
+    key.lanes.push_back(RegionalLaneStateKey{cross_section.layer, first, second, std::move(order),
+                                             std::move(placements)});
+  }
+  std::sort(key.lanes.begin(), key.lanes.end());
+  return key;
+}
+
+struct RegionalAccessSelectionCacheKey {
+  // Template indices retain selection order and pairwise scope changes the solver's permitted
+  // representatives, so both are part of the exact invocation-local identity.
+  std::vector<std::size_t> selected_templates;
+  bool pairwise_scope{false};
+  auto operator<=>(const RegionalAccessSelectionCacheKey&) const = default;
+};
+
+struct RegionalAccessSelectionCache {
+  static constexpr std::size_t maximum_completed_entries = 4'096U;
+  RegionalAccessPreparationCache preparation;
+  std::map<RegionalAccessSelectionCacheKey, RegionalAccessSelection> completed;
+  std::size_t hits{0U};
+  std::size_t misses{0U};
+  std::size_t avoided_calls{0U};
+  std::size_t entries_peak{0U};
+  std::size_t capacity_skipped_insertions{0U};
 };
 
 [[nodiscard]] RegionalBundleChoicePortfolio generate_consistent_bundle_choices(
-    const RegionalRouteResult& regional, const std::vector<RegionalRouteTemplate>& templates,
+    const Board& board, const RegionalRouteResult& regional,
+    const RegionalRoutingWindow& window, const std::vector<RegionalRouteTemplate>& templates,
     const std::vector<std::vector<std::size_t>>& templates_by_fragment,
-    std::size_t maximum_states) {
+    std::size_t maximum_states, bool forward_checking,
+    RegionalAccessSelectionCache* shared_access_cache = nullptr) {
   RegionalBundleChoicePortfolio result;
   if (templates_by_fragment.empty() || maximum_states == 0U) {
     return result;
@@ -2259,20 +3193,434 @@ struct RegionalBundleChoicePortfolio {
                          static_cast<long double>(fragment.clearance.value()),
                          fragment.width.value() > 0 && fragment.clearance.value() >= 0});
   }
+  // Capacity and lane packing consume the same immutable local demand scopes.
+  // Resource IDs here are scope indices, not physical channel IDs.
+  const auto demand_scopes = regional_channel_demand_scopes(regional.fragments,
+      regional.channels, templates, regional.configured.local_channel_occupancy,
+      regional.configured.centerline_channel_cuts);
+  const auto copper_aliases = regional_template_copper_aliases(
+      regional.fragments, templates, regional.configured.shared_channel_copper);
   std::map<std::size_t, long double> maximum_channel_width_nm;
-  for (const auto& channel : regional.channels) {
-    long double maximum_width = 0.0L;
-    for (const auto& cross_section : channel.cross_sections) {
-      maximum_width =
-          std::max(maximum_width, static_cast<long double>(cross_section.usable_width.value()));
-    }
-    maximum_channel_width_nm.emplace(channel.id, maximum_width);
+  std::vector<std::vector<std::size_t>> template_scope_ids(templates.size());
+  for (std::size_t scope = 0; scope < demand_scopes.size(); ++scope) {
+    maximum_channel_width_nm.emplace(scope, demand_scopes[scope].maximum_width.value());
+    for (const auto template_id : demand_scopes[scope].template_indices)
+      template_scope_ids[template_id].push_back(scope);
   }
   struct PartialChannelEnvelope {
     long double width_and_clearance_nm{0.0L};
     long double maximum_clearance_nm{0.0L};
+    std::set<std::size_t> copper_identities;
   };
   std::map<std::size_t, PartialChannelEnvelope> channel_envelopes;
+  struct TemplateResources {
+    std::vector<std::pair<ViaRegionKey, ViaSiteIdentity>> vias;
+    std::vector<std::size_t> channels;
+    FragmentEnvelope envelope;
+    bool valid{true};
+  };
+  const bool propagate_resources =
+      forward_checking && regional.configured.enable_bundle_resource_forward_checking;
+  std::vector<TemplateResources> template_resources;
+  if (propagate_resources) {
+    for (std::size_t template_id = 0; template_id < templates.size(); ++template_id) {
+      const auto& route_template = templates[template_id];
+      auto& resources = template_resources.emplace_back();
+      if (const auto f = fragment_envelopes.find(route_template.fragment);
+          f != fragment_envelopes.end()) resources.envelope = f->second;
+      resources.valid = resources.envelope.valid;
+      resources.channels = template_scope_ids[template_id];
+      std::sort(resources.channels.begin(), resources.channels.end());
+      resources.channels.erase(std::unique(resources.channels.begin(), resources.channels.end()),
+                               resources.channels.end());
+      for (const auto id : route_template.via_choices) {
+        const auto via = std::find_if(regional.via_choices.begin(), regional.via_choices.end(),
+                                     [&](const auto& v) { return v.id == id; });
+        if (via == regional.via_choices.end()) {
+          resources.valid = false;
+          break;
+        }
+        resources.vias.push_back({{via->net, via->region_id}, {via->site, via->span}});
+      }
+    }
+  }
+  std::map<std::pair<std::size_t, std::size_t>, bool> pairwise_access_support;
+  // Only use this before the CSP when every part of the pair's copper is already fixed by the
+  // template. Lanes, terminals, vias and selected global topologies retain downstream freedom.
+  struct FixedTemplateGeometryKey {
+    LayerId layer;
+    Nanometres width;
+    Nanometres clearance;
+    std::vector<Point> centerline;
+    auto operator<=>(const FixedTemplateGeometryKey&) const = default;
+  };
+  std::map<std::pair<FixedTemplateGeometryKey, FixedTemplateGeometryKey>, bool>
+      fixed_geometry_support;
+  const auto fixed_geometry_key = [&](const RegionalRouteTemplate& route_template)
+      -> std::optional<FixedTemplateGeometryKey> {
+    // Only the straight realizer preserves an already-octilinear input centerline. PH and the
+    // straight elbow synthesis may move any other chord, so those candidates stay unknown.
+    if (!regional.configured.enable_straight_realization ||
+        regional.configured.enable_spline_realization || route_template.selected_global_topology ||
+        route_template.terminal_entry_choice ||
+        route_template.terminal_exit_choice || !route_template.via_choices.empty() ||
+        !route_template.channel_sequence.empty() || route_template.topology_centerline.size() < 2U) {
+      return std::nullopt;
+    }
+    const auto fragment = std::find_if(regional.fragments.begin(), regional.fragments.end(),
+                                       [&](const auto& value) {
+                                         return value.id == route_template.fragment;
+                                       });
+    if (fragment == regional.fragments.end() || fragment->width.value() <= 0 ||
+        fragment->clearance.value() < 0) {
+      return std::nullopt;
+    }
+    for (std::size_t edge = 1U; edge < route_template.topology_centerline.size(); ++edge) {
+      const auto& first = route_template.topology_centerline[edge - 1U];
+      const auto& second = route_template.topology_centerline[edge];
+      const auto dx = std::abs(second.x.value() - first.x.value());
+      const auto dy = std::abs(second.y.value() - first.y.value());
+      if ((dx == 0 && dy == 0) || !(dx == 0 || dy == 0 || dx == dy)) {
+        return std::nullopt;
+      }
+    }
+    return FixedTemplateGeometryKey{route_template.routing_layer, fragment->width,
+                                    fragment->clearance, route_template.topology_centerline};
+  };
+  std::vector<std::optional<FixedTemplateGeometryKey>> fixed_template_geometry;
+  fixed_template_geometry.reserve(templates.size());
+  for (const auto& route_template : templates) {
+    fixed_template_geometry.push_back(fixed_geometry_key(route_template));
+  }
+  const auto fixed_geometry_compatible = [&](const std::size_t first_template,
+                                             const std::size_t second_template) {
+    if (first_template >= templates.size() || second_template >= templates.size() ||
+        templates[first_template].fragment.net == templates[second_template].fragment.net) {
+      return true;
+    }
+    const auto& first_key = fixed_template_geometry[first_template];
+    const auto& second_key = fixed_template_geometry[second_template];
+    if (!first_key || !second_key || first_key->layer != second_key->layer) {
+      return true;
+    }
+    auto key = std::minmax(*first_key, *second_key);
+    if (const auto cached = fixed_geometry_support.find(key); cached != fixed_geometry_support.end()) {
+      return cached->second;
+    }
+    ++result.fixed_geometry_compatibility_checks;
+    const auto required = static_cast<long double>(first_key->width.value() +
+                                                   second_key->width.value()) / 2.0L +
+                          static_cast<long double>(
+                              std::max(first_key->clearance, second_key->clearance).value());
+    bool supported = true;
+    for (std::size_t first_edge = 1U; supported && first_edge < first_key->centerline.size();
+         ++first_edge) {
+      for (std::size_t second_edge = 1U; second_edge < second_key->centerline.size();
+           ++second_edge) {
+        if (geometry::segment_distance_nm(first_key->centerline[first_edge - 1U],
+                                          first_key->centerline[first_edge],
+                                          second_key->centerline[second_edge - 1U],
+                                          second_key->centerline[second_edge]) < required) {
+          supported = false;
+          break;
+        }
+      }
+    }
+    if (!supported) ++result.fixed_geometry_compatibility_rejections;
+    fixed_geometry_support.emplace(std::move(key), supported);
+    return supported;
+  };
+  const auto template_has_access = [](const RegionalRouteTemplate& route_template) {
+    return route_template.terminal_entry_choice || route_template.terminal_exit_choice ||
+           !route_template.via_choices.empty();
+  };
+  const auto record_access_result = [&](const RegionalAccessSelection& access) {
+    result.access_assignment_states += access.states;
+    result.access_assignment_exhaustions += access.exhausted ? 1U : 0U;
+    if (access.legal() || access.exhausted) {
+      return;
+    }
+    ++result.access_pruned_states;
+    switch (access.failure) {
+    case RegionalAccessFailureReason::terminal_pair:
+      ++result.terminal_pair_pruned_states;
+      break;
+    case RegionalAccessFailureReason::via_pair:
+      ++result.via_pair_pruned_states;
+      break;
+    case RegionalAccessFailureReason::terminal_via:
+      ++result.terminal_via_pruned_states;
+      break;
+    case RegionalAccessFailureReason::frozen_copper_via:
+      ++result.frozen_copper_via_pruned_states;
+      record_frozen_copper_access_witness(
+          result.frozen_copper_conflicts, access, regional, window, templates);
+      break;
+    case RegionalAccessFailureReason::invalid_choice:
+    case RegionalAccessFailureReason::none:
+      break;
+    }
+    RegionalAccessBlocker blocker;
+    if (access.failure == RegionalAccessFailureReason::via_pair && access.via_pair_blocker) {
+      blocker.kind = RegionalAccessBlockerKind::via_pair;
+      blocker.first_via_choice = access.via_pair_blocker->first;
+      blocker.second_via_choice = access.via_pair_blocker->second;
+    } else if (access.failure == RegionalAccessFailureReason::terminal_via &&
+               access.terminal_via_blocker) {
+      blocker.kind = RegionalAccessBlockerKind::terminal_via;
+      blocker.terminal_choice = access.terminal_via_blocker->first;
+      blocker.first_via_choice = access.terminal_via_blocker->second;
+    } else {
+      return;
+    }
+    const auto prior = std::find_if(
+        result.access_blockers.begin(), result.access_blockers.end(), [&](const auto& candidate) {
+          return candidate.kind == blocker.kind &&
+                 candidate.first_via_choice == blocker.first_via_choice &&
+                 candidate.second_via_choice == blocker.second_via_choice &&
+                 candidate.terminal_choice == blocker.terminal_choice;
+        });
+    if (prior != result.access_blockers.end()) {
+      ++prior->observations;
+    } else if (result.access_blockers.size() <
+               regional.configured.max_access_blockers_per_window) {
+      blocker.observations = 1U;
+      result.access_blockers.push_back(std::move(blocker));
+    }
+  };
+  // This is intentionally invocation-local. The surrounding enumeration holds board, regional,
+  // window, templates and access-state budget fixed; retaining a result beyond that boundary
+  // would require a much wider geometry/rules fingerprint. Exhausted searches are never cached:
+  // their result depends on the bounded search budget rather than proving feasibility.
+  RegionalAccessSelectionCache local_access_cache;
+  auto& access_cache = shared_access_cache == nullptr ? local_access_cache : *shared_access_cache;
+  const auto cache_hits_before = access_cache.hits;
+  const auto cache_misses_before = access_cache.misses;
+  const auto cache_avoided_before = access_cache.avoided_calls;
+  const auto timed_select_access = [&](const std::vector<std::size_t>& selected,
+                                       bool pairwise_scope = false) {
+    RegionalAccessSelectionCacheKey key{selected, pairwise_scope};
+    if (const auto cached = access_cache.completed.find(key);
+        cached != access_cache.completed.end()) {
+      ++access_cache.hits;
+      ++access_cache.avoided_calls;
+      return cached->second;
+    }
+    ++access_cache.misses;
+    const auto started = std::chrono::steady_clock::now();
+    ++result.access_selection_invocations;
+    const auto access = select_access_geometry(
+        board, regional, window, templates, selected,
+        regional.configured.max_access_assignment_states, pairwise_scope,
+        &access_cache.preparation);
+    result.access_selection_us.add_nanoseconds(static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - started).count()));
+    if (!access.exhausted &&
+        access_cache.completed.size() < RegionalAccessSelectionCache::maximum_completed_entries) {
+      access_cache.completed.emplace(std::move(key), access);
+      access_cache.entries_peak = std::max(access_cache.entries_peak, access_cache.completed.size());
+    } else if (!access.exhausted) {
+      ++access_cache.capacity_skipped_insertions;
+    }
+    return access;
+  };
+  const auto pairwise_compatible = [&](const std::size_t first_template,
+                                       const std::size_t second_template) {
+    if (first_template >= templates.size() || second_template >= templates.size()) {
+      return false;
+    }
+    const auto pair = std::minmax(first_template, second_template);
+    const auto& first = templates[pair.first];
+    const auto& second = templates[pair.second];
+    const auto adjacent_alternatives =
+        !first.selected_global_topology && !second.selected_global_topology &&
+        first.fragment.net == second.fragment.net &&
+        first.fragment.connection_index == second.fragment.connection_index &&
+        first.fragment.run_index == second.fragment.run_index &&
+        std::max(first.fragment.fragment_index, second.fragment.fragment_index) -
+                std::min(first.fragment.fragment_index, second.fragment.fragment_index) == 1U;
+    if (adjacent_alternatives && first.routing_layer != second.routing_layer) {
+      ++result.run_layer_pruned_states;
+      return false;
+    }
+    if (!fixed_geometry_compatible(pair.first, pair.second)) {
+      return false;
+    }
+    if (!template_has_access(templates[pair.first]) &&
+        !template_has_access(templates[pair.second])) {
+      return true;
+    }
+    const auto cached = pairwise_access_support.find(pair);
+    if (cached != pairwise_access_support.end()) {
+      return cached->second;
+    }
+    ++result.pairwise_access_checks;
+    const auto access = timed_select_access({pair.first, pair.second}, true);
+    record_access_result(access);
+    const auto supported = access.legal() || access.exhausted;
+    pairwise_access_support.emplace(pair, supported);
+    return supported;
+  };
+  // Bounded HC-CBS-inspired seed composition.  Child groups are finite two-fragment local
+  // assignments, not temporal agents: retain several locally legal alternatives then lazily
+  // combine the most interacting groups.  The established full master below remains the
+  // authority and receives these rows only as additional proposals.
+  std::vector<std::vector<std::size_t>> hc_seed_choices;
+  if (regional.configured.enable_bounded_hc_composition &&
+      regional.configured.hc_composition_cache != nullptr) {
+    const auto template_identity = [&](const std::size_t id) {
+      const auto& candidate = templates[id];
+      std::string identity = candidate.fragment.net.value() + ":" +
+          std::to_string(candidate.fragment.connection_index) + ":" +
+          std::to_string(candidate.fragment.run_index) + ":" +
+          std::to_string(candidate.fragment.fragment_index) + ":" + candidate.routing_layer.value();
+      for (const auto point : candidate.topology_centerline)
+        identity += ":p" + std::to_string(point.x.value()) + "," + std::to_string(point.y.value());
+      for (const auto& layer : candidate.layer_sequence) identity += ":l" + layer.value();
+      for (const auto via_id : candidate.via_choices) {
+        const auto via = std::find_if(regional.via_choices.begin(), regional.via_choices.end(),
+                                      [&](const auto& value) { return value.id == via_id; });
+        if (via != regional.via_choices.end()) {
+          identity += ":v" + std::to_string(via->site.x.value()) + "," +
+                      std::to_string(via->site.y.value());
+          for (const auto& layer : via->span) identity += ":s" + layer.value();
+        }
+      }
+      for (const auto terminal_id : {candidate.terminal_entry_choice, candidate.terminal_exit_choice}) {
+        if (!terminal_id) continue;
+        const auto terminal = std::find_if(regional.terminal_choices.begin(), regional.terminal_choices.end(),
+                                           [&](const auto& value) { return value.id == *terminal_id; });
+        if (terminal == regional.terminal_choices.end()) continue;
+        identity += ":t" + std::to_string(terminal->pad_position.x.value()) + "," +
+                    std::to_string(terminal->pad_position.y.value()) + ":" +
+                    std::to_string(terminal->portal.x.value()) + "," +
+                    std::to_string(terminal->portal.y.value());
+        for (const auto point : terminal->access_path)
+          identity += ":a" + std::to_string(point.x.value()) + "," + std::to_string(point.y.value());
+      }
+      return identity;
+    };
+    std::map<std::string, std::vector<std::size_t>> hc_members;
+    std::size_t hc_child_checks = 0U;
+    std::vector<RegionalHcChildGroup> hc_groups;
+    std::vector<std::string> candidate_geometry;
+    for (std::size_t position = 0U; position < templates_by_fragment.size(); position += 2U) {
+      RegionalHcChildGroup group;
+      group.identity = "fragments:" + std::to_string(position) + ":" +
+                       std::to_string(std::min(position + 1U, templates_by_fragment.size() - 1U));
+      const auto& first_domain = templates_by_fragment[position];
+      const auto second_position = position + 1U;
+      const auto& second_domain = second_position < templates_by_fragment.size()
+                                      ? templates_by_fragment[second_position] : std::vector<std::size_t>{};
+      const auto append_child = [&](std::vector<std::size_t> members) {
+        if (members.empty() || group.alternatives.size() >=
+            regional.configured.max_hc_composition_children_per_group) return;
+        ++hc_child_checks;
+        bool legal = true;
+        for (std::size_t left = 0U; left < members.size(); ++left)
+          for (std::size_t right = left + 1U; right < members.size(); ++right)
+            legal = legal && pairwise_compatible(members[left], members[right]);
+        if (!legal) return;
+        std::vector<std::string> identities;
+        std::uint64_t cost = 0U;
+        for (const auto member : members) {
+          const auto identity = template_identity(member);
+          identities.push_back(identity);
+          candidate_geometry.push_back(identity);
+          const auto increment = templates[member].topology_cost;
+          cost = cost > std::numeric_limits<std::uint64_t>::max() - increment
+              ? std::numeric_limits<std::uint64_t>::max() : cost + increment;
+        }
+        std::sort(identities.begin(), identities.end());
+        std::string identity;
+        for (const auto& value : identities) identity += "[" + value + "]";
+        hc_members.emplace(identity, std::move(members));
+        group.alternatives.push_back({std::move(identity), cost});
+      };
+      for (const auto first : first_domain) {
+        routing_kernel_checkpoint();
+        if (hc_child_checks >= regional.configured.max_hc_composition_compatibility_checks) break;
+        if (group.alternatives.size() >= regional.configured.max_hc_composition_children_per_group) break;
+        if (second_position == templates_by_fragment.size()) append_child({first});
+        else for (const auto second : second_domain) {
+          routing_kernel_checkpoint();
+          if (hc_child_checks >= regional.configured.max_hc_composition_compatibility_checks) break;
+          if (group.alternatives.size() >= regional.configured.max_hc_composition_children_per_group) break;
+          append_child({first, second});
+        }
+      }
+      hc_groups.push_back(std::move(group));
+    }
+    std::sort(candidate_geometry.begin(), candidate_geometry.end());
+    candidate_geometry.erase(std::unique(candidate_geometry.begin(), candidate_geometry.end()),
+                             candidate_geometry.end());
+    RegionalHcSemanticContext hc_context;
+    const auto hc_scene_bytes = estimate_regional_hc_scene_bytes(
+        board, regional.configured.max_hc_composition_cache_bytes);
+    auto* hc_cache = hc_scene_bytes <= regional.configured.max_hc_composition_cache_bytes
+                               ? regional.configured.hc_composition_cache.get() : nullptr;
+    if (hc_cache != nullptr) hc_context.board_scene = std::make_shared<Board>(board);
+    hc_context.rules = std::to_string(regional.configured.max_access_assignment_states) + ":" +
+                       std::to_string(regional.configured.local_channel_occupancy) + ":" +
+                       std::to_string(regional.configured.shared_channel_copper);
+    for (const auto& terminal : regional.terminal_choices) {
+      hc_context.terminal_geometry += terminal.net.value() + ":" + terminal.layer.value() + ":" +
+          std::to_string(terminal.pad_position.x.value()) + "," +
+          std::to_string(terminal.pad_position.y.value()) + ":" +
+          std::to_string(terminal.portal.x.value()) + "," +
+          std::to_string(terminal.portal.y.value());
+      for (const auto point : terminal.access_path)
+        hc_context.terminal_geometry += ":" + std::to_string(point.x.value()) + "," +
+                                        std::to_string(point.y.value());
+      hc_context.terminal_geometry += ";";
+    }
+    hc_context.access_constraints = std::to_string(regional.configured.max_access_assignment_states);
+    hc_context.compatibility_constraints = std::to_string(regional.configured.frozen_copper_context) + ":" +
+                                           std::to_string(regional.configured.enable_bundle_forward_checking);
+    hc_context.options = std::to_string(regional.configured.max_bundle_search_states);
+    hc_context.candidate_geometry = std::move(candidate_geometry);
+    RegionalHcCompositionBounds hc_bounds;
+    hc_bounds.max_nodes = regional.configured.max_hc_composition_nodes;
+    hc_bounds.max_frontier = regional.configured.max_hc_composition_frontier;
+    hc_bounds.max_retained_per_group = regional.configured.max_hc_composition_children_per_group;
+    hc_bounds.max_results = regional.configured.max_hc_composition_results;
+    hc_bounds.max_compatibility_checks = regional.configured.max_hc_composition_compatibility_checks;
+    hc_bounds.max_cache_bytes = regional.configured.max_hc_composition_cache_bytes;
+    const auto hc = compose_regional_hc_assignments(
+        hc_context, hc_groups, hc_bounds,
+        [&](const RegionalHcAlternative& left, const RegionalHcAlternative& right) {
+          const auto left_members = hc_members.find(left.identity);
+          const auto right_members = hc_members.find(right.identity);
+          if (left_members == hc_members.end() || right_members == hc_members.end()) return false;
+          for (const auto lhs : left_members->second) for (const auto rhs : right_members->second)
+            if (!pairwise_compatible(lhs, rhs)) return false;
+          return true;
+        }, hc_cache);
+    result.hc_composition = hc.stats;
+    result.hc_composition.compatibility_checks += hc_child_checks;
+    result.hc_composition.compatibility_bound_hit =
+        result.hc_composition.compatibility_bound_hit ||
+        hc_child_checks >= regional.configured.max_hc_composition_compatibility_checks;
+    result.hc_composition.seed_assignments_generated = hc.assignments.size();
+    for (const auto& grouped : hc.assignments) {
+      std::vector<std::size_t> choice(templates_by_fragment.size());
+      bool complete = grouped.size() == hc_groups.size();
+      for (std::size_t group = 0U; complete && group < grouped.size(); ++group) {
+        if (grouped[group] >= hc_groups[group].alternatives.size()) { complete = false; break; }
+        const auto members = hc_members.find(hc_groups[group].alternatives[grouped[group]].identity);
+        if (members == hc_members.end()) { complete = false; break; }
+        for (const auto id : members->second) {
+          const auto position = std::find_if(templates_by_fragment.begin(), templates_by_fragment.end(),
+              [&](const auto& domain) { return std::find(domain.begin(), domain.end(), id) != domain.end(); });
+          if (position == templates_by_fragment.end()) { complete = false; break; }
+          choice[static_cast<std::size_t>(position - templates_by_fragment.begin())] =
+              static_cast<std::size_t>(std::find(position->begin(), position->end(), id) - position->begin());
+        }
+      }
+      if (complete) hc_seed_choices.push_back(std::move(choice));
+    }
+  }
   // Dense template products are first filtered as compatibility bitsets on the GPU. For a
   // completely enumerated product this replaces branch-and-bound enumeration; every surviving
   // assignment is still rechecked here for via identity and aggregate physical channel width.
@@ -2296,8 +3644,9 @@ struct RegionalBundleChoicePortfolio {
     for (std::size_t second = first + 1U; second < templates.size(); ++second) {
       if (templates[first].fragment == templates[second].fragment)
         continue;
-      bool incompatible = false;
+      bool incompatible = !fixed_geometry_compatible(first, second);
       for (const auto first_via_id : templates[first].via_choices) {
+        if (incompatible) break;
         const auto first_via =
             std::find_if(regional.via_choices.begin(), regional.via_choices.end(),
                          [&](const auto& via) { return via.id == first_via_id; });
@@ -2314,8 +3663,8 @@ struct RegionalBundleChoicePortfolio {
             break;
           }
         }
-        if (incompatible)
-          break;
+          if (incompatible)
+            break;
       }
       if (incompatible)
         compute_assignment.incompatible_options.emplace_back(static_cast<std::uint32_t>(first),
@@ -2354,7 +3703,7 @@ struct RegionalBundleChoicePortfolio {
       const auto envelope = fragment_envelopes.find(templates[template_id].fragment);
       if (envelope == fragment_envelopes.end() || !envelope->second.valid)
         return std::nullopt;
-      auto channels = templates[template_id].channel_sequence;
+      auto channels = template_scope_ids[template_id];
       std::sort(channels.begin(), channels.end());
       channels.erase(std::unique(channels.begin(), channels.end()), channels.end());
       for (const auto channel_id : channels) {
@@ -2362,6 +3711,8 @@ struct RegionalBundleChoicePortfolio {
         if (capacity == maximum_channel_width_nm.end())
           return std::nullopt;
         auto& used = assigned_channels[channel_id];
+        if (regional.configured.shared_channel_copper &&
+            !used.copper_identities.insert(copper_aliases[template_id]).second) continue;
         used.width_and_clearance_nm += envelope->second.width_and_clearance_nm;
         used.maximum_clearance_nm =
             std::max(used.maximum_clearance_nm, envelope->second.clearance_nm);
@@ -2384,18 +3735,37 @@ struct RegionalBundleChoicePortfolio {
   // a fallback reservoir for branches the bounded DFS could not reach, not permission to remove
   // or reorder a previously reachable regional topology.  This matters because downstream exact
   // spline/via realization can prefer a nominally more expensive template.
-  // This search establishes compatible topology/layer/via-template bundles. Terminal escape and
-  // via run-up selection is a separate bounded CSP evaluated below for each retained complete
-  // choice. Do not spend one shared access budget here: an early difficult leaf could exhaust it
-  // and discard every later topology as though it had been proved illegal. In particular that
-  // erased longer fallback corridors in residual cones. Keep the complete leaves and let the
-  // authoritative per-choice access/lane stage reject or accept them with its own full budget.
+  // Forward checking reuses the exact access CSP on template pairs. Only proved failures prune:
+  // an exhausted subproblem remains supported. Adding selected fragments can only restrict the
+  // pair's relaxed access domains, including equivalent via runup representatives. Whole
+  // coupled atoms are checked only at complete leaves because a
+  // partial atom can still be completed by an unassigned member. The downstream access and lane
+  // stage retains its independent per-choice budget and remains authoritative.
+  std::vector<std::size_t> partial_selected;
+  partial_selected.reserve(variable_order.size());
   std::function<void(std::size_t, const std::map<ViaRegionKey, ViaSiteIdentity>&)> search =
       [&](const std::size_t depth, const std::map<ViaRegionKey, ViaSiteIdentity>& assigned_vias) {
         if (result.exhausted) {
           return;
         }
         if (depth == variable_order.size()) {
+          if (forward_checking) {
+            // Match the downstream domain order, including the representative chosen when
+            // several fragments refer to the same physical via region.
+            std::vector<std::size_t> selected;
+            for (std::size_t position = 0; position < choice.size(); ++position) {
+              selected.push_back(templates_by_fragment[position][choice[position]]);
+            }
+            if (!coupled_template_selection_legal(board, window, templates, selected)) {
+              ++result.coupled_pruned_states;
+              return;
+            }
+            const auto access = timed_select_access(selected);
+            record_access_result(access);
+            if (!access.legal() && !access.exhausted) {
+              return;
+            }
+          }
           result.choices.push_back(choice);
           return;
         }
@@ -2406,6 +3776,7 @@ struct RegionalBundleChoicePortfolio {
             result.exhausted = true;
             return;
           }
+          routing_kernel_checkpoint();
           ++result.states;
           const auto template_id = templates_by_fragment[position][candidate_index];
           if (template_id >= templates.size()) {
@@ -2434,12 +3805,23 @@ struct RegionalBundleChoicePortfolio {
           if (!compatible) {
             continue;
           }
+          if (std::any_of(partial_selected.begin(), partial_selected.end(),
+                          [&](const auto selected_template) {
+                            return !fixed_geometry_compatible(selected_template, template_id);
+                          }) ||
+              (forward_checking && std::any_of(partial_selected.begin(), partial_selected.end(),
+                                               [&](const auto selected_template) {
+                                                 return !pairwise_compatible(selected_template,
+                                                                             template_id);
+                                               }))) {
+            continue;
+          }
           const auto fragment_envelope = fragment_envelopes.find(templates[template_id].fragment);
           bool channel_capacity_legal =
               fragment_envelope != fragment_envelopes.end() && fragment_envelope->second.valid;
           std::vector<std::pair<std::size_t, std::optional<PartialChannelEnvelope>>>
               changed_channel_envelopes;
-          auto candidate_channels = templates[template_id].channel_sequence;
+          auto candidate_channels = template_scope_ids[template_id];
           std::sort(candidate_channels.begin(), candidate_channels.end());
           candidate_channels.erase(
               std::unique(candidate_channels.begin(), candidate_channels.end()),
@@ -2458,6 +3840,8 @@ struct RegionalBundleChoicePortfolio {
                                       ? std::optional<PartialChannelEnvelope>{}
                                       : std::optional<PartialChannelEnvelope>{current->second};
             auto next = previous.value_or(PartialChannelEnvelope{});
+            if (regional.configured.shared_channel_copper &&
+                !next.copper_identities.insert(copper_aliases[template_id]).second) continue;
             next.width_and_clearance_nm += fragment_envelope->second.width_and_clearance_nm;
             next.maximum_clearance_nm =
                 std::max(next.maximum_clearance_nm, fragment_envelope->second.clearance_nm);
@@ -2481,7 +3865,58 @@ struct RegionalBundleChoicePortfolio {
             continue;
           }
           choice[position] = candidate_index;
-          search(depth + 1U, next_vias);
+          partial_selected.push_back(template_id);
+          bool forward_legal = true;
+          for (std::size_t future_depth = depth + 1U;
+               forward_checking && forward_legal && future_depth < variable_order.size();
+               ++future_depth) {
+            const auto future_position = variable_order[future_depth];
+            forward_legal = std::any_of(
+                templates_by_fragment[future_position].begin(),
+                templates_by_fragment[future_position].end(), [&](const auto future_template) {
+                  if (future_template >= templates.size()) return false;
+                  if (propagate_resources) {
+                    const auto& resources = template_resources[future_template];
+                    if (!resources.valid) return false;
+                    for (const auto& [key, identity] : resources.vias) {
+                      const auto found = next_vias.find(key);
+                      if (found != next_vias.end() &&
+                          (found->second.site != identity.site ||
+                           found->second.span != identity.span)) {
+                        ++result.forward_via_identity_rejections;
+                        return false;
+                      }
+                    }
+                    for (const auto channel : resources.channels) {
+                      const auto capacity = maximum_channel_width_nm.find(channel);
+                      const auto used = channel_envelopes.find(channel);
+                      const auto prior = used == channel_envelopes.end()
+                                             ? PartialChannelEnvelope{} : used->second;
+                      if (regional.configured.shared_channel_copper &&
+                          prior.copper_identities.contains(copper_aliases[future_template])) continue;
+                      if (capacity == maximum_channel_width_nm.end() ||
+                          prior.width_and_clearance_nm + resources.envelope.width_and_clearance_nm +
+                              std::max(prior.maximum_clearance_nm,
+                                       resources.envelope.clearance_nm) > capacity->second) {
+                        ++result.forward_capacity_rejections;
+                        return false;
+                      }
+                    }
+                  }
+                  return
+                         std::all_of(partial_selected.begin(), partial_selected.end(),
+                                     [&](const auto selected_template) {
+                                       return pairwise_compatible(selected_template,
+                                                                  future_template);
+                                     });
+                });
+          }
+          if (forward_legal) {
+            search(depth + 1U, next_vias);
+          } else {
+            ++result.forward_domain_wipeouts;
+          }
+          partial_selected.pop_back();
           for (auto changed = changed_channel_envelopes.rbegin();
                changed != changed_channel_envelopes.rend(); ++changed) {
             if (changed->second) {
@@ -2500,19 +3935,280 @@ struct RegionalBundleChoicePortfolio {
     for (const auto& accelerated : accelerated_exact_choices) {
       if (result.choices.size() >= maximum_states)
         break;
+      if (forward_checking) {
+        std::vector<std::size_t> selected;
+        for (std::size_t position = 0; position < accelerated.size(); ++position)
+          selected.push_back(templates_by_fragment[position][accelerated[position]]);
+        if (!coupled_template_selection_legal(board, window, templates, selected)) {
+          ++result.coupled_pruned_states;
+          continue;
+        }
+        const auto access = timed_select_access(selected);
+        record_access_result(access);
+        if (!access.legal() && !access.exhausted) continue;
+      }
       if (std::find(result.choices.begin(), result.choices.end(), accelerated) ==
           result.choices.end())
         result.choices.push_back(accelerated);
     }
   }
+  // HC rows remain seeds only after they pass the same current invocation resource/access gate.
+  // A bounded HC outcome never removes the wider master portfolio or proves infeasibility.
+  std::vector<std::vector<std::size_t>> accepted_hc_seeds;
+  for (const auto& seed : hc_seed_choices) {
+    if (seed.size() != templates_by_fragment.size()) continue;
+    std::vector<std::size_t> selected;
+    bool valid = true;
+    for (std::size_t position = 0U; position < seed.size(); ++position) {
+      if (seed[position] >= templates_by_fragment[position].size()) { valid = false; break; }
+      selected.push_back(templates_by_fragment[position][seed[position]]);
+    }
+    // HC composition knows pairwise interactions only. Reuse the master's exact aggregate
+    // via-identity and channel-demand check before a seed can displace a bounded DFS row.
+    // This is deliberately independent of the optional forward-propagation ablation.
+    RoutingComputeAssignmentCandidate aggregate_candidate;
+    if (valid) {
+      aggregate_candidate.options.reserve(selected.size());
+      for (const auto template_id : selected)
+        aggregate_candidate.options.push_back(static_cast<std::uint32_t>(template_id));
+      valid = exact_accelerated_assignment(aggregate_candidate).has_value();
+    }
+    if (!valid || !coupled_template_selection_legal(board, window, templates, selected)) continue;
+    const auto access = timed_select_access(selected);
+    record_access_result(access);
+    if (!access.legal() && !access.exhausted) continue;
+    if (std::find(accepted_hc_seeds.begin(), accepted_hc_seeds.end(), seed) ==
+        accepted_hc_seeds.end()) accepted_hc_seeds.push_back(seed);
+  }
+  if (!accepted_hc_seeds.empty()) {
+    for (const auto& seed : accepted_hc_seeds) {
+      result.choices.erase(std::remove(result.choices.begin(), result.choices.end(), seed),
+                           result.choices.end());
+    }
+    result.choices.insert(result.choices.begin(), accepted_hc_seeds.begin(), accepted_hc_seeds.end());
+    if (result.choices.size() > maximum_states) result.choices.resize(maximum_states);
+  }
+  result.hc_composition.seed_assignments_admitted = accepted_hc_seeds.size();
+  result.access_selection_cache_hits = access_cache.hits - cache_hits_before;
+  result.access_selection_cache_misses = access_cache.misses - cache_misses_before;
+  result.access_selection_cache_avoided_calls = access_cache.avoided_calls - cache_avoided_before;
+  result.access_selection_cache_entries_peak = access_cache.entries_peak;
+  result.access_selection_cache_capacity_skipped_insertions =
+      access_cache.capacity_skipped_insertions;
   return result;
+}
+
+[[nodiscard]] bool
+adjacent_channel_lane_precedence_legal(const std::vector<RegionalRouteTemplate>& templates,
+                                       const std::vector<std::size_t>& selected,
+                                       const std::vector<RegionalCrossSection>& packed_sections) {
+  using OccupantKey = std::pair<NetId, std::size_t>;
+  const auto route_order = [](const std::vector<RegionalRouteFragmentId>& occupants) {
+    std::vector<OccupantKey> order;
+    order.reserve(occupants.size());
+    for (const auto& occupant : occupants) {
+      const OccupantKey key{occupant.net, occupant.connection_index};
+      if (std::find(order.begin(), order.end(), key) == order.end()) {
+        order.push_back(key);
+      }
+    }
+    return order;
+  };
+  std::set<std::pair<std::size_t, std::size_t>> adjacent_channels;
+  using RunKey = std::tuple<NetId, std::size_t, std::size_t>;
+  std::map<RunKey, std::vector<const RegionalRouteTemplate*>> templates_by_run;
+  for (const auto template_id : selected) {
+    if (template_id >= templates.size()) {
+      return false;
+    }
+    const auto& sequence = templates[template_id].channel_sequence;
+    for (std::size_t index = 1U; index < sequence.size(); ++index) {
+      adjacent_channels.insert(std::minmax(sequence[index - 1U], sequence[index]));
+    }
+    templates_by_run[RunKey{templates[template_id].fragment.net,
+                            templates[template_id].fragment.connection_index,
+                            templates[template_id].fragment.run_index}]
+        .push_back(&templates[template_id]);
+  }
+  for (auto& [run, members] : templates_by_run) {
+    static_cast<void>(run);
+    std::sort(members.begin(), members.end(), [](const auto* lhs, const auto* rhs) {
+      return lhs->fragment.fragment_index < rhs->fragment.fragment_index;
+    });
+    for (std::size_t index = 1U; index < members.size(); ++index) {
+      if (members[index - 1U]->fragment.fragment_index + 1U !=
+              members[index]->fragment.fragment_index ||
+          members[index - 1U]->channel_sequence.empty() ||
+          members[index]->channel_sequence.empty()) {
+        continue;
+      }
+      adjacent_channels.insert(std::minmax(members[index - 1U]->channel_sequence.back(),
+                                           members[index]->channel_sequence.front()));
+    }
+  }
+  for (std::size_t first = 0U; first < packed_sections.size(); ++first) {
+    const auto first_order = route_order(packed_sections[first].ordered_occupants);
+    const auto first_reference = route_order(packed_sections[first].geometric_reference_order);
+    for (std::size_t second = first + 1U; second < packed_sections.size(); ++second) {
+      if (!adjacent_channels.contains(
+              std::minmax(packed_sections[first].channel_id, packed_sections[second].channel_id))) {
+        continue;
+      }
+      const auto second_order = route_order(packed_sections[second].ordered_occupants);
+      const auto second_reference = route_order(packed_sections[second].geometric_reference_order);
+      for (std::size_t lhs = 0U; lhs < first_order.size(); ++lhs) {
+        const auto second_lhs =
+            std::find(second_order.begin(), second_order.end(), first_order[lhs]);
+        const auto first_reference_lhs =
+            std::find(first_reference.begin(), first_reference.end(), first_order[lhs]);
+        const auto second_reference_lhs =
+            std::find(second_reference.begin(), second_reference.end(), first_order[lhs]);
+        if (second_lhs == second_order.end()) {
+          continue;
+        }
+        for (std::size_t rhs = lhs + 1U; rhs < first_order.size(); ++rhs) {
+          const auto second_rhs =
+              std::find(second_order.begin(), second_order.end(), first_order[rhs]);
+          const auto first_reference_rhs =
+              std::find(first_reference.begin(), first_reference.end(), first_order[rhs]);
+          const auto second_reference_rhs =
+              std::find(second_reference.begin(), second_reference.end(), first_order[rhs]);
+          if (second_rhs == second_order.end() || first_reference_lhs == first_reference.end() ||
+              first_reference_rhs == first_reference.end() ||
+              second_reference_lhs == second_reference.end() ||
+              second_reference_rhs == second_reference.end()) {
+            continue;
+          }
+          const auto first_flipped = (lhs < rhs) != (first_reference_lhs < first_reference_rhs);
+          const auto second_flipped =
+              (second_lhs < second_rhs) != (second_reference_lhs < second_reference_rhs);
+          if (first_flipped != second_flipped) {
+            return false;
+          }
+        }
+      }
+    }
+  }
+  return true;
 }
 
 [[nodiscard]] std::vector<LayerId> regional_via_span(const Board& board, const LayerId& first,
                                                      const LayerId& last);
 
+[[nodiscard]] bool regional_via_site_legal(
+    const Board& board, const Board& obstacle_board, const auto& static_pads,
+    const auto& static_drills, const auto& static_keepouts, const NetId& net,
+    Point site, const std::vector<LayerId>& span, Nanometres diameter,
+    bool treat_saved_zone_fills_as_refillable) {
+    const auto rules = resolve_net_routing_rules(board, net);
+    const auto radius = static_cast<long double>(diameter.value()) / 2.0L;
+    const auto drill_radius = static_cast<long double>(rules.via_drill.value()) / 2.0L;
+    const auto hole_clearance = static_cast<long double>(board.rules.hole_clearance.value());
+    const auto touches_layer = [&](const LayerId& layer) {
+      return std::find(span.begin(), span.end(), layer) != span.end();
+    };
+    if (geometry::locate_point_in_board_area(board, site) == geometry::PointLocation::outside ||
+        geometry::point_board_boundary_distance_nm(site, board) <
+            radius + static_cast<long double>(board.rules.copper_to_edge_clearance.value())) {
+      return false;
+    }
+    for (const auto& track : obstacle_board.tracks) {
+      if (track.net == net || !touches_layer(track.layer)) {
+        continue;
+      }
+      const auto required =
+          std::max(radius + static_cast<long double>(resolve_pairwise_clearance(board, net, track.net).value()),
+                   drill_radius + hole_clearance) +
+          static_cast<long double>(track.width.value()) / 2.0L;
+      if (geometry::point_segment_distance_nm(site, track.start, track.end) < required) {
+        return false;
+      }
+    }
+    for (const auto& arc : board.track_arcs) {
+      if (arc.net == net || !touches_layer(arc.layer)) {
+        continue;
+      }
+      const auto required =
+          std::max(radius + static_cast<long double>(resolve_pairwise_clearance(board, net, arc.net).value()),
+                   drill_radius + hole_clearance) +
+          static_cast<long double>(arc.width.value()) / 2.0L;
+      if (geometry::point_circular_arc_distance_nm(site, arc.start, arc.middle, arc.end) <
+          required) {
+        return false;
+      }
+    }
+    for (const auto& via : board.vias) {
+      if (via.net == net || std::none_of(via.layers.begin(), via.layers.end(), touches_layer)) {
+        continue;
+      }
+      const auto required =
+          std::max(radius + static_cast<long double>(resolve_pairwise_clearance(board, net, via.net).value()),
+                   drill_radius + hole_clearance) +
+          static_cast<long double>(via.diameter.value()) / 2.0L;
+      if (geometry::point_distance_nm(site, via.position) < required) {
+        return false;
+      }
+    }
+    for (const auto& pad : static_pads) {
+      if (pad.net == net || std::none_of(pad.layers.begin(), pad.layers.end(), touches_layer)) {
+        continue;
+      }
+      const auto required =
+          std::max(radius + static_cast<long double>(resolve_pairwise_clearance(board, net, pad.net).value()),
+                   drill_radius + hole_clearance);
+      if (point_to_pad_copper_distance_nm(site, pad) < required) {
+        return false;
+      }
+    }
+    for (const auto& drill : static_drills) {
+      if (drill.net == net && drill.position == site) {
+        continue;
+      }
+      const auto overlaps_span =
+          std::any_of(drill.layers.begin(), drill.layers.end(), touches_layer);
+      if (drill.net != net && overlaps_span && hole_clearance > 0.0L &&
+          point_to_drill_boundary_distance_nm(site, drill) < radius + hole_clearance) {
+        return false;
+      }
+      if (drill.mechanically_drilled && board.rules.hole_to_hole_clearance.value() > 0 &&
+          point_to_drill_boundary_distance_nm(site, drill) <
+              drill_radius + static_cast<long double>(board.rules.hole_to_hole_clearance.value())) {
+        return false;
+      }
+    }
+    if (!treat_saved_zone_fills_as_refillable) {
+      for (const auto& zone : board.zones) {
+        if (zone.net == net) {
+          continue;
+        }
+        const auto required =
+            std::max(radius + static_cast<long double>(resolve_pairwise_clearance(board, net, zone.net).value()),
+                     drill_radius + hole_clearance);
+        for (const auto& fill : zone.fills) {
+          if (touches_layer(fill.layer) &&
+              geometry::point_filled_region_copper_distance_nm(site, fill) < required) {
+            return false;
+          }
+        }
+      }
+    }
+    for (const auto& keepout : static_keepouts) {
+      if (!keepout.prohibit.vias ||
+          std::none_of(keepout.layers.begin(), keepout.layers.end(), touches_layer)) {
+        continue;
+      }
+      if (point_copper_overlaps_keepout(site, radius, keepout.area)) {
+        return false;
+      }
+    }
+    return true;
+}
+
 void populate_selected_endpoint_choices(const Board& board, const GlobalRouteResult& global,
                                         RegionalRouteResult& result) {
+  const auto obstacle_proxy = flatten_board_beziers_conservatively(board);
+  if (!obstacle_proxy.certified) throw std::runtime_error("uncertified cubic copper obstacle");
+  const auto& obstacle_board = obstacle_proxy.board;
   result.terminal_choices.clear();
   result.via_choices.clear();
   std::map<std::pair<NetId, Point>, std::pair<ObjectId, ObjectId>> pad_by_position;
@@ -2549,7 +4245,7 @@ void populate_selected_endpoint_choices(const Board& board, const GlobalRouteRes
   for (const auto& net : board.nets)
     via_filter_net_codes.emplace(net.id, static_cast<std::uint32_t>(via_filter_net_codes.size()));
   std::vector<RoutingComputeSegment> via_filter_obstacles;
-  for (const auto& track : board.tracks) {
+  for (const auto& track : obstacle_board.tracks) {
     const auto layer = via_filter_layer_codes.find(track.layer);
     if (layer == via_filter_layer_codes.end())
       continue;
@@ -2637,118 +4333,17 @@ void populate_selected_endpoint_choices(const Board& board, const GlobalRouteRes
       const auto span = regional_via_span(board, path.points[begin].layer, path.points[end].layer);
       if (span.size() >= 2U) {
         selected_transitions.push_back(SelectedViaTransition{&path, begin, end, site, span});
-        planned_via_sites.push_back(
-            PlannedViaSite{path.net, site, span, rules.via_diameter, rules.via_drill,
-                           rules.clearance});
+        planned_via_sites.push_back(PlannedViaSite{path.net, site, span, rules.via_diameter,
+                                                   rules.via_drill, rules.clearance});
       }
       begin = end;
     }
   }
-  const auto via_site_legal = [&](const NetId& net, Point site, const std::vector<LayerId>& span,
-                                  Nanometres diameter) {
-    const auto rules = resolve_net_routing_rules(board, net);
-    const auto radius = static_cast<long double>(diameter.value()) / 2.0L;
-    const auto drill_radius = static_cast<long double>(rules.via_drill.value()) / 2.0L;
-    const auto hole_clearance = static_cast<long double>(board.rules.hole_clearance.value());
-    const auto touches_layer = [&](const LayerId& layer) {
-      return std::find(span.begin(), span.end(), layer) != span.end();
-    };
-    if (geometry::locate_point_in_board_area(board, site) == geometry::PointLocation::outside ||
-        geometry::point_board_boundary_distance_nm(site, board) <
-            radius + static_cast<long double>(board.rules.copper_to_edge_clearance.value())) {
-      return false;
-    }
-    for (const auto& track : board.tracks) {
-      if (track.net == net || !touches_layer(track.layer)) {
-        continue;
-      }
-      const auto required =
-          std::max(radius + static_cast<long double>(pairwise_clearance(net, track.net).value()),
-                   drill_radius + hole_clearance) +
-          static_cast<long double>(track.width.value()) / 2.0L;
-      if (geometry::point_segment_distance_nm(site, track.start, track.end) < required) {
-        return false;
-      }
-    }
-    for (const auto& arc : board.track_arcs) {
-      if (arc.net == net || !touches_layer(arc.layer)) {
-        continue;
-      }
-      const auto required =
-          std::max(radius + static_cast<long double>(pairwise_clearance(net, arc.net).value()),
-                   drill_radius + hole_clearance) +
-          static_cast<long double>(arc.width.value()) / 2.0L;
-      if (geometry::point_circular_arc_distance_nm(site, arc.start, arc.middle, arc.end) <
-          required) {
-        return false;
-      }
-    }
-    for (const auto& via : board.vias) {
-      if (via.net == net || std::none_of(via.layers.begin(), via.layers.end(), touches_layer)) {
-        continue;
-      }
-      const auto required =
-          std::max(radius + static_cast<long double>(pairwise_clearance(net, via.net).value()),
-                   drill_radius + hole_clearance) +
-          static_cast<long double>(via.diameter.value()) / 2.0L;
-      if (geometry::point_distance_nm(site, via.position) < required) {
-        return false;
-      }
-    }
-    for (const auto& pad : static_pads) {
-      if (pad.net == net || std::none_of(pad.layers.begin(), pad.layers.end(), touches_layer)) {
-        continue;
-      }
-      const auto required =
-          std::max(radius + static_cast<long double>(pairwise_clearance(net, pad.net).value()),
-                   drill_radius + hole_clearance);
-      if (point_to_pad_copper_distance_nm(site, pad) < required) {
-        return false;
-      }
-    }
-    for (const auto& drill : static_drills) {
-      if (drill.net == net && drill.position == site) {
-        continue;
-      }
-      const auto overlaps_span =
-          std::any_of(drill.layers.begin(), drill.layers.end(), touches_layer);
-      if (drill.net != net && overlaps_span && hole_clearance > 0.0L &&
-          point_to_drill_boundary_distance_nm(site, drill) < radius + hole_clearance) {
-        return false;
-      }
-      if (drill.mechanically_drilled && board.rules.hole_to_hole_clearance.value() > 0 &&
-          point_to_drill_boundary_distance_nm(site, drill) <
-              drill_radius +
-                  static_cast<long double>(board.rules.hole_to_hole_clearance.value())) {
-        return false;
-      }
-    }
-    if (!result.configured.treat_saved_zone_fills_as_refillable) {
-      for (const auto& zone : board.zones) {
-        if (zone.net == net) {
-          continue;
-        }
-        const auto required =
-            std::max(radius + static_cast<long double>(pairwise_clearance(net, zone.net).value()),
-                     drill_radius + hole_clearance);
-        for (const auto& fill : zone.fills) {
-          if (touches_layer(fill.layer) &&
-              geometry::point_filled_region_copper_distance_nm(site, fill) < required) {
-            return false;
-          }
-        }
-      }
-    }
-    for (const auto& keepout : static_keepouts) {
-      if (!keepout.prohibit.vias ||
-          std::none_of(keepout.layers.begin(), keepout.layers.end(), touches_layer)) {
-        continue;
-      }
-      if (point_copper_overlaps_keepout(site, radius, keepout.area)) {
-        return false;
-      }
-    }
-    return true;
+  const auto via_site_legal = [&](const NetId& net, Point site,
+                                  const std::vector<LayerId>& span, Nanometres diameter) {
+    return regional_via_site_legal(board, obstacle_board, static_pads, static_drills,
+        static_keepouts, net, site, span, diameter,
+        result.configured.treat_saved_zone_fills_as_refillable);
   };
   const auto runup_legal = [&](const NetId& net, const LayerId& layer, Point start, Point end,
                                Nanometres width) {
@@ -2758,7 +4353,7 @@ void populate_selected_endpoint_choices(const Board& board, const GlobalRouteRes
             radius + static_cast<long double>(board.rules.copper_to_edge_clearance.value())) {
       return false;
     }
-    for (const auto& track : board.tracks) {
+    for (const auto& track : obstacle_board.tracks) {
       if (track.net == net || track.layer != layer) {
         continue;
       }
@@ -2802,8 +4397,7 @@ void populate_selected_endpoint_choices(const Board& board, const GlobalRouteRes
       }
     }
     if (board.rules.hole_clearance.value() > 0) {
-      const auto required =
-          radius + static_cast<long double>(board.rules.hole_clearance.value());
+      const auto required = radius + static_cast<long double>(board.rules.hole_clearance.value());
       for (const auto& drill : static_drills) {
         if (drill.net == net ||
             std::find(drill.layers.begin(), drill.layers.end(), layer) == drill.layers.end()) {
@@ -2981,21 +4575,17 @@ void populate_selected_endpoint_choices(const Board& board, const GlobalRouteRes
     const auto planned_margin = [&](Point site) {
       auto margin = std::numeric_limits<long double>::infinity();
       for (const auto& planned : planned_via_sites) {
-        const bool spans_overlap =
-            std::any_of(span.begin(), span.end(), [&](const auto& layer) {
-              return std::find(planned.span.begin(), planned.span.end(), layer) !=
-                     planned.span.end();
-            });
+        const bool spans_overlap = std::any_of(span.begin(), span.end(), [&](const auto& layer) {
+          return std::find(planned.span.begin(), planned.span.end(), layer) != planned.span.end();
+        });
         if (planned.net != path.net && spans_overlap) {
           const auto required = std::max(
               {static_cast<long double>(rules.via_diameter.value() + planned.diameter.value()) /
                        2.0L +
                    static_cast<long double>(std::max(rules.clearance, planned.clearance).value()),
-               static_cast<long double>(rules.via_drill.value() + planned.diameter.value()) /
-                       2.0L +
+               static_cast<long double>(rules.via_drill.value() + planned.diameter.value()) / 2.0L +
                    static_cast<long double>(board.rules.hole_clearance.value()),
-               static_cast<long double>(rules.via_diameter.value() + planned.drill.value()) /
-                       2.0L +
+               static_cast<long double>(rules.via_diameter.value() + planned.drill.value()) / 2.0L +
                    static_cast<long double>(board.rules.hole_clearance.value())});
           margin = std::min(margin, geometry::point_distance_nm(site, planned.site) - required);
         }
@@ -3264,38 +4854,274 @@ void populate_selected_endpoint_choices(const Board& board, const GlobalRouteRes
   return result;
 }
 
-struct RegionalAlternativeDomain {
-  PreparedNavMeshDomain navmesh;
-  Nanometres minimum_boundary_clearance;
-};
-
 struct RegionalAlternativeGeometry {
   std::vector<OffsetFreeSpaceRegion> regions;
   Nanometres minimum_boundary_clearance;
 };
 
-using RegionalAlternativeGeometryKey = std::tuple<NetId, LayerId, Nanometres, bool, Point, Point>;
-using RegionalAlternativeDomainKey = std::tuple<NetId, LayerId, Nanometres, bool, Point, Point>;
+using RegionalAlternativeGeometryKey =
+    std::tuple<NetId, LayerId, Nanometres, bool, Point, Point, Nanometres>;
+using RegionalAlternativeDomainKey = std::tuple<NetId, LayerId, Nanometres, bool, Point, Point,
+                                                Nanometres, std::size_t, std::size_t>;
 using RegionalAlternativeSourceKey = std::tuple<NetId, LayerId, bool>;
+// A completed route is valid only for the exact endpoint binding and every NavMesh input used by
+// the search.  Keep this explicit rather than relying on the current regional call sites all
+// constructing the same defaults: prefix/full continuation and future callers must not reuse a
+// bounded-search result after changing a guide, refinement, or USPED setting.
+using RegionalAlternativeRouteKey =
+    std::tuple<RegionalAlternativeDomainKey, std::size_t, Point, Point,
+               Nanometres, std::size_t, std::size_t, std::vector<Point>, Nanometres,
+               std::size_t, Nanometres, bool, Point, Point, bool, std::size_t, Nanometres,
+               bool, std::size_t, std::size_t, std::uint32_t>;
+struct RegionalAlternativeDomain {
+  PreparedNavMeshDomain navmesh;
+  Nanometres minimum_boundary_clearance;
+  RegionalAlternativeDomainKey cache_key;
+  std::size_t cache_region_index{0U};
+};
 struct RegionalAlternativeDomainCache {
   std::map<RegionalAlternativeSourceKey, BoardFreeSpaceExtractionResult> sources;
+  std::map<RegionalAlternativeSourceKey, bool> source_chord_validity;
+  std::map<RegionalAlternativeSourceKey, detail::RegionalSourceIndex> source_bounds;
   std::map<RegionalAlternativeGeometryKey, RegionalAlternativeGeometry> geometry;
-  std::map<RegionalAlternativeDomainKey, std::vector<RegionalAlternativeDomain>> navigation;
+  std::map<RegionalAlternativeDomainKey,
+           std::shared_ptr<const std::vector<RegionalAlternativeDomain>>>
+      navigation;
+  // Exact completed maze requests are reusable by a prefix, its full continuation, and a later
+  // leased preparation call. Negative results are cached too; entries are committed only after
+  // the bounded route call returns, never while a partial search is in flight.
+  std::map<RegionalAlternativeRouteKey, std::optional<NavMeshRouteResult>> routes;
+  std::map<RegionalAlternativeSourceKey, std::uint64_t> source_last_used;
+  std::map<RegionalAlternativeGeometryKey, std::uint64_t> geometry_last_used;
+  std::map<RegionalAlternativeDomainKey, std::uint64_t> navigation_last_used;
+  std::uint64_t use_clock{0U};
 
-  void release_unretained_if_oversized() {
-    // Bound whole-board Boolean products and search-specific lattices without throwing away every
-    // adjacent fragment's same-net/layer reuse. Accepted templates own shared immutable cell sets,
-    // so clearing the scratch portfolio cannot invalidate retained candidates.
+  [[nodiscard]] std::size_t entry_count() const {
+    return sources.size() + geometry.size() + navigation.size() + routes.size();
+  }
+
+  [[nodiscard]] std::size_t retained_bytes_estimate() const {
+    // This estimates identifiable map payload and vector backing storage only. Geometry and
+    // free-space objects own further dynamic allocations, so it must never be presented as RSS.
+    std::size_t bytes = sources.size() * sizeof(decltype(sources)::value_type) +
+                        geometry.size() * sizeof(decltype(geometry)::value_type) +
+                        navigation.size() * sizeof(decltype(navigation)::value_type) +
+                        routes.size() * sizeof(decltype(routes)::value_type);
+    for (const auto& [key, index] : source_bounds) {
+      static_cast<void>(key);
+      bytes += index.retained_bytes();
+    }
+    for (const auto& [key, domains] : navigation) {
+      static_cast<void>(key);
+      if (domains) bytes += domains->capacity() * sizeof(RegionalAlternativeDomain);
+    }
+    bytes += route_payload_bytes();
+    return bytes;
+  }
+
+  [[nodiscard]] std::size_t route_payload_bytes() const {
+    std::size_t bytes = 0U;
+    for (const auto& [key, route] : routes) {
+      static_cast<void>(key);
+      if (!route) continue;
+      // NavMeshCells is a shared handle to the prepared domain lattice.  A route result does not
+      // own a vector of cells, so counting cell count/capacity once per cached endpoint would
+      // wildly overstate memory releasable by route eviction.  The value shell is already bounded
+      // by the map entry; count only the per-route dynamic payload here.
+      bytes += route->corridor.capacity() * sizeof(std::size_t) +
+               route->topology_guard_cells.capacity() * sizeof(std::size_t) +
+               route->portals.capacity() * sizeof(NavMeshPortal) +
+               route->centerline.capacity() * sizeof(Point) +
+               route->topology_guard_coordinate_mask.capacity() * sizeof(std::uint8_t) +
+               route->hydraulic_flow_field.capacity() * sizeof(std::uint16_t) +
+               route->hydraulic_erosion_field.capacity() * sizeof(std::uint16_t) +
+               route->hydraulic_heightmap.capacity() * sizeof(std::uint16_t) +
+               route->hydraulic_free_space_field.capacity() * sizeof(std::uint16_t) +
+               route->hydraulic_downstream_pressure_field.capacity() * sizeof(std::uint16_t) +
+               route->hydraulic_success_prior_field.capacity() * sizeof(std::uint16_t);
+    }
+    return bytes;
+  }
+
+  void observe_retained_storage(RegionalCandidatePipelineStats& stats) const {
+    stats.alternative_cache_entries_peak =
+        std::max(stats.alternative_cache_entries_peak, entry_count());
+    stats.alternative_cache_shallow_bytes_estimate_peak = std::max(
+        stats.alternative_cache_shallow_bytes_estimate_peak, retained_bytes_estimate());
+  }
+
+  void touch_source(const RegionalAlternativeSourceKey& key) { source_last_used[key] = ++use_clock; }
+  void touch_geometry(const RegionalAlternativeGeometryKey& key) { geometry_last_used[key] = ++use_clock; }
+  void touch_navigation(const RegionalAlternativeDomainKey& key) { navigation_last_used[key] = ++use_clock; }
+
+  void release_unretained_if_oversized(RegionalCandidatePipelineStats& stats) {
+    // A board-bound preparation may span several passes. Evict individual least-recently-used
+    // entries and their source certificates instead of dropping compatible free-space products.
     constexpr std::size_t maximum_geometry_entries = 8U;
     constexpr std::size_t maximum_navigation_entries = 32U;
-    if (sources.size() > maximum_geometry_entries || geometry.size() > maximum_geometry_entries ||
-        navigation.size() > maximum_navigation_entries) {
-      navigation.clear();
-      geometry.clear();
-      sources.clear();
+    const auto erase_navigation = [&] {
+      const auto oldest = std::min_element(navigation_last_used.begin(), navigation_last_used.end(),
+          [](const auto& lhs, const auto& rhs) { return lhs.second < rhs.second; });
+      if (oldest == navigation_last_used.end()) return;
+      const auto key = oldest->first;
+      navigation.erase(key);
+      for (auto route = routes.begin(); route != routes.end();) {
+        if (std::get<0>(route->first) == key) route = routes.erase(route);
+        else ++route;
+      }
+      navigation_last_used.erase(oldest);
+      ++stats.alternative_cache_evictions;
+    };
+    while (navigation.size() > maximum_navigation_entries) erase_navigation();
+    while (geometry.size() > maximum_geometry_entries) {
+      const auto oldest = std::min_element(geometry_last_used.begin(), geometry_last_used.end(),
+          [](const auto& lhs, const auto& rhs) { return lhs.second < rhs.second; });
+      if (oldest == geometry_last_used.end()) break;
+      // Prepared domains own their immutable geometry; they have an independent LRU budget.
+      geometry.erase(oldest->first);
+      geometry_last_used.erase(oldest);
+      ++stats.alternative_cache_evictions;
     }
+    while (sources.size() > maximum_geometry_entries) {
+      const auto oldest = std::min_element(source_last_used.begin(), source_last_used.end(),
+          [](const auto& lhs, const auto& rhs) { return lhs.second < rhs.second; });
+      if (oldest == source_last_used.end()) break;
+      sources.erase(oldest->first);
+      source_chord_validity.erase(oldest->first);
+      source_bounds.erase(oldest->first);
+      source_last_used.erase(oldest);
+      ++stats.alternative_cache_evictions;
+    }
+    observe_retained_storage(stats);
   }
 };
+
+[[nodiscard]] const BoardFreeSpaceExtractionResult& cached_regional_source(
+    const Board& board, const NetId& net, const LayerId& layer,
+    RegionalRouteResult& result, RegionalAlternativeDomainCache& cache) {
+  const RegionalAlternativeSourceKey key{
+      net, layer, result.configured.treat_saved_zone_fills_as_refillable};
+  auto source = cache.sources.find(key);
+  if (source == cache.sources.end()) {
+    ++result.candidate_pipeline_stats.alternative_source_cache_misses;
+    source = cache.sources.emplace(key, extract_polygonal_board_free_space(
+        board, BoardFreeSpaceExtractionConfig{
+                   layer, net, true, true,
+                   !result.configured.treat_saved_zone_fills_as_refillable})).first;
+  } else {
+    ++result.candidate_pipeline_stats.alternative_source_cache_hits;
+  }
+  cache.touch_source(key);
+  return source->second;
+}
+
+std::vector<std::optional<Nanometres>> assess_cached_regional_chords(
+    const Board& board, const NetId& net, const LayerId& layer,
+    const std::vector<std::pair<Point, Point>>& chords, RegionalRouteResult& result,
+    RegionalAlternativeDomainCache& cache) {
+  const auto& source = cached_regional_source(board, net, layer, result, cache);
+  const RegionalAlternativeSourceKey key{
+      net, layer, result.configured.treat_saved_zone_fills_as_refillable};
+  auto valid = cache.source_chord_validity.find(key);
+  if (valid == cache.source_chord_validity.end()) {
+    valid = cache.source_chord_validity.emplace(
+        key, source.complete() && validate_free_space_chord_domain(source.domain)).first;
+  }
+  auto assessed = valid->second ? assess_validated_free_space_chords(source.domain, chords)
+                                : std::vector<std::optional<Nanometres>>(chords.size());
+  // The board-bound preparation owns these entries across passes; each source and its validation
+  // certificate are evicted together. Do not retain a reference across this bounded eviction.
+  cache.release_unretained_if_oversized(result.candidate_pipeline_stats);
+  return assessed;
+}
+
+void accumulate_candidate_pipeline_stats(RegionalCandidatePipelineStats& total,
+                                         const RegionalCandidatePipelineStats& increment) {
+  // Timers are inclusive wall-clock observations: bundle assignment includes its search/access/
+  // lane children, and alternative-domain time includes cache lookup plus construction.
+  total.channel_construction_us += increment.channel_construction_us;
+  total.alternative_domain_us += increment.alternative_domain_us;
+  total.bundle_assignment_us += increment.bundle_assignment_us;
+  total.bundle_search_us += increment.bundle_search_us;
+  total.bundle_search_excluding_access_us += increment.bundle_search_excluding_access_us;
+  total.lane_packing_us += increment.lane_packing_us;
+  total.access_selection_us += increment.access_selection_us;
+  total.channel_construction_invocations += increment.channel_construction_invocations;
+  total.channel_prepared_cells += increment.channel_prepared_cells;
+  total.channel_spatial_index_queries += increment.channel_spatial_index_queries;
+  total.channel_exact_overlap_checks += increment.channel_exact_overlap_checks;
+  total.alternative_domain_requests += increment.alternative_domain_requests;
+  total.bundle_assignment_invocations += increment.bundle_assignment_invocations;
+  total.bundle_search_invocations += increment.bundle_search_invocations;
+  total.lane_packing_invocations += increment.lane_packing_invocations;
+  total.access_selection_invocations += increment.access_selection_invocations;
+  total.alternative_source_cache_hits += increment.alternative_source_cache_hits;
+  total.alternative_source_cache_misses += increment.alternative_source_cache_misses;
+  total.alternative_geometry_cache_hits += increment.alternative_geometry_cache_hits;
+  total.alternative_geometry_cache_misses += increment.alternative_geometry_cache_misses;
+  total.alternative_navigation_cache_hits += increment.alternative_navigation_cache_hits;
+  total.alternative_navigation_cache_misses += increment.alternative_navigation_cache_misses;
+  total.alternative_route_cache_hits += increment.alternative_route_cache_hits;
+  total.alternative_route_cache_misses += increment.alternative_route_cache_misses;
+  total.alternative_cache_evictions += increment.alternative_cache_evictions;
+  total.alternative_cache_entries_peak =
+      std::max(total.alternative_cache_entries_peak, increment.alternative_cache_entries_peak);
+  total.alternative_cache_shallow_bytes_estimate_peak = std::max(
+      total.alternative_cache_shallow_bytes_estimate_peak,
+      increment.alternative_cache_shallow_bytes_estimate_peak);
+  total.access_selection_cache_hits += increment.access_selection_cache_hits;
+  total.access_selection_cache_misses += increment.access_selection_cache_misses;
+  total.access_selection_cache_avoided_calls += increment.access_selection_cache_avoided_calls;
+  total.access_selection_cache_entries_peak = std::max(
+      total.access_selection_cache_entries_peak, increment.access_selection_cache_entries_peak);
+  total.access_selection_cache_capacity_skipped_insertions +=
+      increment.access_selection_cache_capacity_skipped_insertions;
+  total.fixed_geometry_compatibility_checks += increment.fixed_geometry_compatibility_checks;
+  total.fixed_geometry_compatibility_rejections +=
+      increment.fixed_geometry_compatibility_rejections;
+  total.candidate_schedule_observations += increment.candidate_schedule_observations;
+  total.candidate_schedule_reorders += increment.candidate_schedule_reorders;
+  total.candidate_preflight_checked += increment.candidate_preflight_checked;
+  total.candidate_preflight_definitive_rejections +=
+      increment.candidate_preflight_definitive_rejections;
+  total.candidate_preflight_fixed_endpoint_rejections +=
+      increment.candidate_preflight_fixed_endpoint_rejections;
+  total.candidate_preflight_packing_rejections += increment.candidate_preflight_packing_rejections;
+  total.layered_navmesh_graph_nodes += increment.layered_navmesh_graph_nodes;
+  total.layered_navmesh_planar_edges += increment.layered_navmesh_planar_edges;
+  total.layered_navmesh_via_zones += increment.layered_navmesh_via_zones;
+  total.layered_navmesh_certified_transitions += increment.layered_navmesh_certified_transitions;
+  total.layered_navmesh_rejected_spans += increment.layered_navmesh_rejected_spans;
+  total.layered_navmesh_preparation_bound_hits += increment.layered_navmesh_preparation_bound_hits;
+  total.layered_navmesh_search_expansions += increment.layered_navmesh_search_expansions;
+  total.layered_navmesh_search_bound_hits += increment.layered_navmesh_search_bound_hits;
+  total.layered_navmesh_selected_proposals += increment.layered_navmesh_selected_proposals;
+
+}
+
+void accumulate_hc_composition_stats(RegionalHcCompositionStats& total,
+                                     const RegionalHcCompositionStats& increment) {
+  total.retained_children += increment.retained_children;
+  total.interaction_edges += increment.interaction_edges;
+  total.nodes_expanded += increment.nodes_expanded;
+  total.compatibility_checks += increment.compatibility_checks;
+  total.compatibility_rejections += increment.compatibility_rejections;
+  total.stale_candidates_seen += increment.stale_candidates_seen;
+  total.stale_candidates_revalidated += increment.stale_candidates_revalidated;
+  total.stale_candidates_rejected += increment.stale_candidates_rejected;
+  total.seed_assignments_generated += increment.seed_assignments_generated;
+  total.seed_assignments_admitted += increment.seed_assignments_admitted;
+  total.cache_hits += increment.cache_hits;
+  total.cache_misses += increment.cache_misses;
+  total.frontier_peak = std::max(total.frontier_peak, increment.frontier_peak);
+  total.node_bound_hit = total.node_bound_hit || increment.node_bound_hit;
+  total.frontier_bound_hit = total.frontier_bound_hit || increment.frontier_bound_hit;
+  total.memory_bound_hit = total.memory_bound_hit || increment.memory_bound_hit;
+  total.child_bound_hit = total.child_bound_hit || increment.child_bound_hit;
+  total.compatibility_bound_hit = total.compatibility_bound_hit || increment.compatibility_bound_hit;
+  total.cancelled = total.cancelled || increment.cancelled;
+  total.cache_disposition = increment.cache_disposition;
+}
 
 [[nodiscard]] std::optional<geometry::AxisAlignedBounds>
 regional_polygon_bounds(const Polygon& polygon) {
@@ -3315,8 +5141,8 @@ regional_polygon_bounds(const Polygon& polygon) {
 [[nodiscard]] std::optional<FreeSpaceDomain>
 local_regional_free_space(const FreeSpaceDomain& source,
                           const geometry::AxisAlignedBounds& search_bounds, Nanometres envelope,
-                          Nanometres cell_pitch) {
-  const auto outline_bounds = regional_polygon_bounds(source.outline);
+                          Nanometres cell_pitch, const detail::RegionalSourceIndex& index) {
+  const auto& outline_bounds = index.outline;
   if (!outline_bounds) {
     return std::nullopt;
   }
@@ -3335,27 +5161,21 @@ local_regional_free_space(const FreeSpaceDomain& source,
   if (!geometry::polygon_inside(local_outline, source.outline)) {
     return std::nullopt;
   }
-  const auto overlaps_local_bounds = [&](const Polygon& polygon) {
-    const auto bounds = regional_polygon_bounds(polygon);
-    return bounds && bounds->overlaps(local_bounds);
-  };
   FreeSpaceDomain result;
   result.outline = std::move(local_outline);
   result.obstacles.reserve(source.cutouts.size() + source.obstacles.size());
   // A board cutout intersecting the local rectangle is equivalent to an ordinary blocked polygon
   // for this zero-offset local Boolean. Keeping it as a cutout would require clipping it to the
   // artificial outline; obstacles may legally cross that outline and remain conservative.
-  std::copy_if(source.cutouts.begin(), source.cutouts.end(), std::back_inserter(result.obstacles),
-               overlaps_local_bounds);
-  std::copy_if(source.obstacles.begin(), source.obstacles.end(),
-               std::back_inserter(result.obstacles), overlaps_local_bounds);
-  std::copy_if(source.filled_obstacles.begin(), source.filled_obstacles.end(),
-               std::back_inserter(result.filled_obstacles),
-               [&](const auto& region) { return overlaps_local_bounds(region.area); });
+  for (const auto& entry : index.query(local_bounds)) {
+    if (entry.kind == 0U) result.obstacles.push_back(source.cutouts[entry.index]);
+    else if (entry.kind == 1U) result.obstacles.push_back(source.obstacles[entry.index]);
+    else result.filled_obstacles.push_back(source.filled_obstacles[entry.index]);
+  }
   return result;
 }
 
-[[nodiscard]] const std::vector<RegionalAlternativeDomain>&
+[[nodiscard]] std::shared_ptr<const std::vector<RegionalAlternativeDomain>>
 prepared_alternative_domains(const Board& board, const NetId& net, const LayerId& layer,
                              Nanometres envelope, const geometry::AxisAlignedBounds& search_bounds,
                              RegionalRouteResult& result, RegionalAlternativeDomainCache& cache) {
@@ -3364,38 +5184,47 @@ prepared_alternative_domains(const Board& board, const NetId& net, const LayerId
                                          envelope,
                                          result.configured.treat_saved_zone_fills_as_refillable,
                                          search_bounds.minimum,
-                                         search_bounds.maximum};
+                                         search_bounds.maximum,
+                                         result.configured.navmesh_cell_pitch,
+                                         result.configured.max_navmesh_cells_per_template,
+                                         result.configured.max_navmesh_expansions_per_template};
+  const auto started = std::chrono::steady_clock::now();
+  ++result.candidate_pipeline_stats.alternative_domain_requests;
+  const auto finish = [&] {
+    result.candidate_pipeline_stats.alternative_domain_us.add_nanoseconds(
+        static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - started).count()));
+  };
   const auto found = cache.navigation.find(key);
   if (found != cache.navigation.end()) {
+    ++result.candidate_pipeline_stats.alternative_navigation_cache_hits;
+    cache.touch_navigation(key);
+    finish();
     return found->second;
   }
+  ++result.candidate_pipeline_stats.alternative_navigation_cache_misses;
   const RegionalAlternativeGeometryKey geometry_key{
       net,
       layer,
       envelope,
       result.configured.treat_saved_zone_fills_as_refillable,
       search_bounds.minimum,
-      search_bounds.maximum};
+      search_bounds.maximum,
+      result.configured.navmesh_cell_pitch};
   auto geometry = cache.geometry.find(geometry_key);
   if (geometry == cache.geometry.end()) {
+    ++result.candidate_pipeline_stats.alternative_geometry_cache_misses;
     RegionalAlternativeGeometry prepared_geometry;
-    const auto source_key = RegionalAlternativeSourceKey{
-        net, layer, result.configured.treat_saved_zone_fills_as_refillable};
-    auto extracted = cache.sources.find(source_key);
-    if (extracted == cache.sources.end()) {
-      extracted = cache.sources
-                      .emplace(source_key,
-                               extract_polygonal_board_free_space(
-                                   board,
-                                   BoardFreeSpaceExtractionConfig{
-                                       layer, net, true, true,
-                                       !result.configured.treat_saved_zone_fills_as_refillable}))
-                      .first;
-    }
-    if (extracted->second.complete()) {
-      auto domain = local_regional_free_space(extracted->second.domain, search_bounds, envelope,
-                                              result.configured.navmesh_cell_pitch);
-      auto offset = offset_polygonal_free_space(domain ? *domain : extracted->second.domain,
+    const auto& extracted = cached_regional_source(board, net, layer, result, cache);
+    if (extracted.complete()) {
+      const RegionalAlternativeSourceKey source_key{
+          net, layer, result.configured.treat_saved_zone_fills_as_refillable};
+      auto index = cache.source_bounds.find(source_key);
+      if (index == cache.source_bounds.end())
+        index = cache.source_bounds.emplace(source_key, extracted.domain).first;
+      auto domain = local_regional_free_space(extracted.domain, search_bounds, envelope,
+                                              result.configured.navmesh_cell_pitch, index->second);
+      auto offset = offset_polygonal_free_space(domain ? *domain : extracted.domain,
                                                 FreeSpaceOffsetConfig{Nanometres{0}, 200'000U});
       prepared_geometry.minimum_boundary_clearance = envelope;
       if (offset.ok()) {
@@ -3403,9 +5232,13 @@ prepared_alternative_domains(const Board& board, const NetId& net, const LayerId
       }
     }
     geometry = cache.geometry.emplace(geometry_key, std::move(prepared_geometry)).first;
+  } else {
+    ++result.candidate_pipeline_stats.alternative_geometry_cache_hits;
   }
-  std::vector<RegionalAlternativeDomain> domains;
-  for (const auto& region : geometry->second.regions) {
+  cache.touch_geometry(geometry_key);
+  auto domains = std::make_shared<std::vector<RegionalAlternativeDomain>>();
+  for (std::size_t region_index = 0U; region_index < geometry->second.regions.size(); ++region_index) {
+    const auto& region = geometry->second.regions[region_index];
     const NavMeshConfig navmesh_config{result.configured.navmesh_cell_pitch,
                                        result.configured.max_navmesh_cells_per_template,
                                        result.configured.max_navmesh_expansions_per_template,
@@ -3422,11 +5255,18 @@ prepared_alternative_domains(const Board& board, const NetId& net, const LayerId
     // bounded regional endpoint domain.
     auto prepared = prepare_validated_navmesh_domain(region, navmesh_config);
     if (prepared.ok()) {
-      domains.push_back(RegionalAlternativeDomain{std::move(prepared),
-                                                  geometry->second.minimum_boundary_clearance});
+      domains->push_back(RegionalAlternativeDomain{
+          std::move(prepared), geometry->second.minimum_boundary_clearance, key, region_index});
     }
   }
-  return cache.navigation.emplace(key, std::move(domains)).first->second;
+  cache.navigation.emplace(key, std::move(domains));
+  cache.touch_navigation(key);
+  cache.release_unretained_if_oversized(result.candidate_pipeline_stats);
+  // The just-inserted key is newest and cannot be evicted by the LRU policy above.
+  const auto retained = cache.navigation.find(key);
+  finish();
+  // touch_navigation() makes this entry newest, so the bounded LRU retains it.
+  return retained->second;
 }
 
 [[nodiscard]] bool regional_domain_contains_point(const RegionalAlternativeDomain& domain,
@@ -3452,6 +5292,56 @@ regional_domains_contain_point(const std::vector<RegionalAlternativeDomain>& dom
   return std::any_of(domains.begin(), domains.end(), [&](const auto& domain) {
     return regional_domain_contains_point(domain, point);
   });
+}
+
+[[nodiscard]] std::optional<NavMeshRouteResult> cached_regional_navmesh_route(
+    const RegionalAlternativeDomain& domain, Point start, Point finish,
+    const NavMeshConfig& config, RegionalAlternativeDomainCache& cache,
+    RegionalCandidatePipelineStats& stats) {
+  const auto bounds = config.search_bounds;
+  const RegionalAlternativeRouteKey key{
+      domain.cache_key,
+      domain.cache_region_index,
+      start,
+      finish,
+      config.cell_pitch,
+      config.maximum_cells,
+      config.maximum_search_expansions,
+      config.topology_guide,
+      config.maximum_guide_distance,
+      config.corridor_guard_rings,
+      config.minimum_boundary_clearance,
+      bounds.has_value(),
+      bounds ? bounds->minimum : Point{},
+      bounds ? bounds->maximum : Point{},
+      config.adaptive_clearance_refinement,
+      config.maximum_refinement_depth,
+      config.minimum_refined_cell_pitch,
+      config.usped.enabled,
+      config.usped.maximum_cells,
+      config.usped.maximum_refined_parents,
+      config.usped.refinement_per_mille};
+  if (const auto found = cache.routes.find(key); found != cache.routes.end()) {
+    ++stats.alternative_route_cache_hits;
+    cache.touch_navigation(domain.cache_key);
+    return found->second;
+  }
+  auto route = route_prepared_navmesh(domain.navmesh, start, finish, config);
+  ++stats.alternative_route_cache_misses;
+  std::optional<NavMeshRouteResult> completed;
+  if (route.ok()) completed.emplace(std::move(route));
+  cache.routes.emplace(key, completed);
+  // Bound completed route memoization independently of the domain LRU. The ordered key makes
+  // deterministic eviction sufficient here; a retained domain may always regenerate a miss.
+  constexpr std::size_t maximum_completed_routes = 512U;
+  constexpr std::size_t maximum_completed_route_payload_bytes = 64U * 1024U * 1024U;
+  while (cache.routes.size() > maximum_completed_routes ||
+         cache.route_payload_bytes() > maximum_completed_route_payload_bytes) {
+    cache.routes.erase(cache.routes.begin());
+    ++stats.alternative_cache_evictions;
+  }
+  cache.observe_retained_storage(stats);
+  return completed;
 }
 
 [[nodiscard]] bool
@@ -3649,6 +5539,177 @@ regional_domains_contain_chord(const std::vector<RegionalAlternativeDomain>& dom
     }
     return next;
   };
+  struct LayeredProposal {
+    LayerId layer;
+    Point start_site;
+    Point end_site;
+    NavMeshRouteResult route;
+  };
+  std::optional<LayeredProposal> layered_proposal;
+  if (result.configured.enable_layered_navmesh && !local_bypass_only &&
+      template_limit > 1U && !layers.empty()) {
+    // One bounded graph for this fragment's entire physical stack. Alias the prepared islands
+    // into their cache owner; copying a graph must not duplicate polygon/BVH payloads.
+    using DomainOwner = std::shared_ptr<const std::vector<RegionalAlternativeDomain>>;
+    std::map<LayerId, DomainOwner> layer_domains;
+    std::vector<LayeredNavMeshLayer> graph_layers;
+    std::vector<LayeredNavMeshViaZone> zones;
+    auto& stats = result.candidate_pipeline_stats;
+    std::size_t prepared_cells = 0U;
+    const auto cell_limit = std::min<std::size_t>(65'536U,
+        result.configured.max_navmesh_cells_per_template);
+    bool bounded = false;
+    for (const auto& physical : board.layers) {
+      if (physical.kind != LayerKind::copper) continue;
+      routing_kernel_checkpoint();
+      if (graph_layers.size() >= 32U) { bounded = true; break; }
+      const auto owner = prepared_alternative_domains(
+          board, fragment.id.net, physical.id, envelope, *search_bounds, result, domain_cache);
+      LayeredNavMeshLayer input{physical.id, physical.stack_order, {}};
+      for (const auto& island : *owner) {
+        if (island.navmesh.cells.size() > cell_limit - prepared_cells) {
+          bounded = true;
+          break;
+        }
+        prepared_cells += island.navmesh.cells.size();
+        input.domains.emplace_back(owner, &island.navmesh);
+      }
+      if (bounded) break;
+      layer_domains.emplace(physical.id, owner);
+      graph_layers.push_back(std::move(input));
+    }
+    const auto original = layer_domains.find(fragment.layer);
+    if (!bounded && original != layer_domains.end()) {
+      // Existing regional vias use their explicit inclusive span; no new via fabrication type
+      // is invented here. The transition callback checks drill, annulus and every affected layer.
+      const auto proxy = flatten_board_beziers_conservatively(board);
+      const auto pads = copper_pad_shapes(board);
+      const auto drills = drill_shapes(board);
+      const auto keepouts = world_keepouts(board);
+      if (proxy.certified) {
+        const auto zone_limit = std::min<std::size_t>(128U,
+            result.configured.max_selected_via_site_candidate_checks);
+        const auto sites_per_end = std::min<std::size_t>(8U,
+            result.configured.max_via_sites_per_region);
+        std::set<std::pair<Point, std::vector<LayerId>>> certified_sites;
+        std::size_t site_checks = 0U;
+        const auto site_check_limit = std::min<std::size_t>(1'024U,
+            result.configured.max_selected_via_site_candidate_checks);
+        const auto via_envelope =
+            bounded_add(rules.clearance, Nanometres{rules.via_diameter.value() / 2});
+        for (const auto& [order, layer] : layers) {
+          static_cast<void>(order);
+          const auto span = regional_via_span(board, fragment.layer, layer);
+          if (span.size() < 2U) continue;
+          for (const bool entry : {true, false}) {
+            const auto endpoint = entry ? fragment.start : fragment.end;
+            const auto toward = entry ? fragment.end : fragment.start;
+            std::size_t retained = 0U;
+            for (const auto site : candidate_sites(endpoint, toward, span)) {
+              routing_kernel_checkpoint();
+              if (retained >= sites_per_end || zones.size() >= zone_limit ||
+                  site_checks >= site_check_limit) break;
+              ++site_checks;
+              if (!regional_domains_contain_chord(*original->second, endpoint, site)) continue;
+              const auto identity = std::pair{site, span};
+              if (!certified_sites.contains(identity)) {
+                // Reject blocked samples before consuming the retained-site allowance. Use the
+                // same via-radius domains as template admission, including intermediate layers.
+                const auto fits_span = std::all_of(span.begin(), span.end(), [&](const auto& copper) {
+                  const auto via_domains = prepared_alternative_domains(
+                      board, fragment.id.net, copper, via_envelope, *search_bounds, result,
+                      domain_cache);
+                  return regional_domains_contain_point(*via_domains, site);
+                });
+                if (!fits_span || !regional_via_site_legal(
+                        board, proxy.board, pads, drills, keepouts, fragment.id.net, site, span,
+                        rules.via_diameter,
+                        result.configured.treat_saved_zone_fills_as_refillable)) {
+                  ++stats.layered_navmesh_rejected_spans;
+                  continue;
+                }
+                certified_sites.insert(identity);
+              }
+              zones.push_back({zones.size(), site,
+                  entry ? fragment.layer : layer, entry ? layer : fragment.layer,
+                  span.front(), span.back(), rules.via_diameter, false});
+              ++retained;
+            }
+          }
+        }
+        stats.layered_navmesh_preparation_bound_hits += site_checks >= site_check_limit;
+        stats.layered_navmesh_via_zones += zones.size();
+        LayeredNavMeshPreparationConfig preparation;
+        preparation.maximum_nodes = cell_limit;
+        preparation.maximum_planar_edges = 4U * cell_limit;
+        preparation.maximum_via_zones = zone_limit;
+        preparation.maximum_transitions = 2'048U;
+        const auto graph = prepare_layered_navmesh_domain(
+            std::move(graph_layers), std::move(zones), [&](const auto& transition) {
+              routing_kernel_checkpoint();
+              return certified_sites.contains({transition.site, transition.span});
+            }, preparation);
+        stats.layered_navmesh_graph_nodes += graph.nodes.size();
+        stats.layered_navmesh_certified_transitions += graph.transitions.size();
+        for (const auto& edges : graph.adjacency)
+          stats.layered_navmesh_planar_edges += static_cast<std::size_t>(std::count_if(
+              edges.begin(), edges.end(), [](const auto& edge) {
+                return edge.kind == LayeredNavMeshEdgeKind::planar;
+              }));
+        stats.layered_navmesh_preparation_bound_hits += graph.preparation_bound_exhausted;
+        if (graph.ok()) {
+          const auto selected = route_prepared_layered_navmesh(
+              graph, fragment.start, fragment.layer, fragment.end, fragment.layer,
+              {result.configured.max_navmesh_expansions_per_template, 2U, 2U});
+          stats.layered_navmesh_search_expansions += selected.search_expansions;
+          stats.layered_navmesh_search_bound_hits += selected.search_budget_exhausted;
+          if (selected.ok()) {
+            const auto first = std::find_if(selected.edges.begin(), selected.edges.end(),
+                [](const auto& edge) { return edge.kind == LayeredNavMeshEdgeKind::transition; });
+            if (first != selected.edges.end()) {
+              const auto last = std::find_if(std::next(first), selected.edges.end(),
+                  [](const auto& edge) { return edge.kind == LayeredNavMeshEdgeKind::transition; });
+              if (last != selected.edges.end() && first->transition.site != last->transition.site) {
+                const auto& middle = graph.layers[first->to.layer_index];
+                const auto& domain = *middle.domains[first->to.domain_index];
+                std::vector<bool> retained(domain.cells.size(), false);
+                retained[first->to.cell] = true;
+                for (auto edge = std::next(first); edge != last; ++edge)
+                  retained[edge->to.cell] = true;
+                std::vector<std::size_t> closed;
+                for (std::size_t cell = 0U; cell < retained.size(); ++cell)
+                  if (!retained[cell]) closed.push_back(cell);
+                NavMeshConfig constrained;
+                constrained.cell_pitch = domain.pitch;
+                constrained.maximum_cells = cell_limit;
+                constrained.maximum_search_expansions =
+                    result.configured.max_navmesh_expansions_per_template;
+                constrained.topology_guide = domain.topology_guide;
+                constrained.maximum_guide_distance = domain.maximum_guide_distance;
+                constrained.minimum_boundary_clearance = domain.minimum_boundary_clearance;
+                constrained.search_bounds = domain.search_bounds;
+                constrained.adaptive_clearance_refinement = domain.adaptive_clearance_refinement;
+                constrained.maximum_refinement_depth = domain.maximum_refinement_depth;
+                constrained.minimum_refined_cell_pitch = domain.minimum_refined_cell_pitch;
+                constrained.usped = domain.usped;
+                constrained.corridor_guard_rings = 0U;
+                auto route = route_prepared_navmesh_flood_fill(
+                    domain, first->transition.site, {last->transition.site}, constrained, closed);
+                if (route.ok()) {
+                  layered_proposal = LayeredProposal{middle.layer, first->transition.site,
+                                                     last->transition.site, std::move(route)};
+                  const auto preferred = std::find_if(layers.begin(), layers.end(),
+                      [&](const auto& value) { return value.second == middle.layer; });
+                  if (preferred != layers.end()) std::rotate(layers.begin(), preferred, std::next(preferred));
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    if (bounded) ++stats.layered_navmesh_preparation_bound_hits;
+  }
   std::size_t layer_sequences = 0U;
   for (const auto& [stack_order, layer] : layers) {
     static_cast<void>(stack_order);
@@ -3661,20 +5722,23 @@ regional_domains_contain_chord(const std::vector<RegionalAlternativeDomain>& dom
     if (span.size() < 2U) {
       continue;
     }
-    const auto& domains = prepared_alternative_domains(board, fragment.id.net, layer, envelope,
-                                                       *search_bounds, result, domain_cache);
+    const auto domains_handle = prepared_alternative_domains(
+        board, fragment.id.net, layer, envelope, *search_bounds, result, domain_cache);
+    const auto& domains = *domains_handle;
     if (domains.empty()) {
       ++result.alternative_domain_rejections;
       continue;
     }
-    const auto& original_track_domains = prepared_alternative_domains(
+    const auto original_track_domains_handle = prepared_alternative_domains(
         board, fragment.id.net, fragment.layer, envelope, *search_bounds, result, domain_cache);
+    const auto& original_track_domains = *original_track_domains_handle;
     const auto via_envelope =
         bounded_add(rules.clearance, Nanometres{rules.via_diameter.value() / 2});
     const auto vias_fit_span = [&](Point site) {
       return std::all_of(span.begin(), span.end(), [&](const auto& span_layer) {
-        const auto& via_domains = prepared_alternative_domains(
+        const auto via_domains_handle = prepared_alternative_domains(
             board, fragment.id.net, span_layer, via_envelope, *search_bounds, result, domain_cache);
+        const auto& via_domains = *via_domains_handle;
         return regional_domains_contain_point(via_domains, site);
       });
     };
@@ -3726,8 +5790,16 @@ regional_domains_contain_chord(const std::vector<RegionalAlternativeDomain>& dom
       });
       return sites;
     };
-    const auto start_sites = legal_endpoint_sites(fragment.start, fragment.end);
-    const auto end_sites = legal_endpoint_sites(fragment.end, fragment.start);
+    auto start_sites = legal_endpoint_sites(fragment.start, fragment.end);
+    auto end_sites = legal_endpoint_sites(fragment.end, fragment.start);
+    if (layered_proposal && layered_proposal->layer == layer) {
+      const auto prefer = [](std::vector<Point>& sites, Point site) {
+        const auto found = std::find(sites.begin(), sites.end(), site);
+        if (found != sites.end()) std::rotate(sites.begin(), found, std::next(found));
+      };
+      prefer(start_sites, layered_proposal->start_site);
+      prefer(end_sites, layered_proposal->end_site);
+    }
     if (start_sites.empty() || end_sites.empty()) {
       continue;
     }
@@ -3752,7 +5824,11 @@ regional_domains_contain_chord(const std::vector<RegionalAlternativeDomain>& dom
           continue;
         }
         std::optional<NavMeshRouteResult> navmesh;
+        const bool selected_layered_pair = layered_proposal && layered_proposal->layer == layer &&
+            layered_proposal->start_site == start_site && layered_proposal->end_site == end_site;
+        if (selected_layered_pair) navmesh = layered_proposal->route;
         for (const auto& domain : domains) {
+          if (navmesh) break;
           if (!regional_domain_contains_point(domain, start_site) ||
               !regional_domain_contains_point(domain, end_site)) {
             continue;
@@ -3768,10 +5844,11 @@ regional_domains_contain_chord(const std::vector<RegionalAlternativeDomain>& dom
                                              true,
                                              2U,
                                              Nanometres{0}};
-          auto candidate =
-              route_prepared_navmesh(domain.navmesh, start_site, end_site, navmesh_config);
-          if (candidate.ok()) {
-            navmesh = std::move(candidate);
+          auto candidate = cached_regional_navmesh_route(
+              domain, start_site, end_site, navmesh_config, domain_cache,
+              result.candidate_pipeline_stats);
+          if (candidate && candidate->ok()) {
+            navmesh = std::move(*candidate);
             break;
           }
         }
@@ -3842,6 +5919,7 @@ regional_domains_contain_chord(const std::vector<RegionalAlternativeDomain>& dom
         const auto terminal_exit_choice = append_terminal_choice(
             fragment.end, end_site, fragment.ends_at_terminal, end_via_choice);
         RegionalChannel channel;
+        channel.alternative_template_only = true;
         channel.id = result.channels.size();
         channel.layer = layer;
         channel.portals = navmesh->portals;
@@ -3893,6 +5971,8 @@ regional_domains_contain_chord(const std::vector<RegionalAlternativeDomain>& dom
         channel.cross_sections.push_back(std::move(cross_section));
         result.channels.push_back(std::move(channel));
 
+        if (selected_layered_pair)
+          ++result.candidate_pipeline_stats.layered_navmesh_selected_proposals;
         RegionalRouteTemplate route_template;
         route_template.fragment = fragment.id;
         route_template.routing_layer = layer;
@@ -3973,8 +6053,9 @@ build_terminal_navmesh_template(const Board& board, const RegionalRouteFragment&
   if (!represented_in_window) {
     return reject();
   }
-  const auto& domains = prepared_alternative_domains(board, fragment.id.net, fragment.layer,
-                                                     envelope, search_bounds, result, domain_cache);
+  const auto domains_handle = prepared_alternative_domains(
+      board, fragment.id.net, fragment.layer, envelope, search_bounds, result, domain_cache);
+  const auto& domains = *domains_handle;
   std::optional<NavMeshRouteResult> navmesh;
   for (const auto& domain : domains) {
     if (!regional_domain_contains_point(domain, start) ||
@@ -3992,9 +6073,10 @@ build_terminal_navmesh_template(const Board& board, const RegionalRouteFragment&
                                        true,
                                        2U,
                                        Nanometres{0}};
-    auto candidate = route_prepared_navmesh(domain.navmesh, start, end, navmesh_config);
-    if (candidate.ok()) {
-      navmesh = std::move(candidate);
+    auto candidate = cached_regional_navmesh_route(
+        domain, start, end, navmesh_config, domain_cache, result.candidate_pipeline_stats);
+    if (candidate) {
+      navmesh = std::move(*candidate);
       break;
     }
   }
@@ -4003,6 +6085,7 @@ build_terminal_navmesh_template(const Board& board, const RegionalRouteFragment&
   }
 
   RegionalChannel channel;
+  channel.alternative_template_only = true;
   channel.id = result.channels.size();
   channel.layer = fragment.layer;
   channel.portals = navmesh->portals;
@@ -4128,12 +6211,6 @@ build_terminal_navmesh_template(const Board& board, const RegionalRouteFragment&
   }
   const auto rules = resolve_net_routing_rules(board, fragment.id.net);
   const auto envelope = bounded_add(rules.clearance, Nanometres{rules.track_width.value() / 2});
-  auto search_bounds = union_bounds(window.bounds, segment_bounds(fragment.start, fragment.end));
-  const auto& domains = prepared_alternative_domains(board, fragment.id.net, fragment.layer,
-                                                     envelope, search_bounds, result, domain_cache);
-  if (domains.empty()) {
-    return alternatives;
-  }
   const auto conflict_center = Point{Nanometres{std::midpoint(conflict_bounds->minimum.x.value(),
                                                               conflict_bounds->maximum.x.value())},
                                      Nanometres{std::midpoint(conflict_bounds->minimum.y.value(),
@@ -4143,12 +6220,67 @@ build_terminal_navmesh_template(const Board& board, const RegionalRouteFragment&
         return lhs.required_nm < rhs.required_nm;
       })->required_nm;
   const auto normal = SplineVector{-dy / length, dx / length};
+  const auto half_pitch =
+      static_cast<long double>(result.configured.navmesh_cell_pitch.value()) / 2.0L;
+  const auto wall_guard = std::hypot(half_pitch, half_pitch);
+  // A multiplier-only waypoint search assumes the conflicting run is no longer than a few copper
+  // envelopes.  At a perpendicular crossing that is false: moving three envelopes along this
+  // fragment's normal may still leave the waypoint in the middle of the other run, so the dynamic
+  // wall disconnects it from all neighboring cells.  Seed both sides just beyond the actual
+  // blocker extrema, then retain the ordinary near offsets as bounded fallbacks.
+  auto minimum_projection = 0.0L;
+  auto maximum_projection = 0.0L;
+  for (const auto& blocker : blockers) {
+    for (const auto point : {blocker.fragment->start, blocker.fragment->end}) {
+      const auto projection =
+          static_cast<long double>(point.x.value() - conflict_center.x.value()) * normal.x +
+          static_cast<long double>(point.y.value() - conflict_center.y.value()) * normal.y;
+      minimum_projection = std::min(minimum_projection, projection);
+      maximum_projection = std::max(maximum_projection, projection);
+    }
+  }
   std::vector<long double> offset_scales;
-  offset_scales.reserve(result.configured.max_same_layer_detour_offsets * 2U);
+  offset_scales.reserve(result.configured.max_same_layer_detour_offsets * 2U + 2U);
+  if (required > 0.0L) {
+    offset_scales.push_back((minimum_projection - required - wall_guard) / required);
+    offset_scales.push_back((maximum_projection + required + wall_guard) / required);
+  }
   for (std::size_t multiplier = 1U; multiplier <= result.configured.max_same_layer_detour_offsets;
        ++multiplier) {
     offset_scales.push_back(-static_cast<long double>(multiplier));
     offset_scales.push_back(static_cast<long double>(multiplier));
+  }
+  std::vector<long double> distinct_scales;
+  distinct_scales.reserve(offset_scales.size());
+  for (const auto scale : offset_scales) {
+    if (std::none_of(distinct_scales.begin(), distinct_scales.end(), [&](const auto prior) {
+          return std::abs(prior - scale) < 1.0e-6L;
+        })) {
+      distinct_scales.push_back(scale);
+    }
+  }
+  offset_scales = std::move(distinct_scales);
+  auto search_bounds = union_bounds(window.bounds, segment_bounds(fragment.start, fragment.end));
+  // The local free-space helper adds only its static copper envelope and two cell pitches.  A
+  // useful conflict detour may deliberately place its waypoint several physical envelopes beyond
+  // the conflict, especially when the other trace crosses this fragment nearly orthogonally.  If
+  // the domain is clipped before that reach is known, the first two waypoints remain too close to
+  // the blocker and the first legal waypoint is rejected merely because it lies just outside the
+  // prepared rectangle.  Carry the complete bounded lateral search reach into domain preparation.
+  if (const auto outline_bounds = regional_polygon_bounds(board.outline)) {
+    auto maximum_scale = 1.0L;
+    for (const auto scale : offset_scales) {
+      maximum_scale = std::max(maximum_scale, std::abs(scale));
+    }
+    const auto reach =
+        Nanometres{static_cast<std::int64_t>(std::ceil(required * maximum_scale))};
+    search_bounds = expanded_bounds(search_bounds, reach, *outline_bounds);
+  }
+  const auto domains_handle = prepared_alternative_domains(
+      board, fragment.id.net, fragment.layer, envelope, search_bounds, result, domain_cache);
+  const auto& domains = *domains_handle;
+  if (domains.empty()) {
+    return alternatives;
   }
   for (const auto offset_scale : offset_scales) {
     if (result.same_layer_detour_checks >= result.configured.max_same_layer_detour_checks ||
@@ -4181,8 +6313,6 @@ build_terminal_navmesh_template(const Board& board, const RegionalRouteFragment&
                                          2U,
                                          Nanometres{0}};
       std::vector<std::size_t> dynamic_walls;
-      const auto half_pitch =
-          static_cast<long double>(result.configured.navmesh_cell_pitch.value()) / 2.0L;
       for (const auto& cell : domain.navmesh.cells) {
         if (cell.contains(fragment.start) || cell.contains(waypoint) ||
             cell.contains(fragment.end)) {
@@ -4204,6 +6334,7 @@ build_terminal_navmesh_template(const Board& board, const RegionalRouteFragment&
         continue;
       }
       RegionalChannel channel;
+      channel.alternative_template_only = true;
       channel.id = result.channels.size();
       channel.layer = fragment.layer;
       channel.occupants = {fragment.id};
@@ -4223,14 +6354,56 @@ build_terminal_navmesh_template(const Board& board, const RegionalRouteFragment&
       if (channel.topology_cells.empty()) {
         continue;
       }
-      auto centerline = entry.centerline;
-      centerline.insert(centerline.end(), exit.centerline.begin() + 1, exit.centerline.end());
-      const auto signature = make_navmesh_topology_signature([&]() {
+      // Flood-fill is used here to prove that both halves of the requested homotopy are
+      // reachable.  Its cell-centre reconstruction is intentionally conservative, but carrying
+      // that raster staircase into PH interpolation creates dozens of artificial interpolation
+      // nodes and can make an otherwise simple detour curvature-infeasible.  Prefer the exact
+      // two-chord dogleg when it has the same forced waypoint and independently passes both the
+      // prepared static domain and every attributed dynamic blocker.  The NavMesh cells/gates
+      // remain attached as topology evidence; only the continuous seed is de-rasterized.
+      const auto chord_clears_attributed_fragments = [&](Point first, Point second) {
+        return std::none_of(blockers.begin(), blockers.end(), [&](const auto& blocker) {
+          return geometry::segment_distance_nm(first, second, blocker.fragment->start,
+                                               blocker.fragment->end) < blocker.required_nm;
+        });
+      };
+      const auto direct_dogleg_legal =
+          regional_domains_contain_chord(domains, fragment.start, waypoint) &&
+          regional_domains_contain_chord(domains, waypoint, fragment.end) &&
+          chord_clears_attributed_fragments(fragment.start, waypoint) &&
+          chord_clears_attributed_fragments(waypoint, fragment.end);
+      auto centerline = std::vector<Point>{};
+      if (direct_dogleg_legal) {
+        centerline = {fragment.start, waypoint, fragment.end};
+      } else {
+        centerline = entry.centerline;
+        centerline.insert(centerline.end(), exit.centerline.begin() + 1, exit.centerline.end());
+      }
+      auto signature_gates = [&]() {
         auto gates = entry.topology_signature.gates;
         gates.insert(gates.end(), exit.topology_signature.gates.begin(),
                      exit.topology_signature.gates.end());
         return gates;
-      }());
+      }();
+      if (direct_dogleg_legal) {
+        // Each half-route's signature was derived from its conservative cell-centre path.  Once
+        // the exact dogleg replaces that reconstruction, keeping every old internal gate would
+        // require the PH curve to replay raster transitions it legitimately bypasses.  Apply the
+        // same gate filtering used by derive_navmesh_topology_signature(): a portal remains a
+        // topological constraint only when the accepted centerline actually crosses it in the
+        // selected direction.  Static-domain and attributed-blocker checks above are what prove
+        // the replacement dogleg itself; this filtering merely removes irrelevant grid evidence.
+        std::vector<NavMeshTopologyGate> crossed_gates;
+        crossed_gates.reserve(signature_gates.size());
+        for (const auto& gate : signature_gates) {
+          auto singleton = make_navmesh_topology_signature({gate});
+          if (validate_navmesh_topology_signature(singleton, centerline).preserved) {
+            crossed_gates.push_back(gate);
+          }
+        }
+        signature_gates = std::move(crossed_gates);
+      }
+      const auto signature = make_navmesh_topology_signature(std::move(signature_gates));
       if (std::any_of(alternatives.begin(), alternatives.end(), [&](const auto& prior) {
             return prior.topology_signature.fingerprint == signature.fingerprint ||
                    prior.topology_centerline == centerline;
@@ -4263,6 +6436,14 @@ build_terminal_navmesh_template(const Board& board, const RegionalRouteFragment&
       };
       append_endpoint_link(fragment.start, entry, entry.corridor.front());
       append_endpoint_link(fragment.end, exit, exit.corridor.back());
+      if (direct_dogleg_legal) {
+        const auto route_guard = Nanometres{
+            std::max<std::int64_t>(1, result.configured.navmesh_cell_pitch.value() / 2)};
+        channel.endpoint_links.push_back(
+            RegionalTopologyLink{fragment.start, waypoint, route_guard});
+        channel.endpoint_links.push_back(
+            RegionalTopologyLink{waypoint, fragment.end, route_guard});
+      }
       channel.topology_signature = signature;
       const auto usable = bounded_add(fragment.width, Nanometres{2 * fragment.clearance.value()});
       const auto middle_x = (static_cast<long double>(fragment.start.x.value()) +
@@ -4317,6 +6498,258 @@ build_terminal_navmesh_template(const Board& board, const RegionalRouteFragment&
   return alternatives;
 }
 
+// Generates topology columns only for an already-attributed physical conflict cone. The
+// anisotropic field prefers longitudinal progress while two signed erosion priors expose both
+// lateral sides of the blocker set. Static free space remains polygon-derived, and the returned
+// NavMesh route has already passed exact chord certification before it enters the discrete master.
+[[nodiscard]] std::vector<RegionalRouteTemplate> build_confined_anisotropic_erosion_templates(
+    const Board& board, const RegionalRoutingWindow& window, const RegionalRouteFragment& fragment,
+    RegionalRouteResult& result, RegionalAlternativeDomainCache& domain_cache) {
+  std::vector<RegionalRouteTemplate> alternatives;
+  if (fragment.explicit_width || window.conflict_edges.empty() ||
+      result.configured.max_confined_anisotropic_erosion_checks == 0U ||
+      result.confined_anisotropic_erosion_checks >=
+          result.configured.max_confined_anisotropic_erosion_checks) {
+    return alternatives;
+  }
+
+  struct AttributedBlocker {
+    const RegionalRouteFragment* fragment{nullptr};
+    std::size_t conflict_edge{0U};
+    long double required_nm{0.0L};
+  };
+  std::vector<AttributedBlocker> blockers;
+  std::optional<geometry::AxisAlignedBounds> conflict_bounds;
+  for (const auto edge_id : window.conflict_edges) {
+    if (edge_id >= result.conflict_edges.size()) {
+      continue;
+    }
+    const auto& conflict = result.conflict_edges[edge_id];
+    if (conflict.first != fragment.id && conflict.second != fragment.id) {
+      continue;
+    }
+    const auto other_id = conflict.first == fragment.id ? conflict.second : conflict.first;
+    const auto other =
+        std::find_if(result.fragments.begin(), result.fragments.end(),
+                     [&](const auto& candidate) { return candidate.id == other_id; });
+    if (other == result.fragments.end() || other->layer != fragment.layer) {
+      continue;
+    }
+    const auto required =
+        static_cast<long double>(fragment.width.value() + other->width.value()) / 2.0L +
+        static_cast<long double>(std::max(fragment.clearance, other->clearance).value());
+    blockers.push_back(AttributedBlocker{&*other, edge_id, required});
+    conflict_bounds = conflict_bounds ? union_bounds(*conflict_bounds, conflict.conflict_bounds)
+                                      : conflict.conflict_bounds;
+  }
+  if (blockers.empty() || !conflict_bounds) {
+    return alternatives;
+  }
+
+  const auto dx = static_cast<long double>(fragment.end.x.value() - fragment.start.x.value());
+  const auto dy = static_cast<long double>(fragment.end.y.value() - fragment.start.y.value());
+  const auto length = std::hypotl(dx, dy);
+  if (!(length > 0.0L)) {
+    return alternatives;
+  }
+  const auto normal = SplineVector{-dy / length, dx / length};
+  const auto required =
+      std::max_element(blockers.begin(), blockers.end(), [](const auto& lhs, const auto& rhs) {
+        return lhs.required_nm < rhs.required_nm;
+      })->required_nm + static_cast<long double>(result.configured.navmesh_cell_pitch.value());
+  const auto rules = resolve_net_routing_rules(board, fragment.id.net);
+  const auto envelope = bounded_add(rules.clearance, Nanometres{rules.track_width.value() / 2});
+  auto search_bounds = union_bounds(window.bounds, segment_bounds(fragment.start, fragment.end));
+  if (const auto outline_bounds = regional_polygon_bounds(board.outline)) {
+    const auto reach = Nanometres{static_cast<std::int64_t>(std::ceil(
+        required * static_cast<long double>(
+                       std::max<std::size_t>(1U, result.configured.max_same_layer_detour_offsets))))};
+    search_bounds = expanded_bounds(search_bounds, reach, *outline_bounds);
+  }
+  const auto domains_handle = prepared_alternative_domains(
+      board, fragment.id.net, fragment.layer, envelope, search_bounds, result, domain_cache);
+  const auto& domains = *domains_handle;
+  if (domains.empty()) {
+    return alternatives;
+  }
+
+  const auto shifted = [&](Point point, long double side) {
+    return Point{
+        Nanometres{static_cast<std::int64_t>(std::llround(
+            static_cast<long double>(point.x.value()) + side * normal.x * required))},
+        Nanometres{static_cast<std::int64_t>(std::llround(
+            static_cast<long double>(point.y.value()) + side * normal.y * required))}};
+  };
+  for (const auto side : {-1.0L, 1.0L}) {
+    if (alternatives.size() >=
+            result.configured.max_confined_anisotropic_candidates_per_fragment ||
+        result.confined_anisotropic_erosion_checks >=
+            result.configured.max_confined_anisotropic_erosion_checks) {
+      break;
+    }
+    for (const auto& domain : domains) {
+      if (result.confined_anisotropic_erosion_checks >=
+          result.configured.max_confined_anisotropic_erosion_checks) {
+        break;
+      }
+      NavMeshConfig navmesh_config{result.configured.navmesh_cell_pitch,
+                                   result.configured.max_navmesh_cells_per_template,
+                                   result.configured.max_navmesh_expansions_per_template,
+                                   {},
+                                   Nanometres{0},
+                                   0U,
+                                   domain.minimum_boundary_clearance,
+                                   search_bounds,
+                                   true,
+                                   2U,
+                                   Nanometres{0}};
+      NavMeshHydraulicConfig hydraulic;
+      hydraulic.flow = result.configured.confined_anisotropic_erosion_flow;
+      hydraulic.flow.anisotropy_axis_x =
+          static_cast<std::int32_t>(std::llround(dx / length * 1'024.0L));
+      hydraulic.flow.anisotropy_axis_y =
+          static_cast<std::int32_t>(std::llround(dy / length * 1'024.0L));
+      hydraulic.flow.transverse_anisotropy_per_mille =
+          result.configured.confined_anisotropy_per_mille;
+      hydraulic.flow.deterministic_seed ^=
+          side < 0.0L ? 0x6a09e667f3bcc909ULL : 0xbb67ae8584caa73bULL;
+      hydraulic.opened_guard_rings = 0U;
+      hydraulic.preserve_pressure_barrier_sides = true;
+      hydraulic.maximum_discovery_cells = std::min<std::size_t>(
+          1'000'000U,
+          result.configured.max_navmesh_cells_per_template > 250'000U
+              ? 1'000'000U
+              : result.configured.max_navmesh_cells_per_template * 4U);
+      for (const auto& blocker : blockers) {
+        const auto margin = Nanometres{static_cast<std::int64_t>(std::ceil(blocker.required_nm))};
+        hydraulic.downstream_feedback.push_back(NavMeshHydraulicTerrainDeposit{
+            expanded_bounds(segment_bounds(blocker.fragment->start, blocker.fragment->end), margin,
+                            search_bounds),
+            blocker.fragment->start,
+            blocker.fragment->end,
+            false,
+            result.configured.confined_erosion_blocker_pressure,
+            0U});
+      }
+      const auto prior_start = shifted(fragment.start, side);
+      const auto prior_end = shifted(fragment.end, side);
+      hydraulic.downstream_feedback.push_back(NavMeshHydraulicTerrainDeposit{
+          expanded_bounds(segment_bounds(prior_start, prior_end),
+                          result.configured.navmesh_cell_pitch, search_bounds),
+          prior_start,
+          prior_end,
+          true,
+          0U,
+          result.configured.confined_erosion_lane_prior});
+
+      ++result.confined_anisotropic_erosion_checks;
+      auto route = route_prepared_navmesh_hydraulic(domain.navmesh, fragment.start, fragment.end,
+                                                     navmesh_config, hydraulic);
+      if (!route.ok()) {
+        ++result.confined_anisotropic_erosion_rejected;
+        continue;
+      }
+      result.confined_anisotropic_erosion_gpu_routes += route.used_hydraulic_gpu ? 1U : 0U;
+      result.confined_anisotropic_erosion_cpu_routes += route.used_hydraulic_gpu ? 0U : 1U;
+      result.confined_anisotropic_erosion_exact_chords += route.hydraulic_exact_certified_chords;
+      const auto clears_blockers = [&]() {
+        for (std::size_t edge = 1U; edge < route.centerline.size(); ++edge) {
+          if (std::any_of(blockers.begin(), blockers.end(), [&](const auto& blocker) {
+                return geometry::segment_distance_nm(route.centerline[edge - 1U],
+                                                     route.centerline[edge],
+                                                     blocker.fragment->start,
+                                                     blocker.fragment->end) < blocker.required_nm;
+              })) {
+            return false;
+          }
+        }
+        return true;
+      };
+      if (!clears_blockers() || route.topology_guard_cells.empty()) {
+        ++result.confined_anisotropic_erosion_rejected;
+        continue;
+      }
+      if (std::any_of(alternatives.begin(), alternatives.end(), [&](const auto& prior) {
+            return prior.topology_signature.fingerprint == route.topology_signature.fingerprint ||
+                   prior.topology_centerline == route.centerline;
+          })) {
+        ++result.confined_anisotropic_erosion_rejected;
+        continue;
+      }
+
+      RegionalChannel channel;
+      channel.alternative_template_only = true;
+      channel.id = result.channels.size();
+      channel.layer = fragment.layer;
+      channel.occupants = {fragment.id};
+      channel.portals = route.portals;
+      channel.topology_signature = route.topology_signature;
+      for (const auto cell_id : route.topology_guard_cells) {
+        if (cell_id < route.cells.size()) {
+          channel.topology_cells.push_back(route.cells[cell_id].polygon());
+        }
+      }
+      const auto append_endpoint_link = [&](Point endpoint, std::size_t cell_id) {
+        if (cell_id >= route.cells.size()) {
+          return;
+        }
+        const auto& cell = route.cells[cell_id];
+        const auto radius = Nanometres{static_cast<std::int64_t>(
+            std::ceil(geometry::point_distance_nm(cell.center, cell.corners.front())))};
+        channel.endpoint_links.push_back(RegionalTopologyLink{endpoint, cell.center, radius});
+      };
+      append_endpoint_link(fragment.start, route.corridor.front());
+      append_endpoint_link(fragment.end, route.corridor.back());
+      const auto usable = bounded_add(fragment.width, Nanometres{2 * fragment.clearance.value()});
+      const auto middle_x = std::midpoint(fragment.start.x.value(), fragment.end.x.value());
+      const auto middle_y = std::midpoint(fragment.start.y.value(), fragment.end.y.value());
+      const auto half = static_cast<long double>(usable.value()) / 2.0L;
+      const Point first_wall{
+          Nanometres{static_cast<std::int64_t>(std::llround(middle_x + normal.x * half))},
+          Nanometres{static_cast<std::int64_t>(std::llround(middle_y + normal.y * half))}};
+      const Point second_wall{
+          Nanometres{static_cast<std::int64_t>(std::llround(middle_x - normal.x * half))},
+          Nanometres{static_cast<std::int64_t>(std::llround(middle_y - normal.y * half))}};
+      auto cross_section = pack_regional_cross_section(result.fragments, channel.occupants,
+                                                        fragment.layer, first_wall, second_wall,
+                                                        usable);
+      cross_section.id = 0U;
+      channel.cross_sections.push_back(std::move(cross_section));
+      result.channels.push_back(std::move(channel));
+
+      RegionalRouteTemplate route_template;
+      route_template.fragment = fragment.id;
+      route_template.routing_layer = fragment.layer;
+      route_template.channel_sequence = {result.channels.back().id};
+      route_template.layer_sequence = {fragment.layer};
+      for (const auto& blocker : blockers) {
+        route_template.avoided_conflict_edges.push_back(blocker.conflict_edge);
+      }
+      std::sort(route_template.avoided_conflict_edges.begin(),
+                route_template.avoided_conflict_edges.end());
+      route_template.topology_centerline = std::move(route.centerline);
+      route_template.topology_signature = result.channels.back().topology_signature;
+      for (std::size_t edge = 1U; edge < route_template.topology_centerline.size(); ++edge) {
+        const auto edge_length =
+            geometry::segment_length_nm(route_template.topology_centerline[edge - 1U],
+                                        route_template.topology_centerline[edge]);
+        route_template.lower_bound_length_nm =
+            route_template.lower_bound_length_nm >
+                    std::numeric_limits<std::uint64_t>::max() - edge_length
+                ? std::numeric_limits<std::uint64_t>::max()
+                : route_template.lower_bound_length_nm + edge_length;
+      }
+      route_template.topology_cost = route_template.lower_bound_length_nm;
+      route_template.selected_global_topology = false;
+      route_template.exact_static_checked = true;
+      alternatives.push_back(std::move(route_template));
+      ++result.confined_anisotropic_erosion_accepted;
+      break;
+    }
+  }
+  return alternatives;
+}
+
 void populate_via_region_evidence(const Board& board, RegionalRouteResult& result) {
   result.via_region_evidence.clear();
   result.contested_via_regions = 0U;
@@ -4333,6 +6766,14 @@ void populate_via_region_evidence(const Board& board, RegionalRouteResult& resul
     }
     return pairwise_clearances.emplace(key, resolve_pairwise_clearance(board, first, second))
         .first->second;
+  };
+  std::map<NetId, Nanometres> net_widths;
+  const auto net_width = [&](const NetId& net) {
+    const auto found = net_widths.find(net);
+    return found != net_widths.end()
+               ? found->second
+               : net_widths.emplace(net, resolve_net_routing_rules(board, net).track_width)
+                     .first->second;
   };
   std::map<std::pair<NetId, std::size_t>, std::vector<const RegionalViaChoice*>> grouped;
   for (const auto& choice : result.via_choices) {
@@ -4537,12 +6978,14 @@ void populate_via_region_evidence(const Board& board, RegionalRouteResult& resul
           const auto& rhs_choice = result.via_choices[rhs_id];
           const auto broad_key = std::pair{std::min(lhs_choice.id, rhs_choice.id),
                                            std::max(lhs_choice.id, rhs_choice.id)};
-          if (use_via_broad_phase && !possible_via_pairs.contains(broad_key)) {
+          if (use_via_broad_phase && lhs_choice.attached_runups.empty() &&
+              rhs_choice.attached_runups.empty() && !possible_via_pairs.contains(broad_key)) {
             continue;
           }
           conflicts +=
               regional_via_choices_conflict(lhs_choice, rhs_choice,
-                                            pairwise_clearance(lhs_choice.net, rhs_choice.net))
+                                            pairwise_clearance(lhs_choice.net, rhs_choice.net),
+                                            net_width(lhs_choice.net), net_width(rhs_choice.net))
                   ? 1U
                   : 0U;
         }
@@ -4851,6 +7294,7 @@ struct LaneOrderSearchResult {
       result.budget_exhausted = true;
       return false;
     }
+    routing_kernel_checkpoint();
     ++result.states;
     if (progress) {
       progress(result.states);
@@ -5069,6 +7513,7 @@ struct LaneOrderSearchResult {
       result.budget_exhausted = true;
       return false;
     }
+    routing_kernel_checkpoint();
     ++result.states;
     if (progress) {
       progress(result.states);
@@ -5188,9 +7633,141 @@ struct LaneOrderSearchResult {
   return result;
 }
 
+void publish_bundle_search_context(
+    const Board& board, const RegionalRouteResult& regional, const RegionalRoutingWindow& window,
+    const std::vector<RegionalRouteTemplate>& templates,
+    const std::vector<std::vector<std::size_t>>& domains, std::string_view phase,
+    RouterTelemetrySink* telemetry) {
+  if (telemetry == nullptr || !telemetry->accepts(RouterTelemetryLevel::diagnostic)) return;
+  namespace json = boost::json;
+  const auto point = [](Point p) { return json::array{p.x.value(), p.y.value()}; };
+  const auto id = [](const RegionalRouteFragmentId& f) {
+    return json::array{f.net.value(), f.connection_index, f.run_index, f.fragment_index};
+  };
+  const auto indices = [](const auto& values) {
+    json::array out;
+    for (const auto value : values) out.emplace_back(value);
+    return out;
+  };
+  const auto layers = [](const auto& values) {
+    json::array out;
+    for (const auto& value : values) out.emplace_back(value.value());
+    return out;
+  };
+  const auto optional_index = [](const auto& value) -> json::value {
+    return value ? json::value(*value) : json::value(nullptr);
+  };
+  json::object context{{"schema", 4}, {"source_revision", board.source_revision},
+                       {"local_channel_occupancy", regional.configured.local_channel_occupancy},
+                       {"shared_channel_copper", regional.configured.shared_channel_copper},
+                       {"centerline_channel_cuts", regional.configured.centerline_channel_cuts},
+                       {"frozen_copper_context", regional.configured.frozen_copper_context},
+                       {"enable_spline_realization", regional.configured.enable_spline_realization},
+                       {"enable_straight_realization", regional.configured.enable_straight_realization},
+                       {"max_straight_portfolio_checks",
+                        regional.configured.max_straight_portfolio_checks},
+                       {"phase", json::string(phase)}, {"window", window.id},
+                       {"max_states", regional.configured.max_bundle_search_states},
+                       {"max_access_states", regional.configured.max_access_assignment_states},
+                       {"max_access_blockers", regional.configured.max_access_blockers_per_window}};
+  context["board_minimum_rules_nm"] = json::array{
+      board.rules.minimum_clearance.value(), board.rules.minimum_track_width.value(),
+      board.rules.minimum_via_diameter.value(), board.rules.minimum_via_annular_width.value(),
+      board.rules.minimum_through_drill.value(), board.rules.copper_to_edge_clearance.value(),
+      board.rules.hole_clearance.value(), board.rules.hole_to_hole_clearance.value()};
+  json::object net_rules;
+  for (const auto& net : board.nets) {
+    const auto rules = resolve_net_routing_rules(board, net.id);
+    net_rules[net.id.value()] = json::array{
+        rules.clearance.value(), rules.track_width.value(), rules.via_diameter.value(),
+        rules.via_drill.value(), rules.differential_pair_track_width.value(),
+        rules.differential_pair_gap.value(), rules.differential_pair_via_gap.value()};
+  }
+  context["net_routing_rules_nm"] = std::move(net_rules);
+  json::array nets, owned, fragments, routes, channels, vias, terminals, evidence, options;
+  for (const auto& net : window.nets) nets.emplace_back(net.value());
+  for (const auto& fragment : window.owned_fragments) owned.push_back(id(fragment));
+  for (const auto& f : regional.fragments) {
+    fragments.emplace_back(json::object{
+        {"id", id(f.id)}, {"layer", f.layer.value()}, {"start", point(f.start)},
+        {"end", point(f.end)}, {"width", f.width.value()}, {"clearance", f.clearance.value()},
+        {"explicit_width", f.explicit_width}, {"coupled_member", f.coupled_member},
+        {"begins_at_terminal", f.begins_at_terminal},
+        {"ends_at_terminal", f.ends_at_terminal}});
+  }
+  for (const auto& t : templates) {
+    json::array centerline;
+    for (const auto p : t.topology_centerline) centerline.push_back(point(p));
+    routes.emplace_back(json::object{
+        {"id", t.id}, {"fragment", id(t.fragment)}, {"layer", t.routing_layer.value()},
+        {"channels", indices(t.channel_sequence)}, {"layers", layers(t.layer_sequence)},
+        {"vias", indices(t.via_choices)}, {"global", t.selected_global_topology},
+        {"entry_via", optional_index(t.entry_via_choice)},
+        {"exit_via", optional_index(t.exit_via_choice)},
+        {"entry_terminal", optional_index(t.terminal_entry_choice)},
+        {"exit_terminal", optional_index(t.terminal_exit_choice)},
+        {"centerline", std::move(centerline)}});
+  }
+  for (const auto& c : regional.channels) {
+    json::array widths, walls;
+    for (const auto& s : c.cross_sections) {
+      widths.emplace_back(s.usable_width.value());
+      walls.push_back(json::array{point(s.first_wall), point(s.second_wall)});
+    }
+    channels.emplace_back(json::object{{"id", c.id}, {"layer", c.layer.value()},
+        {"widths", std::move(widths)}, {"walls", std::move(walls)}});
+  }
+  for (const auto& v : regional.via_choices) {
+    json::array runups;
+    for (const auto& r : v.attached_runups) {
+      json::array points;
+      for (const auto p : r.centerline) points.push_back(point(p));
+      runups.emplace_back(json::object{{"layer", r.layer.value()}, {"anchor", point(r.anchor)},
+                                       {"points", std::move(points)}});
+    }
+    vias.emplace_back(json::object{
+        {"id", v.id}, {"region", v.region_id}, {"net", v.net.value()}, {"site", point(v.site)},
+        {"span", layers(v.span)}, {"diameter", v.diameter.value()}, {"drill", v.drill.value()},
+        {"global", v.selected_global_site}, {"runups", std::move(runups)}});
+  }
+  for (const auto& t : regional.terminal_choices) {
+    json::array points;
+    for (const auto p : t.access_path) points.push_back(point(p));
+    terminals.emplace_back(json::object{{"id", t.id}, {"net", t.net.value()},
+                                        {"layer", t.layer.value()}, {"width", t.width.value()},
+                                        {"points", std::move(points)}});
+  }
+  for (const auto& e : regional.via_region_evidence) {
+    evidence.emplace_back(json::object{
+        {"region", e.region_id}, {"net", e.net.value()}, {"span", layers(e.span)},
+        {"competing", e.competing_regions}, {"conflicting_pairs", e.conflicting_candidate_pairs},
+        {"terminal_conflicts", e.terminal_escape_conflicts}});
+  }
+  for (const auto& domain : domains) options.push_back(indices(domain));
+  context["nets"] = std::move(nets);
+  context["owned"] = std::move(owned);
+  context["fragments"] = std::move(fragments);
+  context["templates"] = std::move(routes);
+  context["channels"] = std::move(channels);
+  context["vias"] = std::move(vias);
+  context["terminals"] = std::move(terminals);
+  context["evidence"] = std::move(evidence);
+  context["domains"] = std::move(options);
+  RouterTelemetryEvent event;
+  event.kind = RouterTelemetryEventKind::search_summary;
+  event.minimum_level = RouterTelemetryLevel::diagnostic;
+  event.stable_id = "regional-bundle-context:" + std::string(phase) + ':' + std::to_string(window.id);
+  event.detail = json::serialize(context);
+  static_cast<void>(telemetry->try_emit(std::move(event)));
+}
+
 void populate_bundle_assignments(const Board& board, const GlobalRouteResult& global,
                                  RegionalRouteResult& result, RouterTelemetrySink* telemetry,
-                                 std::string_view phase) {
+                                 std::string_view phase,
+                                 const RegionalNoGoodClauses* no_good_clauses,
+                                 RegionalAlternativeDomainCache& domain_cache) {
+  const auto assignment_started = std::chrono::steady_clock::now();
+  ++result.candidate_pipeline_stats.bundle_assignment_invocations;
   populate_selected_endpoint_choices(board, global, result);
   if (telemetry != nullptr && result.via_site_gpu_filter_batches > 0U) {
     RouterTelemetryEvent progress;
@@ -5205,7 +7782,6 @@ void populate_bundle_assignments(const Board& board, const GlobalRouteResult& gl
     static_cast<void>(telemetry->try_emit(std::move(progress)));
   }
   std::map<RegionalRouteFragmentId, std::vector<RegionalRouteTemplate>> alternatives;
-  RegionalAlternativeDomainCache domain_cache;
   RegionalFragmentIndex fragment_by_id;
   for (const auto& fragment : result.fragments) {
     fragment_by_id.emplace(fragment.id, &fragment);
@@ -5221,6 +7797,12 @@ void populate_bundle_assignments(const Board& board, const GlobalRouteResult& gl
                       std::to_string(result.alternative_template_checks) + "/" +
                       std::to_string(result.configured.max_alternative_template_checks) +
                       ", accepted=" + std::to_string(result.accepted_alternative_templates) +
+                      ", same_layer_detours=" +
+                      std::to_string(result.accepted_same_layer_detours) + "/" +
+                      std::to_string(result.same_layer_detour_checks) +
+                      ", confined_anisotropic=" +
+                      std::to_string(result.confined_anisotropic_erosion_accepted) + "/" +
+                      std::to_string(result.confined_anisotropic_erosion_checks) +
                       ", geometry_cache=" + std::to_string(domain_cache.geometry.size()) +
                       ", navigation_cache=" + std::to_string(domain_cache.navigation.size());
     static_cast<void>(telemetry->try_emit(std::move(progress)));
@@ -5228,14 +7810,21 @@ void populate_bundle_assignments(const Board& board, const GlobalRouteResult& gl
   const auto publish_lane_progress = [&](std::size_t window_id, std::size_t states,
                                          std::string_view scope) {
     constexpr std::size_t progress_interval = 4096U;
-    if (telemetry == nullptr || ((states & (progress_interval - 1U)) != 0U &&
-                                 states != result.configured.max_lane_order_states)) {
+    if ((states & (progress_interval - 1U)) != 0U &&
+        states != result.configured.max_lane_order_states) {
       return;
     }
+    emit_regional_decision(RegionalDecisionPhase::lane_search_progress, nullptr, false,
+                           "regional lane search window=" + std::to_string(window_id) +
+                               " scope=" + std::string(scope));
+    if (telemetry == nullptr) return;
     RouterTelemetryEvent progress;
     progress.kind = RouterTelemetryEventKind::search_summary;
     progress.stable_id = "regional-lane-progress:" + std::string(phase) + ':' +
                          std::to_string(window_id) + ':' + std::string(scope);
+    const auto active_window = std::find_if(result.windows.begin(), result.windows.end(),
+        [&](const auto& window) { return window.id == window_id; });
+    if (active_window != result.windows.end()) attach_active_region(progress, *active_window);
     progress.detail = std::string(phase) +
                       " regional lane search: window=" + std::to_string(window_id) +
                       ", scope=" + std::string(scope) + ", states=" + std::to_string(states) + '/' +
@@ -5245,23 +7834,40 @@ void populate_bundle_assignments(const Board& board, const GlobalRouteResult& gl
   struct LanePackingCacheValue {
     std::optional<RegionalCrossSection> packing;
   };
-  std::map<std::size_t, std::map<std::vector<RegionalRouteFragmentId>, LanePackingCacheValue>>
+  using LanePackingCacheKey = std::pair<std::vector<std::size_t>,
+                                        std::vector<RegionalRouteFragmentId>>;
+  std::map<std::size_t, std::map<LanePackingCacheKey, LanePackingCacheValue>>
       lane_packing_cache;
-  const auto solve_channel_lanes =
+  const auto solve_scope_lanes =
       [&](const RegionalChannel& channel, const std::vector<RegionalRouteFragmentId>& occupants,
+          const std::vector<std::size_t>& section_indices,
           std::size_t maximum_states, const std::function<void(std::size_t)>& progress) {
+        const auto lane_started = std::chrono::steady_clock::now();
+        ++result.candidate_pipeline_stats.lane_packing_invocations;
+        const auto record_lane_time = [&] {
+          result.candidate_pipeline_stats.lane_packing_us.add_nanoseconds(
+              static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                  std::chrono::steady_clock::now() - lane_started).count()));
+        };
         ++result.lane_solver_queries;
         auto& channel_cache = lane_packing_cache[channel.id];
-        if (const auto cached = channel_cache.find(occupants); cached != channel_cache.end()) {
+        const LanePackingCacheKey key{section_indices, occupants};
+        if (const auto cached = channel_cache.find(key); cached != channel_cache.end()) {
           ++result.lane_solver_cache_hits;
           LanePackingSolveResult solved;
           solved.packing = cached->second.packing;
           solved.complete_search = true;
+          record_lane_time();
           return solved;
         }
         std::vector<PreparedLaneCrossSection> prepared;
-        prepared.reserve(channel.cross_sections.size());
-        for (const auto& source : channel.cross_sections) {
+        prepared.reserve(section_indices.size());
+        for (const auto index : section_indices) {
+          if (index >= channel.cross_sections.size()) {
+            record_lane_time();
+            return LanePackingSolveResult{};
+          }
+          const auto& source = channel.cross_sections[index];
           auto geometric_order = geometric_cross_section_order_indexed(
               fragment_by_id, occupants, source.first_wall, source.second_wall);
           prepared.push_back(PreparedLaneCrossSection{&source, geometric_order,
@@ -5274,9 +7880,79 @@ void populate_bundle_assignments(const Board& board, const GlobalRouteResult& gl
         result.lane_solver_analytical_rejections += solved.analytically_rejected_cross_sections;
         result.lane_solver_budget_exhaustions += solved.budget_exhausted ? 1U : 0U;
         if (solved.complete_search) {
-          channel_cache.emplace(occupants, LanePackingCacheValue{solved.packing});
+          channel_cache.emplace(key, LanePackingCacheValue{solved.packing});
         }
+        record_lane_time();
         return solved;
+      };
+  struct ChannelPackingResult {
+    std::vector<RegionalCrossSection> sections;
+    std::size_t states{0U};
+    bool fits{false};
+    bool budget_exhausted{false};
+  };
+  const auto solve_channel_lanes =
+      [&](const RegionalChannel& channel, const std::vector<RegionalRouteTemplate>& templates,
+          const std::vector<std::size_t>& selected,
+          const std::vector<RegionalChannelDemandScope>& scopes,
+          const std::vector<std::size_t>& copper_aliases, std::size_t maximum_states,
+          const std::function<void(std::size_t)>& progress) {
+        ChannelPackingResult packed;
+        std::vector<bool> active(templates.size(), false);
+        for (const auto id : selected) {
+          if (id >= templates.size()) return packed;
+          active[id] = true;
+        }
+        for (const auto& scope : scopes) {
+          if (scope.channel_id != channel.id) continue;
+          std::vector<RegionalRouteFragmentId> occupants;
+          std::map<std::size_t, std::vector<RegionalRouteFragmentId>> identity_owners;
+          for (const auto id : scope.template_indices) {
+            if (id >= active.size() || !active[id]) continue;
+            if (result.configured.shared_channel_copper)
+              identity_owners[copper_aliases[id]].push_back(templates[id].fragment);
+            else occupants.push_back(templates[id].fragment);
+          }
+          std::map<RegionalRouteFragmentId, std::vector<RegionalRouteFragmentId>> aliases_by_owner;
+          for (auto& [identity, owners] : identity_owners) {
+            std::sort(owners.begin(), owners.end());
+            owners.erase(std::unique(owners.begin(), owners.end()), owners.end());
+            occupants.push_back(owners.front());
+            aliases_by_owner.emplace(owners.front(), std::move(owners));
+          }
+          if (occupants.empty()) continue;
+          std::sort(occupants.begin(), occupants.end());
+          occupants.erase(std::unique(occupants.begin(), occupants.end()), occupants.end());
+          const auto base = packed.states;
+          auto solved = solve_scope_lanes(channel, occupants, scope.cross_section_indices,
+              maximum_states - std::min(maximum_states, packed.states),
+              [&](const auto local) { if (progress) progress(base + local); });
+          packed.states += solved.states;
+          packed.budget_exhausted = packed.budget_exhausted || solved.budget_exhausted;
+          if (!solved.packing) return packed;
+          if (result.configured.shared_channel_copper) {
+            // Cache only physical lane representatives. Expand branch ownership after
+            // lookup so a different selection cannot inherit an earlier owner's set.
+            const auto expand_order = [&](auto& order) {
+              std::vector<RegionalRouteFragmentId> expanded;
+              for (const auto& owner : order) {
+                const auto& aliases = aliases_by_owner.at(owner);
+                expanded.insert(expanded.end(), aliases.begin(), aliases.end());
+              }
+              order = std::move(expanded);
+            };
+            expand_order(solved.packing->ordered_occupants);
+            expand_order(solved.packing->geometric_reference_order);
+            std::vector<RegionalLanePlacement> placements;
+            for (const auto& placement : solved.packing->placements)
+              for (const auto& owner : aliases_by_owner.at(placement.fragment))
+                placements.push_back({owner, placement.center_offset_nm});
+            solved.packing->placements = std::move(placements);
+          }
+          packed.sections.push_back(std::move(*solved.packing));
+        }
+        packed.fits = !packed.sections.empty();
+        return packed;
       };
   std::set<RegionalRouteFragmentId> seen_fragments;
   const auto selected_window_has_proper_crossing = [&](const RegionalRoutingWindow& window) {
@@ -5317,7 +7993,7 @@ void populate_bundle_assignments(const Board& board, const GlobalRouteResult& gl
         return true;
       }
       for (const auto& channel : result.channels) {
-        if (channel.layer != fragment->layer ||
+        if (channel.alternative_template_only || channel.layer != fragment->layer ||
             std::find(channel.occupants.begin(), channel.occupants.end(), fragment_id) ==
                 channel.occupants.end()) {
           continue;
@@ -5442,7 +8118,7 @@ void populate_bundle_assignments(const Board& board, const GlobalRouteResult& gl
         auto generated = build_alternative_layer_templates(board, global, *found, result,
                                                            domain_cache, window_check_limit);
         alternatives.emplace(fragment, std::move(generated));
-        domain_cache.release_unretained_if_oversized();
+        domain_cache.release_unretained_if_oversized(result.candidate_pipeline_stats);
         publish_portfolio_progress();
       }
     }
@@ -5511,7 +8187,7 @@ void populate_bundle_assignments(const Board& board, const GlobalRouteResult& gl
           auto generated = build_alternative_layer_templates(board, global, *found, result,
                                                              domain_cache, window_check_limit);
           alternatives.emplace(fragment, std::move(generated));
-          domain_cache.release_unretained_if_oversized();
+          domain_cache.release_unretained_if_oversized(result.candidate_pipeline_stats);
           publish_portfolio_progress();
         }
       }
@@ -5530,7 +8206,7 @@ void populate_bundle_assignments(const Board& board, const GlobalRouteResult& gl
     };
     for (const auto* window_pointer : residual_windows) {
       const auto& window = *window_pointer;
-      if (window.conflict_edges.size() != 1U || window_has_retained_alternative(window) ||
+      if (window.conflict_edges.size() != 1U ||
           result.same_layer_detour_checks >= result.configured.max_same_layer_detour_checks) {
         continue;
       }
@@ -5549,15 +8225,34 @@ void populate_bundle_assignments(const Board& board, const GlobalRouteResult& gl
         }
         auto generated =
             build_same_layer_detour_templates(board, window, *fragment, result, domain_cache);
-        domain_cache.release_unretained_if_oversized();
+        domain_cache.release_unretained_if_oversized(result.candidate_pipeline_stats);
         publish_portfolio_progress();
+        if (telemetry != nullptr) {
+          RouterTelemetryEvent diagnostic;
+          diagnostic.kind = RouterTelemetryEventKind::search_summary;
+          diagnostic.net = fragment_id.net;
+          diagnostic.stable_id = "regional-same-layer-detour:" + std::string(phase) + ':' +
+                                 std::to_string(window.id) + ':' +
+                                 std::to_string(fragment_id.connection_index) + ':' +
+                                 std::to_string(fragment_id.run_index) + ':' +
+                                 std::to_string(fragment_id.fragment_index);
+          diagnostic.detail = std::string(phase) + " same-layer detour result: net=" +
+                              fragment_id.net.value() + ", generated=" +
+                              std::to_string(generated.size());
+          static_cast<void>(telemetry->try_emit(std::move(diagnostic)));
+        }
         if (generated.empty()) {
           continue;
         }
         auto& retained = alternatives[fragment_id];
         retained.insert(retained.end(), std::make_move_iterator(generated.begin()),
                         std::make_move_iterator(generated.end()));
-        break;
+        // A two-route conflict is not solved by giving only the first pressure-ranked route a
+        // choice. The other route may have the only realizable obstacle side or usable endpoint
+        // tangent, and the joint master may need to change both. Likewise, an alternative-layer
+        // template retained for either participant is not evidence that the other participant
+        // has a usable obstacle-side choice. Continue across every owned participant while the
+        // existing per-window/global detour and template bounds remain.
       }
     }
     std::stable_sort(
@@ -5614,7 +8309,7 @@ void populate_bundle_assignments(const Board& board, const GlobalRouteResult& gl
             auto generated = build_alternative_layer_templates(board, global, *found, result,
                                                                domain_cache, window_check_limit);
             alternatives.emplace(fragment, std::move(generated));
-            domain_cache.release_unretained_if_oversized();
+            domain_cache.release_unretained_if_oversized(result.candidate_pipeline_stats);
             publish_portfolio_progress();
           }
         }
@@ -5644,7 +8339,7 @@ void populate_bundle_assignments(const Board& board, const GlobalRouteResult& gl
     }
     auto generated =
         build_terminal_navmesh_template(board, fragment, start, end, result, domain_cache);
-    domain_cache.release_unretained_if_oversized();
+    domain_cache.release_unretained_if_oversized(result.candidate_pipeline_stats);
     terminal_navmesh_template_cache.emplace(key, generated);
     return generated;
   };
@@ -5903,6 +8598,7 @@ void populate_bundle_assignments(const Board& board, const GlobalRouteResult& gl
     return generated;
   };
   const auto assemble_window_templates = [&](const RegionalRoutingWindow& window) {
+    publish_active_region(telemetry, window, "regional template and lane allocation");
     RegionalBundleAssignment assignment;
     assignment.window_id = window.id;
     assignment.stop_reason = window.eligible() ? RegionalBundleStopReason::no_fitting_lane_order
@@ -5978,7 +8674,7 @@ void populate_bundle_assignments(const Board& board, const GlobalRouteResult& gl
         }
       }
       for (const auto& channel : result.channels) {
-        if (channel.layer == fragment->layer &&
+        if (!channel.alternative_template_only && channel.layer == fragment->layer &&
             std::find(channel.occupants.begin(), channel.occupants.end(), fragment_id) !=
                 channel.occupants.end()) {
           route_template.channel_sequence.push_back(channel.id);
@@ -6055,10 +8751,46 @@ void populate_bundle_assignments(const Board& board, const GlobalRouteResult& gl
                     [](const auto& candidates) { return candidates.empty(); })) {
       continue;
     }
+    const auto bundle_search_started = std::chrono::steady_clock::now();
+    ++result.candidate_pipeline_stats.bundle_search_invocations;
     auto portfolio =
-        generate_consistent_bundle_choices(result, assignment.templates, candidates_by_fragment,
-                                           result.configured.max_bundle_search_states);
+        generate_consistent_bundle_choices(board, result, window, assignment.templates,
+                                           candidates_by_fragment,
+                                           result.configured.max_bundle_search_states, false);
+    accumulate_hc_composition_stats(result.hc_composition_stats, portfolio.hc_composition);
+    const auto bundle_search_elapsed_ns = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - bundle_search_started).count());
+    result.candidate_pipeline_stats.bundle_search_us.add_nanoseconds(bundle_search_elapsed_ns);
+    result.candidate_pipeline_stats.bundle_search_excluding_access_us.add_nanoseconds(
+        bundle_search_elapsed_ns > portfolio.access_selection_us.accumulated_nanoseconds
+            ? bundle_search_elapsed_ns - portfolio.access_selection_us.accumulated_nanoseconds
+            : 0U);
+    result.candidate_pipeline_stats.access_selection_us += portfolio.access_selection_us;
+    result.candidate_pipeline_stats.access_selection_invocations += portfolio.access_selection_invocations;
+    result.candidate_pipeline_stats.access_selection_cache_hits +=
+        portfolio.access_selection_cache_hits;
+    result.candidate_pipeline_stats.access_selection_cache_misses +=
+        portfolio.access_selection_cache_misses;
+    result.candidate_pipeline_stats.access_selection_cache_avoided_calls +=
+        portfolio.access_selection_cache_avoided_calls;
+    result.candidate_pipeline_stats.access_selection_cache_entries_peak = std::max(
+        result.candidate_pipeline_stats.access_selection_cache_entries_peak,
+        portfolio.access_selection_cache_entries_peak);
+    result.candidate_pipeline_stats.access_selection_cache_capacity_skipped_insertions +=
+        portfolio.access_selection_cache_capacity_skipped_insertions;
+    result.candidate_pipeline_stats.fixed_geometry_compatibility_checks +=
+        portfolio.fixed_geometry_compatibility_checks;
+    result.candidate_pipeline_stats.fixed_geometry_compatibility_rejections +=
+        portfolio.fixed_geometry_compatibility_rejections;
+    assignment.frozen_copper_conflicts = portfolio.frozen_copper_conflicts;
+    const auto demand_scopes = regional_channel_demand_scopes(result.fragments, result.channels,
+        assignment.templates, result.configured.local_channel_occupancy,
+        result.configured.centerline_channel_cuts);
+    const auto copper_aliases = regional_template_copper_aliases(result.fragments,
+        assignment.templates, result.configured.shared_channel_copper);
     result.partial_lane_capacity_pruned_states += portfolio.lane_capacity_pruned_states;
+    result.frozen_copper_via_pruned_states += portfolio.frozen_copper_via_pruned_states;
     bool has_fitting_bundle = false;
     std::size_t lane_states = 0U;
     for (const auto& choice : portfolio.choices) {
@@ -6075,10 +8807,24 @@ void populate_bundle_assignments(const Board& board, const GlobalRouteResult& gl
         }
       }
       if (!coupled_template_selection_legal(board, window, assignment.templates, selected) ||
-          !run_layer_selection_legal(assignment.templates, selected) ||
-          !select_access_geometry(board, result, window, assignment.templates, selected,
-                                  result.configured.max_access_assignment_states)
-               .legal()) {
+          !run_layer_selection_legal(assignment.templates, selected)) {
+        continue;
+      }
+      const auto access_started = std::chrono::steady_clock::now();
+      ++result.candidate_pipeline_stats.access_selection_invocations;
+      const auto access = select_access_geometry(board, result, window, assignment.templates, selected,
+                                                 result.configured.max_access_assignment_states);
+      result.candidate_pipeline_stats.access_selection_us.add_nanoseconds(
+          static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+              std::chrono::steady_clock::now() - access_started).count()));
+      if (!access.legal()) {
+        if (!access.exhausted &&
+            access.failure == RegionalAccessFailureReason::frozen_copper_via) {
+          ++assignment.frozen_copper_via_rejected_states;
+          ++result.frozen_copper_via_rejected_states;
+          record_frozen_copper_access_witness(
+              assignment.frozen_copper_conflicts, access, result, window, assignment.templates);
+        }
         continue;
       }
       bool choice_fits = true;
@@ -6094,12 +8840,13 @@ void populate_bundle_assignments(const Board& board, const GlobalRouteResult& gl
         occupants.erase(std::unique(occupants.begin(), occupants.end()), occupants.end());
         const auto base_states = lane_states;
         const auto solved = solve_channel_lanes(
-            *channel, occupants, result.configured.max_lane_order_states - lane_states,
+            *channel, assignment.templates, selected, demand_scopes, copper_aliases,
+            result.configured.max_lane_order_states - lane_states,
             [&](const auto local_states) {
               publish_lane_progress(window.id, base_states + local_states, "joint-repair-screen");
             });
         lane_states += solved.states;
-        if (!solved.packing) {
+        if (!solved.fits) {
           choice_fits = false;
           break;
         }
@@ -6289,6 +9036,34 @@ void populate_bundle_assignments(const Board& board, const GlobalRouteResult& gl
           }
         }
       }
+      // The confined phase is a production conflict-directed column generator, not part of the
+      // ordinary global portfolio. It is enabled only after exact PH/copper separation has named
+      // this window and route run, and retains both signed lateral alternatives when distinct.
+      if (phase == "conflict-directed" &&
+          retained.size() + 1U < result.configured.max_joint_templates_per_fragment &&
+          result.confined_anisotropic_erosion_checks <
+              result.configured.max_confined_anisotropic_erosion_checks) {
+        auto generated = build_confined_anisotropic_erosion_templates(
+            board, *candidate.window, *fragment, result, domain_cache);
+        domain_cache.release_unretained_if_oversized(result.candidate_pipeline_stats);
+        publish_portfolio_progress();
+        for (auto& route_template : generated) {
+          if (retained.size() + 1U >= result.configured.max_joint_templates_per_fragment) {
+            break;
+          }
+          const auto duplicate =
+              std::any_of(retained.begin(), retained.end(), [&](const auto& prior) {
+                return prior.routing_layer == route_template.routing_layer &&
+                       (prior.topology_signature.fingerprint ==
+                            route_template.topology_signature.fingerprint ||
+                        prior.topology_centerline == route_template.topology_centerline);
+              });
+          if (!duplicate) {
+            retained.push_back(std::move(route_template));
+            expanded = true;
+          }
+        }
+      }
       // A same-layer detour is not limited to a pairwise conflict.  The generator constructs its
       // dynamic walls from every attributed same-layer blocker in this window and proves the
       // complete NavMesh detour against all of them.  Keeping the old one-edge guard made a
@@ -6300,8 +9075,22 @@ void populate_bundle_assignments(const Board& board, const GlobalRouteResult& gl
       if (result.same_layer_detour_checks < result.configured.max_same_layer_detour_checks) {
         auto generated = build_same_layer_detour_templates(board, *candidate.window, *fragment,
                                                            result, domain_cache);
-        domain_cache.release_unretained_if_oversized();
+        domain_cache.release_unretained_if_oversized(result.candidate_pipeline_stats);
         publish_portfolio_progress();
+        if (telemetry != nullptr) {
+          RouterTelemetryEvent diagnostic;
+          diagnostic.kind = RouterTelemetryEventKind::search_summary;
+          diagnostic.net = fragment_id.net;
+          diagnostic.stable_id = "regional-same-layer-detour:" + std::string(phase) + ':' +
+                                 std::to_string(candidate.window->id) + ':' +
+                                 std::to_string(fragment_id.connection_index) + ':' +
+                                 std::to_string(fragment_id.run_index) + ':' +
+                                 std::to_string(fragment_id.fragment_index);
+          diagnostic.detail = std::string(phase) + " same-layer detour result: net=" +
+                              fragment_id.net.value() + ", generated=" +
+                              std::to_string(generated.size());
+          static_cast<void>(telemetry->try_emit(std::move(diagnostic)));
+        }
         for (auto& route_template : generated) {
           if (retained.size() + 1U >= result.configured.max_joint_templates_per_fragment) {
             break;
@@ -6331,7 +9120,7 @@ void populate_bundle_assignments(const Board& board, const GlobalRouteResult& gl
         auto generated = build_alternative_layer_templates(
             board, global, *fragment, result, domain_cache, window_check_limit,
             result.configured.max_joint_via_site_ring, remaining_templates + 1U, true);
-        domain_cache.release_unretained_if_oversized();
+        domain_cache.release_unretained_if_oversized(result.candidate_pipeline_stats);
         publish_portfolio_progress();
         for (auto& route_template : generated) {
           const auto duplicate =
@@ -6364,7 +9153,7 @@ void populate_bundle_assignments(const Board& board, const GlobalRouteResult& gl
       auto local_generated = build_alternative_layer_templates(
           board, global, *fragment, result, domain_cache, local_check_limit,
           result.configured.max_joint_via_site_ring, remaining_local_templates + 1U, true, true);
-      domain_cache.release_unretained_if_oversized();
+      domain_cache.release_unretained_if_oversized(result.candidate_pipeline_stats);
       publish_portfolio_progress();
       for (auto& route_template : local_generated) {
         const auto duplicate =
@@ -6392,6 +9181,9 @@ void populate_bundle_assignments(const Board& board, const GlobalRouteResult& gl
     if (!window.eligible()) {
       assignment.stop_reason = RegionalBundleStopReason::window_ineligible;
       result.bundle_assignments.push_back(std::move(assignment));
+      emit_regional_experiment_window_completed(
+          result, window, result.bundle_assignments.back(), result.bundle_assignments.size() - 1U,
+          phase);
       continue;
     }
     auto templates_by_fragment = template_candidates_by_fragment(window, assignment);
@@ -6409,7 +9201,16 @@ void populate_bundle_assignments(const Board& board, const GlobalRouteResult& gl
     std::vector<std::pair<BundleObjective, RegionalBundleSelection>> joint_spline_pool;
     std::vector<std::pair<BundleObjective, RegionalBundleSelection>> residual_coverage_pool;
     std::optional<std::pair<BundleObjective, RegionalBundleSelection>> selected_global_fallback;
+    std::uint64_t bundle_search_us = 0U;
+    std::size_t generated_bundle_choices = 0U;
+    std::size_t forward_capacity_rejections = 0U;
+    std::size_t forward_via_identity_rejections = 0U;
     if (!missing_topology) {
+      const auto demand_scopes = regional_channel_demand_scopes(result.fragments, result.channels,
+          assignment.templates, result.configured.local_channel_occupancy,
+          result.configured.centerline_channel_cuts);
+      const auto copper_aliases = regional_template_copper_aliases(result.fragments,
+          assignment.templates, result.configured.shared_channel_copper);
       // Low-cost global states naturally keep every fragment of a long same-net run on its
       // current layer. A residual cone may instead need the *complete run* to change layer and
       // return through a matched via pair. Generate only that atomic run state here; it remains
@@ -6476,9 +9277,49 @@ void populate_bundle_assignments(const Board& board, const GlobalRouteResult& gl
           }
         }
       }
+      publish_bundle_search_context(board, result, window, assignment.templates,
+                                    templates_by_fragment, phase, telemetry);
+      // The cache is shared only by this immutable template/window enumeration and its immediate
+      // downstream candidate validation. It reuses complete leaf decisions from forward checking.
+      RegionalAccessSelectionCache access_cache;
+      const auto bundle_search_started = std::chrono::steady_clock::now();
+      ++result.candidate_pipeline_stats.bundle_search_invocations;
       auto portfolio =
-          generate_consistent_bundle_choices(result, assignment.templates, templates_by_fragment,
-                                             result.configured.max_bundle_search_states);
+          generate_consistent_bundle_choices(board, result, window, assignment.templates,
+                                             templates_by_fragment,
+                                             result.configured.max_bundle_search_states,
+                                             result.configured.enable_bundle_forward_checking,
+                                             &access_cache);
+      accumulate_hc_composition_stats(result.hc_composition_stats, portfolio.hc_composition);
+      const auto bundle_search_elapsed_ns = static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(
+              std::chrono::steady_clock::now() - bundle_search_started).count());
+      bundle_search_us = bundle_search_elapsed_ns / 1'000U;
+      result.candidate_pipeline_stats.bundle_search_us.add_nanoseconds(bundle_search_elapsed_ns);
+      result.candidate_pipeline_stats.bundle_search_excluding_access_us.add_nanoseconds(
+          bundle_search_elapsed_ns > portfolio.access_selection_us.accumulated_nanoseconds
+              ? bundle_search_elapsed_ns - portfolio.access_selection_us.accumulated_nanoseconds
+              : 0U);
+      result.candidate_pipeline_stats.access_selection_us += portfolio.access_selection_us;
+    result.candidate_pipeline_stats.access_selection_invocations += portfolio.access_selection_invocations;
+      result.candidate_pipeline_stats.access_selection_cache_hits +=
+          portfolio.access_selection_cache_hits;
+      result.candidate_pipeline_stats.access_selection_cache_misses +=
+          portfolio.access_selection_cache_misses;
+      result.candidate_pipeline_stats.access_selection_cache_avoided_calls +=
+          portfolio.access_selection_cache_avoided_calls;
+      result.candidate_pipeline_stats.access_selection_cache_entries_peak = std::max(
+          result.candidate_pipeline_stats.access_selection_cache_entries_peak,
+          portfolio.access_selection_cache_entries_peak);
+      result.candidate_pipeline_stats.access_selection_cache_capacity_skipped_insertions +=
+          portfolio.access_selection_cache_capacity_skipped_insertions;
+      result.candidate_pipeline_stats.fixed_geometry_compatibility_checks +=
+          portfolio.fixed_geometry_compatibility_checks;
+      result.candidate_pipeline_stats.fixed_geometry_compatibility_rejections +=
+          portfolio.fixed_geometry_compatibility_rejections;
+      generated_bundle_choices = portfolio.choices.size();
+      forward_capacity_rejections = portfolio.forward_capacity_rejections;
+      forward_via_identity_rejections = portfolio.forward_via_identity_rejections;
       for (const auto& templates : residual_coverage_templates) {
         std::vector<std::size_t> choice;
         choice.reserve(templates.size());
@@ -6506,10 +9347,52 @@ void populate_bundle_assignments(const Board& board, const GlobalRouteResult& gl
       assignment.partial_terminal_pair_pruned_states = portfolio.terminal_pair_pruned_states;
       assignment.partial_via_pair_pruned_states = portfolio.via_pair_pruned_states;
       assignment.partial_terminal_via_pruned_states = portfolio.terminal_via_pruned_states;
+      assignment.partial_frozen_copper_via_pruned_states =
+          portfolio.frozen_copper_via_pruned_states;
+      assignment.frozen_copper_conflicts = portfolio.frozen_copper_conflicts;
       assignment.partial_lane_capacity_pruned_states = portfolio.lane_capacity_pruned_states;
+      assignment.partial_run_layer_pruned_states = portfolio.run_layer_pruned_states;
+      assignment.partial_coupled_pruned_states = portfolio.coupled_pruned_states;
+      assignment.partial_forward_domain_wipeouts = portfolio.forward_domain_wipeouts;
+      assignment.partial_pairwise_access_checks = portfolio.pairwise_access_checks;
       result.partial_lane_capacity_pruned_states += portfolio.lane_capacity_pruned_states;
+      result.frozen_copper_via_pruned_states += portfolio.frozen_copper_via_pruned_states;
       assignment.partial_access_blockers = portfolio.access_blockers;
       bundle_budget_exhausted = portfolio.exhausted;
+      const auto select_cached_access = [&](const std::vector<std::size_t>& selected) {
+        RegionalAccessSelectionCacheKey key{selected, false};
+        if (const auto cached = access_cache.completed.find(key);
+            cached != access_cache.completed.end()) {
+          ++access_cache.hits;
+          ++access_cache.avoided_calls;
+          ++result.candidate_pipeline_stats.access_selection_cache_hits;
+          ++result.candidate_pipeline_stats.access_selection_cache_avoided_calls;
+          return cached->second;
+        }
+        ++access_cache.misses;
+        ++result.candidate_pipeline_stats.access_selection_cache_misses;
+        const auto access_started = std::chrono::steady_clock::now();
+        ++result.candidate_pipeline_stats.access_selection_invocations;
+        const auto access = select_access_geometry(
+            board, result, window, assignment.templates, selected,
+            result.configured.max_access_assignment_states, false,
+            &access_cache.preparation);
+        result.candidate_pipeline_stats.access_selection_us.add_nanoseconds(
+            static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - access_started).count()));
+        if (!access.exhausted &&
+            access_cache.completed.size() < RegionalAccessSelectionCache::maximum_completed_entries) {
+          access_cache.completed.emplace(std::move(key), access);
+          access_cache.entries_peak = std::max(access_cache.entries_peak, access_cache.completed.size());
+          result.candidate_pipeline_stats.access_selection_cache_entries_peak = std::max(
+              result.candidate_pipeline_stats.access_selection_cache_entries_peak,
+              access_cache.entries_peak);
+        } else if (!access.exhausted) {
+          ++access_cache.capacity_skipped_insertions;
+          ++result.candidate_pipeline_stats.access_selection_cache_capacity_skipped_insertions;
+        }
+        return access;
+      };
       for (const auto& choice : portfolio.choices) {
         std::vector<std::size_t> selected;
         std::map<RegionalRouteFragmentId, LayerId> selected_layers;
@@ -6541,9 +9424,7 @@ void populate_bundle_assignments(const Board& board, const GlobalRouteResult& gl
         const auto coupled_legal =
             coupled_template_selection_legal(board, window, assignment.templates, selected) &&
             run_layer_selection_legal(assignment.templates, selected);
-        const auto access =
-            select_access_geometry(board, result, window, assignment.templates, selected,
-                                   result.configured.max_access_assignment_states);
+        const auto access = select_cached_access(selected);
         assignment.access_assignment_states += access.states;
         assignment.access_assignment_exhaustions += access.exhausted ? 1U : 0U;
         const auto access_legal = access.legal();
@@ -6568,6 +9449,14 @@ void populate_bundle_assignments(const Board& board, const GlobalRouteResult& gl
             break;
           case RegionalAccessFailureReason::terminal_via:
             ++assignment.terminal_via_rejected_states;
+            break;
+          case RegionalAccessFailureReason::frozen_copper_via:
+            ++assignment.frozen_copper_via_rejected_states;
+            ++result.frozen_copper_via_rejected_states;
+            if (!access.exhausted) {
+              record_frozen_copper_access_witness(
+                  assignment.frozen_copper_conflicts, access, result, window, assignment.templates);
+            }
             break;
           case RegionalAccessFailureReason::none:
             break;
@@ -6705,20 +9594,28 @@ void populate_bundle_assignments(const Board& board, const GlobalRouteResult& gl
               result.configured.max_lane_order_states -
               std::min(result.configured.max_lane_order_states, assignment.lane_order_states);
           auto solved = solve_channel_lanes(
-              *channel, occupants, remaining_states, [&](const auto local_states) {
+              *channel, assignment.templates, selected, demand_scopes, copper_aliases,
+              remaining_states, [&](const auto local_states) {
                 publish_lane_progress(window.id, base_states + local_states, "bundle-assignment");
               });
           assignment.lane_order_states += solved.states;
           lane_budget_exhausted = lane_budget_exhausted || solved.budget_exhausted;
-          if (!solved.packing) {
+          if (!solved.fits) {
             packing_failed = true;
             break;
           }
-          solved.packing->id = packed_sections.size();
-          packed_sections.push_back(std::move(*solved.packing));
+          for (auto& section : solved.sections) {
+            section.id = packed_sections.size();
+            section.channel_id = channel_id;
+            packed_sections.push_back(std::move(section));
+          }
+        }
+        if (!packing_failed && !adjacent_channel_lane_precedence_legal(assignment.templates,
+                                                                       selected, packed_sections)) {
+          packing_failed = true;
+          ++result.lane_precedence_rejected_states;
         }
         if (!packing_failed) {
-          any_fitting_state = true;
           const auto relocated_vias = static_cast<std::size_t>(std::count_if(
               access.via_choices.begin(), access.via_choices.end(), [&](const auto choice_id) {
                 const auto found =
@@ -6738,6 +9635,16 @@ void populate_bundle_assignments(const Board& board, const GlobalRouteResult& gl
               selected,          access.via_choices,          access.region_order,
               packed_sections,   access.alternative_switches, template_conflicts.size(),
               residual_conflicts};
+          if (no_good_clauses != nullptr) {
+            const auto clauses = no_good_clauses->find(window.id);
+            if (clauses != no_good_clauses->end() &&
+                clauses->second.contains(
+                    regional_discrete_state_key(result, assignment.templates, selection))) {
+              ++result.conflict_directed_no_good_rejections;
+              continue;
+            }
+          }
+          any_fitting_state = true;
           const auto residual_coverage_selection = residual_coverage_state;
           const auto selected_global_state =
               std::all_of(selected.begin(), selected.end(), [&](const auto template_id) {
@@ -7005,10 +9912,27 @@ void populate_bundle_assignments(const Board& board, const GlobalRouteResult& gl
           ", active=" + std::to_string(assignment.spline_candidate_shortlist.size()) +
           ", reserve=" + std::to_string(assignment.spline_candidate_reserve.size()) +
           ", bundle_states=" + std::to_string(assignment.bundle_search_states) +
+          ", bundle_search_us=" + std::to_string(bundle_search_us) +
+          ", generated_choices=" + std::to_string(generated_bundle_choices) +
+          ", forward_capacity_rejected=" + std::to_string(forward_capacity_rejections) +
+          ", forward_via_identity_rejected=" + std::to_string(forward_via_identity_rejections) +
+          ", access_pruned=" + std::to_string(assignment.partial_access_pruned_states) +
+          ", access_exhaustions=" +
+          std::to_string(assignment.partial_access_assignment_exhaustions) +
+          ", forward_wipeouts=" + std::to_string(assignment.partial_forward_domain_wipeouts) +
+          ", run_layer_pruned=" + std::to_string(assignment.partial_run_layer_pruned_states) +
+          ", coupled_pruned=" + std::to_string(assignment.partial_coupled_pruned_states) +
+          ", late_access_rejected=" + std::to_string(assignment.access_rejected_states) +
+          ", late_coupled_rejected=" + std::to_string(assignment.coupled_rejected_states) +
+          ", packing_rejected=" + std::to_string(assignment.packing_rejected_states) +
+          ", phase=" + std::string(phase) +
           ", stop=" + std::to_string(static_cast<unsigned>(assignment.stop_reason));
       static_cast<void>(telemetry->try_emit(std::move(portfolio_event)));
     }
     result.bundle_assignments.push_back(std::move(assignment));
+    emit_regional_experiment_window_completed(
+        result, window, result.bundle_assignments.back(), result.bundle_assignments.size() - 1U,
+        phase);
   }
   std::vector<std::size_t> spline_portfolio_indices;
   for (std::size_t index = 0U; index < result.bundle_assignments.size(); ++index) {
@@ -7081,6 +10005,9 @@ void populate_bundle_assignments(const Board& board, const GlobalRouteResult& gl
       }
     }
   }
+  result.candidate_pipeline_stats.bundle_assignment_us.add_nanoseconds(
+      static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now() - assignment_started).count()));
 }
 
 struct WorkingRegionalSpline {
@@ -7112,6 +10039,7 @@ struct WorkingRegionalSpline {
   SplineVector lane_displacement;
   std::size_t sweeps{0};
   std::size_t control_moves{0};
+  std::vector<RegionalViaChoice> candidate_vias{};
 };
 
 struct WorkingRegionalSpline::TopologyCellIndex {
@@ -7123,13 +10051,204 @@ struct CachedRegionalOffsetGeometry {
   using SignedOffsets = std::array<PHRationalOffset, 2U>;
   std::vector<SignedOffsets> offsets;
   std::vector<std::array<std::vector<PHOffsetSubdivisionBounds>, 2U>> subdivision_bounds;
+  std::vector<std::uint64_t> segment_fingerprints;
 };
 
 struct CachedRegionalSplineGeometry {
   std::vector<SplineSample> adaptive_samples;
   std::vector<SplineVector> adaptive_positions;
+  std::vector<std::vector<SplineSample>> segment_samples;
+  std::vector<PreparedPHSegmentCertificate> segment_certificates;
+  std::vector<std::uint64_t> segment_fingerprints;
+  std::uint64_t route_revision{0U};
   std::map<std::int64_t, CachedRegionalOffsetGeometry> offsets_by_required_twice_nm;
 };
+
+struct RegionalPHArtifactCacheKey {
+  std::uint64_t segment_fingerprint{0U};
+  std::uint64_t corridor_revision{0U};
+  std::uint64_t obstacle_snapshot_revision{0U};
+  LayerId layer;
+
+  auto operator<=>(const RegionalPHArtifactCacheKey&) const = default;
+};
+
+struct RegionalPHSegmentArtifacts {
+  PreparedPHSegmentCertificate certificate;
+  std::vector<SplineSample> adaptive_samples;
+};
+
+class BoundedRegionalPHArtifactCache {
+public:
+  [[nodiscard]] std::optional<RegionalPHSegmentArtifacts>
+  find(const RegionalPHArtifactCacheKey& key) {
+    std::scoped_lock lock(mutex_);
+    const auto found = entries_.find(key);
+    return found == entries_.end() ? std::nullopt
+                                   : std::optional<RegionalPHSegmentArtifacts>{found->second};
+  }
+
+  void insert(RegionalPHArtifactCacheKey key, RegionalPHSegmentArtifacts value) {
+    std::scoped_lock lock(mutex_);
+    if (entries_.contains(key))
+      return;
+    constexpr std::size_t maximum_entries = 8'192U;
+    while (entries_.size() >= maximum_entries && !insertion_order_.empty()) {
+      entries_.erase(insertion_order_.front());
+      insertion_order_.pop_front();
+    }
+    insertion_order_.push_back(key);
+    entries_.emplace(std::move(key), std::move(value));
+  }
+
+  void clear() {
+    std::scoped_lock lock(mutex_);
+    entries_.clear();
+    insertion_order_.clear();
+  }
+
+private:
+  std::mutex mutex_;
+  std::map<RegionalPHArtifactCacheKey, RegionalPHSegmentArtifacts> entries_;
+  std::deque<RegionalPHArtifactCacheKey> insertion_order_;
+};
+
+struct RegionalPHPairCacheKey {
+  std::uint64_t first_route_fingerprint{0U};
+  std::uint64_t second_route_fingerprint{0U};
+  std::uint64_t first_corridor_revision{0U};
+  std::uint64_t second_corridor_revision{0U};
+  std::uint64_t obstacle_snapshot_revision{0U};
+  std::int64_t required_twice_nm{0};
+  LayerId layer;
+
+  auto operator<=>(const RegionalPHPairCacheKey&) const = default;
+};
+
+class BoundedRegionalPHPairCache {
+public:
+  [[nodiscard]] std::optional<bool> find(const RegionalPHPairCacheKey& key) {
+    std::scoped_lock lock(mutex_);
+    const auto found = entries_.find(key);
+    return found == entries_.end() ? std::nullopt : std::optional<bool>{found->second};
+  }
+
+  void insert(RegionalPHPairCacheKey key, bool intersects) {
+    std::scoped_lock lock(mutex_);
+    if (entries_.contains(key))
+      return;
+    constexpr std::size_t maximum_entries = 32'768U;
+    while (entries_.size() >= maximum_entries && !insertion_order_.empty()) {
+      entries_.erase(insertion_order_.front());
+      insertion_order_.pop_front();
+    }
+    insertion_order_.push_back(key);
+    entries_.emplace(std::move(key), intersects);
+  }
+
+  void clear() {
+    std::scoped_lock lock(mutex_);
+    entries_.clear();
+    insertion_order_.clear();
+  }
+
+private:
+  std::mutex mutex_;
+  std::map<RegionalPHPairCacheKey, bool> entries_;
+  std::deque<RegionalPHPairCacheKey> insertion_order_;
+};
+
+struct RegionalPHRouteCertificateKey {
+  std::uint64_t route_fingerprint{0U};
+  std::uint64_t scene_fingerprint{0U};
+  std::uint64_t corridor_revision{0U};
+  std::uint64_t obstacle_snapshot_revision{0U};
+  LayerId layer;
+
+  auto operator<=>(const RegionalPHRouteCertificateKey&) const = default;
+};
+
+struct RegionalPHRouteCertificates {
+  NavMeshTopologyCheck topology;
+  SplineContinuousEnvelopeCertificate obstacle_and_route_envelope;
+  SplineShapeCertificate shape;
+};
+
+class BoundedRegionalPHRouteCertificateCache {
+public:
+  [[nodiscard]] std::optional<RegionalPHRouteCertificates>
+  find(const RegionalPHRouteCertificateKey& key) {
+    std::scoped_lock lock(mutex_);
+    const auto found = entries_.find(key);
+    return found == entries_.end() ? std::nullopt
+                                   : std::optional<RegionalPHRouteCertificates>{found->second};
+  }
+
+  void insert(RegionalPHRouteCertificateKey key, RegionalPHRouteCertificates value) {
+    std::scoped_lock lock(mutex_);
+    if (entries_.contains(key))
+      return;
+    constexpr std::size_t maximum_entries = 16'384U;
+    while (entries_.size() >= maximum_entries && !insertion_order_.empty()) {
+      entries_.erase(insertion_order_.front());
+      insertion_order_.pop_front();
+    }
+    insertion_order_.push_back(key);
+    entries_.emplace(std::move(key), std::move(value));
+  }
+
+private:
+  std::mutex mutex_;
+  std::map<RegionalPHRouteCertificateKey, RegionalPHRouteCertificates> entries_;
+  std::deque<RegionalPHRouteCertificateKey> insertion_order_;
+};
+
+struct RegionalPHCacheContext {
+  BoundedRegionalPHArtifactCache artifacts;
+  BoundedRegionalPHPairCache pairs;
+  BoundedRegionalPHRouteCertificateCache route_certificates;
+};
+
+[[nodiscard]] std::uint64_t hash_regional_text(std::string_view text) {
+  std::uint64_t value = 1469598103934665603ULL;
+  for (const auto character : text) {
+    value ^= static_cast<unsigned char>(character);
+    value *= 1099511628211ULL;
+  }
+  return value;
+}
+
+[[nodiscard]] std::uint64_t regional_corridor_revision(const WorkingRegionalSpline& route) {
+  std::uint64_t value = hash_regional_text(route.layer.value());
+  const auto mix = [&](std::int64_t component) {
+    value ^= static_cast<std::uint64_t>(component) + 0x9e3779b97f4a7c15ULL + (value << 6U) +
+             (value >> 2U);
+  };
+  for (const auto& cell : route.topology_cells)
+    for (const auto point : cell.vertices) {
+      mix(point.x.value());
+      mix(point.y.value());
+    }
+  for (const auto& link : route.topology_links) {
+    mix(link.first.x.value());
+    mix(link.first.y.value());
+    mix(link.second.x.value());
+    mix(link.second.y.value());
+    mix(link.radius.value());
+  }
+  return value;
+}
+
+[[nodiscard]] std::uint64_t regional_route_geometry_fingerprint(
+    const WorkingRegionalSpline& route) {
+  std::uint64_t value = 1469598103934665603ULL;
+  for (const auto& segment : route.spline.segments) {
+    const auto fingerprint =
+        prepare_quintic_ph_segment_certificate(segment, 0U).geometry_fingerprint;
+    value ^= fingerprint + 0x9e3779b97f4a7c15ULL + (value << 6U) + (value >> 2U);
+  }
+  return value;
+}
 
 [[nodiscard]] std::int64_t regional_topology_bin(std::int64_t coordinate, std::int64_t pitch) {
   const auto quotient = coordinate / pitch;
@@ -7292,7 +10411,8 @@ regional_spline_gate_sequence(const WorkingRegionalSpline& route,
 // still decide whether a regional transaction may be committed.
 [[nodiscard]] bool regional_polyline_stays_in_topology(const WorkingRegionalSpline& route,
                                                        const std::vector<Point>& source,
-                                                       Nanometres sample_spacing) {
+                                                       Nanometres sample_spacing,
+                                                       bool require_directed_gates = true) {
   std::vector<Point> polyline;
   polyline.reserve(source.size());
   for (const auto point : source) {
@@ -7309,12 +10429,13 @@ regional_spline_gate_sequence(const WorkingRegionalSpline& route,
       return false;
     }
   }
-  return !route.topology_signature.valid ||
+  return !require_directed_gates || !route.topology_signature.valid ||
          validate_navmesh_topology_signature(route.topology_signature, polyline).preserved;
 }
 
 [[nodiscard]] std::vector<Point>
-string_pull_regional_spline_seed(const WorkingRegionalSpline& route, Nanometres sample_spacing) {
+string_pull_regional_spline_seed(const WorkingRegionalSpline& route, Nanometres sample_spacing,
+                                 bool require_directed_gates = true) {
   std::vector<Point> source;
   source.reserve(route.spline.corridor_anchors.size());
   for (const auto anchor : route.spline.corridor_anchors) {
@@ -7344,7 +10465,8 @@ string_pull_regional_spline_seed(const WorkingRegionalSpline& route, Nanometres 
       }
       trial.insert(trial.end(), source.begin() + static_cast<std::ptrdiff_t>(candidate + 1U),
                    source.end());
-      if (!regional_polyline_stays_in_topology(route, trial, sample_spacing)) {
+      if (!regional_polyline_stays_in_topology(route, trial, sample_spacing,
+                                               require_directed_gates)) {
         break;
       }
       farthest = candidate++;
@@ -7366,21 +10488,49 @@ make_topology_tight_regional_spline(const std::vector<Point>& seed,
              : make_quintic_ph_route(seed, interpolation);
 }
 
-[[nodiscard]] bool regional_spline_stays_in_topology(const WorkingRegionalSpline& route,
-                                                     const QuinticPHRoute& spline) {
+struct RegionalSplineTopologyCertificate {
+  bool contained{false};
+  NavMeshTopologyCheck gate_sequence;
+
+  [[nodiscard]] bool legal() const { return contained && gate_sequence.preserved; }
+};
+
+[[nodiscard]] RegionalSplineTopologyCertificate
+certify_regional_spline_topology(const WorkingRegionalSpline& route,
+                                 const QuinticPHRoute& spline) {
   const auto samples = adaptive_tessellate_quintic_ph(spline, Nanometres::from_mm(0.02), 10U, 512U);
   if (samples.size() < 2U) {
-    return false;
+    return {};
   }
   std::vector<SplineVector> positions;
   positions.reserve(samples.size());
   for (const auto& sample : samples) {
     positions.push_back(sample.position);
     if (!regional_spline_topology_contains(route, sample.position)) {
-      return false;
+      return {};
     }
   }
-  return regional_spline_gate_sequence(route, positions).preserved;
+  if (!route.topology_signature.valid) {
+    return RegionalSplineTopologyCertificate{true,
+                                             regional_spline_gate_sequence(route, positions)};
+  }
+  std::vector<Point> polyline;
+  polyline.reserve(positions.size());
+  for (const auto position : positions) {
+    const auto point = quantize_regional_spline(position);
+    if (polyline.empty() || polyline.back() != point)
+      polyline.push_back(point);
+  }
+  // Cell-union containment above is the geometric route-class guard. Preserve the ordered
+  // directed subset of raster portals actually crossed by smooth PH geometry, without requiring
+  // the curve to replay every internal portal traversed by the discovery polyline.
+  return RegionalSplineTopologyCertificate{
+      true, validate_navmesh_topology_signature(route.topology_signature, polyline, true)};
+}
+
+[[nodiscard]] bool regional_spline_stays_in_topology(const WorkingRegionalSpline& route,
+                                                     const QuinticPHRoute& spline) {
+  return certify_regional_spline_topology(route, spline).legal();
 }
 
 [[nodiscard]] SplineClearanceProbe
@@ -7391,6 +10541,13 @@ regional_spline_clearance(const WorkingRegionalSpline& route, SplineVector posit
   long double best_margin = std::numeric_limits<long double>::infinity();
   SplineVector best_normal;
   for (std::size_t other = 0U; other < routes.size(); ++other) {
+    const auto via_probe = regional_candidate_via_clearance(
+        route.fragment.net, route.layer, route.width, route.clearance, position,
+        routes[other].candidate_vias, routes[other].clearance);
+    if (via_probe.clearance_nm < best_margin) {
+      best_margin = via_probe.clearance_nm;
+      best_normal = via_probe.obstacle_normal;
+    }
     if (other == route_index || routes[other].layer != route.layer ||
         routes[other].fragment.net == route.fragment.net) {
       continue;
@@ -7464,6 +10621,15 @@ probe_regional_spline_samples(const std::vector<WorkingRegionalSpline>& routes,
   }
   std::vector<RoutingComputeSegment> segments;
   for (std::size_t route = 0U; route < routes.size(); ++route) {
+    for (const auto& via : routes[route].candidate_vias) {
+      const auto& query_layer = routes[route_index].layer;
+      if (std::find(via.span.begin(), via.span.end(), query_layer) == via.span.end()) continue;
+      // Degenerate segments represent disks in the proximity kernel. Include all physical
+      // via layers, not merely the attached curve's layer, so GPU culling cannot hide them.
+      segments.push_back({via.site.x.value(), via.site.y.value(), via.site.x.value(),
+          via.site.y.value(), via.diameter.value() / 2 + routes[route].clearance.value(),
+          layer_codes.at(query_layer), static_cast<std::uint32_t>(route)});
+    }
     if (route >= route_samples.size() || route_samples[route].size() < 2U)
       continue;
     const auto radius = routes[route].width.value() / 2 + routes[route].clearance.value() +
@@ -7590,7 +10756,8 @@ better_regional_spline_legality(const RegionalSplineLegalityAssessment& candidat
 [[nodiscard]] bool regional_ph_envelope_boundaries_intersect(
     const std::vector<WorkingRegionalSpline>& routes, std::size_t first_route,
     std::size_t second_route, std::vector<CachedRegionalSplineGeometry>* cache = nullptr,
-    RegionalRouteResult* metrics = nullptr) {
+    RegionalRouteResult* metrics = nullptr, std::uint64_t obstacle_snapshot_revision = 0U,
+    BoundedRegionalPHPairCache* persistent_pair_cache = nullptr) {
   if (first_route >= routes.size() || second_route >= routes.size())
     return true;
   const auto& first = routes[first_route];
@@ -7603,6 +10770,89 @@ better_regional_spline_legality(const RegionalSplineLegalityAssessment& candidat
                               2 * std::max(first.clearance, second.clearance).value();
   const auto required = static_cast<long double>(required_twice) * 0.5L;
   const auto half = required * 0.5L;
+  auto first_fingerprint = regional_route_geometry_fingerprint(first);
+  auto second_fingerprint = regional_route_geometry_fingerprint(second);
+  auto first_corridor = regional_corridor_revision(first);
+  auto second_corridor = regional_corridor_revision(second);
+  if (std::tie(second_fingerprint, second_corridor) <
+      std::tie(first_fingerprint, first_corridor)) {
+    std::swap(first_fingerprint, second_fingerprint);
+    std::swap(first_corridor, second_corridor);
+  }
+  const RegionalPHPairCacheKey persistent_key{first_fingerprint,
+                                               second_fingerprint,
+                                               first_corridor,
+                                               second_corridor,
+                                               obstacle_snapshot_revision,
+                                               required_twice,
+                                               first.layer};
+  if (persistent_pair_cache != nullptr) {
+    if (const auto cached_verdict = persistent_pair_cache->find(persistent_key)) {
+      if (metrics != nullptr)
+        ++metrics->spline_geometry_cache_hits;
+      return *cached_verdict;
+    }
+  }
+  // First answer the actual clearance question on the polynomial quintic centrelines. Most pairs
+  // are separated by conservative outward-rounded double hulls; definite penetration is proven
+  // from long-double points on the curves. Only ambiguous leaf pairs pay for degree-nine rational
+  // offsets below.
+  std::set<std::pair<std::size_t, std::size_t>> ambiguous_centerline_pairs;
+  for (std::size_t first_index = 0U; first_index < first.spline.segments.size(); ++first_index) {
+    for (std::size_t second_index = 0U; second_index < second.spline.segments.size();
+         ++second_index) {
+      PreparedPHSegmentCertificate temporary_first;
+      PreparedPHSegmentCertificate temporary_second;
+      const PreparedPHSegmentCertificate* first_certificate = nullptr;
+      const PreparedPHSegmentCertificate* second_certificate = nullptr;
+      if (cache != nullptr && first_route < cache->size() &&
+          first_index < (*cache)[first_route].segment_certificates.size())
+        first_certificate = &(*cache)[first_route].segment_certificates[first_index];
+      else {
+        temporary_first = prepare_quintic_ph_segment_certificate(
+            first.spline.segments[first_index]);
+        first_certificate = &temporary_first;
+      }
+      if (cache != nullptr && second_route < cache->size() &&
+          second_index < (*cache)[second_route].segment_certificates.size())
+        second_certificate = &(*cache)[second_route].segment_certificates[second_index];
+      else {
+        temporary_second = prepare_quintic_ph_segment_certificate(
+            second.spline.segments[second_index]);
+        second_certificate = &temporary_second;
+      }
+      PHCenterlineClearanceStats centerline_stats;
+      const auto verdict = certify_quintic_ph_segment_clearance(
+          *first_certificate, *second_certificate, required, Nanometres{10}, 16'384U,
+          &centerline_stats);
+      if (metrics != nullptr) {
+        ++metrics->spline_centerline_certificate_pairs;
+        metrics->spline_centerline_certificate_nodes += centerline_stats.node_pairs;
+        metrics->spline_centerline_simd_batches += centerline_stats.simd_batches;
+        metrics->spline_centerline_simd_lanes += centerline_stats.simd_lanes;
+        metrics->spline_centerline_multiprecision_comparisons +=
+            centerline_stats.multiprecision_comparisons;
+        metrics->spline_centerline_separation_proofs +=
+            verdict == PHCenterlineClearanceVerdict::separated ? 1U : 0U;
+        metrics->spline_centerline_collision_proofs +=
+            verdict == PHCenterlineClearanceVerdict::colliding ? 1U : 0U;
+        metrics->spline_centerline_ambiguous_pairs +=
+            verdict == PHCenterlineClearanceVerdict::ambiguous ? 1U : 0U;
+      }
+      if (verdict == PHCenterlineClearanceVerdict::colliding) {
+        if (persistent_pair_cache != nullptr)
+          persistent_pair_cache->insert(persistent_key, true);
+        return true;
+      }
+      if (verdict == PHCenterlineClearanceVerdict::ambiguous)
+        ambiguous_centerline_pairs.emplace(first_index, second_index);
+    }
+  }
+  if (ambiguous_centerline_pairs.empty()) {
+    if (persistent_pair_cache != nullptr)
+      persistent_pair_cache->insert(persistent_key, false);
+    return false;
+  }
   const auto prepare_offsets = [&](std::size_t route_index) -> const CachedRegionalOffsetGeometry* {
     if (cache == nullptr || route_index >= cache->size())
       return nullptr;
@@ -7616,6 +10866,7 @@ better_regional_spline_legality(const RegionalSplineLegalityAssessment& candidat
     CachedRegionalOffsetGeometry prepared;
     prepared.offsets.reserve(routes[route_index].spline.segments.size());
     prepared.subdivision_bounds.reserve(routes[route_index].spline.segments.size());
+    prepared.segment_fingerprints.reserve(routes[route_index].spline.segments.size());
     for (const auto& segment : routes[route_index].spline.segments) {
       prepared.offsets.push_back(
           {make_quintic_ph_offset(segment, -half), make_quintic_ph_offset(segment, half)});
@@ -7623,11 +10874,12 @@ better_regional_spline_legality(const RegionalSplineLegalityAssessment& candidat
       prepared.subdivision_bounds.push_back(
           {subdivide_quintic_ph_offset_bounds(offsets[0], 4U, Nanometres{10}),
            subdivide_quintic_ph_offset_bounds(offsets[1], 4U, Nanometres{10})});
+      prepared.segment_fingerprints.push_back(
+          prepare_quintic_ph_segment_certificate(segment, 0U).geometry_fingerprint);
     }
     if (metrics != nullptr)
       ++metrics->spline_geometry_cache_misses;
-    return &route_cache.offsets_by_required_twice_nm
-                .emplace(required_twice, std::move(prepared))
+    return &route_cache.offsets_by_required_twice_nm.emplace(required_twice, std::move(prepared))
                 .first->second;
   };
   CachedRegionalOffsetGeometry uncached_first;
@@ -7636,6 +10888,7 @@ better_regional_spline_legality(const RegionalSplineLegalityAssessment& candidat
                                     CachedRegionalOffsetGeometry& prepared) {
     prepared.offsets.reserve(route.spline.segments.size());
     prepared.subdivision_bounds.reserve(route.spline.segments.size());
+    prepared.segment_fingerprints.reserve(route.spline.segments.size());
     for (const auto& segment : route.spline.segments) {
       prepared.offsets.push_back(
           {make_quintic_ph_offset(segment, -half), make_quintic_ph_offset(segment, half)});
@@ -7643,6 +10896,8 @@ better_regional_spline_legality(const RegionalSplineLegalityAssessment& candidat
       prepared.subdivision_bounds.push_back(
           {subdivide_quintic_ph_offset_bounds(offsets[0], 4U, Nanometres{10}),
            subdivide_quintic_ph_offset_bounds(offsets[1], 4U, Nanometres{10})});
+      prepared.segment_fingerprints.push_back(
+          prepare_quintic_ph_segment_certificate(segment, 0U).geometry_fingerprint);
     }
   };
   auto* first_geometry = prepare_offsets(first_route);
@@ -7673,8 +10928,8 @@ better_regional_spline_legality(const RegionalSplineLegalityAssessment& candidat
   };
   std::vector<HullSource> hull_sources;
   bool complete_subdivision = true;
-  for (std::size_t segment_index = 0U;
-       segment_index < first_geometry->subdivision_bounds.size(); ++segment_index)
+  for (std::size_t segment_index = 0U; segment_index < first_geometry->subdivision_bounds.size();
+       ++segment_index)
     for (std::size_t sign_index = 0U; sign_index < 2U; ++sign_index) {
       const auto& sign = first_geometry->subdivision_bounds[segment_index][sign_index];
       complete_subdivision = complete_subdivision && !sign.empty();
@@ -7684,8 +10939,8 @@ better_regional_spline_legality(const RegionalSplineLegalityAssessment& candidat
         hull_sources.push_back({segment_index, sign_index, true});
       }
     }
-  for (std::size_t segment_index = 0U;
-       segment_index < second_geometry->subdivision_bounds.size(); ++segment_index)
+  for (std::size_t segment_index = 0U; segment_index < second_geometry->subdivision_bounds.size();
+       ++segment_index)
     for (std::size_t sign_index = 0U; sign_index < 2U; ++sign_index) {
       const auto& sign = second_geometry->subdivision_bounds[segment_index][sign_index];
       complete_subdivision = complete_subdivision && !sign.empty();
@@ -7697,17 +10952,16 @@ better_regional_spline_legality(const RegionalSplineLegalityAssessment& candidat
     }
   const auto broad = complete_subdivision
                          ? discover_routing_broadphase_pairs(
-                               hulls, std::max<std::int64_t>(
-                                          1, Nanometres::from_mm(0.25).value()),
+                               hulls, std::max<std::int64_t>(1, Nanometres::from_mm(0.25).value()),
                                1'048'576U, true)
                          : RoutingComputeBroadphaseResult{};
   if (metrics != nullptr) {
     ++metrics->spline_offset_broadphase_batches;
     metrics->spline_offset_broadphase_gpu_batches += broad.used_gpu ? 1U : 0U;
-    metrics->spline_offset_broadphase_us += static_cast<std::uint64_t>(
-        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() -
-                                                              broadphase_started)
-            .count());
+    metrics->spline_offset_broadphase_us +=
+        static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                       std::chrono::steady_clock::now() - broadphase_started)
+                                       .count());
   }
   if (complete_subdivision && broad.ok() && broad.candidate_pairs.empty()) {
     if (metrics != nullptr)
@@ -7734,6 +10988,8 @@ better_regional_spline_legality(const RegionalSplineLegalityAssessment& candidat
     for (std::size_t second_index = 0U; second_index < second.spline.segments.size();
          ++second_index) {
       const auto& second_segment = second.spline.segments[second_index];
+      if (!ambiguous_centerline_pairs.contains({first_index, second_index}))
+        continue;
       if (first_segment.bounds_maximum.x + required < second_segment.bounds_minimum.x ||
           second_segment.bounds_maximum.x + required < first_segment.bounds_minimum.x ||
           first_segment.bounds_maximum.y + required < second_segment.bounds_minimum.y ||
@@ -7743,8 +10999,7 @@ better_regional_spline_legality(const RegionalSplineLegalityAssessment& candidat
       for (std::size_t first_sign = 0U; first_sign < 2U; ++first_sign) {
         for (std::size_t second_sign = 0U; second_sign < 2U; ++second_sign) {
           if (complete_subdivision && broad.ok() &&
-              !ambiguous_offsets.contains(
-                  {first_index, first_sign, second_index, second_sign}))
+              !ambiguous_offsets.contains({first_index, first_sign, second_index, second_sign}))
             continue;
           const auto& first_offset = first_offsets[first_index][first_sign];
           const auto& second_offset = second_offsets[second_index][second_sign];
@@ -7756,12 +11011,11 @@ better_regional_spline_legality(const RegionalSplineLegalityAssessment& candidat
             ++metrics->spline_offset_exact_pairs;
             metrics->spline_offset_subdivision_nodes += stats.subdivision_nodes;
             metrics->spline_offset_isolated_leaf_pairs += stats.isolated_leaf_pairs;
-            metrics->spline_offset_node_budget_exhaustions +=
-                stats.node_budget_exhausted ? 1U : 0U;
-            metrics->spline_offset_exact_us += static_cast<std::uint64_t>(
-                std::chrono::duration_cast<std::chrono::microseconds>(
-                    std::chrono::steady_clock::now() - exact_started)
-                    .count());
+            metrics->spline_offset_node_budget_exhaustions += stats.node_budget_exhausted ? 1U : 0U;
+            metrics->spline_offset_exact_us +=
+                static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                               std::chrono::steady_clock::now() - exact_started)
+                                               .count());
           }
           // An exhausted isolator is geometrically ambiguous and therefore cannot prove legal
           // copper. Preserve CPU authority by failing closed rather than treating an empty partial
@@ -7772,6 +11026,8 @@ better_regional_spline_legality(const RegionalSplineLegalityAssessment& candidat
       }
     }
   }
+  if (persistent_pair_cache != nullptr)
+    persistent_pair_cache->insert(persistent_key, false);
   return false;
 }
 
@@ -7804,15 +11060,14 @@ assess_adaptive_regional_window(const std::vector<WorkingRegionalSpline>& routes
   std::vector<std::vector<SplineSample>> sampled(routes.size());
   std::vector<std::vector<SplineVector>> positions(routes.size());
   for (std::size_t route = 0U; route < routes.size(); ++route) {
-    if (cache != nullptr && route < cache->size() &&
-        !(*cache)[route].adaptive_samples.empty()) {
+    if (cache != nullptr && route < cache->size() && !(*cache)[route].adaptive_samples.empty()) {
       sampled[route] = (*cache)[route].adaptive_samples;
       positions[route] = (*cache)[route].adaptive_positions;
       if (metrics != nullptr)
         ++metrics->spline_geometry_cache_hits;
     } else {
-      sampled[route] = adaptive_tessellate_quintic_ph(
-          routes[route].spline, Nanometres::from_mm(0.02), 10U, 512U);
+      sampled[route] = adaptive_tessellate_quintic_ph(routes[route].spline,
+                                                      Nanometres::from_mm(0.02), 10U, 512U);
       positions[route].reserve(sampled[route].size());
       for (const auto& sample : sampled[route]) {
         positions[route].push_back(sample.position);
@@ -7864,10 +11119,10 @@ assess_adaptive_regional_window(const std::vector<WorkingRegionalSpline>& routes
     }
   }
   if (metrics != nullptr) {
-    metrics->spline_adaptive_assessment_us += static_cast<std::uint64_t>(
-        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() -
-                                                              started)
-            .count());
+    metrics->spline_adaptive_assessment_us +=
+        static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                       std::chrono::steady_clock::now() - started)
+                                       .count());
   }
   return result;
 }
@@ -7897,9 +11152,8 @@ assess_adaptive_regional_window(const std::vector<WorkingRegionalSpline>& routes
   input.routes.reserve(routes.size());
   for (std::size_t route = 0U; route < routes.size(); ++route) {
     input.routes.push_back(RoutingComputeQuantizedRoute{
-        static_cast<std::uint32_t>(route * sample_count),
-        static_cast<std::uint32_t>(sample_count), layer_codes.at(routes[route].layer),
-        net_codes.at(routes[route].fragment.net),
+        static_cast<std::uint32_t>(route * sample_count), static_cast<std::uint32_t>(sample_count),
+        layer_codes.at(routes[route].layer), net_codes.at(routes[route].fragment.net),
         routes[route].width.value() / 2 + routes[route].clearance.value()});
   }
 
@@ -7913,8 +11167,8 @@ assess_adaptive_regional_window(const std::vector<WorkingRegionalSpline>& routes
     auto& positions = fixed_positions[route];
     positions.reserve(sample_count);
     for (std::size_t sample = 0U; sample < sample_count; ++sample) {
-      const auto parameter = static_cast<long double>(sample) /
-                             static_cast<long double>(sample_count - 1U);
+      const auto parameter =
+          static_cast<long double>(sample) / static_cast<long double>(sample_count - 1U);
       const auto point = evaluate_quintic_ph(routes[route].spline, parameter);
       positions.emplace_back(point.x, point.y);
     }
@@ -7929,8 +11183,8 @@ assess_adaptive_regional_window(const std::vector<WorkingRegionalSpline>& routes
         continue;
       }
       for (std::size_t sample = 0U; sample < sample_count; ++sample) {
-        const auto parameter = static_cast<long double>(sample) /
-                               static_cast<long double>(sample_count - 1U);
+        const auto parameter =
+            static_cast<long double>(sample) / static_cast<long double>(sample_count - 1U);
         const auto point = evaluate_quintic_ph(candidate, parameter);
         input.candidate_points_nm.emplace_back(point.x, point.y);
       }
@@ -8121,6 +11375,270 @@ assess_quantized_regional_window(const std::vector<WorkingRegionalSpline>& route
   return result;
 }
 
+struct NativeRegionalAssessment {
+  std::vector<bool> route_legal;
+  std::vector<std::uint64_t> route_fit_us;
+  std::vector<NativeSplineFitStats> route_fit_stats;
+  std::vector<RegionalFrozenCopperConflict> frozen_conflicts;
+  std::size_t pieces{0U};
+  std::size_t violations{0U};
+  std::size_t fit_failures{0U};
+  std::size_t dynamic_objects{0U};
+  std::uint64_t fit_us{0U};
+  std::uint64_t drc_us{0U};
+
+  [[nodiscard]] bool legal() const {
+    return violations == 0U && !route_legal.empty() &&
+           std::all_of(route_legal.begin(), route_legal.end(), [](bool value) { return value; });
+  }
+};
+
+// Materialize the selected PH geometry at the regional boundary, rather than treating the
+// rational PH offset as if it were the copper ultimately written to KiCad. The generated native
+// arcs/segments are checked against the immutable board, so static and mutual violations use the
+// same represented-copper predicates as final detailed routing. Source-only pairs are immutable
+// and irrelevant to this proposal, so bounded DRC selects generated arcs, segments and vias while
+// retaining exact interactions with every static object. The frozen-context experiment also
+// includes resolved candidate vias; whole-board DRC and connectivity still require the transaction.
+[[nodiscard]] NativeRegionalAssessment
+assess_native_regional_window(const Board& source, const std::vector<WorkingRegionalSpline>& routes,
+                              const std::vector<std::vector<SplineFittedPiece>>& pieces,
+                              std::size_t window_id, bool defer_saved_zone_fills,
+                              const std::map<std::string, RegionalRouteFragmentId>& frozen_owners,
+                              bool include_candidate_vias) {
+  NativeRegionalAssessment result;
+  result.route_legal.assign(routes.size(), true);
+  if (routes.empty() || pieces.size() != routes.size()) {
+    result.violations = 1U;
+    std::fill(result.route_legal.begin(), result.route_legal.end(), false);
+    return result;
+  }
+
+  Board candidate = source;
+  if (defer_saved_zone_fills) {
+    for (auto& zone : candidate.zones)
+      zone.fills.clear();
+  }
+  std::map<std::string, std::vector<std::size_t>> route_by_generated_id;
+  if (include_candidate_vias) {
+    std::vector<std::pair<RegionalRouteFragmentId, RegionalViaChoice>> selected;
+    for (const auto& route : routes)
+      for (const auto& via : route.candidate_vias)
+        selected.emplace_back(route.fragment, via);
+    std::map<std::string, std::vector<RegionalRouteFragmentId>> via_owners;
+    auto with_vias = build_regional_candidate_via_context(candidate, selected, via_owners);
+    if (!with_vias) {
+      result.violations = 1U;
+      std::fill(result.route_legal.begin(), result.route_legal.end(), false);
+      return result;
+    }
+    candidate = std::move(*with_vias);
+    for (const auto& [id, owners] : via_owners)
+      for (std::size_t route = 0; route < routes.size(); ++route)
+        if (std::find(owners.begin(), owners.end(), routes[route].fragment) != owners.end())
+          route_by_generated_id[id].push_back(route);
+  }
+  for (std::size_t route = 0U; route < routes.size(); ++route) {
+    if (pieces[route].empty()) {
+      result.route_legal[route] = false;
+      ++result.fit_failures;
+      continue;
+    }
+    std::optional<Point> prior_end;
+    for (std::size_t piece_index = 0U; piece_index < pieces[route].size(); ++piece_index) {
+      const auto& piece = pieces[route][piece_index];
+      const auto connected = !prior_end || *prior_end == piece.start;
+      const auto non_degenerate = piece.start != piece.end;
+      const auto arc_valid =
+          piece.kind != SplineFittedPieceKind::circular_arc ||
+          geometry::circular_arc_parameters(piece.start, piece.middle, piece.end).has_value();
+      if (!connected || !non_degenerate || !arc_valid) {
+        result.route_legal[route] = false;
+        ++result.violations;
+        continue;
+      }
+      const auto id_value = "__flux-regional-native-" + std::to_string(window_id) + "-" +
+                            std::to_string(route) + "-" + std::to_string(piece_index);
+      const ObjectId id{id_value};
+      route_by_generated_id.emplace(id_value, std::vector<std::size_t>{route});
+      if (piece.kind == SplineFittedPieceKind::cubic_bezier) {
+        candidate.track_beziers.push_back({id, routes[route].fragment.net, routes[route].layer,
+            piece.start, piece.control1, piece.control2, piece.end, routes[route].width, false});
+      } else if (piece.kind == SplineFittedPieceKind::circular_arc) {
+        candidate.track_arcs.push_back(TrackArc{id, routes[route].fragment.net, routes[route].layer,
+                                                piece.start, piece.middle, piece.end,
+                                                routes[route].width, false});
+      } else {
+        candidate.tracks.push_back(TrackSegment{id, routes[route].fragment.net, routes[route].layer,
+                                                piece.start, piece.end, routes[route].width,
+                                                false});
+      }
+      prior_end = piece.end;
+      ++result.pieces;
+    }
+  }
+
+  std::vector<ObjectId> dynamic_objects;
+  dynamic_objects.reserve(route_by_generated_id.size());
+  for (const auto& [id, owners] : route_by_generated_id) {
+    static_cast<void>(owners);
+    dynamic_objects.emplace_back(id);
+  }
+  result.dynamic_objects = dynamic_objects.size();
+  const auto drc_started = std::chrono::steady_clock::now();
+  const auto copper = check_dynamic_copper_rules(candidate, dynamic_objects);
+  result.drc_us = static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::steady_clock::now() - drc_started)
+          .count());
+  // Dynamic-vs-dynamic relationships are visited from each selected side. Count and attribute
+  // each physical rule failure once, matching whole-board DRC's proposal-facing semantics.
+  std::set<std::tuple<CopperViolationKind, std::string, std::vector<std::string>>>
+      seen_violations;
+  for (const auto& violation : copper.violations) {
+    if (violation.kind == CopperViolationKind::differential_pair_skew)
+      continue;
+    auto canonical_ids = violation.object_ids;
+    std::sort(canonical_ids.begin(), canonical_ids.end());
+    if (!seen_violations.emplace(violation.kind, violation.code, std::move(canonical_ids)).second)
+      continue;
+    bool generated = false;
+    for (const auto& id : violation.object_ids) {
+      const auto found = route_by_generated_id.find(id);
+      if (found == route_by_generated_id.end())
+        continue;
+      for (const auto route : found->second) result.route_legal[route] = false;
+      generated = true;
+    }
+    result.violations += generated ? 1U : 0U;
+    if (generated) {
+      for (const auto& native_id : violation.object_ids) {
+        const auto native = route_by_generated_id.find(native_id);
+        if (native == route_by_generated_id.end()) continue;
+        for (const auto route : native->second) {
+          if (!routes[route].owned) continue;
+          for (const auto& outside_id : violation.object_ids) {
+            const auto outside = frozen_owners.find(outside_id);
+            if (outside == frozen_owners.end()) continue;
+            const auto track = std::find_if(candidate.tracks.begin(), candidate.tracks.end(),
+                [&](const auto& item) { return item.id.value() == outside_id; });
+            RegionalFrozenCopperConflict witness{
+                routes[route].fragment, outside->second,
+                track != candidate.tracks.end() ? track->layer : routes[route].layer,
+                Nanometres{static_cast<std::int64_t>(std::ceil(std::max(
+                    0.0L, static_cast<long double>(violation.required_clearance.value()) -
+                              violation.actual_distance_nm)))}, violation.code};
+            const auto prior = std::find_if(result.frozen_conflicts.begin(), result.frozen_conflicts.end(),
+                [&](const auto& item) { return item.candidate == witness.candidate &&
+                    item.blocker == witness.blocker && item.layer == witness.layer && item.code == witness.code; });
+            if (prior == result.frozen_conflicts.end()) result.frozen_conflicts.push_back(std::move(witness));
+            else prior->clearance_deficit = std::max(prior->clearance_deficit, witness.clearance_deficit);
+          }
+        }
+      }
+    }
+  }
+  return result;
+}
+
+// Diagnostic replay ingredients, never a routability certificate. Full native neighbours and
+// candidate vias accompany each rejected route's ownership and bounded guard-cell geometry.
+void publish_native_constraint_context(const std::vector<WorkingRegionalSpline>& routes,
+    const std::vector<std::vector<SplineFittedPiece>>& pieces,
+    const NativeRegionalAssessment& assessment, const RegionalBundleAssignment& assignment,
+    const RegionalRouterConfig& config, RouterTelemetrySink* telemetry) {
+  if (!config.frozen_copper_context || assessment.legal() || !telemetry ||
+      !telemetry->accepts(RouterTelemetryLevel::diagnostic)) return;
+  std::ostringstream out;
+  const auto quote = [&](std::string_view value) {
+    constexpr char hex[] = "0123456789abcdef";
+    out << '"';
+    for (const char character : value) {
+      const auto c = static_cast<unsigned char>(character);
+      if (c == '"' || c == '\\') out << '\\' << static_cast<char>(c);
+      else if (c < 32U) out << "\\u00" << hex[c >> 4U] << hex[c & 15U];
+      else out << static_cast<char>(c);
+    }
+    out << '"';
+  };
+  const auto point = [&](Point p) { out << '[' << p.x.value() << ',' << p.y.value() << ']'; };
+  out << "{\"kind\":\"regional-native-constraint-context\",\"schema\":3,\"window\":"
+      << assignment.window_id << ",\"rank\":" << assignment.spline_candidate_rank
+      << ",\"xpbd_enabled\":" << (config.enable_xpbd_relaxation ? "true" : "false")
+      << ",\"max_sweeps\":" << config.max_spline_sweeps
+      << ",\"native_dynamic_objects\":" << assessment.dynamic_objects
+      << ",\"native_fit_us\":" << assessment.fit_us
+      << ",\"native_drc_us\":" << assessment.drc_us << ",\"routes\":[";
+  for (std::size_t index = 0; index < routes.size(); ++index) {
+    const auto& route = routes[index];
+    const bool legal = index < assessment.route_legal.size() && assessment.route_legal[index];
+    out << (index ? "," : "") << "{\"net\":";
+    quote(route.fragment.net.value());
+    out << ",\"fragment\":[" << route.fragment.connection_index << ',' << route.fragment.run_index
+        << ',' << route.fragment.fragment_index << "],\"layer\":";
+    quote(route.layer.value());
+    out << ",\"owned\":" << (route.owned ? "true" : "false")
+        << ",\"frozen\":" << (route.frozen_boundary ? "true" : "false")
+        << ",\"emit_replacement\":" << (route.emit_replacement ? "true" : "false")
+        << ",\"native_legal\":" << (legal ? "true" : "false")
+        << ",\"width_nm\":" << route.width.value() << ",\"clearance_nm\":" << route.clearance.value()
+        << ",\"moves\":" << route.control_moves << ",\"sweeps\":" << route.sweeps
+        << ",\"gate_count\":" << route.topology_signature.gates.size();
+    if (index < assessment.route_fit_us.size())
+      out << ",\"native_fit_us\":" << assessment.route_fit_us[index];
+    if (index < assessment.route_fit_stats.size()) {
+      const auto& fit = assessment.route_fit_stats[index];
+      out << ",\"native_fit_attempts\":" << fit.attempts
+          << ",\"native_fit_peak_samples\":" << fit.peak_samples
+          << ",\"native_tessellation_us\":" << fit.tessellation_us
+          << ",\"native_lattice_filter_us\":" << fit.lattice_filter_us
+          << ",\"native_line_arc_fit_us\":" << fit.line_arc_fit_us
+          << ",\"native_tangent_biarc_fit_us\":" << fit.tangent_biarc_fit_us;
+    }
+    out << ",\"anchors\":[";
+    for (std::size_t i = 0; i < route.spline.corridor_anchors.size(); ++i) {
+      if (i) out << ',';
+      point(quantize_regional_spline(route.spline.corridor_anchors[i]));
+    }
+    out << "],\"cells_complete\":" << (!legal && route.topology_cells.size() <= 4096U ? "true" : "false")
+        << ",\"cells\":[";
+    if (!legal) for (std::size_t c = 0; c < std::min(route.topology_cells.size(), std::size_t{4096}); ++c) {
+      out << (c ? ",[" : "[");
+      const auto& vertices = route.topology_cells[c].vertices;
+      for (std::size_t p = 0; p < vertices.size(); ++p) { if (p) out << ','; point(vertices[p]); }
+      out << ']';
+    }
+    out << "],\"links\":[";
+    for (std::size_t i = 0; !legal && i < route.topology_links.size(); ++i) {
+      out << (i ? ",[" : "["); point(route.topology_links[i].first); out << ',';
+      point(route.topology_links[i].second); out << ',' << route.topology_links[i].radius.value() << ']';
+    }
+    out << "],\"vias\":[";
+    for (std::size_t i = 0; i < route.candidate_vias.size(); ++i) {
+      const auto& via = route.candidate_vias[i];
+      out << (i ? ",{" : "{") << "\"site\":"; point(via.site);
+      out << ",\"diameter_nm\":" << via.diameter.value() << ",\"drill_nm\":" << via.drill.value()
+          << ",\"span\":[";
+      for (std::size_t l = 0; l < via.span.size(); ++l) { if (l) out << ','; quote(via.span[l].value()); }
+      out << "]}";
+    }
+    out << "],\"pieces\":[";
+    if (index < pieces.size()) for (std::size_t p = 0; p < pieces[index].size(); ++p) {
+      const auto& piece = pieces[index][p];
+      out << (p ? ",[" : "[") << (piece.kind == SplineFittedPieceKind::cubic_bezier ? 2 : piece.kind == SplineFittedPieceKind::circular_arc ? 1 : 0) << ',';
+      point(piece.start); out << ','; point(piece.middle); out << ','; point(piece.end); if (piece.kind == SplineFittedPieceKind::cubic_bezier) { out << ','; point(piece.control1); out << ','; point(piece.control2); } out << ']';
+    }
+    out << "]}";
+  }
+  out << "]}";
+  RouterTelemetryEvent event;
+  event.kind = RouterTelemetryEventKind::search_summary;
+  event.minimum_level = RouterTelemetryLevel::diagnostic;
+  event.stable_id = "regional-native-context:" + std::to_string(assignment.window_id);
+  event.detail = out.str();
+  static_cast<void>(telemetry->try_emit(std::move(event)));
+}
+
 void publish_regional_spline_assignment_telemetry(const RegionalBundleAssignment& assignment,
                                                   RouterTelemetrySink* telemetry,
                                                   RouterTelemetryLevel minimum_level,
@@ -8128,6 +11646,29 @@ void publish_regional_spline_assignment_telemetry(const RegionalBundleAssignment
   if (telemetry == nullptr || !telemetry->accepts(minimum_level)) {
     return;
   }
+  const auto publish_conflicts = [&](const auto& conflicts, std::string_view provenance) {
+    for (const auto& conflict : conflicts) {
+      const auto identity = [](const auto& id) {
+        return id.net.value() + ":" + std::to_string(id.connection_index) + ":" +
+               std::to_string(id.run_index) + ":" + std::to_string(id.fragment_index);
+      };
+      RouterTelemetryEvent event;
+      event.kind = RouterTelemetryEventKind::search_summary;
+      event.net = conflict.candidate.net;
+      event.group_id = "regional-window:" + std::to_string(assignment.window_id);
+      event.stable_id = "frozen-copper-conflict:" + std::string(provenance) + ":" +
+          identity(conflict.candidate) + ":" + identity(conflict.blocker);
+      event.detail = std::string(provenance) + " outside-copper conflict: candidate=" +
+          identity(conflict.candidate) + ", blocker=" + identity(conflict.blocker) +
+          ", layer=" + conflict.layer.value() + ", code=" + conflict.code +
+          ", deficit_nm=" + std::to_string(conflict.clearance_deficit.value()) +
+          ", rank=" + std::to_string(assignment.spline_candidate_rank) +
+          ", lifecycle=" + std::string(lifecycle);
+      static_cast<void>(telemetry->try_emit(std::move(event)));
+    }
+  };
+  publish_conflicts(assignment.frozen_copper_conflicts, "access");
+  publish_conflicts(assignment.native_frozen_copper_conflicts, "native");
   for (const auto& realization : assignment.spline_realizations) {
     RouterTelemetryEvent route;
     route.kind = RouterTelemetryEventKind::route_candidate_selected;
@@ -8145,8 +11686,9 @@ void publish_regional_spline_assignment_telemetry(const RegionalBundleAssignment
     route.route_lifecycle = std::string(lifecycle);
     route.route_width_nm =
         static_cast<std::uint64_t>(std::max<std::int64_t>(0, realization.width.value()));
-    route.route_geometry = RouterTelemetryRouteGeometry::quintic_ph;
-    route.spline_degree = 5U;
+    route.route_geometry = realization.straight_realization
+        ? RouterTelemetryRouteGeometry::polyline : RouterTelemetryRouteGeometry::quintic_ph;
+    route.spline_degree = realization.straight_realization ? 0U : 5U;
     route.topology_signature = realization.topology_signature;
     route.topology_gate_count = realization.topology_gate_count;
     route.topology_gate_sequence_legal = realization.topology_gate_sequence_legal;
@@ -8162,8 +11704,9 @@ void publish_regional_spline_assignment_telemetry(const RegionalBundleAssignment
     }
     route.detail =
         std::string(lifecycle) +
-        " regional quintic PH curve tessellation; diagnostic planning geometry; "
-        "candidate_rank=" +
+        (realization.straight_realization
+             ? " regional straight copper; diagnostic planning geometry; candidate_rank="
+             : " regional quintic PH curve tessellation; diagnostic planning geometry; candidate_rank=") +
         std::to_string(assignment.spline_candidate_rank) +
         ", topology_legal=" + std::string(realization.topology_legal ? "yes" : "no") +
         ", endpoint_topology=" + std::string(realization.endpoint_topology_legal ? "yes" : "no") +
@@ -8177,10 +11720,348 @@ void publish_regional_spline_assignment_telemetry(const RegionalBundleAssignment
   }
 }
 
-void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
-                            std::stop_token stop_token, RouterTelemetrySink* telemetry,
-                            std::size_t maximum_fallback_waves = 1U) {
+// Workers retain only bounded phase summaries. Geometry publication and decision callbacks stay
+// on the parent so speculative candidates cannot race the viewer's selected regional state.
+class RegionalCandidateTelemetry final : public RouterTelemetrySink {
+public:
+  bool accepts(RouterTelemetryLevel level) const noexcept override {
+    return level != RouterTelemetryLevel::trace;
+  }
+  bool try_emit(RouterTelemetryEvent event) noexcept override {
+    if (!event.stable_id.starts_with("regional-spline-phase-timing:")) return true;
+    try {
+      if (events.size() < 2U) events.push_back(std::move(event));
+      return true;
+    } catch (...) { return false; }
+  }
+  std::vector<RouterTelemetryEvent> events;
+};
+
+void merge_regional_spline_work(RegionalRouteResult& result, RegionalRouteResult& local,
+                                const RegionalRouteResult& baseline) {
+#define FLUX_MERGE_SPLINE_DELTA(field) result.field += local.field - baseline.field
+    FLUX_MERGE_SPLINE_DELTA(candidate_pipeline_stats.candidate_preflight_checked);
+    FLUX_MERGE_SPLINE_DELTA(candidate_pipeline_stats.candidate_preflight_definitive_rejections);
+    FLUX_MERGE_SPLINE_DELTA(candidate_pipeline_stats.candidate_preflight_fixed_endpoint_rejections);
+    FLUX_MERGE_SPLINE_DELTA(candidate_pipeline_stats.candidate_preflight_packing_rejections);
+    FLUX_MERGE_SPLINE_DELTA(candidate_pipeline_stats.layered_navmesh_graph_nodes);
+    FLUX_MERGE_SPLINE_DELTA(candidate_pipeline_stats.layered_navmesh_planar_edges);
+    FLUX_MERGE_SPLINE_DELTA(candidate_pipeline_stats.layered_navmesh_via_zones);
+    FLUX_MERGE_SPLINE_DELTA(candidate_pipeline_stats.layered_navmesh_certified_transitions);
+    FLUX_MERGE_SPLINE_DELTA(candidate_pipeline_stats.layered_navmesh_rejected_spans);
+    FLUX_MERGE_SPLINE_DELTA(candidate_pipeline_stats.layered_navmesh_preparation_bound_hits);
+    FLUX_MERGE_SPLINE_DELTA(candidate_pipeline_stats.layered_navmesh_search_expansions);
+    FLUX_MERGE_SPLINE_DELTA(candidate_pipeline_stats.layered_navmesh_search_bound_hits);
+    FLUX_MERGE_SPLINE_DELTA(candidate_pipeline_stats.layered_navmesh_selected_proposals);
+
+    FLUX_MERGE_SPLINE_DELTA(candidate_pipeline_stats.candidate_schedule_observations);
+    FLUX_MERGE_SPLINE_DELTA(candidate_pipeline_stats.candidate_schedule_reorders);
+
+    FLUX_MERGE_SPLINE_DELTA(spline_candidate_parallel_batches);
+    FLUX_MERGE_SPLINE_DELTA(spline_candidate_parallel_tasks);
+    FLUX_MERGE_SPLINE_DELTA(spline_candidate_parallel_discarded);
+    FLUX_MERGE_SPLINE_DELTA(linear_scaffold_checks);
+    FLUX_MERGE_SPLINE_DELTA(linear_scaffold_rejections);
+    FLUX_MERGE_SPLINE_DELTA(candidate_ranker_groups_scored);
+    FLUX_MERGE_SPLINE_DELTA(candidate_ranker_candidates_scored);
+    FLUX_MERGE_SPLINE_DELTA(candidate_ranker_candidates_reordered);
+    FLUX_MERGE_SPLINE_DELTA(candidate_ranker_training_rows_written);
+    FLUX_MERGE_SPLINE_DELTA(candidate_ranker_training_rows_failed);
+    FLUX_MERGE_SPLINE_DELTA(joint_spline_candidates_evaluated);
+    FLUX_MERGE_SPLINE_DELTA(joint_spline_candidates_legal);
+    FLUX_MERGE_SPLINE_DELTA(joint_spline_failed_fallback_improvements);
+    FLUX_MERGE_SPLINE_DELTA(spline_lane_targets);
+    FLUX_MERGE_SPLINE_DELTA(spline_multi_target_fragments);
+    FLUX_MERGE_SPLINE_DELTA(spline_merged_runs);
+    FLUX_MERGE_SPLINE_DELTA(spline_merged_fragments);
+    FLUX_MERGE_SPLINE_DELTA(spline_interpolation_portfolio_candidates);
+    FLUX_MERGE_SPLINE_DELTA(spline_interpolation_portfolio_offset_rejections);
+    FLUX_MERGE_SPLINE_DELTA(spline_interpolation_portfolio_accepted);
+    FLUX_MERGE_SPLINE_DELTA(spline_interpolation_portfolio_windows_improved);
+    FLUX_MERGE_SPLINE_DELTA(spline_topology_seed_gpu_batches);
+    FLUX_MERGE_SPLINE_DELTA(spline_topology_seed_gpu_fallbacks);
+    FLUX_MERGE_SPLINE_DELTA(spline_topology_seed_gpu_candidates);
+    FLUX_MERGE_SPLINE_DELTA(spline_topology_seed_exact_candidates);
+    FLUX_MERGE_SPLINE_DELTA(spline_interpolation_gpu_batches);
+    FLUX_MERGE_SPLINE_DELTA(spline_interpolation_gpu_fallbacks);
+    FLUX_MERGE_SPLINE_DELTA(spline_interpolation_gpu_candidates);
+    FLUX_MERGE_SPLINE_DELTA(spline_interpolation_exact_candidates);
+    FLUX_MERGE_SPLINE_DELTA(spline_topology_seed_construction_rejections);
+    FLUX_MERGE_SPLINE_DELTA(spline_topology_seed_corridor_rejections);
+    FLUX_MERGE_SPLINE_DELTA(spline_topology_seed_cell_rejections);
+    FLUX_MERGE_SPLINE_DELTA(spline_topology_seed_gate_rejections);
+    FLUX_MERGE_SPLINE_DELTA(spline_topology_seed_shape_rejections);
+    FLUX_MERGE_SPLINE_DELTA(spline_geometry_cache_hits);
+    FLUX_MERGE_SPLINE_DELTA(spline_geometry_cache_misses);
+    FLUX_MERGE_SPLINE_DELTA(spline_incremental_segments_reused);
+    FLUX_MERGE_SPLINE_DELTA(spline_incremental_segments_rebuilt);
+    FLUX_MERGE_SPLINE_DELTA(spline_route_certificate_cache_hits);
+    FLUX_MERGE_SPLINE_DELTA(spline_route_certificate_cache_misses);
+    FLUX_MERGE_SPLINE_DELTA(spline_centerline_certificate_pairs);
+    FLUX_MERGE_SPLINE_DELTA(spline_centerline_separation_proofs);
+    FLUX_MERGE_SPLINE_DELTA(spline_centerline_collision_proofs);
+    FLUX_MERGE_SPLINE_DELTA(spline_centerline_ambiguous_pairs);
+    FLUX_MERGE_SPLINE_DELTA(spline_centerline_certificate_nodes);
+    FLUX_MERGE_SPLINE_DELTA(spline_centerline_simd_batches);
+    FLUX_MERGE_SPLINE_DELTA(spline_centerline_simd_lanes);
+    FLUX_MERGE_SPLINE_DELTA(spline_centerline_multiprecision_comparisons);
+    FLUX_MERGE_SPLINE_DELTA(spline_offset_broadphase_batches);
+    FLUX_MERGE_SPLINE_DELTA(spline_offset_broadphase_gpu_batches);
+    FLUX_MERGE_SPLINE_DELTA(spline_offset_broadphase_rejections);
+    FLUX_MERGE_SPLINE_DELTA(spline_offset_exact_pairs);
+    FLUX_MERGE_SPLINE_DELTA(spline_offset_subdivision_nodes);
+    FLUX_MERGE_SPLINE_DELTA(spline_offset_isolated_leaf_pairs);
+    FLUX_MERGE_SPLINE_DELTA(spline_offset_node_budget_exhaustions);
+    FLUX_MERGE_SPLINE_DELTA(spline_joint_shove_attempts);
+    FLUX_MERGE_SPLINE_DELTA(spline_joint_shove_accepted);
+    FLUX_MERGE_SPLINE_DELTA(spline_adaptive_pair_shove_attempts);
+    FLUX_MERGE_SPLINE_DELTA(spline_adaptive_pair_shove_accepted);
+    FLUX_MERGE_SPLINE_DELTA(spline_adaptive_pair_windows_improved);
+    FLUX_MERGE_SPLINE_DELTA(spline_adaptive_pair_windows_legalized);
+    FLUX_MERGE_SPLINE_DELTA(quantized_segment_pair_checks);
+    FLUX_MERGE_SPLINE_DELTA(quantized_clearance_conflicts);
+    FLUX_MERGE_SPLINE_DELTA(native_arc_windows_checked);
+    FLUX_MERGE_SPLINE_DELTA(native_arc_fit_failures);
+    FLUX_MERGE_SPLINE_DELTA(native_arc_pieces_checked);
+    FLUX_MERGE_SPLINE_DELTA(native_arc_copper_violations);
+    FLUX_MERGE_SPLINE_DELTA(native_arc_legal_windows);
+    FLUX_MERGE_SPLINE_DELTA(quantization_feedback_attempts);
+    FLUX_MERGE_SPLINE_DELTA(quantization_feedback_accepted);
+    FLUX_MERGE_SPLINE_DELTA(quantization_feedback_windows_legalized);
+    FLUX_MERGE_SPLINE_DELTA(quantization_check_budget_exhausted_windows);
+    FLUX_MERGE_SPLINE_DELTA(xpbd_windows_attempted);
+    FLUX_MERGE_SPLINE_DELTA(xpbd_windows_improved);
+    FLUX_MERGE_SPLINE_DELTA(xpbd_subset_assessments);
+    FLUX_MERGE_SPLINE_DELTA(xpbd_subset_repairs_retained);
+    FLUX_MERGE_SPLINE_DELTA(xpbd_subset_groups_retained);
+    FLUX_MERGE_SPLINE_DELTA(avbd_windows_attempted);
+    FLUX_MERGE_SPLINE_DELTA(avbd_proposals_improved);
+    FLUX_MERGE_SPLINE_DELTA(avbd_windows_improved);
+    FLUX_MERGE_SPLINE_DELTA(avbd_contacts);
+    FLUX_MERGE_SPLINE_DELTA(avbd_duplicate_reductions);
+    FLUX_MERGE_SPLINE_DELTA(avbd_colors);
+    FLUX_MERGE_SPLINE_DELTA(avbd_local_block_solves);
+    FLUX_MERGE_SPLINE_DELTA(avbd_duals);
+    FLUX_MERGE_SPLINE_DELTA(avbd_penalty_updates);
+    FLUX_MERGE_SPLINE_DELTA(avbd_moved_rigid_owners);
+    FLUX_MERGE_SPLINE_DELTA(avbd_capacity_rejections);
+    FLUX_MERGE_SPLINE_DELTA(avbd_solve_us);
+    FLUX_MERGE_SPLINE_DELTA(xpbd_windows_legalized);
+    FLUX_MERGE_SPLINE_DELTA(xpbd_gpu_invocations);
+    FLUX_MERGE_SPLINE_DELTA(xpbd_cpu_fallbacks);
+    FLUX_MERGE_SPLINE_DELTA(xpbd_unconflicted_candidates_skipped);
+    FLUX_MERGE_SPLINE_DELTA(xpbd_topology_rejections);
+    FLUX_MERGE_SPLINE_DELTA(xpbd_obstacle_segments);
+    FLUX_MERGE_SPLINE_DELTA(xpbd_obstacle_segment_budget_exhaustions);
+    FLUX_MERGE_SPLINE_DELTA(xpbd_pressure_cells);
+    FLUX_MERGE_SPLINE_DELTA(xpbd_terrain_cells_sampled);
+    FLUX_MERGE_SPLINE_DELTA(xpbd_constraints);
+    FLUX_MERGE_SPLINE_DELTA(xpbd_broadphase_cells);
+    FLUX_MERGE_SPLINE_DELTA(xpbd_broadphase_pair_emissions);
+    FLUX_MERGE_SPLINE_DELTA(xpbd_resident_input_buffer_reuses);
+    FLUX_MERGE_SPLINE_DELTA(xpbd_gpu_broadphase_invocations);
+    FLUX_MERGE_SPLINE_DELTA(xpbd_broadphase_fallbacks);
+    FLUX_MERGE_SPLINE_DELTA(xpbd_gpu_pressure_field_invocations);
+    FLUX_MERGE_SPLINE_DELTA(xpbd_unresolved_trace_pairs);
+    FLUX_MERGE_SPLINE_DELTA(xpbd_initial_violations);
+    FLUX_MERGE_SPLINE_DELTA(xpbd_final_violations);
+    FLUX_MERGE_SPLINE_DELTA(spline_interpolation_rank_us);
+    FLUX_MERGE_SPLINE_DELTA(spline_interpolation_exact_us);
+    FLUX_MERGE_SPLINE_DELTA(spline_adaptive_assessment_us);
+    FLUX_MERGE_SPLINE_DELTA(spline_offset_broadphase_us);
+    FLUX_MERGE_SPLINE_DELTA(spline_offset_exact_us);
+    FLUX_MERGE_SPLINE_DELTA(xpbd_broadphase_us);
+    FLUX_MERGE_SPLINE_DELTA(xpbd_constraint_generation_us);
+    FLUX_MERGE_SPLINE_DELTA(xpbd_solve_us);
+    FLUX_MERGE_SPLINE_DELTA(xpbd_stress_reduction_us);
+    FLUX_MERGE_SPLINE_DELTA(xpbd_readback_us);
+#undef FLUX_MERGE_SPLINE_DELTA
+    result.spline_candidate_parallel_workers =
+        std::max(result.spline_candidate_parallel_workers, local.spline_candidate_parallel_workers);
+    result.avbd_maximum_degree =
+        std::max(result.avbd_maximum_degree, local.avbd_maximum_degree);
+    result.xpbd_stress.obstacle_nm +=
+        local.xpbd_stress.obstacle_nm - baseline.xpbd_stress.obstacle_nm;
+    result.xpbd_stress.trace_clearance_nm +=
+        local.xpbd_stress.trace_clearance_nm - baseline.xpbd_stress.trace_clearance_nm;
+    result.xpbd_stress.stretch_bend_nm +=
+        local.xpbd_stress.stretch_bend_nm - baseline.xpbd_stress.stretch_bend_nm;
+    result.xpbd_stress.corridor_nm +=
+        local.xpbd_stress.corridor_nm - baseline.xpbd_stress.corridor_nm;
+    result.xpbd_stress.via_nm += local.xpbd_stress.via_nm - baseline.xpbd_stress.via_nm;
+    result.peak_quantized_clearance_deficit =
+        std::max(result.peak_quantized_clearance_deficit,
+                 local.peak_quantized_clearance_deficit);
+    result.xpbd_peak_initial_residual =
+        std::max(result.xpbd_peak_initial_residual, local.xpbd_peak_initial_residual);
+    result.xpbd_peak_final_residual =
+        std::max(result.xpbd_peak_final_residual, local.xpbd_peak_final_residual);
+    result.xpbd_peak_pressure = std::max(result.xpbd_peak_pressure, local.xpbd_peak_pressure);
+    if (local.local_routability_diagnoses.size() > baseline.local_routability_diagnoses.size())
+      result.local_routability_diagnoses.insert(
+          result.local_routability_diagnoses.end(),
+          local.local_routability_diagnoses.begin() +
+              static_cast<std::ptrdiff_t>(baseline.local_routability_diagnoses.size()),
+          local.local_routability_diagnoses.end());
+    if (local.xpbd_invocations.size() > baseline.xpbd_invocations.size())
+      result.xpbd_invocations.insert(
+          result.xpbd_invocations.end(),
+          std::make_move_iterator(local.xpbd_invocations.begin() +
+                                  static_cast<std::ptrdiff_t>(baseline.xpbd_invocations.size())),
+          std::make_move_iterator(local.xpbd_invocations.end()));
+}
+
+[[nodiscard]] RegionalRouteResult regional_spline_work_baseline(const RegionalRouteResult& source) {
+  RegionalRouteResult snapshot;
+  snapshot.candidate_pipeline_stats = source.candidate_pipeline_stats;
+  snapshot.spline_candidate_parallel_batches = source.spline_candidate_parallel_batches;
+  snapshot.spline_candidate_parallel_tasks = source.spline_candidate_parallel_tasks;
+  snapshot.spline_candidate_parallel_discarded = source.spline_candidate_parallel_discarded;
+  snapshot.linear_scaffold_checks = source.linear_scaffold_checks;
+  snapshot.linear_scaffold_rejections = source.linear_scaffold_rejections;
+  snapshot.candidate_ranker_groups_scored = source.candidate_ranker_groups_scored;
+  snapshot.candidate_ranker_candidates_scored = source.candidate_ranker_candidates_scored;
+  snapshot.candidate_ranker_candidates_reordered = source.candidate_ranker_candidates_reordered;
+  snapshot.candidate_ranker_training_rows_written = source.candidate_ranker_training_rows_written;
+  snapshot.candidate_ranker_training_rows_failed = source.candidate_ranker_training_rows_failed;
+  snapshot.joint_spline_candidates_evaluated = source.joint_spline_candidates_evaluated;
+  snapshot.joint_spline_candidates_legal = source.joint_spline_candidates_legal;
+  snapshot.joint_spline_failed_fallback_improvements = source.joint_spline_failed_fallback_improvements;
+  snapshot.spline_lane_targets = source.spline_lane_targets;
+  snapshot.spline_multi_target_fragments = source.spline_multi_target_fragments;
+  snapshot.spline_merged_runs = source.spline_merged_runs;
+  snapshot.spline_merged_fragments = source.spline_merged_fragments;
+  snapshot.spline_interpolation_portfolio_candidates = source.spline_interpolation_portfolio_candidates;
+  snapshot.spline_interpolation_portfolio_offset_rejections = source.spline_interpolation_portfolio_offset_rejections;
+  snapshot.spline_interpolation_portfolio_accepted = source.spline_interpolation_portfolio_accepted;
+  snapshot.spline_interpolation_portfolio_windows_improved = source.spline_interpolation_portfolio_windows_improved;
+  snapshot.spline_topology_seed_gpu_batches = source.spline_topology_seed_gpu_batches;
+  snapshot.spline_topology_seed_gpu_fallbacks = source.spline_topology_seed_gpu_fallbacks;
+  snapshot.spline_topology_seed_gpu_candidates = source.spline_topology_seed_gpu_candidates;
+  snapshot.spline_topology_seed_exact_candidates = source.spline_topology_seed_exact_candidates;
+  snapshot.spline_interpolation_gpu_batches = source.spline_interpolation_gpu_batches;
+  snapshot.spline_interpolation_gpu_fallbacks = source.spline_interpolation_gpu_fallbacks;
+  snapshot.spline_interpolation_gpu_candidates = source.spline_interpolation_gpu_candidates;
+  snapshot.spline_interpolation_exact_candidates = source.spline_interpolation_exact_candidates;
+  snapshot.spline_topology_seed_construction_rejections = source.spline_topology_seed_construction_rejections;
+  snapshot.spline_topology_seed_corridor_rejections = source.spline_topology_seed_corridor_rejections;
+  snapshot.spline_topology_seed_cell_rejections = source.spline_topology_seed_cell_rejections;
+  snapshot.spline_topology_seed_gate_rejections = source.spline_topology_seed_gate_rejections;
+  snapshot.spline_topology_seed_shape_rejections = source.spline_topology_seed_shape_rejections;
+  snapshot.spline_geometry_cache_hits = source.spline_geometry_cache_hits;
+  snapshot.spline_geometry_cache_misses = source.spline_geometry_cache_misses;
+  snapshot.spline_incremental_segments_reused = source.spline_incremental_segments_reused;
+  snapshot.spline_incremental_segments_rebuilt = source.spline_incremental_segments_rebuilt;
+  snapshot.spline_route_certificate_cache_hits = source.spline_route_certificate_cache_hits;
+  snapshot.spline_route_certificate_cache_misses = source.spline_route_certificate_cache_misses;
+  snapshot.spline_centerline_certificate_pairs = source.spline_centerline_certificate_pairs;
+  snapshot.spline_centerline_separation_proofs = source.spline_centerline_separation_proofs;
+  snapshot.spline_centerline_collision_proofs = source.spline_centerline_collision_proofs;
+  snapshot.spline_centerline_ambiguous_pairs = source.spline_centerline_ambiguous_pairs;
+  snapshot.spline_centerline_certificate_nodes = source.spline_centerline_certificate_nodes;
+  snapshot.spline_centerline_simd_batches = source.spline_centerline_simd_batches;
+  snapshot.spline_centerline_simd_lanes = source.spline_centerline_simd_lanes;
+  snapshot.spline_centerline_multiprecision_comparisons = source.spline_centerline_multiprecision_comparisons;
+  snapshot.spline_offset_broadphase_batches = source.spline_offset_broadphase_batches;
+  snapshot.spline_offset_broadphase_gpu_batches = source.spline_offset_broadphase_gpu_batches;
+  snapshot.spline_offset_broadphase_rejections = source.spline_offset_broadphase_rejections;
+  snapshot.spline_offset_exact_pairs = source.spline_offset_exact_pairs;
+  snapshot.spline_offset_subdivision_nodes = source.spline_offset_subdivision_nodes;
+  snapshot.spline_offset_isolated_leaf_pairs = source.spline_offset_isolated_leaf_pairs;
+  snapshot.spline_offset_node_budget_exhaustions = source.spline_offset_node_budget_exhaustions;
+  snapshot.spline_joint_shove_attempts = source.spline_joint_shove_attempts;
+  snapshot.spline_joint_shove_accepted = source.spline_joint_shove_accepted;
+  snapshot.spline_adaptive_pair_shove_attempts = source.spline_adaptive_pair_shove_attempts;
+  snapshot.spline_adaptive_pair_shove_accepted = source.spline_adaptive_pair_shove_accepted;
+  snapshot.spline_adaptive_pair_windows_improved = source.spline_adaptive_pair_windows_improved;
+  snapshot.spline_adaptive_pair_windows_legalized = source.spline_adaptive_pair_windows_legalized;
+  snapshot.quantized_segment_pair_checks = source.quantized_segment_pair_checks;
+  snapshot.quantized_clearance_conflicts = source.quantized_clearance_conflicts;
+  snapshot.native_arc_windows_checked = source.native_arc_windows_checked;
+  snapshot.native_arc_fit_failures = source.native_arc_fit_failures;
+  snapshot.native_arc_pieces_checked = source.native_arc_pieces_checked;
+  snapshot.native_arc_copper_violations = source.native_arc_copper_violations;
+  snapshot.native_arc_legal_windows = source.native_arc_legal_windows;
+  snapshot.quantization_feedback_attempts = source.quantization_feedback_attempts;
+  snapshot.quantization_feedback_accepted = source.quantization_feedback_accepted;
+  snapshot.quantization_feedback_windows_legalized = source.quantization_feedback_windows_legalized;
+  snapshot.quantization_check_budget_exhausted_windows = source.quantization_check_budget_exhausted_windows;
+  snapshot.xpbd_windows_attempted = source.xpbd_windows_attempted;
+  snapshot.xpbd_windows_improved = source.xpbd_windows_improved;
+  snapshot.xpbd_subset_assessments = source.xpbd_subset_assessments;
+  snapshot.xpbd_subset_repairs_retained = source.xpbd_subset_repairs_retained;
+  snapshot.xpbd_subset_groups_retained = source.xpbd_subset_groups_retained;
+  snapshot.avbd_windows_attempted = source.avbd_windows_attempted;
+  snapshot.avbd_proposals_improved = source.avbd_proposals_improved;
+  snapshot.avbd_windows_improved = source.avbd_windows_improved;
+  snapshot.avbd_contacts = source.avbd_contacts;
+  snapshot.avbd_duplicate_reductions = source.avbd_duplicate_reductions;
+  snapshot.avbd_colors = source.avbd_colors;
+  snapshot.avbd_local_block_solves = source.avbd_local_block_solves;
+  snapshot.avbd_duals = source.avbd_duals;
+  snapshot.avbd_penalty_updates = source.avbd_penalty_updates;
+  snapshot.avbd_maximum_degree = source.avbd_maximum_degree;
+  snapshot.avbd_moved_rigid_owners = source.avbd_moved_rigid_owners;
+  snapshot.avbd_capacity_rejections = source.avbd_capacity_rejections;
+  snapshot.avbd_solve_us = source.avbd_solve_us;
+  snapshot.xpbd_windows_legalized = source.xpbd_windows_legalized;
+  snapshot.xpbd_gpu_invocations = source.xpbd_gpu_invocations;
+  snapshot.xpbd_cpu_fallbacks = source.xpbd_cpu_fallbacks;
+  snapshot.xpbd_unconflicted_candidates_skipped = source.xpbd_unconflicted_candidates_skipped;
+  snapshot.xpbd_topology_rejections = source.xpbd_topology_rejections;
+  snapshot.xpbd_obstacle_segments = source.xpbd_obstacle_segments;
+  snapshot.xpbd_obstacle_segment_budget_exhaustions = source.xpbd_obstacle_segment_budget_exhaustions;
+  snapshot.xpbd_pressure_cells = source.xpbd_pressure_cells;
+  snapshot.xpbd_terrain_cells_sampled = source.xpbd_terrain_cells_sampled;
+  snapshot.xpbd_constraints = source.xpbd_constraints;
+  snapshot.xpbd_broadphase_cells = source.xpbd_broadphase_cells;
+  snapshot.xpbd_broadphase_pair_emissions = source.xpbd_broadphase_pair_emissions;
+  snapshot.xpbd_resident_input_buffer_reuses = source.xpbd_resident_input_buffer_reuses;
+  snapshot.xpbd_gpu_broadphase_invocations = source.xpbd_gpu_broadphase_invocations;
+  snapshot.xpbd_broadphase_fallbacks = source.xpbd_broadphase_fallbacks;
+  snapshot.xpbd_gpu_pressure_field_invocations = source.xpbd_gpu_pressure_field_invocations;
+  snapshot.xpbd_unresolved_trace_pairs = source.xpbd_unresolved_trace_pairs;
+  snapshot.xpbd_initial_violations = source.xpbd_initial_violations;
+  snapshot.xpbd_final_violations = source.xpbd_final_violations;
+  snapshot.spline_interpolation_rank_us = source.spline_interpolation_rank_us;
+  snapshot.spline_interpolation_exact_us = source.spline_interpolation_exact_us;
+  snapshot.spline_adaptive_assessment_us = source.spline_adaptive_assessment_us;
+  snapshot.spline_offset_broadphase_us = source.spline_offset_broadphase_us;
+  snapshot.spline_offset_exact_us = source.spline_offset_exact_us;
+  snapshot.spline_realization_us = source.spline_realization_us;
+  snapshot.xpbd_broadphase_us = source.xpbd_broadphase_us;
+  snapshot.xpbd_constraint_generation_us = source.xpbd_constraint_generation_us;
+  snapshot.xpbd_solve_us = source.xpbd_solve_us;
+  snapshot.xpbd_stress_reduction_us = source.xpbd_stress_reduction_us;
+  snapshot.xpbd_readback_us = source.xpbd_readback_us;
+  snapshot.xpbd_stress = source.xpbd_stress;
+  snapshot.local_routability_diagnoses = source.local_routability_diagnoses;
+  snapshot.xpbd_invocations = source.xpbd_invocations;
+  return snapshot;
+}
+
+void realize_bundle_splines_serial(const Board& board, RegionalRouteResult& result,
+                                   std::stop_token stop_token, RouterTelemetrySink* telemetry,
+                                   std::size_t maximum_fallback_waves,
+                                   RegionalPHCacheContext* persistent_cache,
+                                   bool candidate_only = false) {
   const auto realization_started = std::chrono::steady_clock::now();
+  std::map<std::size_t, std::optional<Board>> frozen_contexts;
+  std::map<std::size_t, std::map<std::string, RegionalRouteFragmentId>> frozen_owners;
+  static std::atomic<std::uint64_t> ranking_invocation_counter{0U};
+  const auto ranking_invocation =
+      std::to_string(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                         std::chrono::system_clock::now().time_since_epoch())
+                         .count()) +
+      "-" + std::to_string(ranking_invocation_counter.fetch_add(1U));
+  std::optional<RegionalCandidateRanker> candidate_ranker;
+  result.candidate_ranker_requested = !result.configured.candidate_ranker_model_path.empty();
+  if (result.candidate_ranker_requested) {
+    candidate_ranker = RegionalCandidateRanker::load_file(
+        result.configured.candidate_ranker_model_path, result.candidate_ranker_diagnostic);
+    result.candidate_ranker_loaded = candidate_ranker.has_value();
+    result.candidate_ranker_trees = candidate_ranker ? candidate_ranker->tree_count() : 0U;
+  }
   // Complete windows may publish bounded diagnostic realizations even while another window is
   // unresolved. build_regional_spline_candidate() still requires every assignment to complete,
   // so partial geometry can improve observability without becoming committable copper.
@@ -8188,12 +12069,33 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
   candidate_assignments.reserve(result.bundle_assignments.size() +
                                 result.configured.max_joint_spline_candidates);
   for (auto& assignment : result.bundle_assignments) {
+    emit_regional_decision(RegionalDecisionPhase::spline_candidate_started, nullptr, false,
+                           "regional spline assignment preparation window=" +
+                               std::to_string(assignment.window_id));
     if (!assignment.complete() || assignment.spline_candidate_shortlist.empty()) {
       candidate_assignments.push_back(std::move(assignment));
       continue;
     }
     auto shortlist = std::move(assignment.spline_candidate_shortlist);
     assignment.spline_candidate_shortlist.clear();
+    for (std::size_t rank = 0U; rank < shortlist.size(); ++rank) {
+      shortlist[rank].candidate_heuristic_rank = rank;
+      shortlist[rank].candidate_learned_score_available = candidate_ranker.has_value();
+      if (candidate_ranker) {
+        shortlist[rank].candidate_learned_score = candidate_ranker->score(
+            regional_candidate_features(result, assignment, shortlist[rank]));
+      }
+    }
+    if (candidate_ranker && shortlist.size() > 1U) {
+      ++result.candidate_ranker_groups_scored;
+      result.candidate_ranker_candidates_scored += shortlist.size();
+      std::stable_sort(shortlist.begin(), shortlist.end(), [](const auto& lhs, const auto& rhs) {
+        return lhs.candidate_learned_score > rhs.candidate_learned_score;
+      });
+      for (std::size_t rank = 0U; rank < shortlist.size(); ++rank)
+        result.candidate_ranker_candidates_reordered +=
+            shortlist[rank].candidate_heuristic_rank != rank ? 1U : 0U;
+    }
     for (std::size_t rank = 0U; rank < shortlist.size(); ++rank) {
       auto candidate = assignment;
       candidate.selected_templates = shortlist[rank].templates;
@@ -8204,8 +12106,15 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
       candidate.selected_template_conflicts = shortlist[rank].template_conflicts;
       candidate.selected_residual_conflicts = shortlist[rank].residual_conflicts;
       candidate.spline_realizations.clear();
+      candidate.relaxed_via_choices.clear();
+      candidate.native_frozen_copper_conflicts.clear();
       candidate.spline_candidate_rank = rank;
+      candidate.spline_candidate_heuristic_rank = shortlist[rank].candidate_heuristic_rank;
+      candidate.spline_candidate_learned_score = shortlist[rank].candidate_learned_score;
+      candidate.spline_candidate_learned_score_available =
+          shortlist[rank].candidate_learned_score_available;
       candidate.joint_spline_candidate = true;
+      candidate.spline_candidate_realized = false;
       if (rank != 0U) {
         candidate.spline_candidate_reserve.clear();
       }
@@ -8213,13 +12122,234 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
     }
   }
   result.bundle_assignments = std::move(candidate_assignments);
-  std::size_t assignment_index = 0U;
+  std::map<std::size_t, RegionalCandidateSchedulingState> candidate_scheduling_states;
+  // Run only monotonic preflight certificates before either the serial or parallel spline
+  // worker can spend mutable geometry/DRC budget. Failed continuous geometry is intentionally
+  // not included here: it may still be repaired inside the candidate's selected topology.
   for (auto& assignment : result.bundle_assignments) {
+    if (assignment.spline_candidate_realized || !assignment.complete()) continue;
+    ++result.candidate_pipeline_stats.candidate_preflight_checked;
+    const auto preflight = preflight_regional_candidate(board, result, assignment);
+    if (!preflight.definitively_infeasible()) continue;
+    assignment.stop_reason = RegionalBundleStopReason::candidate_preflight_infeasible;
+    assignment.spline_candidate_realized = true;
+    ++result.candidate_pipeline_stats.candidate_preflight_definitive_rejections;
+    for (const auto& failure : preflight.infeasibilities) {
+      if (failure.kind == RegionalCandidateInfeasibilityKind::fixed_endpoint_envelope_overlap)
+        ++result.candidate_pipeline_stats.candidate_preflight_fixed_endpoint_rejections;
+      else
+        ++result.candidate_pipeline_stats.candidate_preflight_packing_rejections;
+    }
+  }
+  // Keep the existing contiguous per-window execution structure. The policy gives each window a
+  // stable static order before the parallel path divides it into bounded batches.
+  for (std::size_t first = 0U; first < result.bundle_assignments.size();) {
+    const auto window_id = result.bundle_assignments[first].window_id;
+    auto last = first + 1U;
+    while (last < result.bundle_assignments.size() &&
+           result.bundle_assignments[last].window_id == window_id) ++last;
+    auto schedule = schedule_regional_candidates(
+        board, result,
+        std::span<const RegionalBundleAssignment>{result.bundle_assignments.data() + first, last - first},
+        &candidate_scheduling_states[window_id]);
+    std::vector<RegionalBundleAssignment> ordered;
+    ordered.reserve(last - first);
+    for (const auto& entry : schedule)
+      ordered.push_back(std::move(result.bundle_assignments[first + entry.assignment_index]));
+    std::move(ordered.begin(), ordered.end(), result.bundle_assignments.begin() +
+                                           static_cast<std::ptrdiff_t>(first));
+    first = last;
+  }
+  std::size_t assignment_index = 0U;
+  // Keep a bounded number of legal alternatives per window so geometric quality can improve
+  // without exhaustively realizing every retained portfolio. Compact the unevaluated suffix
+  // before the ordinary per-window reduction below.
+  std::map<std::size_t, std::size_t> exact_legal_windows;
+  std::vector<bool> skipped_after_exact_legal(result.bundle_assignments.size(), false);
+  const auto observe_candidate = [&](const RegionalBundleAssignment& assignment) {
+    if (assignment.stop_reason == RegionalBundleStopReason::candidate_preflight_infeasible) return;
+    const auto profile = candidate_spline_failure_profile(assignment);
+    const auto violations = profile.short_routes + profile.topology + profile.shape +
+        profile.mutual + profile.quantization + assignment.native_frozen_copper_conflicts.size();
+    const auto conflict_free = static_cast<std::size_t>(std::count_if(
+        assignment.spline_realizations.begin(), assignment.spline_realizations.end(),
+        [](const auto& route) {
+          return route.topology_legal && route.shape_legal && route.mutually_legal &&
+                 route.quantized_mutually_legal && route.native_copper_legal;
+        }));
+    record_regional_candidate_evaluation(
+        candidate_scheduling_states[assignment.window_id],
+        regional_candidate_schedule_signature(assignment),
+        {violations, conflict_free, assignment.complete()});
+    ++result.candidate_pipeline_stats.candidate_schedule_observations;
+  };
+  const auto reschedule_suffix = [&](std::size_t first, std::size_t last) {
+    if (first >= last) return;
+    const auto window_id = result.bundle_assignments[first].window_id;
+    // Only unstarted entries are movable. Completed worker results are reduced in stable order.
+    while (last > first && result.bundle_assignments[last - 1U].spline_candidate_realized) --last;
+    if (first >= last) return;
+    if (std::any_of(result.bundle_assignments.begin() + static_cast<std::ptrdiff_t>(first),
+                    result.bundle_assignments.begin() + static_cast<std::ptrdiff_t>(last),
+                    [](const auto& assignment) { return assignment.spline_candidate_realized; })) return;
+    auto schedule = schedule_regional_candidates(board, result,
+        std::span<const RegionalBundleAssignment>{result.bundle_assignments.data() + first, last - first},
+        &candidate_scheduling_states[window_id]);
+    std::vector<RegionalBundleAssignment> ordered;
+    std::vector<bool> ordered_skips;
+    for (std::size_t index = 0U; index < schedule.size(); ++index) {
+      const auto source = first + schedule[index].assignment_index;
+      result.candidate_pipeline_stats.candidate_schedule_reorders +=
+          schedule[index].assignment_index != index ? 1U : 0U;
+      ordered.push_back(std::move(result.bundle_assignments[source]));
+      ordered_skips.push_back(skipped_after_exact_legal[source]);
+    }
+    std::move(ordered.begin(), ordered.end(),
+              result.bundle_assignments.begin() + static_cast<std::ptrdiff_t>(first));
+    std::move(ordered_skips.begin(), ordered_skips.end(),
+              skipped_after_exact_legal.begin() + static_cast<std::ptrdiff_t>(first));
+  };
+
+  // A regional alternative mutates its assignment and result counters through the entire PH,
+  // native-copper, and frozen-context pipeline. Evaluate only independent alternatives from the
+  // same immutable starting result in small batches, then publish their assignment state back in
+  // rank order. This deliberately does not share the caller's mutable result or telemetry stream.
+  // The PH caches themselves are bounded and synchronized; each candidate owns its frozen-board
+  // maps and all other mutable DRC scratch through the private RegionalRouteResult copy.
+  if (result.configured.max_spline_candidate_workers > 1U &&
+      result.configured.candidate_ranker_training_data_path.empty() &&
+      !stop_token.stop_requested()) {
+    for (std::size_t group = 0U; group < result.bundle_assignments.size();) {
+      if (!result.bundle_assignments[group].joint_spline_candidate ||
+          result.bundle_assignments[group].spline_candidate_realized) {
+        ++group;
+        continue;
+      }
+      const auto window_id = result.bundle_assignments[group].window_id;
+      auto end = group;
+      while (end < result.bundle_assignments.size() &&
+             result.bundle_assignments[end].joint_spline_candidate &&
+             !result.bundle_assignments[end].spline_candidate_realized &&
+             result.bundle_assignments[end].window_id == window_id) {
+        ++end;
+      }
+      const auto legal_limit = std::max<std::size_t>(
+          1U, result.configured.max_legal_spline_candidates_per_window);
+      std::size_t legal = 0U;
+      for (auto batch = group; batch < end && legal < legal_limit &&
+                                      !stop_token.stop_requested();) {
+        const auto candidate_memory_workers =
+            result.configured.max_spline_window_scratch_bytes == 0U
+                ? result.configured.max_spline_candidate_workers
+                : std::max<std::size_t>(
+                      1U, result.configured.max_spline_window_scratch_bytes /
+                              result.configured.estimated_spline_window_scratch_bytes);
+        const auto requested = std::min(
+            {result.configured.max_spline_candidate_workers, end - batch,
+             candidate_memory_workers});
+        auto lease = acquire_cpu_workers(requested, result.configured.max_spline_cpu_workers);
+        const auto workers = lease.workers();
+        if (workers < 2U) break; // retain the established serial semantics under contention.
+        const auto batch_end = std::min(end, batch + workers);
+        ++result.spline_candidate_parallel_batches;
+        result.spline_candidate_parallel_tasks += batch_end - batch;
+        result.spline_candidate_parallel_workers =
+            std::max(result.spline_candidate_parallel_workers, workers);
+        const auto baseline = regional_spline_work_baseline(result);
+        std::vector<std::unique_ptr<RegionalRouteResult>> completed(batch_end - batch);
+        std::vector<RegionalCandidateTelemetry> candidate_telemetry(batch_end - batch);
+        run_bounded_routing_tasks(batch_end - batch, workers, stop_token,
+            [&](std::size_t slot) {
+              const auto candidate_index = batch + slot;
+              auto local = std::make_unique<RegionalRouteResult>(result);
+              local->bundle_assignments = {result.bundle_assignments[candidate_index]};
+              local->configured.max_spline_window_workers = 1U;
+              local->configured.max_spline_candidate_workers = 1U;
+              local->configured.max_spline_exact_candidate_workers = 1U;
+              realize_bundle_splines_serial(board, *local, stop_token,
+                                            telemetry ? &candidate_telemetry[slot] : nullptr, 0U,
+                                            persistent_cache, true);
+              completed[slot] = std::move(local);
+            });
+        lease = {};
+        for (auto candidate = batch; candidate < batch_end; ++candidate) {
+          if (!completed[candidate - batch]) continue;
+          auto& local = *completed[candidate - batch];
+          merge_regional_spline_work(result, local, baseline);
+          if (telemetry)
+            for (auto& event : candidate_telemetry[candidate - batch].events)
+              static_cast<void>(telemetry->try_emit(std::move(event)));
+          if (local.bundle_assignments.empty()) continue;
+          if (legal >= legal_limit) {
+            skipped_after_exact_legal[candidate] = true;
+            ++result.spline_candidate_parallel_discarded;
+            continue;
+          }
+          auto assignment = std::move(local.bundle_assignments.front());
+          assignment.spline_candidate_realized = true;
+          result.bundle_assignments[candidate] = std::move(assignment);
+          observe_candidate(result.bundle_assignments[candidate]);
+          publish_regional_spline_assignment_telemetry(
+              result.bundle_assignments[candidate], telemetry, RouterTelemetryLevel::diagnostic,
+              "candidate-parallel");
+          emit_regional_decision(RegionalDecisionPhase::spline_candidate_completed, &result,
+                                 false, "regional spline candidate completed (parallel)");
+          if (result.bundle_assignments[candidate].complete()) ++legal;
+        }
+        batch = batch_end;
+        reschedule_suffix(batch, end);
+      }
+      // Preserve exact early-legal semantics: candidates in later batches were not speculated
+      // once the ordered result has met the per-window legal portfolio bound.
+      if (legal >= legal_limit) {
+        for (auto candidate = group; candidate < end; ++candidate) {
+          if (!result.bundle_assignments[candidate].spline_candidate_realized)
+            skipped_after_exact_legal[candidate] = true;
+        }
+      }
+      group = end;
+    }
+  }
+  for (std::size_t candidate_index = 0U;
+       candidate_index < result.bundle_assignments.size(); ++candidate_index) {
+    auto& assignment = result.bundle_assignments[candidate_index];
     ++assignment_index;
+    emit_regional_decision(RegionalDecisionPhase::spline_candidate_started, nullptr, false,
+                           "regional spline candidate window=" + std::to_string(assignment.window_id) +
+                               " rank=" + std::to_string(assignment.spline_candidate_rank));
+    if (assignment.joint_spline_candidate &&
+        exact_legal_windows[assignment.window_id] >=
+            std::max<std::size_t>(1U, result.configured.max_legal_spline_candidates_per_window)) {
+      skipped_after_exact_legal[candidate_index] = true;
+      continue;
+    }
+    if (assignment.spline_candidate_realized) {
+      if (assignment.complete()) {
+        ++exact_legal_windows[assignment.window_id];
+        const auto prefix = "linear-scaffold:" + std::to_string(assignment.window_id) + ":";
+        for (auto& diagnosis : result.local_routability_diagnoses)
+          if (diagnosis.resource.stable_id.starts_with(prefix)) diagnosis.locally_resolved = true;
+      }
+      continue;
+    }
     if (!assignment.complete() || stop_token.stop_requested() ||
         (!assignment.joint_spline_candidate && !assignment.spline_realizations.empty())) {
       continue;
     }
+    const auto candidate_realization_started = std::chrono::steady_clock::now();
+    const auto phase_elapsed_us = [](auto started) {
+      return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::steady_clock::now() - started).count());
+    };
+    std::uint64_t setup_us = 0U;
+    std::uint64_t interpolation_us = 0U;
+    std::uint64_t xpbd_us = 0U;
+    std::uint64_t joint_shove_us = 0U;
+    std::uint64_t trajectory_polish_us = 0U;
+    std::uint64_t adaptive_pair_us = 0U;
+    std::uint64_t post_polish_us = 0U;
+    std::uint64_t quantization_us = 0U;
+    assignment.native_frozen_copper_conflicts.clear();
     if (telemetry != nullptr) {
       RouterTelemetryEvent progress;
       progress.kind = RouterTelemetryEventKind::search_summary;
@@ -8227,6 +12357,9 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
       progress.total_groups = result.bundle_assignments.size();
       progress.group_id = "regional-window:" + std::to_string(assignment.window_id);
       progress.stable_id = "regional-spline-progress:" + std::to_string(assignment.window_id);
+      const auto active_window = std::find_if(result.windows.begin(), result.windows.end(),
+          [&](const auto& window) { return window.id == assignment.window_id; });
+      if (active_window != result.windows.end()) attach_active_region(progress, *active_window);
       progress.detail =
           "regional spline realization started: window=" + std::to_string(assignment.window_id) +
           ", assignment=" + std::to_string(assignment_index) + "/" +
@@ -8377,9 +12510,17 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
                            [&](const auto& choice) { return choice.id == selected_choice; });
           if (candidate != result.via_choices.end() && candidate->net == source->net &&
               candidate->region_id == source->region_id && candidate->span == source->span) {
+            const auto relaxed = std::find_if(assignment.relaxed_via_choices.begin(),
+                                              assignment.relaxed_via_choices.end(),
+                                              [&](const auto& choice) { return choice.id == candidate->id; });
+            if (relaxed != assignment.relaxed_via_choices.end()) return &*relaxed;
             return &*candidate;
           }
         }
+        const auto relaxed = std::find_if(assignment.relaxed_via_choices.begin(),
+                                          assignment.relaxed_via_choices.end(),
+                                          [&](const auto& choice) { return choice.id == source->id; });
+        if (relaxed != assignment.relaxed_via_choices.end()) return &*relaxed;
         return &*source;
       };
       const auto* entry_via = selected_via(route_template.entry_via_choice);
@@ -8557,6 +12698,18 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
       }
       auto spline = make_quintic_ph_route(seed);
       if (!spline) {
+        if (telemetry != nullptr) {
+          RouterTelemetryEvent event;
+          event.kind = RouterTelemetryEventKind::search_summary;
+          event.net = fragment->id.net;
+          event.stable_id = "regional-seed-construction:" + std::to_string(assignment.window_id);
+          event.detail = "initial PH constructor rejected seed; template=" +
+                         std::to_string(template_id) + ", owned=" + (owned ? "yes" : "no");
+          for (const auto point : seed)
+            event.detail += " (" + std::to_string(point.x.value()) + "," +
+                            std::to_string(point.y.value()) + ")";
+          static_cast<void>(telemetry->try_emit(std::move(event)));
+        }
         assignment.stop_reason = RegionalBundleStopReason::spline_realization_failed;
         break;
       }
@@ -8594,11 +12747,124 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
                                              route_template.selected_global_topology,
                                              1U,
                                              target_displacement});
+      if (result.configured.frozen_copper_context) {
+        const auto rules = resolve_net_routing_rules(board, fragment->id.net);
+        for (const auto* via : {entry_via, exit_via}) if (via) {
+          auto physical = *via;
+          physical.diameter = rules.via_diameter;
+          physical.drill = rules.via_drill;
+          routes.back().candidate_vias.push_back(std::move(physical));
+        }
+      }
     }
     if (assignment.stop_reason == RegionalBundleStopReason::spline_realization_failed) {
       continue;
     }
-    const auto prepare_route_topology_seed = [&](WorkingRegionalSpline& route) {
+    if (result.configured.require_legal_linear_scaffold) {
+      ++result.linear_scaffold_checks;
+      auto scaffold_board = board;
+      // A repair window contains partial connections. Whole-net skew is undefined here; retain
+      // every spatial gap/width rule and recheck skew on the complete final board.
+      for (auto& pair : scaffold_board.differential_pairs) pair.maximum_skew.reset();
+      if (result.configured.treat_saved_zone_fills_as_refillable)
+        for (auto& zone : scaffold_board.zones) zone.fills.clear();
+      std::vector<ObjectId> proposed_vias;
+      std::set<std::string> scaffold_ids;
+      for (const auto& track : board.tracks) scaffold_ids.insert(track.id.value());
+      for (const auto& arc : board.track_arcs) scaffold_ids.insert(arc.id.value());
+      for (const auto& curve : board.track_beziers) scaffold_ids.insert(curve.id.value());
+      for (const auto& via : board.vias) scaffold_ids.insert(via.id.value());
+      for (const auto& zone : board.zones) scaffold_ids.insert(zone.id.value());
+      for (const auto& keepout : board.keepouts) scaffold_ids.insert(keepout.id.value());
+      for (const auto& footprint : board.footprints) {
+        scaffold_ids.insert(footprint.id.value());
+        for (const auto& pad : footprint.pads) scaffold_ids.insert(pad.id.value());
+      }
+      for (const auto choice_id : assignment.selected_via_choices) {
+        const auto choice = std::find_if(result.via_choices.begin(), result.via_choices.end(),
+                                         [&](const auto& value) { return value.id == choice_id; });
+        if (choice == result.via_choices.end()) continue; // existing assignment validation owns this
+        if (std::any_of(scaffold_board.vias.begin(), scaffold_board.vias.end(), [&](const auto& via) {
+              return via.net == choice->net && via.position == choice->site && via.layers == choice->span;
+            })) continue;
+        auto id_text = "__flux-scaffold-via-" + std::to_string(assignment.window_id) +
+                      "-" + std::to_string(choice_id);
+        while (!scaffold_ids.insert(id_text).second) id_text += "_";
+        const auto id = ObjectId{id_text};
+        proposed_vias.push_back(id);
+        scaffold_board.vias.push_back({id, choice->net, choice->site, choice->diameter,
+                                       choice->drill, choice->span, false});
+      }
+      GlobalRouteResult scaffold;
+      for (const auto& route : routes) {
+        GlobalRoutePath path;
+        path.net = route.fragment.net;
+        // Local fragments of one connection need distinct provisional object identities.
+        path.connection_index = scaffold.paths.size();
+        for (const auto point : route.topology_seed) path.points.push_back({point, route.layer});
+        if (path.points.size() >= 2U) path.segment_widths.assign(path.points.size() - 1U, route.width);
+        scaffold.paths.push_back(std::move(path));
+      }
+      QuantizedCopperOracleConfig oracle_config;
+      oracle_config.grid_pitch = Nanometres{1}; // check the actual integer scaffold, not a new lattice
+      const auto physical = probe_quantized_copper_feasibility(scaffold_board, scaffold, oracle_config,
+                                                               stop_token);
+      const auto via_drc = check_dynamic_copper_rules(scaffold_board, proposed_vias);
+      for (const auto& violation : via_drc.violations) {
+        for (const auto& id : proposed_vias) {
+          if (std::find(violation.object_ids.begin(), violation.object_ids.end(), id.value()) ==
+              violation.object_ids.end()) continue;
+          const auto via = std::find_if(scaffold_board.vias.begin(), scaffold_board.vias.end(),
+                                        [&](const auto& item) { return item.id == id; });
+          if (via == scaffold_board.vias.end() || via->layers.empty()) continue;
+          RoutabilityDiagnosis diagnosis;
+          diagnosis.kind = RoutabilityFailureKind::via_site_exhausted;
+          diagnosis.stage = RoutabilityFailureStage::quantization;
+          diagnosis.resource = {"linear-scaffold-via:" + id.value(), via->layers.front(),
+                                {via->position, via->position}, {via->net}};
+          diagnosis.suggested_relaxation = RoutabilityRelaxation::change_via_site;
+          diagnosis.detail = "pre-PH selected via rejected: " + violation.code;
+          diagnosis.clearance_deficit = Nanometres{static_cast<std::int64_t>(std::ceil(std::max(
+              0.0L, static_cast<long double>(violation.required_clearance.value()) - violation.actual_distance_nm)))};
+          result.local_routability_diagnoses.push_back(std::move(diagnosis));
+        }
+      }
+      // Fragment endpoints are interior repair boundaries: whole-board opens here are expected.
+      // Copper legality, widths and all selected physical vias are not optional.
+      if (!physical.all_paths_materialized || !physical.exact_copper_legal || !via_drc.ok()) {
+        const auto lanes_feasible = !assignment.packed_cross_sections.empty() &&
+            std::all_of(assignment.packed_cross_sections.begin(), assignment.packed_cross_sections.end(),
+                         [](const auto& section) { return section.physically_fits; });
+        const auto movable_pairs_only = physical.all_paths_materialized && via_drc.ok() &&
+            std::all_of(physical.diagnoses.begin(), physical.diagnoses.end(), [&](const auto& diagnosis) {
+              if (diagnosis.stage != RoutabilityFailureStage::quantization) return true;
+              return diagnosis.kind == RoutabilityFailureKind::quantization_clearance &&
+                  diagnosis.suggested_relaxation == RoutabilityRelaxation::change_lane_order &&
+                  diagnosis.resource.nets.size() > 1U &&
+                  std::all_of(diagnosis.resource.nets.begin(), diagnosis.resource.nets.end(),
+                      [&](const auto& net) { return std::any_of(routes.begin(), routes.end(),
+                          [&](const auto& route) { return route.fragment.net == net && !route.frozen_boundary; }); });
+            });
+        const auto joint_repair = lanes_feasible && movable_pairs_only &&
+                                  result.configured.enable_xpbd_relaxation;
+        if (!joint_repair) {
+          ++result.linear_scaffold_rejections;
+          assignment.stop_reason = RegionalBundleStopReason::no_fitting_lane_order;
+        }
+        for (auto diagnosis : physical.diagnoses) {
+          if (diagnosis.kind != RoutabilityFailureKind::quantization_clearance) continue;
+          diagnosis.resource.stable_id = "linear-scaffold:" + std::to_string(assignment.window_id) + ":" + diagnosis.resource.stable_id;
+          diagnosis.detail = "pre-PH physical scaffold: " + diagnosis.detail;
+          // This is only a seed observation when the feasible lane arrangement is owned jointly;
+          // final native-scene checks decide whether the constructive solver discharged it.
+          diagnosis.locally_resolved = false;
+          result.local_routability_diagnoses.push_back(std::move(diagnosis));
+        }
+        if (!joint_repair) continue;
+      }
+    }
+    const auto prepare_route_topology_seed = [&](std::size_t route_index) {
+      auto& route = routes[route_index];
       route.topology_cell_index = prepare_regional_topology_cell_index(route.topology_cells);
       const auto configured_spacing = result.configured.navmesh_cell_pitch.value() > 0
                                           ? result.configured.navmesh_cell_pitch.value() / 4
@@ -8612,9 +12878,33 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
           raw_topology_seed.push_back(point);
         }
       }
-      const auto simplified_seed = string_pull_regional_spline_seed(route, sample_spacing);
+      // The selected corridor—not every raster transition used to discover it—is the geometric
+      // homotopy authority. First pull the planning polyline inside that corridor, then derive the
+      // subset of directed gates actually crossed by the pulled route. Requiring all inherited
+      // gates during the pull makes a continuous PH curve replay grid stair-steps and was the
+      // source of long wiggling routes in otherwise open free space.
+      const auto simplified_seed =
+          string_pull_regional_spline_seed(route, sample_spacing, false);
+      if (simplified_seed.size() >= 2U && route.topology_signature.valid) {
+        std::vector<NavMeshTopologyGate> crossed_gates;
+        crossed_gates.reserve(route.topology_signature.gates.size());
+        for (const auto& gate : route.topology_signature.gates) {
+          auto singleton = make_navmesh_topology_signature({gate});
+          if (validate_navmesh_topology_signature(singleton, simplified_seed).preserved) {
+            crossed_gates.push_back(gate);
+          }
+        }
+        route.topology_signature = make_navmesh_topology_signature(std::move(crossed_gates));
+      }
       const auto select_topology_seed = [&](const std::vector<Point>& seed,
                                             std::optional<Nanometres> corner_guard = std::nullopt) {
+        // A broken route/certificate binding cannot be repaired by trying sixteen PH branches.
+        if (seed.size() < 2U ||
+            (route.topology_signature.valid &&
+             !validate_navmesh_topology_signature(route.topology_signature, seed).preserved)) {
+          ++result.spline_topology_seed_gate_rejections;
+          return false;
+        }
         // PH Hermite interpolation has several regular algebraic branches, and one fixed nodal
         // derivative magnitude can still overshoot a perfectly valid funnel at a tight
         // entry/via turn. Search a small interpolation portfolio before changing topology. Short
@@ -8639,15 +12929,93 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
              {0.5L, 0.25L},
              {1.0L, 0.25L}}};
         const auto corridor = regional_spline_convex_corridor(route);
+        std::vector<QuinticPHRoute> candidates;
+        candidates.reserve(interpolation_starts.size() * (corner_guard ? 2U : 1U));
         for (const auto [parameter_exponent, tangent_scale] : interpolation_starts) {
           PHInterpolationConfig interpolation;
           interpolation.parameter_exponent = parameter_exponent;
           interpolation.tangent_scale = tangent_scale;
-          auto candidate = make_topology_tight_regional_spline(seed, corner_guard, interpolation);
-          if (candidate && set_quintic_ph_corridor(*candidate, corridor) &&
-              regional_spline_stays_in_topology(route, *candidate) &&
-              certify_quintic_ph_shape(*candidate).legal) {
-            route.spline = std::move(*candidate);
+          const auto append = [&](std::optional<QuinticPHRoute> candidate) {
+            ++result.spline_interpolation_portfolio_candidates;
+            if (candidate && set_quintic_ph_corridor(*candidate, corridor)) {
+              candidates.push_back(std::move(*candidate));
+            } else {
+              ++result.spline_topology_seed_construction_rejections;
+            }
+          };
+          // Once a discrete dogleg has been exact-checked, its apex is evidence selecting the
+          // obstacle side, not mandatory copper geometry.  First try a genuine PH rounding that
+          // trims the two incident chords and bridges them with tangent continuity.  Retaining
+          // the apex as an interpolation node is a conservative fallback for very narrow gates,
+          // but can otherwise force a short reversal/wiggle at the corner.  Both forms still have
+          // to remain in the same corridor and cross the complete directed gate sequence.
+          if (corner_guard) {
+            append(make_corner_rounded_quintic_ph_route(seed, *corner_guard, interpolation));
+          }
+          append(make_topology_tight_regional_spline(seed, corner_guard, interpolation));
+        }
+        if (candidates.empty()) {
+          return false;
+        }
+
+        // Experiment 29's candidate-major GPU ranker is the normal entry point for every
+        // regional PH portfolio, including the initial topology-seed fit.  Previously this
+        // earliest portfolio exact-checked as many as 32 candidates sequentially and only the
+        // later mutual-clearance sweep used the GPU.  Request the complete ranking so approximate
+        // scores change only evaluation order: every lower-ranked curve remains a deterministic
+        // fail-closed fallback when the GPU favourites fail topology or shape certification.
+        const auto rank_started = std::chrono::steady_clock::now();
+        const auto ranking =
+            rank_regional_interpolation_candidates(routes, route_index, candidates,
+                                                    candidates.size());
+        result.spline_interpolation_rank_us +=
+            static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                           std::chrono::steady_clock::now() - rank_started)
+                                           .count());
+        ++result.spline_interpolation_gpu_batches;
+        result.spline_interpolation_gpu_fallbacks += ranking.used_gpu ? 0U : 1U;
+        result.spline_interpolation_gpu_candidates += ranking.assessed_candidates;
+        ++result.spline_topology_seed_gpu_batches;
+        result.spline_topology_seed_gpu_fallbacks += ranking.used_gpu ? 0U : 1U;
+        result.spline_topology_seed_gpu_candidates += ranking.assessed_candidates;
+
+        std::vector<std::size_t> order;
+        order.reserve(candidates.size());
+        if (ranking.ok()) {
+          for (const auto& ranked : ranking.shortlist) {
+            if (ranked.candidate < candidates.size() &&
+                std::find(order.begin(), order.end(), ranked.candidate) == order.end()) {
+              order.push_back(ranked.candidate);
+            }
+          }
+        }
+        // A backend failure or unexpectedly short readback may never reduce feasibility. Preserve
+        // the original deterministic portfolio as the suffix examined by exact CPU authority.
+        for (std::size_t candidate = 0U; candidate < candidates.size(); ++candidate) {
+          if (std::find(order.begin(), order.end(), candidate) == order.end()) {
+            order.push_back(candidate);
+          }
+        }
+        for (const auto candidate_index : order) {
+          const auto exact_started = std::chrono::steady_clock::now();
+          ++result.spline_interpolation_exact_candidates;
+          ++result.spline_topology_seed_exact_candidates;
+          auto& candidate = candidates[candidate_index];
+          const auto topology = certify_regional_spline_topology(route, candidate);
+          const auto topology_legal = topology.legal();
+          result.spline_topology_seed_corridor_rejections += topology_legal ? 0U : 1U;
+          result.spline_topology_seed_cell_rejections += topology.contained ? 0U : 1U;
+          result.spline_topology_seed_gate_rejections +=
+              topology.contained && !topology.gate_sequence.preserved ? 1U : 0U;
+          const auto shape_legal = topology_legal && certify_quintic_ph_shape(candidate).legal;
+          result.spline_topology_seed_shape_rejections +=
+              topology_legal && !shape_legal ? 1U : 0U;
+          result.spline_interpolation_exact_us +=
+              static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                             std::chrono::steady_clock::now() - exact_started)
+                                             .count());
+          if (topology_legal && shape_legal) {
+            route.spline = std::move(candidate);
             return true;
           }
         }
@@ -8803,12 +13171,43 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
     }
     routes = std::move(merged_routes);
     bool topology_seed_failure = false;
-    for (auto& route : routes) {
+    for (std::size_t route_index = 0U; route_index < routes.size(); ++route_index) {
+      auto& route = routes[route_index];
       if (route.topology_signature.valid) {
         ++result.spline_topology_gate_signatures;
         result.spline_topology_gates += route.topology_signature.gates.size();
       }
-      if (!prepare_route_topology_seed(route)) {
+      const auto construction_before = result.spline_topology_seed_construction_rejections;
+      const auto cells_before = result.spline_topology_seed_cell_rejections;
+      const auto gates_before = result.spline_topology_seed_gate_rejections;
+      const auto shape_before = result.spline_topology_seed_shape_rejections;
+      if (!prepare_route_topology_seed(route_index)) {
+        if (telemetry != nullptr) {
+          RouterTelemetryEvent event;
+          event.kind = RouterTelemetryEventKind::search_summary;
+          event.net = route.fragment.net;
+          event.stable_id = "regional-seed-certificate:" + std::to_string(assignment.window_id);
+          event.detail = "PH seed portfolio rejected; owned=" + std::string(route.owned ? "yes" : "no") +
+              ", construction=" + std::to_string(result.spline_topology_seed_construction_rejections - construction_before) +
+              ", containment=" + std::to_string(result.spline_topology_seed_cell_rejections - cells_before) +
+              ", gates=" + std::to_string(result.spline_topology_seed_gate_rejections - gates_before) +
+              ", shape=" + std::to_string(result.spline_topology_seed_shape_rejections - shape_before);
+          for (const auto point : route.topology_seed)
+            event.detail += " (" + std::to_string(point.x.value()) + "," +
+                            std::to_string(point.y.value()) + ")";
+          const auto raw_check = validate_navmesh_topology_signature(
+              route.topology_signature, route.topology_seed, true);
+          event.detail += "; raw_seed=" + raw_check.diagnostic + "; gates=";
+          for (const auto& gate : route.topology_signature.gates) {
+            event.detail += " [" + std::to_string(gate.ordinal);
+            for (const auto point : {gate.left_boundary, gate.right_boundary,
+                                     gate.from_center, gate.to_center})
+              event.detail += "," + std::to_string(point.x.value()) + "," +
+                              std::to_string(point.y.value());
+            event.detail += "]";
+          }
+          static_cast<void>(telemetry->try_emit(std::move(event)));
+        }
         topology_seed_failure = true;
         break;
       }
@@ -8819,37 +13218,283 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
     }
     std::vector<std::vector<SplineVector>> route_samples(routes.size());
     std::vector<CachedRegionalSplineGeometry> geometry_cache(routes.size());
-    std::map<std::pair<std::size_t, std::size_t>, bool> offset_pair_cache;
+    using OffsetPairCacheKey =
+        std::tuple<std::size_t, std::uint64_t, std::size_t, std::uint64_t>;
+    std::map<OffsetPairCacheKey, bool> offset_pair_cache;
+    const auto obstacle_snapshot_revision = hash_regional_text(board.source_revision);
     const auto refresh_route_samples = [&](std::size_t index) {
       auto& cached = geometry_cache[index];
-      cached.adaptive_samples = adaptive_tessellate_quintic_ph(
-          routes[index].spline, Nanometres::from_mm(0.02), 10U, 512U);
+      const auto& segments = routes[index].spline.segments;
+      const auto structural_change = cached.segment_fingerprints.size() != segments.size();
+      if (structural_change) {
+        cached.segment_samples.resize(segments.size());
+        cached.segment_certificates.resize(segments.size());
+        cached.segment_fingerprints.assign(segments.size(), 0U);
+        cached.offsets_by_required_twice_nm.clear();
+      }
+      const auto corridor_revision = regional_corridor_revision(routes[index]);
+      bool route_changed = structural_change;
+      for (std::size_t segment_index = 0U; segment_index < segments.size(); ++segment_index) {
+        auto fingerprint_probe = prepare_quintic_ph_segment_certificate(segments[segment_index], 0U);
+        const auto fingerprint = fingerprint_probe.geometry_fingerprint;
+        if (!structural_change && cached.segment_fingerprints[segment_index] == fingerprint) {
+          ++result.spline_incremental_segments_reused;
+          continue;
+        }
+        route_changed = true;
+        const RegionalPHArtifactCacheKey artifact_key{fingerprint, corridor_revision,
+                                                       obstacle_snapshot_revision,
+                                                       routes[index].layer};
+        auto artifacts = persistent_cache != nullptr
+                             ? persistent_cache->artifacts.find(artifact_key)
+                             : std::optional<RegionalPHSegmentArtifacts>{};
+        if (artifacts) {
+          cached.segment_certificates[segment_index] = std::move(artifacts->certificate);
+          cached.segment_samples[segment_index] = std::move(artifacts->adaptive_samples);
+          ++result.spline_geometry_cache_hits;
+        } else {
+          cached.segment_certificates[segment_index] =
+              prepare_quintic_ph_segment_certificate(segments[segment_index]);
+          QuinticPHRoute one_segment;
+          one_segment.segments.push_back(segments[segment_index]);
+          cached.segment_samples[segment_index] = adaptive_tessellate_quintic_ph(
+              one_segment, Nanometres::from_mm(0.02), 10U, 512U);
+          if (!cached.segment_samples[segment_index].empty())
+            cached.segment_samples[segment_index].front().parameter =
+                segments[segment_index].route_parameter_start;
+          if (persistent_cache != nullptr)
+            persistent_cache->artifacts.insert(
+                artifact_key,
+                RegionalPHSegmentArtifacts{cached.segment_certificates[segment_index],
+                                           cached.segment_samples[segment_index]});
+          ++result.spline_geometry_cache_misses;
+        }
+        cached.segment_fingerprints[segment_index] = fingerprint;
+        ++result.spline_incremental_segments_rebuilt;
+        // Signed offsets are indexed per PH span. Preserve all unaffected spans and rebuild only
+        // the entries whose quadratic preimage actually changed.
+        for (auto& [required_twice, offset_geometry] : cached.offsets_by_required_twice_nm) {
+          if (offset_geometry.offsets.size() != segments.size()) {
+            offset_geometry = {};
+            continue;
+          }
+          const auto half = static_cast<long double>(required_twice) * 0.25L;
+          offset_geometry.offsets[segment_index] = {
+              make_quintic_ph_offset(segments[segment_index], -half),
+              make_quintic_ph_offset(segments[segment_index], half)};
+          offset_geometry.subdivision_bounds[segment_index] = {
+              subdivide_quintic_ph_offset_bounds(
+                  offset_geometry.offsets[segment_index][0], 4U, Nanometres{10}),
+              subdivide_quintic_ph_offset_bounds(
+                  offset_geometry.offsets[segment_index][1], 4U, Nanometres{10})};
+          offset_geometry.segment_fingerprints[segment_index] = fingerprint;
+        }
+      }
+      cached.adaptive_samples.clear();
+      for (const auto& segment_samples : cached.segment_samples) {
+        for (const auto& sample : segment_samples) {
+          if (!cached.adaptive_samples.empty() &&
+              cached.adaptive_samples.back().position == sample.position)
+            continue;
+          cached.adaptive_samples.push_back(sample);
+        }
+      }
       cached.adaptive_positions.clear();
       cached.adaptive_positions.reserve(cached.adaptive_samples.size());
       for (const auto& sample : cached.adaptive_samples)
         cached.adaptive_positions.push_back(sample.position);
-      cached.offsets_by_required_twice_nm.clear();
+      if (route_changed)
+        ++cached.route_revision;
       auto& prepared = route_samples[index];
       prepared = cached.adaptive_positions;
-      std::erase_if(offset_pair_cache, [&](const auto& entry) {
-        return entry.first.first == index || entry.first.second == index;
-      });
-      ++result.spline_geometry_cache_misses;
     };
     for (std::size_t index = 0U; index < routes.size(); ++index) {
       refresh_route_samples(index);
     }
     const auto offset_pair_intersects = [&](std::size_t first, std::size_t second) {
-      const auto key = std::minmax(first, second);
+      if (second < first)
+        std::swap(first, second);
+      const OffsetPairCacheKey key{first, geometry_cache[first].route_revision, second,
+                                   geometry_cache[second].route_revision};
       if (const auto found = offset_pair_cache.find(key); found != offset_pair_cache.end()) {
         ++result.spline_geometry_cache_hits;
         return found->second;
       }
       const auto intersects = regional_ph_envelope_boundaries_intersect(
-          routes, key.first, key.second, &geometry_cache, &result);
+          routes, first, second, &geometry_cache, &result, obstacle_snapshot_revision,
+          persistent_cache != nullptr ? &persistent_cache->pairs : nullptr);
       offset_pair_cache.emplace(key, intersects);
       return intersects;
     };
+    const auto continuous_mutual_failures = [&](const std::vector<WorkingRegionalSpline>& values,
+                                                 const std::vector<std::vector<SplineVector>>&
+                                                     samples) {
+      std::size_t failures = 0U;
+      for (std::size_t route_index = 0U; route_index < values.size(); ++route_index) {
+        if (!values[route_index].owned) {
+          continue;
+        }
+        const auto evaluator = [&](SplineVector position) {
+          const auto probe = regional_spline_clearance(values[route_index], position, values,
+                                                       route_index, samples);
+          return SplineClearanceProbe{probe.clearance_nm, probe.obstacle_normal,
+                                      probe.clearance_nm >= 0.0L};
+        };
+        // Continuous-envelope certification normally also proves containment in the route's
+        // prepared NavMesh guard-cell union.  That is a separate topology certificate: including
+        // it here mislabeled conservative cell-boundary excursions as mutual copper collisions
+        // and caused XPBD to push routes that were already physically separated.  Remove only
+        // the prepared corridor from this local copy so this metric and XPBD trigger represent
+        // route-to-route copper envelopes exclusively.  Directed gates, adaptive topology,
+        // quantized copper, and final exact DRC remain independent mandatory gates.
+        auto mutual_only_spline = values[route_index].spline;
+        mutual_only_spline.prepared_corridor.reset();
+        failures += certify_quintic_ph_continuous_envelope(
+                        mutual_only_spline, Nanometres{0}, evaluator)
+                            .legal
+                        ? 0U
+                        : 1U;
+      }
+      return failures;
+    };
+    const auto continuous_full_failures = [&](const std::vector<WorkingRegionalSpline>& values,
+                                               const std::vector<std::vector<SplineVector>>&
+                                                   samples) {
+      std::size_t failures = 0U;
+      for (std::size_t route_index = 0U; route_index < values.size(); ++route_index) {
+        if (!values[route_index].owned) {
+          continue;
+        }
+        const auto evaluator = [&](SplineVector position) {
+          return regional_spline_clearance(values[route_index], position, values, route_index,
+                                           samples);
+        };
+        failures += certify_quintic_ph_continuous_envelope(
+                        values[route_index].spline, Nanometres{0}, evaluator)
+                            .legal
+                        ? 0U
+                        : 1U;
+      }
+      return failures;
+    };
+    setup_us = phase_elapsed_us(candidate_realization_started);
+    // The regional realization can spend a substantial amount of time in the continuous
+    // polish stages below.  Publish the actual candidate geometry at the boundaries between
+    // those stages so a live client sees the evolving PH curves, rather than repeatedly seeing
+    // the last complete assignment.  This is deliberately observational: it reads the working
+    // routes after an accepted phase and never feeds telemetry back into selection or scoring.
+    std::uint64_t provisional_geometry_fingerprint = 0U;
+    const auto publish_phase_started = [&](std::string_view phase) {
+      emit_regional_decision(RegionalDecisionPhase::spline_phase_started, nullptr, false,
+                             "regional spline phase=" + std::string(phase) +
+                                 " window=" + std::to_string(assignment.window_id));
+      if (telemetry == nullptr) return;
+      RouterTelemetryEvent event;
+      event.kind = RouterTelemetryEventKind::search_summary;
+      event.group_id = "regional-window:" + std::to_string(assignment.window_id);
+      event.stable_id = "regional-spline-phase:" + std::to_string(assignment.window_id) + ":" +
+                        std::to_string(assignment.spline_candidate_rank) + ":" +
+                        std::to_string(hash_regional_text(phase));
+      event.iteration = assignment_index;
+      event.total_groups = result.bundle_assignments.size();
+      const auto active_window = std::find_if(result.windows.begin(), result.windows.end(),
+          [&](const auto& window) { return window.id == assignment.window_id; });
+      if (active_window != result.windows.end()) attach_active_region(event, *active_window);
+      event.detail = "regional provisional geometry phase started: " + std::string(phase) +
+                     ", candidate_rank=" + std::to_string(assignment.spline_candidate_rank) +
+                     ", routes=" + std::to_string(routes.size());
+      static_cast<void>(telemetry->try_emit(std::move(event)));
+    };
+    const auto publish_provisional_geometry = [&](std::string_view phase) {
+      if (telemetry == nullptr || !telemetry->accepts(RouterTelemetryLevel::normal)) return;
+      std::uint64_t fingerprint = 1469598103934665603ULL;
+      for (const auto& route : routes) {
+        // Include the stable fragment identity as well as its PH state.  A route may keep the
+        // same curve while a neighbouring route changes, which is still a new window snapshot.
+        fingerprint ^= hash_regional_text(route.fragment.net.value());
+        fingerprint *= 1099511628211ULL;
+        fingerprint ^= static_cast<std::uint64_t>(route.fragment.connection_index);
+        fingerprint *= 1099511628211ULL;
+        fingerprint ^= regional_route_geometry_fingerprint(route);
+        fingerprint *= 1099511628211ULL;
+      }
+      if (fingerprint == provisional_geometry_fingerprint) return;
+      provisional_geometry_fingerprint = fingerprint;
+      constexpr std::size_t maximum_routes = 128U;
+      constexpr std::size_t maximum_points_per_route = 96U;
+      std::size_t emitted = 0U;
+      for (std::size_t index = 0U; index < routes.size() && emitted < maximum_routes; ++index) {
+        const auto& working = routes[index];
+        if (!working.emit_replacement) continue;
+        RouterTelemetryEvent route;
+        route.kind = RouterTelemetryEventKind::route_candidate_selected;
+        route.minimum_level = RouterTelemetryLevel::normal;
+        // Keep this identity identical to the final selected regional spline.  The viewer can
+        // therefore replace a provisional curve in place when the later phase changes it.
+        route.stable_id = "regional-spline:" + std::to_string(assignment.window_id) + ":" +
+                          working.fragment.net.value() + ":" +
+                          std::to_string(working.fragment.connection_index) + ":" +
+                          std::to_string(working.fragment.run_index) + ":" +
+                          std::to_string(working.fragment.fragment_index);
+        route.group_id = "regional-window:" + std::to_string(assignment.window_id);
+        route.net = working.fragment.net;
+        route.layer = working.layer;
+        // Candidate rank is the assignment revision used by the final selected publication too.
+        // Do not invent a larger provisional revision: consumers that coalesce by revision must
+        // still accept the final selected geometry after this diagnostic overlay.
+        route.route_revision = assignment.spline_candidate_rank + 1U;
+        route.route_family = "regional_spline";
+        route.route_lifecycle = "provisional";
+        route.route_width_nm = static_cast<std::uint64_t>(
+            std::max<std::int64_t>(0, working.width.value()));
+        route.route_geometry = RouterTelemetryRouteGeometry::quintic_ph;
+        route.spline_degree = 5U;
+        const auto controls = quintic_ph_bezier_controls(working.spline);
+        constexpr std::size_t maximum_control_points = 384U;
+        if (controls.size() > maximum_control_points) {
+          route.route_geometry = RouterTelemetryRouteGeometry::polyline;
+          route.spline_degree = 0U;
+        }
+        route.spline_control_points.reserve(std::min(controls.size(), maximum_control_points));
+        if (controls.size() <= maximum_control_points) {
+          for (const auto point : controls) {
+            route.spline_control_points.push_back(
+                RouterTelemetryPathPoint{static_cast<std::int64_t>(std::llround(point.x)),
+                                         static_cast<std::int64_t>(std::llround(point.y)),
+                                         working.layer});
+          }
+        }
+        const auto& samples = route_samples[index];
+        const auto stride = std::max<std::size_t>(
+            1U, (samples.size() + maximum_points_per_route - 1U) / maximum_points_per_route);
+        route.route_points.reserve(std::min(samples.size(), maximum_points_per_route + 1U));
+        for (std::size_t sample = 0U; sample < samples.size(); sample += stride) {
+          route.route_points.push_back(RouterTelemetryPathPoint{
+              static_cast<std::int64_t>(std::llround(samples[sample].x)),
+              static_cast<std::int64_t>(std::llround(samples[sample].y)), working.layer});
+        }
+        if (!samples.empty() && (route.route_points.empty() ||
+            route.route_points.back().x_nm != static_cast<std::int64_t>(std::llround(samples.back().x)) ||
+            route.route_points.back().y_nm != static_cast<std::int64_t>(std::llround(samples.back().y)))) {
+          route.route_points.push_back(RouterTelemetryPathPoint{
+              static_cast<std::int64_t>(std::llround(samples.back().x)),
+              static_cast<std::int64_t>(std::llround(samples.back().y)), working.layer});
+        }
+        route.detail = "regional provisional PH geometry after " + std::string(phase) +
+                       "; diagnostic planning geometry, not committed copper";
+        static_cast<void>(telemetry->try_emit(std::move(route)));
+        ++emitted;
+      }
+    };
+    publish_phase_started("seed preparation");
+    publish_provisional_geometry("seed preparation");
+    publish_phase_started("interpolation");
+    const auto interpolation_started = std::chrono::steady_clock::now();
+    // Every following interpolation, XPBD, elastic-band, and PNS operation is a candidate-local
+    // polish of this exact topology state. Keep the earliest continuous certificate so no sampled
+    // objective can regress a legal seed and hide that fact from final realization.
+    const auto pre_polish_routes = routes;
+    const auto pre_polish_continuous_failures = continuous_full_failures(routes, route_samples);
     // Select PH interpolation parameters jointly with the already assembled neighbouring routes.
     // The topology-only seed pass can find several shape-legal realizations of the same anchors;
     // choosing its first candidate independently may consume the clearance needed by the next
@@ -8912,7 +13557,10 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
           }
           return intersections;
         };
-        const auto original_offset_intersections = offset_intersections(route_index);
+        const auto original_offset_intersections =
+            interpolation_current.mutual_illegal_routes == 0U
+                ? 0U
+                : offset_intersections(route_index);
         auto best_offset_intersections = original_offset_intersections;
         std::vector<QuinticPHRoute> interpolation_candidates;
         interpolation_candidates.reserve(starts.size());
@@ -8928,12 +13576,12 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
           interpolation_candidates.push_back(std::move(*candidate));
         }
         const auto rank_started = std::chrono::steady_clock::now();
-        const auto ranking = rank_regional_interpolation_candidates(
-            routes, route_index, interpolation_candidates, 2U);
-        result.spline_interpolation_rank_us += static_cast<std::uint64_t>(
-            std::chrono::duration_cast<std::chrono::microseconds>(
-                std::chrono::steady_clock::now() - rank_started)
-                .count());
+        const auto ranking = rank_regional_interpolation_candidates(routes, route_index,
+                                                                    interpolation_candidates, 2U);
+        result.spline_interpolation_rank_us +=
+            static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                           std::chrono::steady_clock::now() - rank_started)
+                                           .count());
         ++result.spline_interpolation_gpu_batches;
         result.spline_interpolation_gpu_fallbacks += ranking.used_gpu ? 0U : 1U;
         result.spline_interpolation_gpu_candidates += ranking.assessed_candidates;
@@ -8945,17 +13593,17 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
           const auto& candidate = interpolation_candidates[ranked.candidate];
           if (!regional_spline_stays_in_topology(routes[route_index], candidate) ||
               !certify_quintic_ph_shape(candidate).legal) {
-            result.spline_interpolation_exact_us += static_cast<std::uint64_t>(
-                std::chrono::duration_cast<std::chrono::microseconds>(
-                    std::chrono::steady_clock::now() - exact_started)
-                    .count());
+            result.spline_interpolation_exact_us +=
+                static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                               std::chrono::steady_clock::now() - exact_started)
+                                               .count());
             continue;
           }
           routes[route_index].spline = candidate;
           refresh_route_samples(route_index);
-          const auto assessment =
-              assess_adaptive_regional_window(routes, &geometry_cache, &result);
-          const auto candidate_offset_intersections = offset_intersections(route_index);
+          const auto assessment = assess_adaptive_regional_window(routes, &geometry_cache, &result);
+          const auto candidate_offset_intersections =
+              assessment.mutual_illegal_routes == 0U ? 0U : offset_intersections(route_index);
           result.spline_interpolation_portfolio_offset_rejections +=
               candidate_offset_intersections > 0U ? 1U : 0U;
           if (candidate_offset_intersections < best_offset_intersections ||
@@ -8965,10 +13613,10 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
             best_assessment = assessment;
             best_offset_intersections = candidate_offset_intersections;
           }
-          result.spline_interpolation_exact_us += static_cast<std::uint64_t>(
-              std::chrono::duration_cast<std::chrono::microseconds>(
-                  std::chrono::steady_clock::now() - exact_started)
-                  .count());
+          result.spline_interpolation_exact_us +=
+              static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                             std::chrono::steady_clock::now() - exact_started)
+                                             .count());
         }
         routes[route_index].spline = std::move(best);
         refresh_route_samples(route_index);
@@ -8987,6 +13635,8 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
     if (interpolation_window_improved) {
       ++result.spline_interpolation_portfolio_windows_improved;
     }
+    interpolation_us = phase_elapsed_us(interpolation_started);
+    publish_provisional_geometry("interpolation");
     const auto refit_after_shove = [&](std::vector<WorkingRegionalSpline>& candidate_routes,
                                        std::size_t route_index) {
       std::vector<std::vector<SplineVector>> candidate_samples(candidate_routes.size());
@@ -8999,6 +13649,7 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
         }
       }
       SplineTrajectoryOptimizationConfig config;
+      config.enable_paired_obstacle_supports = result.configured.enable_paired_obstacle_supports;
       config.minimum_clearance = Nanometres{0};
       config.control_step =
           Nanometres{std::max<std::int64_t>(1, result.configured.window_margin.value() / 10)};
@@ -9008,6 +13659,7 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
       config.samples = 32U;
       config.maximum_iterations = 2U;
       config.maximum_candidate_checks = 64U;
+      config.exact_candidate_workers = result.configured.max_spline_exact_candidate_workers;
       const auto evaluator = [&](SplineVector position) {
         return regional_spline_clearance(candidate_routes[route_index], position, candidate_routes,
                                          route_index, candidate_samples);
@@ -9020,16 +13672,25 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
       assignment.stop_reason = RegionalBundleStopReason::spline_realization_failed;
       continue;
     }
-    if (result.configured.enable_xpbd_relaxation && routes.size() > 1U) {
+    publish_phase_started("xpbd relaxation");
+    const auto xpbd_started = std::chrono::steady_clock::now();
+    if (result.configured.enable_xpbd_relaxation && !routes.empty()) {
       const auto baseline = assess_adaptive_regional_window(routes, &geometry_cache, &result);
-      // XPBD is a physical-conflict repair stage, not a second unconditional spline optimizer.
-      // A topology-legal candidate with no mutual copper-envelope conflict has nothing for the
-      // joint clearance solver to repair and will still pass through the ordinary continuous,
-      // quantization and exact-DRC gates below. This guard is especially important for retained
-      // fallback portfolios, where hundreds of individually legal alternatives may be inspected.
-      if (baseline.mutual_illegal_routes == 0U) {
-        ++result.xpbd_unconflicted_candidates_skipped;
-      } else {
+      const auto baseline_continuous_mutual_failures =
+          continuous_mutual_failures(routes, route_samples);
+      std::size_t baseline_offset_intersections = 0U;
+      if (baseline.mutual_illegal_routes > 0U) {
+        for (std::size_t first = 0U; first < routes.size(); ++first) {
+          for (std::size_t second = first + 1U; second < routes.size(); ++second) {
+            baseline_offset_intersections += offset_pair_intersects(first, second) ? 1U : 0U;
+          }
+        }
+      }
+      // XPBD/AVBD is an enabled bounded physical stage.  The spline mutual probe deliberately
+      // excludes fixed-board obstacles, so using a mutual-only skip here would bypass precisely
+      // the one-route and obstacle-only scenes that the solver's obstacle contacts can repair.
+      // The existing topology, PH, native-scene, and DRC gates still decide acceptance.
+      {
         // XPBD operates on straight particle links while the authoritative regional route is a
         // PH curve. Subdivide the quadratic preimage exactly at the same adaptive 0.02 mm samples
         // used by the CPU clearance gate before constructing particles. The links then form a
@@ -9037,11 +13698,12 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
         // across long PH spans. A single straight PH span also receives a midpoint because its
         // two connection endpoints are fixed and otherwise offer no deformation freedom. Every
         // inserted point reproduces the identical curve until XPBD moves it.
+        const auto interpolation_cap = result.configured.max_xpbd_interpolation_nodes_per_route;
         for (std::size_t route_index = 0U; route_index < routes.size(); ++route_index) {
           auto& spline = routes[route_index].spline;
           if (routes[route_index].frozen_boundary ||
               spline.control_points.size() >=
-                  result.configured.max_xpbd_interpolation_nodes_per_route) {
+                  interpolation_cap) {
             continue;
           }
           bool inserted = false;
@@ -9050,10 +13712,10 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
           }
           const auto samples = adaptive_tessellate_quintic_ph(
               spline, Nanometres::from_mm(0.02), 10U,
-              result.configured.max_xpbd_interpolation_nodes_per_route);
+              interpolation_cap);
           for (const auto& sample : samples) {
             if (spline.control_points.size() >=
-                    result.configured.max_xpbd_interpolation_nodes_per_route ||
+                    interpolation_cap ||
                 !(sample.parameter > 0.0L && sample.parameter < 1.0L)) {
               continue;
             }
@@ -9063,6 +13725,7 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
             refresh_route_samples(route_index);
           }
         }
+        assignment.xpbd_attempted = true;
         ++result.xpbd_windows_attempted;
         std::map<LayerId, std::uint32_t> layer_codes;
         std::map<NetId, std::uint32_t> route_collision_groups;
@@ -9070,6 +13733,16 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
         std::vector<RoutingXpbdSegment> segments;
         std::vector<std::size_t> particle_route_indices;
         std::vector<std::pair<std::size_t, std::size_t>> route_particle_ranges;
+        // AVBD normally inherits XPBD's fixed endpoints.  A generated, selected local via is
+        // the sole exception: only when every attached run-up is represented by an owned route
+        // in this window may its endpoint particles translate as one rigid owner.
+        std::vector<RoutingAvbdRigidGroup> avbd_rigid_groups;
+        std::vector<std::size_t> avbd_group_choice_ids;
+        // Every selected via gets one contact particle on every spanned copper layer. Most are
+        // pinned; a later closure proof may promote one generated via's whole set into a rigid
+        // movable group. This also covers selected-global sites which are not board Via objects.
+        std::map<std::size_t, std::vector<std::size_t>> avbd_via_span_particles;
+        std::vector<std::size_t> avbd_span_choice_ids;
         route_particle_ranges.reserve(routes.size());
         for (std::size_t route_index = 0U; route_index < routes.size(); ++route_index) {
           const auto& route = routes[route_index];
@@ -9099,6 +13772,7 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
                                     flags, static_cast<std::int64_t>(std::llround(point.x)),
                                     static_cast<std::int64_t>(std::llround(point.y)),
                                     result.configured.window_margin.value()});
+            particles.back().clearance_nm = route.clearance.value();
             particle_route_indices.push_back(route_index);
           }
           const auto finish = particles.size();
@@ -9114,6 +13788,119 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
                 collision_group->second, layer->second, copper_radius,
                 std::max<std::int64_t>(1, rest), route.clearance.value()});
           }
+        }
+        // Via diameter and clearance are physical properties even when an endpoint is pinned.
+        // AVBD may move only the proven-closed generated subset below, but every via contact
+        // must still present its actual exclusion radius to the joint trace solve.
+        for (const auto choice_id : assignment.selected_via_choices) {
+          const auto choice = std::find_if(result.via_choices.begin(), result.via_choices.end(),
+              [&](const auto& value) { return value.id == choice_id; });
+          if (choice == result.via_choices.end()) continue;
+          const auto radius = std::max<std::int64_t>(1, (choice->diameter.value() + 1) / 2);
+          const auto clearance = resolve_net_routing_rules(board, choice->net).clearance.value();
+          for (std::size_t route_index = 0U; route_index < routes.size(); ++route_index) {
+            if (routes[route_index].fragment.net != choice->net) continue;
+            const auto [start, finish] = route_particle_ranges[route_index];
+            if (start == finish) continue;
+            if (routes[route_index].entry_via_site &&
+                *routes[route_index].entry_via_site == choice->site) {
+              particles[start].radius_nm = std::max(particles[start].radius_nm, radius);
+              particles[start].clearance_nm = std::max(particles[start].clearance_nm, clearance);
+              avbd_via_span_particles[choice->id].push_back(start);
+            }
+            if (routes[route_index].exit_via_site &&
+                *routes[route_index].exit_via_site == choice->site) {
+              particles[finish - 1U].radius_nm = std::max(particles[finish - 1U].radius_nm, radius);
+              particles[finish - 1U].clearance_nm =
+                  std::max(particles[finish - 1U].clearance_nm, clearance);
+              avbd_via_span_particles[choice->id].push_back(finish - 1U);
+            }
+          }
+          for (const auto& span_layer : choice->span) {
+            const auto layer = layer_codes.try_emplace(
+                span_layer, static_cast<std::uint32_t>(layer_codes.size())).first;
+            const auto already_present = std::any_of(avbd_via_span_particles[choice->id].begin(),
+                avbd_via_span_particles[choice->id].end(), [&](const auto particle) {
+                  return particle < particles.size() && particles[particle].layer == layer->second;
+                });
+            if (already_present) continue;
+            const auto route = route_collision_groups.try_emplace(
+                choice->net, static_cast<std::uint32_t>(route_collision_groups.size())).first;
+            const auto particle = particles.size();
+            particles.push_back(RoutingXpbdParticle{choice->site.x.value(), choice->site.y.value(),
+                radius, 0.0L, route->second, layer->second, routing_xpbd_via,
+                choice->site.x.value(), choice->site.y.value(), result.configured.window_margin.value()});
+            particles.back().clearance_nm = clearance;
+            particle_route_indices.push_back(routes.size());
+            avbd_via_span_particles[choice->id].push_back(particle);
+            avbd_span_choice_ids.push_back(choice->id);
+          }
+        }
+        for (const auto choice_id : assignment.selected_via_choices) {
+          const auto choice = std::find_if(result.via_choices.begin(), result.via_choices.end(),
+              [&](const auto& value) { return value.id == choice_id; });
+          if (choice == result.via_choices.end() || choice->selected_global_site ||
+              choice->attached_runups.empty() || coupled_net(board, choice->net)) {
+            continue;
+          }
+          const auto reused_board_via = std::any_of(board.vias.begin(), board.vias.end(),
+              [&](const auto& via) { return via.position == choice->site; });
+          const auto reused_pad = std::any_of(board.footprints.begin(), board.footprints.end(),
+              [&](const auto& footprint) {
+                return std::any_of(footprint.pads.begin(), footprint.pads.end(), [&](const auto& pad) {
+                  return pad_drill_world_position(footprint, pad) == choice->site;
+                });
+              });
+          if (reused_board_via || reused_pad) continue;
+          RoutingAvbdRigidGroup group;
+          group.particle_indices = avbd_via_span_particles[choice->id];
+          bool complete_attachment_set = true;
+          for (const auto& runup : choice->attached_runups) {
+            bool attached = false;
+            for (std::size_t route_index = 0U; route_index < routes.size(); ++route_index) {
+              const auto& route = routes[route_index];
+              if (!route.owned || route.frozen_boundary || route.fragment.net != choice->net ||
+                  route.layer != runup.layer ||
+                  (route.source_start != runup.anchor && route.replacement_end != runup.anchor)) continue;
+              const auto [start, finish] = route_particle_ranges[route_index];
+              if (start == finish) continue;
+              if (route.entry_via_site && *route.entry_via_site == choice->site) {
+                group.particle_indices.push_back(start);
+                attached = true;
+              }
+              if (route.exit_via_site && *route.exit_via_site == choice->site) {
+                group.particle_indices.push_back(finish - 1U);
+                attached = true;
+              }
+            }
+            complete_attachment_set = complete_attachment_set && attached;
+          }
+          // No endpoint at this generated via may be silently excluded from the rigid owner.
+          for (std::size_t route_index = 0U; route_index < routes.size(); ++route_index) {
+            const auto& route = routes[route_index];
+            const bool endpoint_here =
+                (route.entry_via_site && *route.entry_via_site == choice->site) ||
+                (route.exit_via_site && *route.exit_via_site == choice->site);
+            if (!endpoint_here || route.fragment.net != choice->net) continue;
+            const auto represented = std::any_of(choice->attached_runups.begin(),
+                choice->attached_runups.end(), [&](const auto& runup) {
+                  return runup.layer == route.layer &&
+                      (runup.anchor == route.source_start || runup.anchor == route.replacement_end);
+                });
+            complete_attachment_set = complete_attachment_set && route.owned &&
+                                      !route.frozen_boundary && represented;
+          }
+          std::sort(group.particle_indices.begin(), group.particle_indices.end());
+          group.particle_indices.erase(
+              std::unique(group.particle_indices.begin(), group.particle_indices.end()),
+              group.particle_indices.end());
+          if (!complete_attachment_set || group.particle_indices.empty()) continue;
+          const auto via_radius = std::max<std::int64_t>(1, (choice->diameter.value() + 1) / 2);
+          for (const auto particle : group.particle_indices) {
+            particles[particle].radius_nm = std::max(particles[particle].radius_nm, via_radius);
+          }
+          avbd_group_choice_ids.push_back(choice->id);
+          avbd_rigid_groups.push_back(std::move(group));
         }
         std::vector<LayerId> xpbd_layers(layer_codes.size());
         for (const auto& [layer, code] : layer_codes)
@@ -9184,6 +13971,41 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
             for (const auto& hole : fill.holes) {
               add_obstacle_polygon(hole, layer, collision_group, false);
             }
+          }
+        }
+        // Synthetic via-span particles have no route segment to trigger the ordinary obstacle
+        // extraction above. Give their unrepresented layers the same board-free-space contacts.
+        std::sort(avbd_span_choice_ids.begin(), avbd_span_choice_ids.end());
+        avbd_span_choice_ids.erase(
+            std::unique(avbd_span_choice_ids.begin(), avbd_span_choice_ids.end()),
+            avbd_span_choice_ids.end());
+        for (const auto choice_id : avbd_span_choice_ids) {
+          if (obstacle_budget_exhausted) break;
+          const auto choice = std::find_if(result.via_choices.begin(), result.via_choices.end(),
+              [&](const auto& value) { return value.id == choice_id; });
+          if (choice == result.via_choices.end()) continue;
+          for (const auto& span_layer : choice->span) {
+            const auto represented = std::any_of(routes.begin(), routes.end(),
+                [&](const auto& route) {
+                  return route.layer == span_layer && route.fragment.net == choice->net;
+                });
+            if (represented) continue;
+            const auto extracted = extract_polygonal_board_free_space(
+                board, BoardFreeSpaceExtractionConfig{span_layer, choice->net, true, true,
+                                                       !result.configured.treat_saved_zone_fills_as_refillable});
+            if (!extracted.complete()) continue;
+            const auto layer = layer_codes.at(span_layer);
+            const auto collision_group = route_collision_groups.at(choice->net);
+            for (const auto& cutout : extracted.domain.cutouts)
+              add_obstacle_polygon(cutout, layer, collision_group);
+            for (const auto& obstacle : extracted.domain.obstacles)
+              add_obstacle_polygon(obstacle, layer, collision_group);
+            for (const auto& fill : extracted.domain.filled_obstacles) {
+              add_obstacle_polygon(fill.area, layer, collision_group);
+              for (const auto& hole : fill.holes)
+                add_obstacle_polygon(hole, layer, collision_group, false);
+            }
+            if (obstacle_budget_exhausted) break;
           }
         }
         result.xpbd_obstacle_segments += obstacles.size();
@@ -9274,9 +14096,66 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
         }
         const auto relaxed =
             relax_routing_xpbd(particles, segments, obstacles, xpbd_terrain, xpbd_config);
+        // AVBD is a bounded CPU refinement of the XPBD proposal.  Compare only
+        // AVBD's like-for-like contact residuals; its constraint families differ from XPBD's.
+        std::optional<RoutingAvbdResult> avbd;
+        const RoutingXpbdResult* proposal = &relaxed;
+        std::string avbd_diagnostic;
+        // AVBD refines the XPBD proposal, including converged XPBD states whose discrete
+        // residual criterion does not guarantee a better PH/native realization.
+        if (result.configured.enable_avbd_relaxation && relaxed.ok() &&
+            relaxed.positions_nm.size() == particles.size() &&
+            particles.size() <= result.configured.avbd.maximum_particles) {
+          auto avbd_particles = particles;
+          for (std::size_t particle = 0U; particle < avbd_particles.size(); ++particle) {
+            avbd_particles[particle].x_nm = relaxed.positions_nm[particle].first;
+            avbd_particles[particle].y_nm = relaxed.positions_nm[particle].second;
+          }
+          for (const auto& group : avbd_rigid_groups)
+            for (const auto particle : group.particle_indices)
+              if (particle < avbd_particles.size()) avbd_particles[particle].inverse_mass = 1.0L;
+          publish_phase_started("avbd contact relaxation");
+          ++result.avbd_windows_attempted;
+          avbd.emplace(relax_routing_avbd(avbd_particles, segments, obstacles, xpbd_config,
+                                          avbd_rigid_groups, result.configured.avbd, stop_token));
+          result.avbd_contacts += avbd->contacts;
+          result.avbd_duplicate_reductions += avbd->duplicate_reductions;
+          result.avbd_colors += avbd->colors;
+          result.avbd_local_block_solves += avbd->local_block_solves;
+          result.avbd_duals += avbd->duals;
+          result.avbd_penalty_updates += avbd->penalty_updates;
+          result.avbd_maximum_degree =
+              std::max(result.avbd_maximum_degree, avbd->maximum_degree);
+          result.avbd_moved_rigid_owners += avbd->moved_rigid_owners;
+          result.avbd_solve_us += avbd->relaxation.timings.solve_us;
+          if (!avbd->ok()) ++result.avbd_capacity_rejections;
+          if (avbd->ok() && avbd->relaxation.positions_nm.size() == particles.size() &&
+              avbd->relaxation.final.total_residual_nm <
+                  avbd->relaxation.initial.total_residual_nm) {
+            proposal = &avbd->relaxation;
+            ++result.avbd_proposals_improved;
+          }
+          avbd_diagnostic = "AVBD contacts=" + std::to_string(avbd->contacts) +
+              ", degree=" + std::to_string(avbd->maximum_degree) +
+              ", colors=" + std::to_string(avbd->colors) +
+              ", blocks=" + std::to_string(avbd->local_block_solves) +
+              ", duals=" + std::to_string(avbd->duals) +
+              ", penalties=" + std::to_string(avbd->penalty_updates) +
+              ", moved_vias=" + std::to_string(avbd->moved_rigid_owners) +
+              ", residual=" + std::to_string(static_cast<double>(avbd->relaxation.initial.total_residual_nm)) +
+              "->" + std::to_string(static_cast<double>(avbd->relaxation.final.total_residual_nm)) +
+              ", ok=" + (avbd->ok() ? "true" : "false") +
+              (avbd->relaxation.diagnostic.empty() ? "" : ", reason=" + avbd->relaxation.diagnostic);
+        } else if (result.configured.enable_avbd_relaxation && relaxed.ok() &&
+                   relaxed.positions_nm.size() == particles.size() &&
+                   particles.size() > result.configured.avbd.maximum_particles) {
+          ++result.avbd_capacity_rejections;
+          avbd_diagnostic = "AVBD skipped: particle cap";
+        }
         RegionalXpbdInvocation invocation;
         invocation.window_id = assignment.window_id;
         invocation.candidate_rank = assignment.spline_candidate_rank;
+        invocation.rational_offset_triggered = baseline_offset_intersections > 0U;
         invocation.route_count = routes.size();
         invocation.particle_count = particles.size();
         invocation.segment_count = segments.size();
@@ -9362,8 +14241,12 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
         invocation.converged = relaxed.converged;
         invocation.stalled = relaxed.stalled;
         invocation.topology_escape_required = relaxed.topology_escape_required;
+        assignment.xpbd_topology_escape_required =
+            assignment.xpbd_topology_escape_required || relaxed.topology_escape_required;
         invocation.pair_budget_exhausted = relaxed.pair_budget_exhausted;
         invocation.diagnostic = relaxed.diagnostic;
+        if (!avbd_diagnostic.empty())
+          invocation.diagnostic += (invocation.diagnostic.empty() ? "" : "; ") + avbd_diagnostic;
         result.xpbd_gpu_invocations += relaxed.used_gpu ? 1U : 0U;
         result.xpbd_cpu_fallbacks += relaxed.cpu_fallback ? 1U : 0U;
         result.xpbd_pressure_cells += relaxed.pressure_field.size();
@@ -9393,53 +14276,269 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
               result.xpbd_peak_pressure,
               *std::max_element(relaxed.pressure_field.begin(), relaxed.pressure_field.end()));
         }
-        if (relaxed.ok() && relaxed.positions_nm.size() == particles.size()) {
+        std::vector<RegionalViaChoice> trial_relaxed_vias;
+        if (proposal->ok() && proposal->positions_nm.size() == particles.size()) {
           auto trial = routes;
           for (std::size_t route_index = 0U; route_index < trial.size(); ++route_index) {
             const auto [start, finish] = route_particle_ranges[route_index];
             for (std::size_t particle = start; particle < finish; ++particle) {
               const auto control = particle - start;
               trial[route_index].spline.control_points[control] =
-                  SplineVector{static_cast<long double>(relaxed.positions_nm[particle].first),
-                               static_cast<long double>(relaxed.positions_nm[particle].second)};
+                  SplineVector{static_cast<long double>(proposal->positions_nm[particle].first),
+                               static_cast<long double>(proposal->positions_nm[particle].second)};
             }
             if (!rebuild_quintic_ph_route(trial[route_index].spline)) {
               trial.clear();
               break;
             }
           }
+          if (!trial.empty() && avbd && proposal == &avbd->relaxation) {
+            for (std::size_t group_index = 0U; group_index < avbd_rigid_groups.size();
+                 ++group_index) {
+              const auto& group = avbd_rigid_groups[group_index];
+              if (group.particle_indices.empty() || group_index >= avbd_group_choice_ids.size()) continue;
+              const auto particle = group.particle_indices.front();
+              if (particle >= proposal->positions_nm.size()) continue;
+              const auto choice = std::find_if(result.via_choices.begin(), result.via_choices.end(),
+                  [&](const auto& value) { return value.id == avbd_group_choice_ids[group_index]; });
+              if (choice == result.via_choices.end()) continue;
+              const Point relocated{Nanometres{proposal->positions_nm[particle].first},
+                                    Nanometres{proposal->positions_nm[particle].second}};
+              bool rigid = true;
+              for (const auto member : group.particle_indices)
+                rigid = rigid && member < proposal->positions_nm.size() &&
+                    proposal->positions_nm[member] == proposal->positions_nm[particle];
+              if (!rigid || relocated == choice->site) continue;
+              auto relaxed_choice = *choice;
+              relaxed_choice.site = relocated;
+              trial_relaxed_vias.push_back(relaxed_choice);
+              for (const auto member : group.particle_indices) {
+                if (member >= particle_route_indices.size() ||
+                    particle_route_indices[member] >= trial.size()) continue;
+                const auto route_index = particle_route_indices[member];
+                const auto [start, finish] = route_particle_ranges[route_index];
+                if (member < start || member >= finish) continue;
+                trial[route_index].spline.control_points[member - start] =
+                    SplineVector{static_cast<long double>(relocated.x.value()),
+                                 static_cast<long double>(relocated.y.value())};
+              }
+              for (auto& route : trial) {
+                if (route.fragment.net != choice->net) continue;
+                if (route.entry_via_site && *route.entry_via_site == choice->site)
+                  route.entry_via_site = relocated;
+                if (route.exit_via_site && *route.exit_via_site == choice->site)
+                  route.exit_via_site = relocated;
+                for (auto& via : route.candidate_vias)
+                  if (via.net == choice->net && via.site == choice->site) via.site = relocated;
+              }
+            }
+            for (auto& route : trial) {
+              if (!rebuild_quintic_ph_route(route.spline)) {
+                trial.clear();
+                break;
+              }
+            }
+          }
           if (trial.empty()) {
-            invocation.diagnostic = "XPBD deformation could not be reconstructed as a PH chain";
-            result.xpbd_invocations.push_back(std::move(invocation));
-            continue;
-          }
-          const auto candidate = assess_adaptive_regional_window(trial);
-          if (candidate.objective() < baseline.objective()) {
-            routes = std::move(trial);
-            invocation.accepted = true;
-            ++result.xpbd_windows_improved;
-            if ((baseline.owned_topology_illegal_routes > 0U ||
-                 baseline.owned_mutual_illegal_routes > 0U) &&
+            invocation.diagnostic += (invocation.diagnostic.empty() ? "" : "; ") +
+                std::string("joint deformation could not be reconstructed as a PH chain");
+          } else {
+            const auto candidate = assess_adaptive_regional_window(trial);
+            std::vector<std::vector<SplineVector>> candidate_samples(trial.size());
+            for (std::size_t candidate_route = 0U; candidate_route < trial.size();
+                 ++candidate_route) {
+              const auto sampled = adaptive_tessellate_quintic_ph(
+                  trial[candidate_route].spline, Nanometres::from_mm(0.02), 10U, 512U);
+              candidate_samples[candidate_route].reserve(sampled.size());
+              for (const auto& sample : sampled) {
+                candidate_samples[candidate_route].push_back(sample.position);
+              }
+            }
+            const auto candidate_continuous_mutual_failures =
+                continuous_mutual_failures(trial, candidate_samples);
+            std::size_t candidate_offset_intersections = 0U;
+            if (baseline_offset_intersections > 0U) {
+              for (std::size_t first = 0U; first < trial.size(); ++first) {
+                for (std::size_t second = first + 1U; second < trial.size(); ++second) {
+                  candidate_offset_intersections +=
+                      regional_ph_envelope_boundaries_intersect(trial, first, second, nullptr,
+                                                                &result)
+                          ? 1U
+                          : 0U;
+                }
+              }
+            }
+            const auto adaptive_improved = candidate.objective() < baseline.objective();
+            const auto rational_offset_improved =
+                baseline_offset_intersections > 0U &&
+                candidate_offset_intersections < baseline_offset_intersections &&
                 candidate.owned_topology_illegal_routes == 0U &&
-                candidate.owned_mutual_illegal_routes == 0U) {
-              ++result.xpbd_windows_legalized;
+                candidate.owned_mutual_illegal_routes == 0U;
+            const auto continuous_envelope_improved =
+                baseline_continuous_mutual_failures > 0U &&
+                candidate_continuous_mutual_failures < baseline_continuous_mutual_failures &&
+                candidate.topology_illegal_routes <= baseline.topology_illegal_routes &&
+                candidate.topology_gate_violations <= baseline.topology_gate_violations;
+            if ((baseline_offset_intersections == 0U && adaptive_improved) ||
+                rational_offset_improved || continuous_envelope_improved) {
+              routes = std::move(trial);
+              assignment.relaxed_via_choices = trial_relaxed_vias;
+              invocation.accepted = true;
+              if (avbd && proposal == &avbd->relaxation) {
+                ++result.avbd_windows_improved;
+                invocation.diagnostic += (invocation.diagnostic.empty() ? "" : "; ") +
+                    std::string("AVBD proposal accepted by PH gate");
+              }
+              ++result.xpbd_windows_improved;
+              if ((baseline.owned_topology_illegal_routes > 0U ||
+                   baseline.owned_mutual_illegal_routes > 0U ||
+                   baseline_offset_intersections > 0U) &&
+                  candidate.owned_topology_illegal_routes == 0U &&
+                  candidate.owned_mutual_illegal_routes == 0U &&
+                  candidate_offset_intersections == 0U) {
+                ++result.xpbd_windows_legalized;
+              }
+              for (std::size_t index = 0U; index < routes.size(); ++index) {
+                refresh_route_samples(index);
+              }
+            } else if (candidate.topology_illegal_routes > baseline.topology_illegal_routes ||
+                       candidate.topology_gate_violations > baseline.topology_gate_violations) {
+              ++result.xpbd_topology_rejections;
+              assignment.xpbd_topology_escape_required = true;
             }
-            for (std::size_t index = 0U; index < routes.size(); ++index) {
-              refresh_route_samples(index);
+            if (!invocation.accepted) {
+              invocation.diagnostic +=
+                  (invocation.diagnostic.empty() ? "" : "; ") +
+                  std::string("PH reconstruction rejected: baseline topology=") +
+                  std::to_string(baseline.topology_illegal_routes) +
+                  ", mutual=" + std::to_string(baseline.mutual_illegal_routes) +
+                  "; candidate topology=" + std::to_string(candidate.topology_illegal_routes) +
+                  ", mutual=" + std::to_string(candidate.mutual_illegal_routes) +
+                  ", rational_offsets=" +
+                  std::to_string(candidate_offset_intersections) + "/" +
+                  std::to_string(baseline_offset_intersections) +
+                  ", continuous_envelopes=" +
+                  std::to_string(candidate_continuous_mutual_failures) + "/" +
+                  std::to_string(baseline_continuous_mutual_failures) +
+                  ", gate_violations=" + std::to_string(candidate.topology_gate_violations);
             }
-          } else if (candidate.topology_illegal_routes > baseline.topology_illegal_routes ||
-                     candidate.topology_gate_violations > baseline.topology_gate_violations) {
-            ++result.xpbd_topology_rejections;
           }
-          if (!invocation.accepted) {
-            invocation.diagnostic +=
-                (invocation.diagnostic.empty() ? "" : "; ") +
-                std::string("PH reconstruction rejected: baseline topology=") +
-                std::to_string(baseline.topology_illegal_routes) +
-                ", mutual=" + std::to_string(baseline.mutual_illegal_routes) +
-                "; candidate topology=" + std::to_string(candidate.topology_illegal_routes) +
-                ", mutual=" + std::to_string(candidate.mutual_illegal_routes) +
-                ", gate_violations=" + std::to_string(candidate.topology_gate_violations);
+          if (!invocation.accepted && !stop_token.stop_requested()) {
+            // Restore blocked net-atomic moves, then check the surviving proposal against the
+            // restored scene again. A failed full repair may contain useful independent moves.
+            // Coupled nets require a joint constraint oracle, so retain their baseline here.
+            std::map<NetId, std::vector<std::size_t>> grouped;
+            for (std::size_t index = 0U; index < routes.size(); ++index)
+              if (routes[index].owned && !routes[index].frozen_boundary &&
+                  !coupled_net(board, routes[index].fragment.net))
+                grouped[routes[index].fragment.net].push_back(index);
+            std::vector<std::vector<std::size_t>> groups;
+            for (const auto& [net, members] : grouped) {
+              static_cast<void>(net);
+              groups.push_back(members);
+            }
+            auto proposed = routes;
+            std::vector<bool> reconstructible(groups.size(), true);
+            for (std::size_t group = 0U; group < groups.size(); ++group) {
+              for (const auto index : groups[group]) {
+                const auto [start, finish] = route_particle_ranges[index];
+                // Endpoint anchors include same-net junctions and vias; they are immutable.
+                for (auto particle = start + 1U; particle + 1U < finish; ++particle) {
+                  proposed[index].spline.control_points[particle - start] = SplineVector{
+                      static_cast<long double>(proposal->positions_nm[particle].first),
+                      static_cast<long double>(proposal->positions_nm[particle].second)};
+                }
+                reconstructible[group] = rebuild_quintic_ph_route(proposed[index].spline) &&
+                                         reconstructible[group];
+              }
+            }
+            const Board* native_source = &board;
+            if (result.configured.frozen_copper_context) {
+              auto [context, inserted] = frozen_contexts.try_emplace(assignment.window_id);
+              if (inserted)
+                context->second = build_regional_frozen_copper_context(
+                    board, result, assignment.window_id, &frozen_owners[assignment.window_id]);
+              native_source = context->second ? &*context->second : nullptr;
+            }
+            std::vector<std::vector<SplineFittedPiece>> baseline_pieces(routes.size());
+            auto proposed_pieces = baseline_pieces;
+            NativeRegionalAssessment native_baseline;
+            if (native_source && !groups.empty()) {
+              for (std::size_t index = 0U; index < routes.size(); ++index)
+                baseline_pieces[index] = fit_quintic_ph_to_cubic_copper(
+                    routes[index].spline, result.configured.native_fit, stop_token);
+              proposed_pieces = baseline_pieces;
+              for (std::size_t group = 0U; group < groups.size(); ++group)
+                if (reconstructible[group])
+                  for (const auto index : groups[group])
+                    proposed_pieces[index] = fit_quintic_ph_to_cubic_copper(
+                        proposed[index].spline, result.configured.native_fit, stop_token);
+              native_baseline = assess_native_regional_window(
+                  *native_source, routes, baseline_pieces, assignment.window_id,
+                  result.configured.treat_saved_zone_fills_as_refillable,
+                  frozen_owners[assignment.window_id], result.configured.frozen_copper_context);
+            }
+            std::vector<WorkingRegionalSpline> safe_subset;
+            const auto subset = retain_safe_repair_subset(groups.size(), 8U,
+                [&](const std::vector<bool>& retained) {
+                  RepairSubsetAssessment assessment;
+                  if (!native_source || stop_token.stop_requested()) return assessment;
+                  auto hybrid = routes;
+                  auto pieces = baseline_pieces;
+                  for (std::size_t group = 0U; group < groups.size(); ++group) {
+                    if (!retained[group]) continue;
+                    if (!reconstructible[group]) {
+                      assessment.blocked_groups.push_back(group);
+                      continue;
+                    }
+                    for (const auto index : groups[group]) {
+                      hybrid[index] = proposed[index];
+                      pieces[index] = proposed_pieces[index];
+                    }
+                  }
+                  if (!assessment.blocked_groups.empty()) return assessment;
+                  const auto native = assess_native_regional_window(
+                      *native_source, hybrid, pieces, assignment.window_id,
+                      result.configured.treat_saved_zone_fills_as_refillable,
+                      frozen_owners[assignment.window_id], result.configured.frozen_copper_context);
+                  for (std::size_t group = 0U; group < groups.size(); ++group)
+                    if (retained[group] && std::any_of(groups[group].begin(), groups[group].end(),
+                        [&](const auto index) {
+                          return index >= native.route_legal.size() || !native.route_legal[index];
+                        })) assessment.blocked_groups.push_back(group);
+                  if (!assessment.blocked_groups.empty()) return assessment;
+                  const auto candidate = assess_adaptive_regional_window(hybrid);
+                  std::vector<std::vector<SplineVector>> samples(hybrid.size());
+                  for (std::size_t index = 0U; index < hybrid.size(); ++index)
+                    for (const auto& sample : adaptive_tessellate_quintic_ph(
+                             hybrid[index].spline, Nanometres::from_mm(0.02), 10U, 512U))
+                      samples[index].push_back(sample.position);
+                  assessment.strictly_improved =
+                      candidate.objective() < baseline.objective() &&
+                      candidate.topology_illegal_routes <= baseline.topology_illegal_routes &&
+                      candidate.topology_gate_violations <= baseline.topology_gate_violations &&
+                      continuous_mutual_failures(hybrid, samples) <= baseline_continuous_mutual_failures &&
+                      native.violations <= native_baseline.violations &&
+                      native.fit_failures <= native_baseline.fit_failures;
+                  if (assessment.strictly_improved) safe_subset = std::move(hybrid);
+                  return assessment;
+                });
+            result.xpbd_subset_assessments += subset.assessments;
+            if (subset.accepted && !stop_token.stop_requested()) {
+              routes = std::move(safe_subset);
+              invocation.accepted = true;
+              if (avbd && proposal == &avbd->relaxation) {
+                ++result.avbd_windows_improved;
+                invocation.diagnostic += (invocation.diagnostic.empty() ? "" : "; ") +
+                    std::string("AVBD proposal accepted by subset gate");
+              }
+              ++result.xpbd_subset_repairs_retained;
+              result.xpbd_subset_groups_retained +=
+                  static_cast<std::size_t>(std::count(subset.retained.begin(), subset.retained.end(), true));
+              ++result.xpbd_windows_improved;
+              invocation.diagnostic += "; retained exact-checked net-atomic repair subset";
+              for (std::size_t index = 0U; index < routes.size(); ++index) refresh_route_samples(index);
+            }
           }
         }
         if (result.configured.enable_xpbd_feedback &&
@@ -9531,6 +14630,8 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
               ", obstacle_stress_nm=" +
               std::to_string(static_cast<double>(invocation.stress.obstacle_nm)) +
               ", unresolved_pairs=" + std::to_string(invocation.unresolved_trace_pairs) +
+              ", rational_offset_trigger=" +
+              std::string(invocation.rational_offset_triggered ? "yes" : "no") +
               ", gpu_pressure=" + std::string(invocation.used_gpu_pressure_field ? "yes" : "no") +
               ", stalled=" + std::string(invocation.stalled ? "yes" : "no") +
               ", accepted=" + std::string(invocation.accepted ? "yes" : "no") +
@@ -9561,11 +14662,15 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
         result.xpbd_invocations.push_back(std::move(invocation));
       }
     }
+    xpbd_us = phase_elapsed_us(xpbd_started);
+    publish_provisional_geometry("xpbd relaxation");
     // Legalize the selected lane bundle collectively before asking the ordinary smoothness
     // optimizer to refine each route. This is a bounded elastic-band/PNS step: the most deeply
     // colliding interior curve sample supplies the obstacle normal and cubic basis influence,
     // while a whole-route legality score prevents a shove from trading clearance for a corridor
     // crossing. Every window is still committed only as one exact-clean transaction.
+    publish_phase_started("joint shove");
+    const auto joint_shove_started = std::chrono::steady_clock::now();
     constexpr std::size_t joint_samples = 33U;
     for (std::size_t sweep = 0U; sweep < result.configured.max_spline_sweeps; ++sweep) {
       bool accepted_in_sweep = false;
@@ -9635,6 +14740,10 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
         break;
       }
     }
+    joint_shove_us = phase_elapsed_us(joint_shove_started);
+    publish_provisional_geometry("joint shove");
+    publish_phase_started("trajectory polish");
+    const auto trajectory_polish_started = std::chrono::steady_clock::now();
     for (std::size_t sweep = 0U; sweep < result.configured.max_spline_sweeps; ++sweep) {
       bool moved = false;
       for (std::size_t index = 0U; index < routes.size(); ++index) {
@@ -9642,6 +14751,7 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
           continue;
         }
         SplineTrajectoryOptimizationConfig config;
+        config.enable_paired_obstacle_supports = result.configured.enable_paired_obstacle_supports;
         config.minimum_clearance = Nanometres{0};
         config.control_step =
             Nanometres{std::max<std::int64_t>(1, result.configured.window_margin.value() / 10)};
@@ -9651,6 +14761,7 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
         config.samples = 32U;
         config.maximum_iterations = 2U;
         config.maximum_candidate_checks = 128U;
+        config.exact_candidate_workers = result.configured.max_spline_exact_candidate_workers;
         const auto evaluator = [&](SplineVector position) {
           return regional_spline_clearance(routes[index], position, routes, index, route_samples);
         };
@@ -9673,11 +14784,15 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
         break;
       }
     }
+    trajectory_polish_us = phase_elapsed_us(trajectory_polish_started);
+    publish_provisional_geometry("trajectory polish");
 
     // Finish with bounded two-route transactions judged by the same adaptive whole-window
     // representation used by final realization. Earlier sampled pair shoves could improve one
     // curve while regressing the complete window; this phase accepts only a lexicographic decrease
     // in adaptive topology/mutual violations and keeps the unchanged routes as its fallback.
+    publish_phase_started("adaptive pair shove");
+    const auto adaptive_pair_started = std::chrono::steady_clock::now();
     const auto has_mutual_pressure = [&]() {
       for (std::size_t route = 0U; route < routes.size(); ++route) {
         for (const auto& position : route_samples[route]) {
@@ -9862,6 +14977,35 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
         }
       }
     }
+    adaptive_pair_us = phase_elapsed_us(adaptive_pair_started);
+    publish_provisional_geometry("adaptive pair shove");
+    publish_phase_started("continuous-envelope check");
+    const auto post_polish_started = std::chrono::steady_clock::now();
+    const auto post_polish_continuous_failures = continuous_full_failures(routes, route_samples);
+    if (post_polish_continuous_failures > pre_polish_continuous_failures) {
+      routes = pre_polish_routes;
+      for (std::size_t route_index = 0U; route_index < routes.size(); ++route_index) {
+        refresh_route_samples(route_index);
+      }
+      if (telemetry != nullptr) {
+        RouterTelemetryEvent event;
+        event.kind = RouterTelemetryEventKind::search_summary;
+        event.minimum_level = RouterTelemetryLevel::diagnostic;
+        event.group_id = "regional-window:" + std::to_string(assignment.window_id);
+        event.stable_id = "regional-continuous-polish-rollback:" +
+                          std::to_string(assignment.window_id) + ":" +
+                          std::to_string(assignment.spline_candidate_rank);
+        event.detail = "rolled back sampled spline polish after exact continuous-envelope "
+                       "failures increased from " +
+                       std::to_string(pre_polish_continuous_failures) + " to " +
+                       std::to_string(post_polish_continuous_failures);
+        static_cast<void>(telemetry->try_emit(std::move(event)));
+      }
+    }
+    post_polish_us = phase_elapsed_us(post_polish_started);
+    publish_provisional_geometry("continuous-envelope check");
+    publish_phase_started("quantization feedback");
+    const auto quantization_started = std::chrono::steady_clock::now();
     std::vector<std::vector<SplineSample>> final_route_samples(routes.size());
     std::vector<std::vector<Point>> quantized_route_samples(routes.size());
     const auto refresh_final_samples = [&]() {
@@ -10113,6 +15257,78 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
         !quantized_assessment.budget_exhausted) {
       ++result.quantization_feedback_windows_legalized;
     }
+    quantization_us = phase_elapsed_us(quantization_started);
+    publish_provisional_geometry("quantization feedback");
+    std::vector<std::vector<SplineFittedPiece>> native_pieces(routes.size());
+    std::vector<std::uint64_t> native_fit_us(routes.size(), 0U);
+    std::vector<NativeSplineFitStats> native_fit_stats(routes.size());
+    for (std::size_t index = 0U; index < routes.size(); ++index) {
+      const auto fit_started = std::chrono::steady_clock::now();
+      native_pieces[index] = fit_quintic_ph_to_cubic_copper(
+          routes[index].spline, result.configured.native_fit, stop_token);
+      native_fit_stats[index].attempts = 1U;
+      native_fit_us[index] = static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::microseconds>(
+              std::chrono::steady_clock::now() - fit_started).count());
+    }
+    NativeRegionalAssessment native_assessment;
+    if (result.configured.native_arc_materialization_authority) {
+      ++result.native_arc_windows_checked;
+      const Board* native_source = &board;
+      if (result.configured.frozen_copper_context) {
+        auto [context, inserted] = frozen_contexts.try_emplace(assignment.window_id);
+        if (inserted)
+          context->second = build_regional_frozen_copper_context(
+              board, result, assignment.window_id, &frozen_owners[assignment.window_id]);
+        native_source = context->second ? &*context->second : nullptr;
+      }
+      if (native_source) {
+        native_assessment =
+          assess_native_regional_window(*native_source, routes, native_pieces, assignment.window_id,
+                                        result.configured.treat_saved_zone_fills_as_refillable,
+                                        frozen_owners[assignment.window_id],
+                                        result.configured.frozen_copper_context);
+      } else {
+        native_assessment.route_legal.assign(routes.size(), false);
+        native_assessment.violations = 1U;
+      }
+      result.native_arc_pieces_checked += native_assessment.pieces;
+      result.native_arc_fit_failures += native_assessment.fit_failures;
+      result.native_arc_copper_violations += native_assessment.violations;
+      result.native_arc_legal_windows += native_assessment.legal() ? 1U : 0U;
+      assignment.native_frozen_copper_conflicts = native_assessment.frozen_conflicts;
+    } else {
+      native_assessment.route_legal.resize(routes.size(), true);
+      for (std::size_t index = 0U; index < routes.size(); ++index)
+        native_assessment.route_legal[index] = !native_pieces[index].empty();
+    }
+    native_assessment.route_fit_us = std::move(native_fit_us);
+    native_assessment.route_fit_stats = std::move(native_fit_stats);
+    native_assessment.fit_us = std::accumulate(native_assessment.route_fit_us.begin(),
+                                               native_assessment.route_fit_us.end(),
+                                               std::uint64_t{0U});
+    if (result.configured.native_arc_materialization_authority)
+      publish_native_constraint_context(routes, native_pieces, native_assessment, assignment,
+                                        result.configured, telemetry);
+    std::uint64_t scene_fingerprint = obstacle_snapshot_revision;
+    for (const auto& route : routes) {
+      const auto route_fingerprint = regional_route_geometry_fingerprint(route);
+      scene_fingerprint ^= route_fingerprint + 0x9e3779b97f4a7c15ULL + (scene_fingerprint << 6U) +
+                           (scene_fingerprint >> 2U);
+      scene_fingerprint ^= static_cast<std::uint64_t>(route.width.value());
+      scene_fingerprint ^= static_cast<std::uint64_t>(route.clearance.value()) << 1U;
+      for (const auto& via : route.candidate_vias) {
+        const auto mix = [&](std::uint64_t value) {
+          scene_fingerprint ^= value + 0x9e3779b97f4a7c15ULL +
+                               (scene_fingerprint << 6U) + (scene_fingerprint >> 2U);
+        };
+        mix(hash_regional_text(via.net.value()));
+        mix(static_cast<std::uint64_t>(via.site.x.value()));
+        mix(static_cast<std::uint64_t>(via.site.y.value()));
+        mix(static_cast<std::uint64_t>(via.diameter.value()));
+        for (const auto& layer : via.span) mix(hash_regional_text(layer.value()));
+      }
+    }
     bool all_legal = true;
     for (std::size_t index = 0U; index < routes.size(); ++index) {
       const auto& samples = final_route_samples[index];
@@ -10128,8 +15344,39 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
       realized.accepted_control_moves = routes[index].control_moves;
       realized.topology_signature = routes[index].topology_signature.fingerprint;
       realized.topology_gate_count = routes[index].topology_signature.gates.size();
+      realized.ph_route = std::make_shared<const QuinticPHRoute>(routes[index].spline);
+      // Current regional construction uses the default zero-radius hard bound; retain it with
+      // the certificate so a future nonzero regional policy cannot be dropped by tightening.
+      realized.certified_minimum_bend_radius = Nanometres{0};
+      realized.topology_certificate = routes[index].topology_signature;
+      const auto retain_anchor = [&](Point anchor) {
+        const auto vector = SplineVector{static_cast<long double>(anchor.x.value()),
+                                         static_cast<long double>(anchor.y.value())};
+        if (std::any_of(routes[index].spline.control_points.begin(),
+                        routes[index].spline.control_points.end(),
+                        [&](auto control) {
+                          return std::abs(control.x - vector.x) < 0.5L &&
+                                 std::abs(control.y - vector.y) < 0.5L;
+                        }) &&
+            std::find(realized.protected_anchors.begin(), realized.protected_anchors.end(),
+                      anchor) == realized.protected_anchors.end()) {
+          realized.protected_anchors.push_back(anchor);
+        }
+      };
+      retain_anchor(routes[index].source_start);
+      retain_anchor(routes[index].replacement_end);
+      if (routes[index].entry_via_site) retain_anchor(*routes[index].entry_via_site);
+      if (routes[index].exit_via_site) retain_anchor(*routes[index].exit_via_site);
+      for (const auto& link : routes[index].topology_links) {
+        retain_anchor(link.first);
+        retain_anchor(link.second);
+      }
       const auto ph_controls = quintic_ph_bezier_controls(routes[index].spline);
       realized.control_points.reserve(ph_controls.size());
+      realized.native_pieces = native_pieces[index];
+      realized.native_fit_policy = result.configured.native_fit;
+      realized.native_copper_legal =
+          index < native_assessment.route_legal.size() && native_assessment.route_legal[index];
       realized.merged_fragments = routes[index].merged_fragments;
       for (const auto& control : ph_controls) {
         realized.control_points.push_back(quantize_regional_spline(control));
@@ -10153,7 +15400,24 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
           realized.centerline.size() <= 2U ||
           std::all_of(realized.centerline.begin() + 1, realized.centerline.end() - 1,
                       realized_point_is_in_topology);
-      const auto gate_sequence = regional_spline_gate_sequence(routes[index], route_samples[index]);
+      const RegionalPHRouteCertificateKey route_certificate_key{
+          regional_route_geometry_fingerprint(routes[index]), scene_fingerprint,
+          regional_corridor_revision(routes[index]), obstacle_snapshot_revision,
+          routes[index].layer};
+      auto prepared_route_certificate =
+          persistent_cache != nullptr
+              ? persistent_cache->route_certificates.find(route_certificate_key)
+              : std::optional<RegionalPHRouteCertificates>{};
+      if (prepared_route_certificate)
+        ++result.spline_route_certificate_cache_hits;
+      else
+        ++result.spline_route_certificate_cache_misses;
+      const auto gate_sequence =
+          prepared_route_certificate ? prepared_route_certificate->topology
+          : routes[index].topology_signature.valid
+              ? validate_navmesh_topology_signature(routes[index].topology_signature,
+                                                    realized.centerline, true)
+              : regional_spline_gate_sequence(routes[index], route_samples[index]);
       realized.topology_gate_sequence_legal = gate_sequence.preserved;
       realized.topology_diagnostic = gate_sequence.diagnostic;
       realized.topology_legal = endpoints_topology_legal && interior_topology_legal &&
@@ -10161,18 +15425,39 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
       realized.endpoint_topology_legal = endpoints_topology_legal;
       realized.interior_topology_legal = interior_topology_legal;
       const auto final_clearance_evaluator = [&](SplineVector position) {
-        return regional_spline_clearance(routes[index], position, routes, index, route_samples);
+        const auto probe =
+            regional_spline_clearance(routes[index], position, routes, index, route_samples);
+        return SplineClearanceProbe{probe.clearance_nm, probe.obstacle_normal,
+                                    probe.clearance_nm >= 0.0L};
       };
-      const auto continuous_envelope = certify_quintic_ph_continuous_envelope(
-          routes[index].spline, Nanometres{0}, final_clearance_evaluator);
-      result.spline_continuous_hulls_checked += continuous_envelope.hulls_checked;
-      result.spline_continuous_envelope_rejections += continuous_envelope.legal ? 0U : 1U;
-      result.spline_continuous_budget_exhaustions += continuous_envelope.budget_exhausted ? 1U : 0U;
-      // Rational PH offset intersection is the exact transverse-crossing closure for an
-      // otherwise legal continuous envelope.  It cannot rescue an envelope that has already
-      // failed, so do not pay its recursive root/isolation cost for that rejected candidate.
+      auto mutual_only_spline = routes[index].spline;
+      mutual_only_spline.prepared_corridor.reset();
+      SplineContinuousEnvelopeCertificate continuous_envelope;
+      // Native KiCad primitives are the physical object ultimately committed. When that exact
+      // represented-copper transaction is legal, do not repeat the same acceptance decision on
+      // a degree-nine rational approximation that will be discarded. Retain the PH envelope as
+      // a fail-closed diagnostic for rejected native candidates and for controlled legacy runs.
+      const auto need_continuous_diagnostic =
+          !result.configured.native_arc_materialization_authority || !realized.native_copper_legal;
+      if (need_continuous_diagnostic) {
+        realized.continuous_envelope_evaluated = true;
+        continuous_envelope =
+            prepared_route_certificate
+                ? prepared_route_certificate->obstacle_and_route_envelope
+                : certify_quintic_ph_continuous_envelope(mutual_only_spline, Nanometres{0},
+                                                         final_clearance_evaluator);
+        if (!prepared_route_certificate) {
+          result.spline_continuous_hulls_checked += continuous_envelope.hulls_checked;
+          result.spline_continuous_envelope_rejections += continuous_envelope.legal ? 0U : 1U;
+          result.spline_continuous_budget_exhaustions +=
+              continuous_envelope.budget_exhausted ? 1U : 0U;
+        }
+      }
+      realized.continuous_envelope_legal =
+          !realized.continuous_envelope_evaluated || continuous_envelope.legal;
       bool rational_offset_intersection = false;
-      if (continuous_envelope.legal) {
+      if (realized.continuous_envelope_evaluated && continuous_envelope.legal) {
+        realized.rational_offset_evaluated = true;
         for (std::size_t other_index = 0U; other_index < routes.size(); ++other_index) {
           if (other_index != index && offset_pair_intersects(index, other_index)) {
             rational_offset_intersection = true;
@@ -10180,11 +15465,26 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
           }
         }
       }
-      realized.mutually_legal = continuous_envelope.legal && !rational_offset_intersection;
+      realized.rational_offset_intersection = rational_offset_intersection;
+      realized.mutually_legal = result.configured.native_arc_materialization_authority
+                                    ? realized.native_copper_legal
+                                    : continuous_envelope.legal && !rational_offset_intersection;
       realized.quantized_mutually_legal = !quantized_assessment.budget_exhausted &&
                                           index < quantized_assessment.route_legal.size() &&
                                           quantized_assessment.route_legal[index];
-      const auto shape = certify_quintic_ph_shape(routes[index].spline);
+      // In native-authority mode the manufacturing quantization is the integer arc/segment
+      // scene above, not the diagnostic tessellation chords. Keep chord conflict counters as
+      // optimizer evidence, but do not let that different representation veto legal copper.
+      if (result.configured.native_arc_materialization_authority)
+        realized.quantized_mutually_legal = realized.native_copper_legal;
+      const auto shape = prepared_route_certificate
+                             ? prepared_route_certificate->shape
+                             : certify_quintic_ph_shape(routes[index].spline);
+      if (!prepared_route_certificate && realized.continuous_envelope_evaluated &&
+          persistent_cache != nullptr)
+        persistent_cache->route_certificates.insert(
+            route_certificate_key,
+            RegionalPHRouteCertificates{gate_sequence, continuous_envelope, shape});
       realized.shape_legal = shape.legal;
       realized.shape_sample_budget_exhausted = shape.sample_budget_exhausted;
       realized.shape_self_intersections = shape.self_intersections;
@@ -10216,12 +15516,116 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
     if (!all_legal) {
       assignment.stop_reason = RegionalBundleStopReason::spline_realization_failed;
     }
+    if (telemetry != nullptr && telemetry->accepts(RouterTelemetryLevel::diagnostic)) {
+      RouterTelemetryEvent timing;
+      timing.kind = RouterTelemetryEventKind::search_summary;
+      timing.minimum_level = RouterTelemetryLevel::diagnostic;
+      timing.group_id = "regional-window:" + std::to_string(assignment.window_id);
+      timing.stable_id = "regional-spline-phase-timing:" +
+                         std::to_string(assignment.window_id) + ":" +
+                         std::to_string(assignment.spline_candidate_rank);
+      std::ostringstream detail;
+      detail << "regional spline phase timing: exact_workers="
+             << result.configured.max_spline_exact_candidate_workers
+             << ", setup_us=" << setup_us
+             << ", interpolation_us=" << interpolation_us << ", xpbd_us=" << xpbd_us
+             << ", joint_shove_us=" << joint_shove_us
+             << ", trajectory_polish_us=" << trajectory_polish_us
+             << ", adaptive_pair_us=" << adaptive_pair_us
+             << ", post_polish_us=" << post_polish_us
+             << ", quantization_us=" << quantization_us
+             << ", native_fit_us=" << native_assessment.fit_us
+             << ", native_drc_us=" << native_assessment.drc_us
+             << ", elapsed_us=" << phase_elapsed_us(candidate_realization_started);
+      timing.detail = detail.str();
+      static_cast<void>(telemetry->try_emit(std::move(timing)));
+    }
     // A dense window may spend minutes evaluating its bounded continuous portfolio. Publish the
     // completed candidate now so trace/live viewers can inspect the real PH Bezier controls even if
     // a later candidate is cancelled or the caller's time budget expires. This remains diagnostic,
     // provisional state; final selected geometry is republished below at normal level.
     publish_regional_spline_assignment_telemetry(assignment, telemetry,
                                                  RouterTelemetryLevel::diagnostic, "candidate");
+    // Candidate realization is complete and its assignment no longer mutates before the next
+    // bounded candidate. This is the first coherent window-level diagnostic snapshot.
+    emit_regional_decision(RegionalDecisionPhase::spline_candidate_completed, &result, false,
+                           "regional spline candidate completed");
+    if (assignment.joint_spline_candidate &&
+        !result.configured.candidate_ranker_training_data_path.empty()) {
+      RegionalBundleSelection selection;
+      selection.templates = assignment.selected_templates;
+      selection.via_choices = assignment.selected_via_choices;
+      selection.via_assignment_region_order = assignment.via_assignment_region_order;
+      selection.packed_cross_sections = assignment.packed_cross_sections;
+      selection.via_alternative_switches = assignment.selected_via_alternative_switches;
+      selection.template_conflicts = assignment.selected_template_conflicts;
+      selection.residual_conflicts = assignment.selected_residual_conflicts;
+      selection.candidate_heuristic_rank = assignment.spline_candidate_heuristic_rank;
+      selection.candidate_learned_score = assignment.spline_candidate_learned_score;
+      selection.candidate_learned_score_available =
+          assignment.spline_candidate_learned_score_available;
+      const auto profile = candidate_spline_failure_profile(assignment);
+      const auto realization_us = static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::microseconds>(
+              std::chrono::steady_clock::now() - candidate_realization_started)
+              .count());
+      const auto query_id = board.source_revision + ":" + ranking_invocation + ":" +
+                            std::to_string(assignment.window_id);
+      std::string training_diagnostic;
+      const auto written = append_regional_candidate_training_observation(
+          result.configured.candidate_ranker_training_data_path,
+          RegionalCandidateTrainingObservation{
+              board.source_revision,
+              query_id,
+              assignment.window_id,
+              assignment.spline_candidate_heuristic_rank,
+              assignment.spline_candidate_rank,
+              regional_candidate_features(result, assignment, selection),
+              assignment.spline_candidate_learned_score_available,
+              assignment.spline_candidate_learned_score,
+              assignment.complete(),
+              profile.short_routes,
+              profile.topology,
+              profile.shape,
+              profile.mutual,
+              profile.quantization,
+              realization_us},
+          training_diagnostic);
+      result.candidate_ranker_training_rows_written += written ? 1U : 0U;
+      result.candidate_ranker_training_rows_failed += written ? 0U : 1U;
+      if (!written && result.candidate_ranker_diagnostic.empty())
+        result.candidate_ranker_diagnostic = std::move(training_diagnostic);
+    }
+    if (assignment.joint_spline_candidate && assignment.complete()) {
+      ++exact_legal_windows[assignment.window_id];
+    }
+    if (assignment.complete()) {
+      const auto prefix = "linear-scaffold:" + std::to_string(assignment.window_id) + ":";
+      for (auto& diagnosis : result.local_routability_diagnoses)
+        if (diagnosis.resource.stable_id.starts_with(prefix)) diagnosis.locally_resolved = true;
+    }
+    assignment.spline_candidate_realized = true;
+    if (!candidate_only) {
+      observe_candidate(assignment);
+      auto suffix_end = candidate_index + 1U;
+      while (suffix_end < result.bundle_assignments.size() &&
+             result.bundle_assignments[suffix_end].window_id == assignment.window_id &&
+             !result.bundle_assignments[suffix_end].spline_candidate_realized) ++suffix_end;
+      reschedule_suffix(candidate_index + 1U, suffix_end);
+    }
+  }
+  // Candidate workers return raw exact realizations; only the parent reduces windows,
+  // emits diagnoses, promotes fallback portfolios and recomputes retained-state counters.
+  if (candidate_only) return;
+  if (std::ranges::any_of(skipped_after_exact_legal, std::identity{})) {
+    std::vector<RegionalBundleAssignment> evaluated_assignments;
+    evaluated_assignments.reserve(result.bundle_assignments.size());
+    for (std::size_t index = 0U; index < result.bundle_assignments.size(); ++index) {
+      if (!skipped_after_exact_legal[index]) {
+        evaluated_assignments.push_back(std::move(result.bundle_assignments[index]));
+      }
+    }
+    result.bundle_assignments = std::move(evaluated_assignments);
   }
 
   // A shortlist is an atomic continuous feasibility test for one joint window, not multiple
@@ -10283,8 +15687,13 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
       const auto profile = failure_profile(result.bundle_assignments[candidate]);
       candidate_summaries.push_back(RegionalSplineCandidateSummary{
           result.bundle_assignments[candidate].spline_candidate_rank,
-          result.bundle_assignments[candidate].selected_templates, profile.short_routes,
+          result.bundle_assignments[candidate].selected_templates,
+          result.bundle_assignments[candidate].selected_via_choices,
+          result.bundle_assignments[candidate].via_assignment_region_order,
+          result.bundle_assignments[candidate].packed_cross_sections, profile.short_routes,
           profile.topology, profile.shape, profile.mutual, profile.quantization,
+          regional_assignment_is_no_good_certificate(
+              result.bundle_assignments[candidate].stop_reason),
           result.bundle_assignments[candidate].complete()});
     }
     for (auto candidate = index + 1U; candidate < end; ++candidate) {
@@ -10304,6 +15713,9 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
       if (profile.quantization > 0U && profile.topology == 0U && profile.mutual == 0U) {
         return RoutabilityFailureKind::quantization_clearance;
       }
+      if (candidate.xpbd_topology_escape_required && profile.mutual > 0U) {
+        return RoutabilityFailureKind::topological_trap;
+      }
       return profile.mutual >= profile.topology ? RoutabilityFailureKind::shove_deadlock
                                                 : RoutabilityFailureKind::topological_trap;
     };
@@ -10316,7 +15728,8 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
       case RoutabilityFailureKind::shove_deadlock:
         return profile.mutual;
       case RoutabilityFailureKind::topological_trap:
-        return profile.topology;
+        return profile.topology +
+               (candidate.xpbd_topology_escape_required ? profile.mutual : 0U);
       case RoutabilityFailureKind::quantization_clearance:
         return profile.quantization;
       default:
@@ -10329,26 +15742,29 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
     const auto legal_realization_objective = [](const RegionalBundleAssignment& candidate) {
       std::size_t control_moves = 0U;
       std::size_t optimization_sweeps = 0U;
-      long double centerline_length_nm = 0.0L;
+      long double exact_length_nm = 0.0L;
+      long double curvature = 0.0L;
       for (const auto& realization : candidate.spline_realizations) {
         control_moves += realization.accepted_control_moves;
         optimization_sweeps += realization.optimization_sweeps;
-        for (std::size_t point = 1U; point < realization.centerline.size(); ++point) {
-          centerline_length_nm += geometry::point_distance_nm(realization.centerline[point - 1U],
-                                                              realization.centerline[point]);
-        }
+        if (realization.ph_route) {
+          for (const auto& segment : realization.ph_route->segments)
+            exact_length_nm += quintic_ph_arc_length(segment);
+          curvature += quintic_ph_curvature_objective(*realization.ph_route);
+        } else
+          for (std::size_t point = 1U; point < realization.centerline.size(); ++point)
+            exact_length_nm += geometry::point_distance_nm(realization.centerline[point - 1U],
+                                                            realization.centerline[point]);
       }
-      // Every candidate reaching this comparator already passed the same exact topology,
-      // continuous-envelope and quantized-envelope gates. Prefer the solution that required the
-      // least elastic deformation before considering physical length and original portfolio rank.
-      // This prevents an aggressively polished early topology from hiding a cleaner lane/layer/via
-      // alternative that the regional solver deliberately retained.
-      return std::tuple{control_moves,
-                        optimization_sweeps,
-                        centerline_length_nm,
+      // All candidates here passed identical topology, envelope, and native-copper gates.
+      // Compare exact retained PH length, then curvature. Straight realizations use their
+      // polyline length; deformation bookkeeping is only a deterministic final tie-breaker.
+      return std::tuple{exact_length_nm, curvature,
+                        candidate.spline_candidate_rank,
                         candidate.selected_template_conflicts,
                         candidate.selected_residual_conflicts,
-                        candidate.spline_candidate_rank};
+                        optimization_sweeps,
+                        control_moves};
     };
     for (auto candidate = index; candidate < end; ++candidate) {
       if (result.bundle_assignments[candidate].complete() &&
@@ -10370,6 +15786,7 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
         const auto profile = failure_profile(candidate);
         return std::tuple{maximum_realizations - candidate.spline_realizations.size(),
                           profile.short_routes,
+                          candidate.xpbd_topology_escape_required ? 1U : 0U,
                           profile.topology + profile.shape + profile.mutual + profile.quantization,
                           profile.topology,
                           profile.shape,
@@ -10391,8 +15808,14 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
         result.joint_spline_failed_improved_window_ids.push_back(window_id);
       }
     }
-    const auto diagnosed_kind = failure_kind(result.bundle_assignments[selected]);
     const auto selected_profile = failure_profile(result.bundle_assignments[selected]);
+    // If a later shortlist member repaired the window, describe the failure that was actually
+    // repaired rather than classifying the all-zero selected profile as a shove deadlock.  The
+    // diagnosis remains locally resolved and therefore non-authoritative feedback, but its type,
+    // severity and viewer text must still be truthful.
+    const auto diagnosis_source = result.bundle_assignments[selected].complete() ? index : selected;
+    const auto diagnosed_kind = failure_kind(result.bundle_assignments[diagnosis_source]);
+    const auto diagnosed_profile = failure_profile(result.bundle_assignments[diagnosis_source]);
     if (!result.bundle_assignments[index].complete()) {
       const auto window =
           std::find_if(result.windows.begin(), result.windows.end(),
@@ -10436,12 +15859,13 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
                                : RoutabilityFailureStage::spline_realization;
         const auto severity =
             diagnosed_kind == RoutabilityFailureKind::quantization_clearance
-                ? std::max<std::size_t>(1U, selected_profile.quantization)
+                ? std::max<std::size_t>(1U, diagnosed_profile.quantization)
             : diagnosed_kind == RoutabilityFailureKind::curvature_infeasible
-                ? std::max<std::size_t>(1U, selected_profile.short_routes + selected_profile.shape)
+                ? std::max<std::size_t>(1U,
+                                        diagnosed_profile.short_routes + diagnosed_profile.shape)
             : diagnosed_kind == RoutabilityFailureKind::shove_deadlock
-                ? std::max<std::size_t>(1U, selected_profile.mutual)
-                : std::max<std::size_t>(1U, selected_profile.topology);
+                ? std::max<std::size_t>(1U, diagnosed_profile.mutual)
+                : std::max<std::size_t>(1U, diagnosed_profile.topology);
         RoutabilityDiagnosis diagnosis{
             diagnosed_kind,
             stage,
@@ -10455,7 +15879,16 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
             std::nullopt,
             std::nullopt,
             relaxation,
-            "selected spline/PNS realization diagnosed " + std::string(to_string(diagnosed_kind)) +
+            std::string(result.bundle_assignments[selected].complete()
+                            ? "initial spline/PNS realization repaired after "
+                            : "selected spline/PNS realization diagnosed ") +
+                std::string(to_string(diagnosed_kind)) +
+                "; xpbd_attempted=" +
+                std::string(result.bundle_assignments[selected].xpbd_attempted ? "yes" : "no") +
+                ", xpbd_topology_escape=" +
+                std::string(result.bundle_assignments[selected].xpbd_topology_escape_required
+                                ? "yes"
+                                : "no") +
                 "; selected state has realizations=" +
                 std::to_string(result.bundle_assignments[selected].spline_realizations.size()) +
                 ", topology=" + std::to_string(selected_profile.topology) +
@@ -10517,7 +15950,7 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
         continue;
       }
       std::set<RegionalRouteFragmentId> implicated_fragments;
-      bool topology_failure = false;
+      bool topology_failure = assignment.xpbd_topology_escape_required;
       for (const auto& realization : assignment.spline_realizations) {
         if (!realization.topology_legal || !realization.mutually_legal ||
             !realization.quantized_mutually_legal || realization.centerline.size() < 2U) {
@@ -10622,6 +16055,8 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
       promoted_wave.emplace(assignment.window_id, assignment.spline_fallback_waves);
       assignment.spline_candidate_reserve = std::move(remaining_reserve);
       assignment.spline_realizations.clear();
+      assignment.relaxed_via_choices.clear();
+      assignment.native_frozen_copper_conflicts.clear();
       assignment.stop_reason = RegionalBundleStopReason::complete;
       assignment.joint_spline_candidate = false;
       if (telemetry != nullptr) {
@@ -10641,7 +16076,8 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
     if (!promoted_windows.empty()) {
       // Re-rank after each wave because its least-illegal result changes which
       // corridor/lane/via alternatives are most relevant for the next bounded wave.
-      realize_bundle_splines(board, result, stop_token, telemetry, maximum_fallback_waves);
+      realize_bundle_splines_serial(board, result, stop_token, telemetry,
+                                    maximum_fallback_waves, persistent_cache);
       for (const auto window_id : promoted_windows) {
         const auto assignment =
             std::find_if(result.bundle_assignments.begin(), result.bundle_assignments.end(),
@@ -10723,15 +16159,200 @@ void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
     }
   }
   result.selected_terminal_portal_choices = selected_terminal_portals.size();
-  result.spline_realization_us += static_cast<std::uint64_t>(
-      std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() -
-                                                            realization_started)
-          .count());
+  result.spline_realization_us +=
+      static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                     std::chrono::steady_clock::now() - realization_started)
+                                     .count());
+}
+
+void realize_bundle_splines(const Board& board, RegionalRouteResult& result,
+                            std::stop_token stop_token, RouterTelemetrySink* telemetry,
+                            std::size_t maximum_fallback_waves = 1U,
+                            std::size_t fallback_wave = 0U,
+                            RegionalPHCacheContext* inherited_cache = nullptr) {
+  // A realization invocation is the deterministic cache lifetime. It spans every shortlist and
+  // recursive fallback wave, while separate planner invocations cannot clear or perturb each
+  // other's cache state.
+  RegionalPHCacheContext owned_cache;
+  auto* persistent_cache = inherited_cache != nullptr ? inherited_cache : &owned_cache;
+  const auto promotion_waves_before = result.joint_spline_fallback_promotion_waves;
+  struct WindowInput {
+    std::size_t window_id{0U};
+    std::vector<RegionalBundleAssignment> assignments;
+    bool active{false};
+  };
+  const auto active_window_ids =
+      select_regional_spline_tier_windows(result.bundle_assignments, fallback_wave);
+  const std::set<std::size_t> active_window_set(active_window_ids.begin(),
+                                                active_window_ids.end());
+  std::vector<WindowInput> windows;
+  std::map<std::size_t, std::size_t> window_slots;
+  for (const auto& assignment : result.bundle_assignments) {
+    auto [slot, inserted] = window_slots.emplace(assignment.window_id, windows.size());
+    if (inserted)
+      windows.push_back(WindowInput{assignment.window_id, {}, false});
+    windows[slot->second].assignments.push_back(assignment);
+    windows[slot->second].active = active_window_set.contains(assignment.window_id);
+  }
+  const auto active_windows =
+      static_cast<std::size_t>(std::count_if(windows.begin(), windows.end(),
+                                             [](const auto& window) { return window.active; }));
+  // A worker owns a full RegionalRouteResult snapshot. Require two assignments per extra worker
+  // so a tiny shortlist cannot multiply snapshot/cache memory for negligible parallel work.
+  const auto active_assignments = static_cast<std::size_t>(std::count_if(
+      result.bundle_assignments.begin(), result.bundle_assignments.end(), [&](const auto& value) {
+        return active_window_set.contains(value.window_id);
+      }));
+  const auto workload_workers = std::max<std::size_t>(
+      1U, (active_assignments + std::size_t{1U}) / std::size_t{2U});
+  const auto memory_workers = result.configured.max_spline_window_scratch_bytes == 0U
+                                  ? result.configured.max_spline_window_workers
+                                  : std::max<std::size_t>(
+                                        1U, result.configured.max_spline_window_scratch_bytes /
+                                                result.configured
+                                                    .estimated_spline_window_scratch_bytes);
+  const auto requested_workers = std::min(
+      {result.configured.max_spline_window_workers, active_windows, workload_workers, memory_workers,
+       std::size_t{4U}});
+  auto window_worker_lease = acquire_cpu_workers(requested_workers,
+                                                 result.configured.max_spline_cpu_workers);
+  const auto workers = window_worker_lease.workers();
+  result.spline_window_tasks += active_windows;
+  result.spline_window_workers = std::max(result.spline_window_workers, workers);
+  if (workers < 2U || !result.configured.candidate_ranker_training_data_path.empty()) {
+    window_worker_lease = {};
+    realize_bundle_splines_serial(board, result, stop_token, telemetry, maximum_fallback_waves,
+                                  persistent_cache);
+    return;
+  }
+
+  // Each worker owns its complete mutable regional/geometry state. The source board and original
+  // result are immutable snapshots.
+  std::vector<std::optional<RegionalRouteResult>> outputs(windows.size());
+  const auto realize_window = [&](std::size_t index) {
+    auto local = result;
+    local.bundle_assignments = windows[index].assignments;
+    local.configured.max_spline_window_workers = 1U;
+    local.configured.max_spline_candidate_workers = 1U;
+    // The outer lease owns this CPU slot. Exact PH candidates execute on the window worker,
+    // avoiding a window-worker × candidate-worker explosion and bounding PH/DRC scratch.
+    local.configured.max_spline_exact_candidate_workers = 1U;
+    // These fields describe the retained state, not cumulative work. The serial worker
+    // recomputes them for its one window; the stable reducer sums those disjoint results.
+    local.spline_short_realization_rejections = 0U;
+    local.spline_topology_rejections = 0U;
+    local.spline_topology_endpoint_rejections = 0U;
+    local.spline_topology_interior_rejections = 0U;
+    local.spline_topology_gate_signatures = 0U;
+    local.spline_topology_gates = 0U;
+    local.spline_topology_gate_rejections = 0U;
+    local.spline_mutual_clearance_rejections = 0U;
+    local.selected_lane_cross_sections = 0U;
+    local.selected_geometric_lane_reorders = 0U;
+    local.avoided_lane_order_inversions = 0U;
+    realize_bundle_splines_serial(board, local, stop_token, telemetry, fallback_wave,
+                                  persistent_cache);
+    outputs[index] = std::move(local);
+  };
+  run_bounded_routing_tasks(windows.size(), workers, stop_token, [&](std::size_t index) {
+    if (windows[index].active) realize_window(index);
+  });
+  window_worker_lease = {};
+
+  const auto baseline = result;
+  result.bundle_assignments.clear();
+  result.spline_short_realization_rejections = 0U;
+  result.spline_topology_rejections = 0U;
+  result.spline_topology_endpoint_rejections = 0U;
+  result.spline_topology_interior_rejections = 0U;
+  result.spline_topology_gate_signatures = 0U;
+  result.spline_topology_gates = 0U;
+  result.spline_topology_gate_rejections = 0U;
+  result.spline_mutual_clearance_rejections = 0U;
+  result.selected_lane_cross_sections = 0U;
+  result.selected_geometric_lane_reorders = 0U;
+  result.avoided_lane_order_inversions = 0U;
+  for (std::size_t window = 0U; window < outputs.size(); ++window) {
+    if (!outputs[window]) {
+      result.bundle_assignments.insert(result.bundle_assignments.end(),
+                                       windows[window].assignments.begin(),
+                                       windows[window].assignments.end());
+      continue;
+    }
+    auto& local = *outputs[window];
+    result.bundle_assignments.insert(result.bundle_assignments.end(),
+                                     std::make_move_iterator(local.bundle_assignments.begin()),
+                                     std::make_move_iterator(local.bundle_assignments.end()));
+    merge_regional_spline_work(result, local, baseline);
+    result.spline_realization_us += local.spline_realization_us - baseline.spline_realization_us;
+    result.spline_short_realization_rejections += local.spline_short_realization_rejections;
+    result.spline_topology_rejections += local.spline_topology_rejections;
+    result.spline_topology_endpoint_rejections += local.spline_topology_endpoint_rejections;
+    result.spline_topology_interior_rejections += local.spline_topology_interior_rejections;
+    result.spline_topology_gate_signatures += local.spline_topology_gate_signatures;
+    result.spline_topology_gates += local.spline_topology_gates;
+    result.spline_topology_gate_rejections += local.spline_topology_gate_rejections;
+    result.spline_mutual_clearance_rejections += local.spline_mutual_clearance_rejections;
+    result.selected_lane_cross_sections += local.selected_lane_cross_sections;
+    result.selected_geometric_lane_reorders += local.selected_geometric_lane_reorders;
+    result.avoided_lane_order_inversions += local.avoided_lane_order_inversions;
+
+  }
+
+  const auto next_wave = fallback_wave + 1U;
+  std::set<std::size_t> pending_windows;
+  if (next_wave <= maximum_fallback_waves &&
+      (fallback_wave == 0U ||
+       result.joint_spline_fallback_promotion_waves > promotion_waves_before)) {
+    for (const auto& assignment : result.bundle_assignments) {
+      if (!assignment.complete() && !assignment.spline_candidate_reserve.empty() &&
+          assignment.spline_fallback_waves < next_wave) {
+        pending_windows.insert(assignment.window_id);
+      }
+    }
+  }
+  if (!pending_windows.empty() && !stop_token.stop_requested()) {
+    if (telemetry != nullptr) {
+      RouterTelemetryEvent event;
+      event.kind = RouterTelemetryEventKind::search_summary;
+      event.stable_id = "regional-spline-tier-barrier:" + std::to_string(fallback_wave);
+      event.group_id = "regional-spline-tier-barrier";
+      event.detail =
+          std::string(fallback_wave == 0U ? "active" : "fallback") +
+          " regional spline tier completed across all eligible windows; advancing to fallback " +
+          "wave=" + std::to_string(next_wave) + "/" +
+          std::to_string(maximum_fallback_waves) +
+          ", pending_windows=" + std::to_string(pending_windows.size());
+      static_cast<void>(telemetry->try_emit(std::move(event)));
+    }
+    realize_bundle_splines(board, result, stop_token, telemetry, maximum_fallback_waves,
+                           next_wave, persistent_cache);
+  }
 }
 
 void build_regional_spline_candidate(const Board& board, const GlobalRouteResult& global,
                                      RegionalRouteResult& result) {
+  emit_regional_decision(RegionalDecisionPhase::spline_phase_started, nullptr, false,
+                         "assembling regional spline scene");
+  // Assessment belongs to the exact scene which was checked. Rebuilding (even if ownership
+  // fails before assembly) invalidates that evidence; a copied incumbent is kept separately.
+  result.native_scene_evaluated = false;
+  result.native_scene_complete = false;
+  result.native_scene_conflicts = 0U;
+  result.native_scene_fixed_conflicts = 0U;
+  result.native_scene_total_conflicts = 0U;
+  result.native_scene_open_connections = 0U;
+  result.straight_scene_evaluated = false;
+  result.straight_scene_drc_violations = 0U;
+  result.straight_scene_open_connections = 0U;
+  result.straight_scene_drc_categories.clear();
+  std::erase_if(result.local_routability_diagnoses, [](const auto& diagnosis) {
+    return diagnosis.resource.stable_id.starts_with("native-scene:") ||
+           diagnosis.resource.stable_id.starts_with("straight-scene:");
+  });
   result.spline_candidate_paths.clear();
+  result.native_realization_manifest.clear();
+  result.native_realization_manifest_available = false;
   result.multilayer_route_plans.clear();
   result.complete_via_dependent_routes = 0U;
   result.planned_layer_runs = 0U;
@@ -10739,6 +16360,7 @@ void build_regional_spline_candidate(const Board& board, const GlobalRouteResult
   result.stitched_multilayer_runs = 0U;
   result.spline_candidate_available = false;
   result.spline_candidate_conflicting_articulation = false;
+  result.spline_candidate_diagnostic.clear();
   if (result.bundle_assignments.empty() ||
       std::any_of(result.bundle_assignments.begin(), result.bundle_assignments.end(),
                   [](const auto& assignment) { return !assignment.complete(); })) {
@@ -10758,26 +16380,59 @@ void build_regional_spline_candidate(const Board& board, const GlobalRouteResult
   std::map<RegionalRouteFragmentId, Replacement> replacements;
   std::map<std::pair<NetId, Point>, Point> relocated_via_sites;
   for (const auto& assignment : result.bundle_assignments) {
+    const auto assignment_window =
+        std::find_if(result.windows.begin(), result.windows.end(), [&](const auto& window) {
+          return window.id == assignment.window_id;
+        });
+    if (assignment_window == result.windows.end()) {
+      result.spline_candidate_diagnostic = "native transaction has no owning regional window";
+      return;
+    }
     for (const auto& realization : assignment.spline_realizations) {
+      // A Tarjan articulation fragment may be carried into an adjacent window as an immutable
+      // physical boundary. It participates in local clearance certification and telemetry, but
+      // only the window which explicitly owns it may publish its replacement. Treating frozen
+      // context as a second transaction writer discarded otherwise compatible window solutions.
+      if (assignment_window != result.windows.end() &&
+          std::find(assignment_window->owned_fragments.begin(),
+                    assignment_window->owned_fragments.end(), realization.fragment) ==
+              assignment_window->owned_fragments.end()) {
+        continue;
+      }
       const auto [found, inserted] = replacements.emplace(
           realization.fragment,
           Replacement{realization.layer, realization.centerline, realization.replacement_end,
                       realization.width, realization.width_kind, realization.entry_via_site,
                       realization.exit_via_site});
-      if (!inserted &&
-          found->second != Replacement{realization.layer, realization.centerline,
-                                       realization.replacement_end, realization.width,
-                                       realization.width_kind, realization.entry_via_site,
-                                       realization.exit_via_site}) {
+      if (inserted) {
+        auto published = realization;
+        published.owner_window_id = assignment.window_id;
+        result.native_realization_manifest.push_back(std::move(published));
+      }
+      // Even identical centerlines may carry different copper fits. Never silently pick one
+      // writer by iteration order; ownership must be unique before the native handoff.
+      static_cast<void>(found);
+      if (!inserted) {
         result.spline_candidate_conflicting_articulation = true;
+        result.spline_candidate_diagnostic =
+            "different regional windows attempted to replace fragment " +
+            realization.fragment.net.value() + "/" +
+            std::to_string(realization.fragment.connection_index) + "/" +
+            std::to_string(realization.fragment.run_index) + "/" +
+            std::to_string(realization.fragment.fragment_index);
         return;
       }
     }
     for (const auto choice_id : assignment.selected_via_choices) {
-      const auto choice =
-          std::find_if(result.via_choices.begin(), result.via_choices.end(),
-                       [&](const auto& candidate) { return candidate.id == choice_id; });
-      if (choice == result.via_choices.end() || choice->selected_global_site) {
+      const auto relaxed = std::find_if(assignment.relaxed_via_choices.begin(),
+                                        assignment.relaxed_via_choices.end(),
+                                        [&](const auto& candidate) { return candidate.id == choice_id; });
+      const auto original = std::find_if(result.via_choices.begin(), result.via_choices.end(),
+          [&](const auto& candidate) { return candidate.id == choice_id; });
+      const auto* choice = relaxed != assignment.relaxed_via_choices.end()
+                               ? &*relaxed
+                               : original != result.via_choices.end() ? &*original : nullptr;
+      if (choice == nullptr || (choice->selected_global_site && relaxed == assignment.relaxed_via_choices.end())) {
         continue;
       }
       const auto source = std::find_if(
@@ -10792,6 +16447,10 @@ void build_regional_spline_candidate(const Board& board, const GlobalRouteResult
           relocated_via_sites.emplace(std::pair{choice->net, source->site}, choice->site);
       if (!inserted && found->second != choice->site) {
         result.spline_candidate_conflicting_articulation = true;
+        result.spline_candidate_diagnostic =
+            "different regional windows selected incompatible relocation sites for " +
+            choice->net.value() + " via at (" + std::to_string(source->site.x.value()) + "," +
+            std::to_string(source->site.y.value()) + ")";
         return;
       }
     }
@@ -10923,6 +16582,10 @@ void build_regional_spline_candidate(const Board& board, const GlobalRouteResult
         if (edge + 2U >= original.size() ||
             original[edge + 1U].layer != original[edge + 2U].layer) {
           result.spline_candidate_conflicting_articulation = true;
+          result.spline_candidate_diagnostic =
+              "regional replacement end was not reachable in source run for " + path.net.value() +
+              "/" + std::to_string(path.connection_index) + "/" +
+              std::to_string(run_index);
           result.spline_candidate_paths.clear();
           return;
         }
@@ -10940,6 +16603,9 @@ void build_regional_spline_candidate(const Board& board, const GlobalRouteResult
       const auto& selected_replacement = replacement->second;
       if (selected_replacement.width != source_fragment->second->width ||
           selected_replacement.width_kind != source_fragment->second->width_kind) {
+        result.spline_candidate_diagnostic =
+            "regional replacement changed width evidence for " + path.net.value() + "/" +
+            std::to_string(path.connection_index) + "/" + std::to_string(run_index);
         result.spline_candidate_paths.clear();
         return;
       }
@@ -10984,6 +16650,31 @@ void build_regional_spline_candidate(const Board& board, const GlobalRouteResult
         first.position = relocation->second;
         second.position = relocation->second;
       }
+    }
+  }
+  // A fragment which switches onto the next source run's layer can leave an adapter
+  // B->F followed immediately by the original F->B transition at the same point. That is
+  // one continuous B run, not two physical vias. Remove only these zero-length return
+  // excursions from straight transactions. The complete connectivity/copper proof below
+  // remains mandatory: an intermediate-layer branch must still have a physical connection.
+  const bool straight_transaction = !result.native_realization_manifest.empty() &&
+      std::all_of(result.native_realization_manifest.begin(), result.native_realization_manifest.end(),
+                  [](const auto& route) { return route.straight_realization; });
+  if (straight_transaction) for (auto& path : result.spline_candidate_paths) {
+    for (std::size_t first = 0; first < path.points.size();) {
+      auto end = first + 1U;
+      while (end < path.points.size() && path.points[end].position == path.points[first].position) ++end;
+      if (end - first > 2U && path.points[first].layer == path.points[end - 1U].layer) {
+        path.points.erase(path.points.begin() + static_cast<std::ptrdiff_t>(first + 1U),
+                          path.points.begin() + static_cast<std::ptrdiff_t>(end));
+        path.segment_widths.erase(path.segment_widths.begin() + static_cast<std::ptrdiff_t>(first),
+                                  path.segment_widths.begin() + static_cast<std::ptrdiff_t>(end - 1U));
+        path.segment_width_kinds.erase(path.segment_width_kinds.begin() + static_cast<std::ptrdiff_t>(first),
+                                       path.segment_width_kinds.begin() + static_cast<std::ptrdiff_t>(end - 1U));
+        ++result.straight_collapsed_via_adapters;
+        end = first + 1U;
+      }
+      first = end;
     }
   }
   const auto saturating_length_add = [](std::uint64_t total, std::uint64_t amount) {
@@ -11096,6 +16787,10 @@ void build_regional_spline_candidate(const Board& board, const GlobalRouteResult
        ++path_index) {
     if (!update_width_evidence(result.spline_candidate_paths[path_index],
                                global.paths[path_index])) {
+      result.spline_candidate_diagnostic =
+          "regional replacement could not preserve neck-down evidence for " +
+          result.spline_candidate_paths[path_index].net.value() + "/" +
+          std::to_string(result.spline_candidate_paths[path_index].connection_index);
       result.spline_candidate_paths.clear();
       return;
     }
@@ -11109,6 +16804,9 @@ void build_regional_spline_candidate(const Board& board, const GlobalRouteResult
     }
     auto multilayer = plan_multilayer_route(board, path);
     if (!multilayer) {
+      result.spline_candidate_diagnostic =
+          "regional replacement produced an invalid multilayer transition plan for " +
+          path.net.value() + "/" + std::to_string(path.connection_index);
       result.spline_candidate_paths.clear();
       result.multilayer_route_plans.clear();
       result.complete_via_dependent_routes = 0U;
@@ -11122,6 +16820,16 @@ void build_regional_spline_candidate(const Board& board, const GlobalRouteResult
     result.multilayer_route_plans.push_back(std::move(*multilayer));
   }
   result.spline_candidate_available = !result.spline_candidate_paths.empty();
+  result.native_realization_manifest_available = result.spline_candidate_available;
+  if (result.native_realization_manifest_available && !validate_regional_native_ownership(result)) {
+    result.spline_candidate_available = false;
+    result.spline_candidate_diagnostic = "regional native transaction has ambiguous ownership";
+    return;
+  }
+  if (result.spline_candidate_available)
+    result.spline_candidate_diagnostic = "complete regional spline transaction assembled";
+  if (result.spline_candidate_available && result.configured.native_arc_materialization_authority)
+    assess_regional_native_scene(board, result);
 }
 
 [[nodiscard]] std::string regional_group_id(std::size_t component_id) {
@@ -11207,6 +16915,8 @@ void publish_regional_telemetry(const Board& board, const RegionalRouteResult& r
         return "missing_corridor_topology";
       case RegionalBundleStopReason::no_fitting_lane_order:
         return "no_fitting_lane_order";
+      case RegionalBundleStopReason::candidate_preflight_infeasible:
+        return "candidate_preflight_infeasible";
       case RegionalBundleStopReason::window_ineligible:
         return "window_ineligible";
       case RegionalBundleStopReason::state_budget_exhausted:
@@ -11233,9 +16943,20 @@ void publish_regional_telemetry(const Board& board, const RegionalRouteResult& r
           ", terminal_pair=" + std::to_string(assignment.partial_terminal_pair_pruned_states) +
           ", via_pair=" + std::to_string(assignment.partial_via_pair_pruned_states) +
           ", terminal_via=" + std::to_string(assignment.partial_terminal_via_pruned_states) +
+          ", frozen_copper_via=" +
+          std::to_string(assignment.partial_frozen_copper_via_pruned_states) +
           ", lane_capacity=" + std::to_string(assignment.partial_lane_capacity_pruned_states) +
+          ", run_layer=" + std::to_string(assignment.partial_run_layer_pruned_states) +
+          ", coupled=" + std::to_string(assignment.partial_coupled_pruned_states) +
+          ", forward_wipeouts=" +
+          std::to_string(assignment.partial_forward_domain_wipeouts) +
+          ", pairwise_access_checks=" +
+          std::to_string(assignment.partial_pairwise_access_checks) +
           ", packing=" + std::to_string(assignment.packing_rejected_states) +
-          ", spline_candidates=" + std::to_string(assignment.spline_candidates_evaluated);
+          ", spline_candidates=" + std::to_string(assignment.spline_candidates_evaluated) +
+          ", xpbd_attempted=" + std::string(assignment.xpbd_attempted ? "yes" : "no") +
+          ", xpbd_topology_escape=" +
+          std::string(assignment.xpbd_topology_escape_required ? "yes" : "no");
       emit(std::move(incomplete));
     }
   }
@@ -11265,8 +16986,12 @@ void publish_regional_telemetry(const Board& board, const RegionalRouteResult& r
       };
       if (!single_kind(edge.evidence_mask)) {
         conflict.conflict_kind = "regional";
+      } else if ((edge.evidence_mask & packing_unresolved_evidence) != 0U) {
+        conflict.conflict_kind = "packing_unresolved";
       } else if ((edge.evidence_mask & clearance_shadow_evidence) != 0U) {
         conflict.conflict_kind = "clearance_shadow";
+      } else if ((edge.evidence_mask & exact_copper_evidence) != 0U) {
+        conflict.conflict_kind = "physical";
       } else if ((edge.evidence_mask & physical_capacity_evidence) != 0U) {
         conflict.conflict_kind = "physical";
       } else {
@@ -11297,6 +17022,15 @@ void publish_regional_telemetry(const Board& board, const RegionalRouteResult& r
     return pairwise_clearances.emplace(key, resolve_pairwise_clearance(board, first, second))
         .first->second;
   };
+  std::map<NetId, Nanometres> telemetry_net_widths;
+  const auto telemetry_net_width = [&](const NetId& net) {
+    const auto found = telemetry_net_widths.find(net);
+    return found != telemetry_net_widths.end()
+               ? found->second
+               : telemetry_net_widths
+                     .emplace(net, resolve_net_routing_rules(board, net).track_width)
+                     .first->second;
+  };
   for (const auto& choice : result.via_choices) {
     const auto evidence = std::find_if(
         result.via_region_evidence.begin(), result.via_region_evidence.end(),
@@ -11312,8 +17046,9 @@ void publish_regional_telemetry(const Board& board, const RegionalRouteResult& r
     if (diagnostic) {
       for (const auto& other : result.via_choices) {
         if (other.net != choice.net &&
-            regional_via_choices_conflict(choice, other,
-                                          pairwise_clearance(choice.net, other.net))) {
+            regional_via_choices_conflict(choice, other, pairwise_clearance(choice.net, other.net),
+                                          telemetry_net_width(choice.net),
+                                          telemetry_net_width(other.net))) {
           competing_nets.insert(other.net);
         }
       }
@@ -11452,6 +17187,7 @@ void publish_regional_telemetry(const Board& board, const RegionalRouteResult& r
       ", lane_cross_sections=" + std::to_string(result.selected_lane_cross_sections) +
       ", geometric_lane_reorders=" + std::to_string(result.selected_geometric_lane_reorders) +
       ", avoided_lane_inversions=" + std::to_string(result.avoided_lane_order_inversions) +
+      ", lane_precedence_rejections=" + std::to_string(result.lane_precedence_rejected_states) +
       ", lane_solver_states=" + std::to_string(result.lane_solver_states) +
       ", lane_solver_pruned=" + std::to_string(result.lane_solver_pruned_states) +
       ", lane_solver_analytical_rejections=" +
@@ -11462,6 +17198,10 @@ void publish_regional_telemetry(const Board& board, const RegionalRouteResult& r
       ", partial_lane_capacity_pruned=" +
       std::to_string(result.partial_lane_capacity_pruned_states) +
       ", partial_access_pruned=" + std::to_string(partial_access_pruned) +
+      ", frozen_copper_via_pruned=" +
+      std::to_string(result.frozen_copper_via_pruned_states) +
+      ", frozen_copper_via_rejected=" +
+      std::to_string(result.frozen_copper_via_rejected_states) +
       ", attributed_access_blockers=" + std::to_string(attributed_access_blockers) +
       ", terminal_navmesh=" + std::to_string(result.accepted_terminal_navmesh_templates) + "/" +
       std::to_string(result.terminal_navmesh_template_checks) +
@@ -11497,6 +17237,20 @@ void publish_regional_telemetry(const Board& board, const RegionalRouteResult& r
       std::to_string(result.residual_conflict_cone_stub_fragments) +
       ", residual_retry_withheld_assignments=" +
       std::to_string(result.residual_conflict_cone_retry_withheld_assignments) +
+      ", conflict_directed_cores=" + std::to_string(result.conflict_directed_topology_cores) +
+      ", conflict_directed_master_reruns=" +
+      std::to_string(result.conflict_directed_master_reruns) +
+      ", conflict_directed_columns=" + std::to_string(result.conflict_directed_columns_generated) +
+      ", conflict_directed_no_goods=" + std::to_string(result.conflict_directed_no_good_clauses) +
+      ", conflict_directed_no_good_unknown_withheld=" +
+      std::to_string(result.conflict_directed_no_good_unknown_withheld) +
+      ", conflict_directed_recovered=" +
+      std::to_string(result.conflict_directed_windows_recovered) +
+      ", confined_anisotropic_erosion=" +
+      std::to_string(result.confined_anisotropic_erosion_accepted) + "/" +
+      std::to_string(result.confined_anisotropic_erosion_checks) +
+      ", confined_anisotropic_exact_chords=" +
+      std::to_string(result.confined_anisotropic_erosion_exact_chords) +
       ", complete_via_dependent_routes=" + std::to_string(result.complete_via_dependent_routes) +
       ", planned_layer_runs=" + std::to_string(result.planned_layer_runs) +
       ", planned_via_transitions=" + std::to_string(result.planned_via_transitions) +
@@ -11528,6 +17282,1698 @@ void publish_regional_telemetry(const Board& board, const RegionalRouteResult& r
 }
 
 } // namespace
+
+RegionalBundleChoicePortfolio enumerate_regional_bundle_choices(
+    const Board& board, const RegionalRouteResult& regional, const RegionalRoutingWindow& window,
+    const std::vector<RegionalRouteTemplate>& templates,
+    const std::vector<std::vector<std::size_t>>& templates_by_fragment,
+    std::size_t maximum_states, bool forward_checking) {
+  return generate_consistent_bundle_choices(board, regional, window, templates,
+                                            templates_by_fragment, maximum_states,
+                                            forward_checking);
+}
+
+std::vector<std::size_t> select_regional_spline_tier_windows(
+    const std::vector<RegionalBundleAssignment>& assignments, std::size_t fallback_wave) {
+  std::vector<std::size_t> windows;
+  std::set<std::size_t> seen;
+  for (const auto& assignment : assignments) {
+    const auto eligible =
+        fallback_wave == 0U ||
+        (!assignment.complete() && !assignment.spline_candidate_reserve.empty() &&
+         assignment.spline_fallback_waves < fallback_wave);
+    if (eligible && seen.insert(assignment.window_id).second) {
+      windows.push_back(assignment.window_id);
+    }
+  }
+  return windows;
+}
+
+std::optional<Board> build_regional_frozen_copper_context(
+    const Board& source, const RegionalRouteResult& regional, std::size_t window_id,
+    std::map<std::string, RegionalRouteFragmentId>* provenance) {
+  if (provenance) provenance->clear();
+  const auto owner = std::find_if(regional.windows.begin(), regional.windows.end(),
+      [&](const auto& window) { return window.id == window_id; });
+  if (owner == regional.windows.end()) return std::nullopt;
+  const std::set<RegionalRouteFragmentId> owned(owner->owned_fragments.begin(),
+                                              owner->owned_fragments.end());
+  for (const auto& id : owned)
+    if (std::none_of(regional.fragments.begin(), regional.fragments.end(),
+                     [&](const auto& fragment) { return fragment.id == id; }))
+      return std::nullopt;
+  Board scene = source;
+  std::set<std::string> ids;
+  for (const auto& item : source.tracks) ids.insert(item.id.value());
+  for (const auto& item : source.track_arcs) ids.insert(item.id.value());
+  for (const auto& item : source.track_beziers) ids.insert(item.id.value());
+  for (const auto& item : source.vias) ids.insert(item.id.value());
+  for (const auto& item : source.zones) ids.insert(item.id.value());
+  for (const auto& footprint : source.footprints) {
+    ids.insert(footprint.id.value());
+    for (const auto& pad : footprint.pads) ids.insert(pad.id.value());
+  }
+  std::size_t serial = 0U;
+  for (const auto& fragment : regional.fragments) {
+    if (owned.contains(fragment.id) || fragment.start == fragment.end) continue;
+    std::string id;
+    do {
+      id = "__flux-frozen-copper-" + std::to_string(serial++);
+    } while (!ids.insert(id).second);
+    if (provenance) provenance->emplace(id, fragment.id);
+    scene.tracks.push_back(TrackSegment{ObjectId{id}, fragment.id.net, fragment.layer,
+                                       fragment.start, fragment.end, fragment.width, false});
+  }
+  return scene;
+}
+
+SplineClearanceProbe regional_candidate_via_clearance(
+    const NetId& net, const LayerId& layer, Nanometres width, Nanometres clearance,
+    SplineVector position, const std::vector<RegionalViaChoice>& vias,
+    Nanometres via_net_clearance) {
+  auto margin = std::numeric_limits<long double>::infinity();
+  SplineVector normal;
+  for (const auto& via : vias) {
+    if (via.net == net || std::find(via.span.begin(), via.span.end(), layer) == via.span.end())
+      continue;
+    const auto dx = position.x - static_cast<long double>(via.site.x.value());
+    const auto dy = position.y - static_cast<long double>(via.site.y.value());
+    const auto distance = std::hypotl(dx, dy);
+    const auto required = (static_cast<long double>(width.value()) + via.diameter.value()) / 2.0L +
+        std::max(clearance, via_net_clearance).value();
+    if (distance - required < margin) {
+      margin = distance - required;
+      normal = distance > 0.0L ? SplineVector{dx / distance, dy / distance} : SplineVector{1.0L, 0.0L};
+    }
+  }
+  return {margin, normal, margin >= 0.0L};
+}
+
+std::optional<Board> build_regional_candidate_via_context(
+    const Board& source,
+    const std::vector<std::pair<RegionalRouteFragmentId, RegionalViaChoice>>& selected,
+    std::map<std::string, std::vector<RegionalRouteFragmentId>>& provenance) {
+  provenance.clear();
+  Board scene = source;
+  std::set<std::string> ids;
+  for (const auto& item : source.tracks) ids.insert(item.id.value());
+  for (const auto& item : source.track_arcs) ids.insert(item.id.value());
+  for (const auto& item : source.track_beziers) ids.insert(item.id.value());
+  for (const auto& item : source.vias) ids.insert(item.id.value());
+  for (const auto& item : source.zones) ids.insert(item.id.value());
+  for (const auto& footprint : source.footprints) {
+    ids.insert(footprint.id.value());
+    for (const auto& pad : footprint.pads) ids.insert(pad.id.value());
+  }
+  std::size_t serial = 0;
+  for (const auto& [owner, choice] : selected) {
+    if (owner.net != choice.net || choice.span.size() < 2U ||
+        regional_via_span(source, choice.span.front(), choice.span.back()) != choice.span) {
+      provenance.clear();
+      return std::nullopt;
+    }
+    const auto covers = [&](const auto& layers) {
+      return std::all_of(choice.span.begin(), choice.span.end(), [&](const auto& layer) {
+        return std::find(layers.begin(), layers.end(), layer) != layers.end();
+      });
+    };
+    auto existing = std::find_if(scene.vias.begin(), scene.vias.end(), [&](const auto& via) {
+      return via.net == choice.net && via.position == choice.site && covers(via.layers);
+    });
+    if (existing != scene.vias.end()) {
+      // Existing source vias are already checked against generated curves; only newly inserted
+      // candidate vias need additional attribution to their attached routes.
+      if (const auto found = provenance.find(existing->id.value()); found != provenance.end() &&
+          std::find(found->second.begin(), found->second.end(), owner) == found->second.end())
+        found->second.push_back(owner);
+      continue;
+    }
+    bool pad_reused = false;
+    for (const auto& footprint : source.footprints)
+      for (const auto& pad : footprint.pads)
+        pad_reused = pad_reused || (pad.net == choice.net && pad.plated && pad_has_drill(pad) &&
+            pad_drill_world_position(footprint, pad) == choice.site && covers(pad.layers));
+    if (pad_reused) continue;
+    std::string id;
+    do { id = "__flux-candidate-via-" + std::to_string(serial++); }
+    while (!ids.insert(id).second);
+    const auto rules = resolve_net_routing_rules(source, choice.net);
+    scene.vias.push_back({ObjectId{id}, choice.net, choice.site, rules.via_diameter,
+                         rules.via_drill, choice.span, false});
+    provenance.emplace(id, std::vector<RegionalRouteFragmentId>{owner});
+  }
+  return scene;
+}
+
+bool append_regional_frozen_scope_witnesses(
+    const RegionalRouteResult& regional, RegionalRouterConfig& config) {
+  if (!config.expand_frozen_copper_scope || !config.frozen_copper_context) return false;
+  bool added = false;
+  for (const auto& assignment : regional.bundle_assignments) {
+    if (assignment.complete()) continue;
+    const auto window =
+        std::find_if(regional.windows.begin(), regional.windows.end(), [&](const auto& item) {
+          return item.id == assignment.window_id;
+        });
+    if (window == regional.windows.end()) continue;
+    const auto append_witnesses = [&](const auto& witnesses) -> void {
+      for (const auto& witness : witnesses) {
+        if (config.frozen_copper_scope_witnesses.size() >= config.max_local_routability_diagnoses)
+          return;
+        const auto owned = [&](const auto& id) {
+          return std::find(window->owned_fragments.begin(), window->owned_fragments.end(), id) !=
+                 window->owned_fragments.end();
+        };
+        const auto exists = [&](const auto& id) {
+          return std::any_of(regional.fragments.begin(), regional.fragments.end(),
+                             [&](const auto& fragment) { return fragment.id == id; });
+        };
+        if (!owned(witness.candidate) || owned(witness.blocker) ||
+            witness.candidate.net == witness.blocker.net || !exists(witness.candidate) ||
+            !exists(witness.blocker))
+          continue;
+        const auto same = [&](const auto& prior) {
+          return prior.candidate == witness.candidate && prior.blocker == witness.blocker &&
+                 prior.layer == witness.layer;
+        };
+        if (std::none_of(config.frozen_copper_scope_witnesses.begin(),
+                         config.frozen_copper_scope_witnesses.end(), same)) {
+          config.frozen_copper_scope_witnesses.push_back(witness);
+          added = true;
+        }
+      }
+    };
+    append_witnesses(assignment.frozen_copper_conflicts);
+    append_witnesses(assignment.native_frozen_copper_conflicts);
+  }
+  return added;
+}
+
+bool regional_frozen_scope_retry_pending(
+    const RegionalRouteResult& regional, const RegionalRouterConfig& config,
+    std::size_t remaining_scope_retries) {
+  if (!config.prioritize_frozen_scope_expansion || remaining_scope_retries == 0U ||
+      !config.enable_spline_realization || regional.spline_candidate_available) return false;
+  auto expanded = config;
+  return append_regional_frozen_scope_witnesses(regional, expanded);
+}
+
+bool validate_regional_native_ownership(const RegionalRouteResult& regional) {
+  auto manifest = regional.native_realization_manifest;
+  if (!regional.native_realization_manifest_available) {
+    if (!regional.spline_candidate_available) return true;
+    // Legacy producers may omit the flat manifest, but not explicit window ownership.
+    manifest.clear();
+    for (const auto& assignment : regional.bundle_assignments) {
+      const auto owner = std::find_if(regional.windows.begin(), regional.windows.end(),
+          [&](const auto& window) { return window.id == assignment.window_id; });
+      if (owner == regional.windows.end()) return false;
+      for (auto publication : assignment.spline_realizations) {
+        if (std::find(owner->owned_fragments.begin(), owner->owned_fragments.end(), publication.fragment) ==
+            owner->owned_fragments.end()) continue;
+        if (publication.owner_window_id && *publication.owner_window_id != assignment.window_id) return false;
+        publication.owner_window_id = assignment.window_id;
+        manifest.push_back(std::move(publication));
+      }
+    }
+  }
+  std::set<RegionalRouteFragmentId> writers;
+  for (const auto& route : manifest) {
+    if (!route.owner_window_id || !writers.insert(route.fragment).second) return false;
+    const auto owner = std::find_if(regional.windows.begin(), regional.windows.end(),
+        [&](const auto& window) { return window.id == *route.owner_window_id; });
+    if (owner == regional.windows.end() ||
+        std::find(owner->owned_fragments.begin(), owner->owned_fragments.end(), route.fragment) ==
+            owner->owned_fragments.end()) return false;
+    const auto ownerships = std::count_if(regional.windows.begin(), regional.windows.end(),
+        [&](const auto& window) {
+          return std::find(window.owned_fragments.begin(), window.owned_fragments.end(), route.fragment) !=
+                 window.owned_fragments.end();
+        });
+    if (ownerships != 1) return false;
+  }
+  return true;
+}
+
+using StraightAxisFirstFragments = std::set<RegionalRouteFragmentId>;
+
+// Keeps the pre-oracle representation immutable while a bounded scheduler compares native
+// copper evidence.  `scene` intentionally contains the original board (and zone policy), not
+// the native preview tracks: the oracle must materialize exactly the selected paths once.
+struct PreparedStraightScene {
+  Board scene;
+  GlobalRouteResult candidate;
+  bool ready{false};
+};
+
+static void finalize_prepared_straight_scene(PreparedStraightScene& prepared,
+                                             RegionalRouteResult& result,
+                                             std::stop_token stop_token) {
+  if (!prepared.ready) return;
+  QuantizedCopperOracleConfig oracle_config;
+  oracle_config.grid_pitch = Nanometres{1};
+  ++result.linear_scaffold_checks;
+  const auto proof = probe_quantized_copper_feasibility(prepared.scene, prepared.candidate,
+                                                         oracle_config, stop_token);
+  result.straight_scene_evaluated = proof.evaluated && proof.all_paths_materialized;
+  result.straight_scene_drc_violations = proof.drc_violations;
+  result.straight_scene_open_connections = proof.open_connections;
+  result.straight_scene_drc_categories.clear();
+  for (const auto& [category, count] : proof.drc_violation_counts)
+    result.straight_scene_drc_categories.emplace(category, count);
+  if (!proof.all_paths_materialized || !proof.exact_copper_legal || proof.open_connections > 0U ||
+      stop_token.stop_requested() || result.native_scene_conflicts > 0U ||
+      !result.spline_candidate_available) {
+    ++result.linear_scaffold_rejections;
+    result.spline_candidate_available = false;
+    result.spline_candidate_diagnostic = "straight regional transaction rejected by exact copper proof: violations=" +
+        std::to_string(proof.drc_violations) + ", opens=" + std::to_string(proof.open_connections);
+    for (auto diagnosis : proof.diagnoses) {
+      if (result.local_routability_diagnoses.size() >= result.configured.max_local_routability_diagnoses) break;
+      diagnosis.resource.stable_id = "straight-scene:" + diagnosis.resource.stable_id;
+      result.local_routability_diagnoses.push_back(std::move(diagnosis));
+    }
+    return;
+  }
+  result.spline_candidate_diagnostic = "straight regional transaction passed exact copper proof";
+  for (auto& route : result.native_realization_manifest)
+    route.native_copper_legal = route.mutually_legal = route.quantized_mutually_legal = true;
+  for (auto& assignment : result.bundle_assignments)
+    for (auto& route : assignment.spline_realizations)
+      route.native_copper_legal = route.mutually_legal = route.quantized_mutually_legal = true;
+  if (result.validated_copper_scene.data) {
+    auto accepted = std::make_shared<RegionalCopperSceneData>(*result.validated_copper_scene.data);
+    accepted->manifest = result.native_realization_manifest;
+    result.validated_copper_scene.data = std::move(accepted);
+  }
+}
+
+static void realize_regional_straight_candidate_once(
+    const Board& board, const GlobalRouteResult& global, RegionalRouteResult& result,
+    std::stop_token stop_token,
+    const StraightAxisFirstFragments* axis_first_fragments = nullptr,
+    StraightAxisFirstFragments* eligible_axis_first_fragments = nullptr,
+    PreparedStraightScene* prepared = nullptr) {
+  result.straight_scene_evaluated = false;
+  result.spline_candidate_available = false;
+  result.native_realization_manifest_available = false;
+  result.native_realization_manifest.clear();
+  result.spline_candidate_paths.clear();
+  result.native_scene_evaluated = false;
+  result.native_scene_complete = false;
+  result.native_scene_total_conflicts = 0U;
+  result.native_scene_open_connections = 0U;
+  if (stop_token.stop_requested()) return;
+  for (auto& assignment : result.bundle_assignments) {
+    assignment.spline_realizations.clear();
+    if (!assignment.complete()) continue;
+    const auto window = std::find_if(result.windows.begin(), result.windows.end(),
+        [&](const auto& item) { return item.id == assignment.window_id; });
+    if (window == result.windows.end()) {
+      assignment.stop_reason = RegionalBundleStopReason::spline_realization_failed;
+      continue;
+    }
+    for (const auto template_id : assignment.selected_templates) {
+      if (stop_token.stop_requested()) return;
+      if (template_id >= assignment.templates.size()) {
+        assignment.stop_reason = RegionalBundleStopReason::spline_realization_failed;
+        break;
+      }
+      const auto& route_template = assignment.templates[template_id];
+      const auto fragment = std::find_if(result.fragments.begin(), result.fragments.end(),
+          [&](const auto& item) { return item.id == route_template.fragment; });
+      if (fragment == result.fragments.end()) {
+        assignment.stop_reason = RegionalBundleStopReason::spline_realization_failed;
+        break;
+      }
+      if (std::find(window->owned_fragments.begin(), window->owned_fragments.end(), fragment->id) ==
+          window->owned_fragments.end()) continue;
+      const auto selected_via =
+          [&](const std::optional<std::size_t>& source_choice) -> const RegionalViaChoice* {
+        if (!source_choice) {
+          return nullptr;
+        }
+        const auto source =
+            std::find_if(result.via_choices.begin(), result.via_choices.end(),
+                         [&](const auto& choice) { return choice.id == *source_choice; });
+        if (source == result.via_choices.end()) {
+          return nullptr;
+        }
+        for (const auto selected_choice : assignment.selected_via_choices) {
+          const auto candidate =
+              std::find_if(result.via_choices.begin(), result.via_choices.end(),
+                           [&](const auto& choice) { return choice.id == selected_choice; });
+          if (candidate != result.via_choices.end() && candidate->net == source->net &&
+              candidate->region_id == source->region_id && candidate->span == source->span) {
+            const auto relaxed = std::find_if(assignment.relaxed_via_choices.begin(),
+                                              assignment.relaxed_via_choices.end(),
+                                              [&](const auto& choice) { return choice.id == candidate->id; });
+            if (relaxed != assignment.relaxed_via_choices.end()) return &*relaxed;
+            return &*candidate;
+          }
+        }
+        const auto relaxed = std::find_if(assignment.relaxed_via_choices.begin(),
+                                          assignment.relaxed_via_choices.end(),
+                                          [&](const auto& choice) { return choice.id == source->id; });
+        if (relaxed != assignment.relaxed_via_choices.end()) return &*relaxed;
+        return &*source;
+      };
+      const auto* entry_via = selected_via(route_template.entry_via_choice);
+      const auto* exit_via = selected_via(route_template.exit_via_choice);
+      const auto selected_terminal =
+          [&](const std::optional<std::size_t>& choice_id) -> const RegionalTerminalChoice* {
+        if (!choice_id) {
+          return nullptr;
+        }
+        const auto found =
+            std::find_if(result.terminal_choices.begin(), result.terminal_choices.end(),
+                         [&](const auto& choice) { return choice.id == *choice_id; });
+        return found == result.terminal_choices.end() ? nullptr : &*found;
+      };
+      const auto* entry_terminal = selected_terminal(route_template.terminal_entry_choice);
+      const auto* exit_terminal = selected_terminal(route_template.terminal_exit_choice);
+      const auto entry_via_site =
+          entry_via == nullptr ? std::optional<Point>{} : std::optional<Point>{entry_via->site};
+      const auto exit_via_site =
+          exit_via == nullptr ? std::optional<Point>{} : std::optional<Point>{exit_via->site};
+      const auto route_start = entry_via_site && (!route_template.selected_global_topology ||
+                                                  !fragment->begins_at_terminal)
+                                   ? *entry_via_site
+                               : entry_terminal != nullptr ? entry_terminal->portal
+                                                           : fragment->start;
+      const auto route_end =
+          exit_via_site && (!route_template.selected_global_topology || !fragment->ends_at_terminal)
+              ? *exit_via_site
+          : exit_terminal != nullptr ? exit_terminal->portal
+                                     : fragment->end;
+      const auto selected_runup = [&](const RegionalViaChoice* via, bool entry) {
+        std::vector<Point> runup;
+        if (via == nullptr || via->selected_global_site) {
+          return runup;
+        }
+        const auto found = std::find_if(
+            via->attached_runups.begin(), via->attached_runups.end(), [&](const auto& candidate) {
+              return candidate.layer == fragment->layer && candidate.centerline.size() >= 2U &&
+                     geometry::point_segment_distance_nm(candidate.anchor, fragment->start,
+                                                         fragment->end) == 0.0L;
+            });
+        if (found == via->attached_runups.end()) {
+          return runup;
+        }
+        runup = found->centerline;
+        if (entry) {
+          std::reverse(runup.begin(), runup.end());
+        }
+        return runup;
+      };
+      const auto entry_runup = selected_runup(entry_via, true);
+      const auto exit_runup = selected_runup(exit_via, false);
+
+      std::vector<Point> seed;
+      const auto append = [&](Point point) {
+        if (seed.empty() || seed.back() != point) seed.push_back(point);
+      };
+      append(route_start);
+      for (const auto point : entry_runup) append(point);
+      // Alternate corridors own their topology. Source-topology templates instead consume the
+      // actual packed lane centers; otherwise assignment never changes the conflicting chord.
+      if (!route_template.selected_global_topology && route_template.topology_centerline.size() >= 2U) {
+        for (const auto point : route_template.topology_centerline) append(point);
+      } else {
+        std::vector<std::pair<long double, Point>> targets;
+        const auto dx = static_cast<long double>(fragment->end.x.value() - fragment->start.x.value());
+        const auto dy = static_cast<long double>(fragment->end.y.value() - fragment->start.y.value());
+        const auto denominator = dx * dx + dy * dy;
+        const auto parameter = [&](Point point) {
+          return denominator > 0.0L ?
+              ((point.x.value() - fragment->start.x.value()) * dx +
+               (point.y.value() - fragment->start.y.value()) * dy) / denominator : 0.0L;
+        };
+        const auto lower = entry_runup.empty() ? 0.0L : parameter(entry_runup.back());
+        const auto upper = exit_runup.empty() ? 1.0L : parameter(exit_runup.front());
+        const bool fixed_width = fragment->explicit_width &&
+            fragment->width_kind != GlobalRouteSegmentWidthKind::terminal_neck_down;
+        for (const auto& section : assignment.packed_cross_sections) {
+          if (fixed_width || !geometry::segments_intersect(fragment->start, fragment->end,
+                                                           section.first_wall, section.second_wall)) continue;
+          const auto sx = static_cast<long double>(section.second_wall.x.value() - section.first_wall.x.value());
+          const auto sy = static_cast<long double>(section.second_wall.y.value() - section.first_wall.y.value());
+          const auto length = std::hypotl(sx, sy);
+          if (!(length > 0.0L)) continue;
+          for (const auto& placement : section.placements) {
+            if (placement.fragment != fragment->id) continue;
+            const auto point = quantize_regional_spline({
+                (static_cast<long double>(section.first_wall.x.value()) + section.second_wall.x.value()) / 2.0L +
+                    sx * placement.center_offset_nm / length,
+                (static_cast<long double>(section.first_wall.y.value()) + section.second_wall.y.value()) / 2.0L +
+                    sy * placement.center_offset_nm / length});
+            const auto t = parameter(point);
+            if (t > lower && t < upper) targets.emplace_back(t, point);
+          }
+        }
+        std::sort(targets.begin(), targets.end());
+        for (const auto& [parameter_value, point] : targets) {
+          static_cast<void>(parameter_value);
+          append(point);
+        }
+      }
+      for (const auto point : exit_runup) append(point);
+      append(route_end);
+      RegionalSplineRealization route;
+      route.fragment = fragment->id;
+      route.replacement_end = fragment->end;
+      route.layer = route_template.routing_layer;
+      route.width = fragment->width;
+      route.width_kind = fragment->width_kind;
+      route.entry_via_site = entry_via_site;
+      route.exit_via_site = exit_via_site;
+      route.straight_realization = true;
+      // Integer octilinear doglegs preserve every endpoint, lane target and via access anchor.
+      // The selected alternative uses one dominant-axis run followed by a 45-degree run. It is
+      // intentionally not a Manhattan detour: its only additional degree of freedom is the
+      // elbow ordering of an existing seed chord, and exact full-scene checks remain decisive.
+      const bool axis_first = axis_first_fragments != nullptr &&
+                              axis_first_fragments->contains(fragment->id);
+      if (!seed.empty()) route.centerline.push_back(seed.front());
+      for (std::size_t i = 1; i < seed.size(); ++i) {
+        const auto first = route.centerline.back();
+        const auto last = seed[i];
+        const auto dx = last.x.value() - first.x.value();
+        const auto dy = last.y.value() - first.y.value();
+        if (dx != 0 && dy != 0 && std::abs(dx) != std::abs(dy)) {
+          if (eligible_axis_first_fragments != nullptr) {
+            eligible_axis_first_fragments->insert(fragment->id);
+          }
+          const auto diagonal = std::min(std::abs(dx), std::abs(dy));
+          if (axis_first) {
+            // Consume the excess on the dominant axis, leaving an exact 45-degree finish.
+            const bool horizontal = std::abs(dx) >= std::abs(dy);
+            route.centerline.push_back(
+                horizontal
+                    ? Point{Nanometres{last.x.value() - (dx < 0 ? -diagonal : diagonal)}, first.y}
+                    : Point{first.x, Nanometres{last.y.value() - (dy < 0 ? -diagonal : diagonal)}});
+          } else {
+            route.centerline.push_back(
+                {Nanometres{first.x.value() + (dx < 0 ? -diagonal : diagonal)},
+                 Nanometres{first.y.value() + (dy < 0 ? -diagonal : diagonal)}});
+          }
+        }
+        if (route.centerline.back() != last) route.centerline.push_back(last);
+      }
+      for (std::size_t i = 1; i < route.centerline.size(); ++i)
+        route.native_pieces.push_back({SplineFittedPieceKind::segment,
+                                       route.centerline[i - 1U], {}, route.centerline[i]});
+      if (route.native_pieces.empty()) {
+        assignment.stop_reason = RegionalBundleStopReason::spline_realization_failed;
+        break;
+      }
+      assignment.spline_realizations.push_back(std::move(route));
+    }
+  }
+  build_regional_spline_candidate(board, global, result);
+  if (!result.native_realization_manifest_available) return;
+  // Native scene checks include owned copper, frozen continuations, static pads and real vias.
+  assess_regional_native_scene(board, result);
+  GlobalRouteResult candidate = global;
+  candidate.paths = result.spline_candidate_paths;
+  auto scene = board;
+  if (result.configured.treat_saved_zone_fills_as_refillable)
+    for (auto& zone : scene.zones) zone.fills.clear();
+  PreparedStraightScene local{std::move(scene), std::move(candidate), true};
+  if (prepared != nullptr) {
+    *prepared = std::move(local);
+    return;
+  }
+  finalize_prepared_straight_scene(local, result, stop_token);
+}
+
+void realize_regional_straight_candidate(const Board& board, const GlobalRouteResult& global,
+                                         RegionalRouteResult& result, std::stop_token stop_token) {
+  result.configured.enable_straight_realization = true;
+  result.configured.enable_spline_realization = false;
+  result.straight_scene_portfolio_checks = 0U;
+  result.straight_scene_multi_window_checks = 0U;
+  result.straight_scene_multi_window_improvements = 0U;
+  result.straight_scene_geometry_checks = 0U;
+  result.straight_scene_geometry_improvements = 0U;
+  result.straight_scene_joint_portfolio_checks = 0U;
+  result.straight_scene_portfolio_improvements = 0U;
+  result.straight_scene_geometry_attempts = 0U;
+  result.straight_scene_geometry_error_reduction = 0U;
+  result.straight_scene_geometry_elapsed_us = {};
+  result.straight_scene_portfolio_attempts = 0U;
+  result.straight_scene_portfolio_error_reduction = 0U;
+  result.straight_scene_portfolio_elapsed_us = {};
+  result.straight_scene_provisional_context_conflicts = 0U;
+  result.straight_scene_search_outcome = RegionalStraightSearchOutcome::not_run;
+  result.straight_scene_preview_checks = 0U;
+  result.straight_scene_reserve_candidates = 0U;
+  result.straight_scene_pool_states = 0U;
+  result.straight_scene_pool_complete = false;
+  result.repair_family_attempts = {};
+  result.repair_family_error_reduction = {};
+  result.repair_family_work_units = {};
+  result.repair_family_elapsed_us = {};
+  struct OutcomeOnExit {
+    RegionalRouteResult& result;
+    std::stop_token stop;
+    ~OutcomeOnExit() {
+      result.repair_family_attempts[0] = result.straight_scene_geometry_attempts;
+      result.repair_family_error_reduction[0] = result.straight_scene_geometry_error_reduction;
+      result.repair_family_elapsed_us[0] = result.straight_scene_geometry_elapsed_us;
+      if (stop.stop_requested()) result.straight_scene_search_outcome = RegionalStraightSearchOutcome::cancelled;
+      else if (result.spline_candidate_available)
+        result.straight_scene_search_outcome = RegionalStraightSearchOutcome::found_legal_candidate;
+      else if (result.straight_scene_search_outcome == RegionalStraightSearchOutcome::not_run &&
+               result.configured.max_straight_portfolio_checks > 0U)
+        result.straight_scene_search_outcome = RegionalStraightSearchOutcome::budget_or_scope_unknown;
+    }
+  } outcome_on_exit{result, stop_token};
+
+  const std::vector<RegionalBundleStopReason> discrete_stop_reasons = [&] {
+    std::vector<RegionalBundleStopReason> reasons;
+    reasons.reserve(result.bundle_assignments.size());
+    for (const auto& assignment : result.bundle_assignments) reasons.push_back(assignment.stop_reason);
+    return reasons;
+  }();
+  const auto apply_selection = [](RegionalBundleAssignment& assignment,
+                                  const RegionalBundleSelection& selection) {
+    assignment.relaxed_via_choices.clear();
+    assignment.selected_templates = selection.templates;
+    assignment.selected_via_choices = selection.via_choices;
+    assignment.via_assignment_region_order = selection.via_assignment_region_order;
+    assignment.packed_cross_sections = selection.packed_cross_sections;
+    assignment.selected_via_alternative_switches = selection.via_alternative_switches;
+    assignment.selected_template_conflicts = selection.template_conflicts;
+    assignment.selected_residual_conflicts = selection.residual_conflicts;
+  };
+  // The discrete objective can prefer many layer excursions whose copper is worse than the
+  // original topology. Keep the allocator's already packed source-topology fallback in the
+  // physical comparison; do not invent a new lane order or lower a clearance requirement.
+  auto fallback = result;
+  bool changed = false;
+  for (auto& assignment : fallback.bundle_assignments) {
+    if (!assignment.complete()) continue;
+    const RegionalBundleSelection* selected = nullptr;
+    const auto consider = [&](const auto& pool) {
+      for (const auto& selection : pool) {
+        if (selection.templates.empty() || !std::all_of(selection.templates.begin(), selection.templates.end(),
+              [&](const auto id) { return id < assignment.templates.size() &&
+                  assignment.templates[id].selected_global_topology; })) continue;
+        // A source-topology fallback retains the original physical via sites as well.
+        const bool original_vias = std::all_of(selection.via_choices.begin(), selection.via_choices.end(),
+            [&](const auto id) {
+              const auto via = std::find_if(fallback.via_choices.begin(), fallback.via_choices.end(),
+                                            [&](const auto& item) { return item.id == id; });
+              return via != fallback.via_choices.end() && via->selected_global_site;
+            });
+        if (original_vias && !selected) selected = &selection;
+      }
+    };
+    consider(assignment.spline_candidate_shortlist);
+    consider(assignment.spline_candidate_reserve);
+    if (!selected || (assignment.selected_templates == selected->templates &&
+                      assignment.selected_via_choices == selected->via_choices &&
+                      assignment.packed_cross_sections == selected->packed_cross_sections)) continue;
+    apply_selection(assignment, *selected);
+    changed = true;
+  }
+  StraightAxisFirstFragments eligible_axis_first;
+  realize_regional_straight_candidate_once(board, global, result, stop_token, nullptr,
+                                            &eligible_axis_first);
+  result.straight_scene_trials = stop_token.stop_requested() ? 0U : 1U;
+  const auto objective = [](const auto& candidate) {
+    return std::tuple{candidate.spline_candidate_available ? 0U : 1U,
+                      candidate.linear_scaffold_checks > 0U ? 0U : 1U,
+                      candidate.straight_scene_open_connections,
+                      candidate.straight_scene_drc_violations,
+                      candidate.native_scene_conflicts};
+  };
+  const auto objective_error = [](const auto& candidate) {
+    return candidate.straight_scene_open_connections + candidate.straight_scene_drc_violations +
+           candidate.native_scene_conflicts;
+  };
+  if (changed && !result.spline_candidate_available && !stop_token.stop_requested()) {
+    StraightAxisFirstFragments fallback_eligible_axis_first;
+    realize_regional_straight_candidate_once(board, global, fallback, stop_token, nullptr,
+                                              &fallback_eligible_axis_first);
+    if (!stop_token.stop_requested() && objective(fallback) < objective(result)) {
+      result = std::move(fallback);
+      eligible_axis_first = std::move(fallback_eligible_axis_first);
+      result.straight_source_fallback_selected = true;
+    }
+    result.straight_scene_trials = 2U;
+  }
+  if (result.spline_candidate_available || stop_token.stop_requested()) {
+    result.straight_scene_search_outcome = stop_token.stop_requested()
+        ? RegionalStraightSearchOutcome::cancelled
+        : RegionalStraightSearchOutcome::found_legal_candidate;
+    return;
+  }
+
+  // A complete discrete scene can still fail only after its fixed diagonal-first elbows are
+  // assembled. Try complementary octilinear elbows on eligible, implicated owned fragments
+  // while retaining a share of the common budget for template portfolios.
+  // The accepted set is carried into every later template trial so a successful geometry choice
+  // cannot be accidentally undone by an otherwise unrelated bundle alternative.
+  StraightAxisFirstFragments accepted_axis_first;
+  const auto geometry_objective = objective;
+  const auto geometry_comparable = [](const RegionalRouteResult& candidate) {
+    return candidate.straight_scene_evaluated && candidate.native_scene_evaluated &&
+           candidate.native_scene_complete;
+  };
+  const auto total_portfolio_budget = result.configured.max_straight_portfolio_checks;
+  const bool bundle_alternatives_available = std::any_of(
+      result.bundle_assignments.begin(), result.bundle_assignments.end(),
+      [&](const auto& assignment) {
+        const auto differs = [&](const auto& selection) {
+          return selection.templates != assignment.selected_templates ||
+                 selection.via_choices != assignment.selected_via_choices ||
+                 selection.via_assignment_region_order != assignment.via_assignment_region_order ||
+                 selection.packed_cross_sections != assignment.packed_cross_sections;
+        };
+        return std::any_of(assignment.spline_candidate_shortlist.begin(),
+                           assignment.spline_candidate_shortlist.end(), differs) ||
+               std::any_of(assignment.spline_candidate_reserve.begin(),
+                           assignment.spline_candidate_reserve.end(), differs);
+      });
+  // When both families have work, reserve half of the common bounded budget for retained
+  // template/pair trials. If geometry has no candidate or exhausts early, the existing bundle
+  // loops receive the unused capacity because they still use the total bound below.
+  const auto geometry_budget = bundle_alternatives_available
+      ? std::min(total_portfolio_budget, std::max<std::size_t>(2U,
+            total_portfolio_budget / 2U + total_portfolio_budget % 2U))
+      : total_portfolio_budget;
+  if (geometry_budget > 0U && !stop_token.stop_requested() &&
+      geometry_comparable(result)) {
+    std::set<NetId> implicated_nets;
+    for (const auto& diagnosis : result.local_routability_diagnoses) {
+      if (diagnosis.locally_resolved ||
+          (!diagnosis.resource.stable_id.starts_with("native-scene:") &&
+           !diagnosis.resource.stable_id.starts_with("straight-scene:")))
+        continue;
+      implicated_nets.insert(diagnosis.resource.nets.begin(), diagnosis.resource.nets.end());
+    }
+    std::set<RegionalRouteFragmentId> geometry_candidates;
+    for (const auto& assignment : result.bundle_assignments) {
+      const auto window = std::find_if(result.windows.begin(), result.windows.end(),
+          [&](const auto& item) { return item.id == assignment.window_id; });
+      if (window == result.windows.end()) continue;
+      const bool implicated = std::any_of(window->owned_fragments.begin(), window->owned_fragments.end(),
+          [&](const auto& fragment) { return implicated_nets.contains(fragment.net); });
+      if (!implicated) continue;
+      for (const auto& fragment : window->owned_fragments) {
+        if (implicated_nets.contains(fragment.net) && eligible_axis_first.contains(fragment)) {
+          geometry_candidates.insert(fragment);
+        }
+      }
+    }
+    for (const auto& fragment : geometry_candidates) {
+      if (bundle_alternatives_available && result.straight_scene_geometry_attempts >= 2U &&
+          result.straight_scene_geometry_improvements == 0U) break;
+      if (result.straight_scene_portfolio_checks >= geometry_budget ||
+          result.spline_candidate_available || stop_token.stop_requested())
+        break;
+      auto choices = accepted_axis_first;
+      if (!choices.insert(fragment).second) continue;
+      auto trial = result;
+      for (std::size_t restore = 0U; restore < trial.bundle_assignments.size(); ++restore)
+        trial.bundle_assignments[restore].stop_reason = discrete_stop_reasons[restore];
+      const auto started = std::chrono::steady_clock::now();
+      const auto prior_scaffold_checks = trial.linear_scaffold_checks;
+      const auto prior_scaffold_rejections = trial.linear_scaffold_rejections;
+      realize_regional_straight_candidate_once(board, global, trial, stop_token, &choices);
+      result.linear_scaffold_checks += trial.linear_scaffold_checks - prior_scaffold_checks;
+      result.linear_scaffold_rejections += trial.linear_scaffold_rejections - prior_scaffold_rejections;
+      ++result.straight_scene_portfolio_checks;
+      ++result.straight_scene_geometry_checks;
+      ++result.straight_scene_geometry_attempts;
+      result.straight_scene_geometry_elapsed_us += static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::microseconds>(
+              std::chrono::steady_clock::now() - started).count());
+      ++result.straight_scene_trials;
+      if (stop_token.stop_requested() || !geometry_comparable(trial) ||
+          !(geometry_objective(trial) < geometry_objective(result)))
+        continue;
+      trial.straight_scene_trials = result.straight_scene_trials;
+      trial.linear_scaffold_checks = result.linear_scaffold_checks;
+      trial.linear_scaffold_rejections = result.linear_scaffold_rejections;
+      trial.straight_scene_portfolio_checks = result.straight_scene_portfolio_checks;
+      trial.straight_scene_geometry_checks = result.straight_scene_geometry_checks;
+      trial.straight_scene_geometry_attempts = result.straight_scene_geometry_attempts;
+      trial.straight_scene_geometry_elapsed_us = result.straight_scene_geometry_elapsed_us;
+      trial.straight_scene_geometry_error_reduction = result.straight_scene_geometry_error_reduction +
+          (objective_error(result) > objective_error(trial)
+               ? objective_error(result) - objective_error(trial) : 0U);
+      trial.straight_scene_geometry_improvements = result.straight_scene_geometry_improvements + 1U;
+      trial.straight_scene_joint_portfolio_checks = result.straight_scene_joint_portfolio_checks;
+      trial.straight_scene_portfolio_improvements = result.straight_scene_portfolio_improvements + 1U;
+      result = std::move(trial);
+      accepted_axis_first = std::move(choices);
+    }
+  }
+  if (result.spline_candidate_available || stop_token.stop_requested()) {
+    result.straight_scene_search_outcome = stop_token.stop_requested()
+        ? RegionalStraightSearchOutcome::cancelled
+        : RegionalStraightSearchOutcome::found_legal_candidate;
+    return;
+  }
+
+  // V68: retain the discrete planner as the source of alternatives, but judge each changed
+  // window only in the complete assembled straight transaction. A failed realization changes an
+  // assignment's stop reason, so restore only its original discrete state for the trial; an
+  // assignment that was incomplete or unsearched remains excluded from publication.
+  const bool complete_discrete_scene = std::all_of(
+      discrete_stop_reasons.begin(), discrete_stop_reasons.end(), [](const auto reason) {
+        return reason == RegionalBundleStopReason::complete;
+      });
+  const auto comparable = [](const RegionalRouteResult& candidate) {
+    return candidate.straight_scene_evaluated && candidate.native_scene_evaluated &&
+           candidate.native_scene_complete;
+  };
+  if (result.configured.max_straight_portfolio_checks == 0U || !complete_discrete_scene ||
+      !comparable(result) || result.spline_candidate_available || stop_token.stop_requested()) {
+    result.straight_scene_search_outcome = stop_token.stop_requested()
+        ? RegionalStraightSearchOutcome::cancelled
+        : result.spline_candidate_available ? RegionalStraightSearchOutcome::found_legal_candidate
+                                             : RegionalStraightSearchOutcome::budget_or_scope_unknown;
+    return;
+  }
+  const auto budget = result.configured.max_straight_portfolio_checks;
+  const auto same_selection = [](const RegionalBundleAssignment& assignment,
+                                 const RegionalBundleSelection& selection) {
+    return assignment.selected_templates == selection.templates &&
+           assignment.selected_via_choices == selection.via_choices &&
+           assignment.via_assignment_region_order == selection.via_assignment_region_order &&
+           assignment.packed_cross_sections == selection.packed_cross_sections;
+  };
+  struct WindowPortfolio {
+    std::size_t index;
+    std::set<NetId> nets;
+    std::size_t physical_pressure{0U};
+    std::vector<RegionalBundleSelection> alternatives;
+  };
+  std::vector<WindowPortfolio> portfolios;
+  bool pool_truncated = false;
+  for (std::size_t index = 0U; index < result.bundle_assignments.size(); ++index) {
+    const auto& assignment = result.bundle_assignments[index];
+    if (discrete_stop_reasons[index] != RegionalBundleStopReason::complete ||
+        (assignment.spline_candidate_shortlist.empty() &&
+         assignment.spline_candidate_reserve.empty())) continue;
+    WindowPortfolio portfolio{index, {}, 0U, {}};
+    const auto window = std::find_if(result.windows.begin(), result.windows.end(),
+        [&](const auto& item) { return item.id == assignment.window_id; });
+    if (window == result.windows.end()) continue;
+    for (const auto& fragment : window->owned_fragments) portfolio.nets.insert(fragment.net);
+    // Retain rejected singles as well: two individually unhelpful moves can form a legal
+    // transaction. Copy the bounded pool before any incumbent replacement invalidates it.
+    const auto append_alternative = [&](const auto& selection, bool reserve) {
+      if (same_selection(assignment, selection) ||
+          std::find(portfolio.alternatives.begin(), portfolio.alternatives.end(), selection) !=
+              portfolio.alternatives.end()) return;
+      if (portfolio.alternatives.size() >= budget) { pool_truncated = true; return; }
+      portfolio.alternatives.push_back(selection);
+      if (reserve) ++result.straight_scene_reserve_candidates;
+    };
+    // Interleave reserve and shortlist ranks: a deep shortlist must not hide the physical
+    // escape candidates retained by the discrete planner.
+    for (std::size_t rank = 0; rank < std::max(assignment.spline_candidate_shortlist.size(),
+                                             assignment.spline_candidate_reserve.size()); ++rank) {
+      if (rank < assignment.spline_candidate_shortlist.size())
+        append_alternative(assignment.spline_candidate_shortlist[rank], false);
+      if (rank < assignment.spline_candidate_reserve.size())
+        append_alternative(assignment.spline_candidate_reserve[rank], true);
+    }
+    if (portfolio.alternatives.empty()) continue;
+    for (const auto& diagnosis : result.local_routability_diagnoses) {
+      if (diagnosis.locally_resolved ||
+          (!diagnosis.resource.stable_id.starts_with("native-scene:") &&
+           !diagnosis.resource.stable_id.starts_with("straight-scene:"))) continue;
+      if (std::any_of(diagnosis.resource.nets.begin(), diagnosis.resource.nets.end(),
+                      [&](const auto& net) { return portfolio.nets.contains(net); }))
+        ++portfolio.physical_pressure;
+    }
+    portfolios.push_back(std::move(portfolio));
+  }
+  std::stable_sort(portfolios.begin(), portfolios.end(), [&](const auto& a, const auto& b) {
+    const auto& left = result.bundle_assignments[a.index];
+    const auto& right = result.bundle_assignments[b.index];
+    return std::tuple{a.physical_pressure, left.selected_template_conflicts,
+                      left.selected_residual_conflicts} !=
+                   std::tuple{b.physical_pressure, right.selected_template_conflicts,
+                              right.selected_residual_conflicts}
+        ? std::tuple{a.physical_pressure, left.selected_template_conflicts,
+                     left.selected_residual_conflicts} >
+              std::tuple{b.physical_pressure, right.selected_template_conflicts,
+                         right.selected_residual_conflicts}
+        : left.window_id < right.window_id;
+  });
+  if (portfolios.size() > budget) { pool_truncated = true; portfolios.resize(budget); }
+  // Link windows only through an observed copper conflict between distinct owned nets.
+  // Attribution selects a neighborhood; the full-scene oracle still decides acceptance.
+  std::vector<std::pair<std::size_t, std::size_t>> pairs;
+  for (std::size_t first = 0U; first < portfolios.size() && pairs.size() < budget; ++first) {
+    for (std::size_t second = first + 1U;
+         second < portfolios.size() && pairs.size() < budget; ++second) {
+      const bool linked = std::any_of(result.local_routability_diagnoses.begin(),
+          result.local_routability_diagnoses.end(), [&](const auto& diagnosis) {
+        if (diagnosis.locally_resolved ||
+            (!diagnosis.resource.stable_id.starts_with("native-scene:") &&
+             !diagnosis.resource.stable_id.starts_with("straight-scene:"))) return false;
+        for (const auto& a : diagnosis.resource.nets)
+          if (portfolios[first].nets.contains(a))
+            for (const auto& b : diagnosis.resource.nets)
+              if (a != b && portfolios[second].nets.contains(b)) return true;
+        return false;
+      });
+      if (linked) pairs.emplace_back(first, second);
+    }
+  }
+  // Freeze the candidate domain after the accepted elbow choices. Small domains can be
+  // enumerated completely; larger ones stay explicitly bounded/unknown.
+  const auto fixed_base = result;
+  const auto remaining = budget - result.straight_scene_portfolio_checks;
+  std::size_t domain_size = 1U;
+  bool complete_domain = !pool_truncated &&
+      portfolios.size() <= std::min<std::size_t>(4U, result.configured.max_straight_joint_windows);
+  for (const auto& portfolio : portfolios) {
+    const auto size = portfolio.alternatives.size() + 1U;
+    if (domain_size > (remaining + 1U) / size) { complete_domain = false; break; }
+    domain_size *= size;
+  }
+  using PortfolioMove = std::pair<std::size_t, std::size_t>;
+  using Moves = std::vector<PortfolioMove>;
+  std::array<std::deque<Moves>, 4U> queues;
+  const auto enqueue = [&](Moves moves) {
+    if (moves.empty()) return;
+    const auto family = std::min<std::size_t>(3U, moves.size());
+    if (queues[family].size() < budget) queues[family].push_back(std::move(moves));
+  };
+  if (complete_domain) {
+    Moves moves;
+    const auto enumerate = [&](auto&& self, std::size_t position) -> void {
+      if (stop_token.stop_requested()) return;
+      if (position == portfolios.size()) { enqueue(moves); return; }
+      self(self, position + 1U); // Original choice is part of the fixed domain.
+      for (std::size_t rank = 0; rank < portfolios[position].alternatives.size(); ++rank) {
+        moves.emplace_back(position, rank);
+        self(self, position + 1U);
+        moves.pop_back();
+      }
+    };
+    enumerate(enumerate, 0U);
+  } else {
+    // Preserve breadth across windows and ranks while keeping generation bounded independently
+    // of the exact-check budget. Connected groups are based on observed physical conflicts.
+    for (std::size_t rank = 0; rank < budget && queues[1].size() < budget; ++rank)
+      for (std::size_t window = 0; window < portfolios.size() && queues[1].size() < budget; ++window)
+        if (rank < portfolios[window].alternatives.size()) enqueue({{window, rank}});
+    for (std::size_t sum = 0; sum < 2U * budget && queues[2].size() < budget; ++sum)
+      for (const auto& [a, b] : pairs)
+        for (std::size_t rank = 0; rank <= sum && queues[2].size() < budget; ++rank)
+          if (rank < portfolios[a].alternatives.size() && sum - rank < portfolios[b].alternatives.size())
+            enqueue({{a, rank}, {b, sum - rank}});
+    std::set<std::vector<std::size_t>> groups;
+    std::vector<std::vector<std::size_t>> frontier;
+    for (const auto& [a, b] : pairs) { groups.insert({a, b}); frontier.push_back({a, b}); }
+    std::vector<std::vector<std::size_t>> joint_groups;
+    for (std::size_t size = 3U;
+         size <= std::min<std::size_t>(4U, result.configured.max_straight_joint_windows) &&
+         joint_groups.size() < budget; ++size) {
+      std::vector<std::vector<std::size_t>> next;
+      for (const auto& group : frontier) {
+        for (const auto& [a, b] : pairs) {
+          const bool has_a = std::binary_search(group.begin(), group.end(), a);
+          const bool has_b = std::binary_search(group.begin(), group.end(), b);
+          if (has_a == has_b) continue;
+          auto expanded = group;
+          expanded.push_back(has_a ? b : a);
+          std::sort(expanded.begin(), expanded.end());
+          if (!groups.insert(expanded).second) continue;
+          next.push_back(expanded);
+          joint_groups.push_back(std::move(expanded));
+          if (joint_groups.size() >= budget) break;
+        }
+        if (joint_groups.size() >= budget) break;
+      }
+      frontier = std::move(next);
+    }
+    std::size_t generated_states = 0U;
+    const auto state_limit = budget * 16U;
+    for (std::size_t sum = 0; sum < budget && queues[3].size() < budget &&
+         generated_states < state_limit; ++sum) {
+      for (const auto& group : joint_groups) {
+        Moves moves;
+        const auto enumerate = [&](auto&& self, std::size_t at, std::size_t left) -> void {
+          if (stop_token.stop_requested() || queues[3].size() >= budget ||
+              generated_states++ >= state_limit) return;
+          if (at == group.size()) { if (left == 0U) enqueue(moves); return; }
+          const auto index = group[at];
+          for (std::size_t rank = 0; rank <= left && rank < portfolios[index].alternatives.size(); ++rank) {
+            moves.emplace_back(index, rank);
+            self(self, at + 1U, left - rank);
+            moves.pop_back();
+            if (queues[3].size() >= budget || generated_states >= state_limit) break;
+          }
+        };
+        enumerate(enumerate, 0U, sum);
+        if (queues[3].size() >= budget || generated_states >= state_limit) break;
+      }
+    }
+  }
+  std::vector<std::size_t> incumbent_choices(portfolios.size(), 0U);
+  std::set<std::vector<std::size_t>> evaluated_choices{incumbent_choices};
+  std::array<RegionalRepairFamilyObservation, 4U> observations{};
+  RegionalRepairSchedulerState scheduler;
+  const auto narrow = [](std::size_t value) {
+    return static_cast<std::uint32_t>(std::min<std::size_t>(value, UINT32_MAX));
+  };
+  result.repair_family_attempts[0] = result.straight_scene_geometry_attempts;
+  result.repair_family_error_reduction[0] = result.straight_scene_geometry_error_reduction;
+  result.repair_family_elapsed_us[0] = result.straight_scene_geometry_elapsed_us;
+  bool all_proven = comparable(fixed_base) && fixed_base.straight_scene_provisional_context_conflicts == 0U;
+  std::size_t proven_states = 1U; // Original, already checked scene.
+  struct PendingCandidate {
+    RegionalRouteResult trial;
+    PreparedStraightScene prepared;
+    std::vector<std::size_t> choices;
+    std::size_t family{0U};
+    std::uint64_t preparation_ns{0U};
+    std::size_t prior_checks{0U};
+    std::size_t prior_rejections{0U};
+  };
+  const auto preserve_measurements = [](RegionalRouteResult& to, const RegionalRouteResult& from) {
+    to.straight_scene_trials = from.straight_scene_trials;
+    to.linear_scaffold_checks = from.linear_scaffold_checks;
+    to.linear_scaffold_rejections = from.linear_scaffold_rejections;
+    to.straight_scene_portfolio_checks = from.straight_scene_portfolio_checks;
+    to.straight_scene_joint_portfolio_checks = from.straight_scene_joint_portfolio_checks;
+    to.straight_scene_multi_window_checks = from.straight_scene_multi_window_checks;
+    to.straight_scene_multi_window_improvements = from.straight_scene_multi_window_improvements;
+    to.straight_scene_portfolio_improvements = from.straight_scene_portfolio_improvements;
+    to.straight_scene_portfolio_attempts = from.straight_scene_portfolio_attempts;
+    to.straight_scene_portfolio_elapsed_us = from.straight_scene_portfolio_elapsed_us;
+    to.straight_scene_portfolio_error_reduction = from.straight_scene_portfolio_error_reduction;
+    to.straight_scene_preview_checks = from.straight_scene_preview_checks;
+    to.straight_scene_reserve_candidates = from.straight_scene_reserve_candidates;
+    to.repair_family_attempts = from.repair_family_attempts;
+    to.repair_family_error_reduction = from.repair_family_error_reduction;
+    to.repair_family_work_units = from.repair_family_work_units;
+    to.repair_family_elapsed_us = from.repair_family_elapsed_us;
+  };
+  while (result.straight_scene_portfolio_checks < budget && !result.spline_candidate_available &&
+         !stop_token.stop_requested()) {
+    std::vector<PendingCandidate> batch;
+    while (batch.size() < 4U && result.straight_scene_portfolio_checks + batch.size() < budget &&
+           !stop_token.stop_requested()) {
+      for (std::size_t f = 0; f < observations.size(); ++f) {
+        observations[f].available = !queues[f].empty();
+        observations[f].attempts = narrow(result.repair_family_attempts[f]);
+        observations[f].accepted_physical_error_reduction = narrow(result.repair_family_error_reduction[f]);
+        observations[f].work_units = narrow(result.repair_family_work_units[f]);
+      }
+      const auto decision = schedule_regional_repair_family(observations, scheduler);
+      if (!decision.family) break;
+      const auto family = static_cast<std::size_t>(regional_repair_family_index(*decision.family));
+      auto moves = std::move(queues[family].front());
+      queues[family].pop_front();
+      auto choices = complete_domain ? std::vector<std::size_t>(portfolios.size(), 0U) : incumbent_choices;
+      for (const auto& [index, rank] : moves) choices[index] = rank + 1U;
+      if (!evaluated_choices.insert(choices).second) continue;
+      PendingCandidate candidate;
+      candidate.trial = complete_domain ? fixed_base : result;
+      candidate.choices = std::move(choices);
+      candidate.family = family;
+      for (std::size_t i = 0; i < candidate.trial.bundle_assignments.size(); ++i)
+        candidate.trial.bundle_assignments[i].stop_reason = discrete_stop_reasons[i];
+      for (const auto& [index, rank] : moves)
+        apply_selection(candidate.trial.bundle_assignments[portfolios[index].index],
+                        portfolios[index].alternatives[rank]);
+      candidate.prior_checks = candidate.trial.linear_scaffold_checks;
+      candidate.prior_rejections = candidate.trial.linear_scaffold_rejections;
+      const auto started = std::chrono::steady_clock::now();
+      realize_regional_straight_candidate_once(board, global, candidate.trial, stop_token,
+                                              &accepted_axis_first, nullptr, &candidate.prepared);
+      candidate.preparation_ns = static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(
+              std::chrono::steady_clock::now() - started).count());
+      result.straight_scene_portfolio_elapsed_us.add_nanoseconds(candidate.preparation_ns);
+      result.repair_family_elapsed_us[family].add_nanoseconds(candidate.preparation_ns);
+      ++result.straight_scene_preview_checks;
+      ++result.straight_scene_portfolio_attempts;
+      ++result.repair_family_attempts[family];
+      std::size_t work = 1U;
+      for (const auto& route : candidate.trial.native_realization_manifest) work += route.native_pieces.size();
+      result.repair_family_work_units[family] += work;
+      batch.push_back(std::move(candidate));
+    }
+    if (batch.empty()) break;
+    // This is prioritization, not a feasibility proof or pruning rule. Every prepared candidate
+    // remains eligible for the independent full-scene oracle, even with a worse native score.
+    std::stable_sort(batch.begin(), batch.end(), [](const auto& a, const auto& b) {
+      return std::tuple{!a.trial.native_scene_complete, a.trial.native_scene_fixed_conflicts,
+                        a.trial.straight_scene_provisional_context_conflicts} <
+             std::tuple{!b.trial.native_scene_complete, b.trial.native_scene_fixed_conflicts,
+                        b.trial.straight_scene_provisional_context_conflicts};
+    });
+    for (auto& candidate : batch) {
+      if (stop_token.stop_requested() || result.spline_candidate_available) break;
+      const auto started = std::chrono::steady_clock::now();
+      finalize_prepared_straight_scene(candidate.prepared, candidate.trial, stop_token);
+      const auto elapsed_ns = static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(
+              std::chrono::steady_clock::now() - started).count());
+      result.straight_scene_portfolio_elapsed_us.add_nanoseconds(elapsed_ns);
+      result.repair_family_elapsed_us[candidate.family].add_nanoseconds(elapsed_ns);
+      result.linear_scaffold_checks += candidate.trial.linear_scaffold_checks - candidate.prior_checks;
+      result.linear_scaffold_rejections += candidate.trial.linear_scaffold_rejections - candidate.prior_rejections;
+      ++result.straight_scene_portfolio_checks;
+      ++result.straight_scene_trials;
+      if (candidate.family > 1U) ++result.straight_scene_joint_portfolio_checks;
+      if (candidate.family > 2U) ++result.straight_scene_multi_window_checks;
+      all_proven = all_proven && comparable(candidate.trial) &&
+          candidate.trial.straight_scene_provisional_context_conflicts == 0U;
+      routing_kernel_checkpoint();
+      ++proven_states;
+      if (!stop_token.stop_requested() && comparable(candidate.trial) &&
+          candidate.trial.straight_scene_open_connections <= result.straight_scene_open_connections &&
+          objective(candidate.trial) < objective(result)) {
+        const auto reduction = objective_error(result) > objective_error(candidate.trial)
+            ? objective_error(result) - objective_error(candidate.trial) : 0U;
+        result.repair_family_error_reduction[candidate.family] += reduction;
+        result.straight_scene_portfolio_error_reduction += reduction;
+        ++result.straight_scene_portfolio_improvements;
+        if (candidate.family > 2U) ++result.straight_scene_multi_window_improvements;
+        preserve_measurements(candidate.trial, result);
+        result = std::move(candidate.trial);
+        incumbent_choices = std::move(candidate.choices);
+      }
+    }
+  }
+  result.straight_scene_pool_states = proven_states;
+  result.straight_scene_pool_complete = complete_domain && all_proven && proven_states == domain_size &&
+      !stop_token.stop_requested();
+  if (stop_token.stop_requested())
+    result.straight_scene_search_outcome = RegionalStraightSearchOutcome::cancelled;
+  else if (result.spline_candidate_available)
+    result.straight_scene_search_outcome = RegionalStraightSearchOutcome::found_legal_candidate;
+  else if (result.straight_scene_pool_complete)
+    result.straight_scene_search_outcome = RegionalStraightSearchOutcome::retained_fixed_pool_exhausted;
+  else
+    result.straight_scene_search_outcome = RegionalStraightSearchOutcome::budget_or_scope_unknown;
+}
+
+void assess_regional_native_scene(const Board& source, RegionalRouteResult& regional) {
+  regional.validated_copper_scene.data.reset();
+  regional.native_scene_evaluated = false;
+  regional.native_scene_complete = false;
+  regional.native_scene_conflicts = 0U;
+  regional.native_scene_fixed_conflicts = 0U;
+  regional.native_scene_total_conflicts = 0U;
+  regional.native_scene_open_connections = 0U;
+  regional.straight_scene_provisional_context_conflicts = 0U;
+  std::erase_if(regional.local_routability_diagnoses, [](const auto& diagnosis) {
+    return diagnosis.resource.stable_id.starts_with("native-scene:");
+  });
+  if (!regional.native_realization_manifest_available)
+    return;
+  Board scene = source;
+  if (regional.configured.treat_saved_zone_fills_as_refillable)
+    for (auto& zone : scene.zones)
+      zone.fills.clear();
+  struct Evidence {
+    NetId net;
+    LayerId layer;
+    Point start;
+    Point end;
+    bool native;
+    bool provisional;
+  };
+  std::map<std::string, Evidence> evidence;
+  std::set<std::string> ids;
+  for (const auto& track : source.tracks) {
+    ids.insert(track.id.value());
+    evidence.emplace(track.id.value(),
+                     Evidence{track.net, track.layer, track.start, track.end, false, false});
+  }
+  for (const auto& arc : source.track_arcs) {
+    ids.insert(arc.id.value());
+    evidence.emplace(arc.id.value(),
+                     Evidence{arc.net, arc.layer, arc.start, arc.end, false, false});
+  }
+  for (const auto& curve : source.track_beziers) {
+    ids.insert(curve.id.value());
+    evidence.emplace(curve.id.value(),
+                     Evidence{curve.net, curve.layer, curve.start, curve.end, false, false});
+  }
+  for (const auto& via : source.vias) {
+    ids.insert(via.id.value());
+    if (!via.layers.empty())
+      evidence.emplace(via.id.value(), Evidence{via.net, via.layers.front(), via.position,
+                                                via.position, false, false});
+  }
+  for (const auto& zone : source.zones)
+    ids.insert(zone.id.value());
+  for (const auto& footprint : source.footprints) {
+    ids.insert(footprint.id.value());
+    for (const auto& pad : footprint.pads)
+      ids.insert(pad.id.value());
+  }
+  std::size_t serial = 0U;
+  const auto id_for = [&](Evidence item) {
+    std::string id;
+    do {
+      id = "__flux-native-scene-" + std::to_string(serial++);
+    } while (!ids.insert(id).second);
+    evidence.emplace(id, std::move(item));
+    return ObjectId{id};
+  };
+  std::set<std::size_t> consumed;
+  bool complete = true;
+  for (const auto& path : regional.spline_candidate_paths) {
+    const auto rules = resolve_net_routing_rules(source, path.net);
+    for (std::size_t first = 0U; first + 1U < path.points.size();) {
+      std::optional<std::pair<std::size_t, bool>> match;
+      for (std::size_t index = 0U; index < regional.native_realization_manifest.size(); ++index) {
+        const auto& route = regional.native_realization_manifest[index];
+        if (consumed.contains(index) || route.fragment.net != path.net ||
+            route.fragment.connection_index != path.connection_index ||
+            route.centerline.size() < 2U || first + route.centerline.size() > path.points.size())
+          continue;
+        for (const bool reversed : {false, true}) {
+          bool matches = true;
+          for (std::size_t offset = 0U; offset < route.centerline.size(); ++offset) {
+            const auto at = reversed ? route.centerline.size() - 1U - offset : offset;
+            matches = matches && path.points[first + offset].layer == route.layer &&
+                      path.points[first + offset].position == route.centerline[at];
+          }
+          if (matches) {
+            match = {index, reversed};
+            break;
+          }
+        }
+        if (match)
+          break;
+      }
+      if (match) {
+        const auto& route = regional.native_realization_manifest[match->first];
+        consumed.insert(match->first);
+        if (route.native_pieces.empty() ||
+            !std::isfinite(native_spline_max_join_angle(route.native_pieces))) {
+          complete = false;
+          first += route.centerline.size() - 1U;
+          continue;
+        }
+        if (route.native_pieces.front().start != route.centerline.front() ||
+            route.native_pieces.back().end != route.centerline.back())
+          complete = false;
+        for (const auto& piece : route.native_pieces) {
+          auto minimum =
+              Point{std::min(piece.start.x, piece.end.x), std::min(piece.start.y, piece.end.y)};
+          auto maximum =
+              Point{std::max(piece.start.x, piece.end.x), std::max(piece.start.y, piece.end.y)};
+          if (piece.kind == SplineFittedPieceKind::circular_arc)
+            for (const auto point :
+                 geometry::circular_arc_extrema(piece.start, piece.middle, piece.end)) {
+              minimum = {std::min(minimum.x, point.x), std::min(minimum.y, point.y)};
+              maximum = {std::max(maximum.x, point.x), std::max(maximum.y, point.y)};
+            }
+          if (piece.kind == SplineFittedPieceKind::cubic_bezier)
+            for (const auto point : {piece.control1, piece.control2}) {
+              minimum = {std::min(minimum.x, point.x), std::min(minimum.y, point.y)};
+              maximum = {std::max(maximum.x, point.x), std::max(maximum.y, point.y)};
+            }
+          const auto id = id_for({path.net, route.layer, minimum, maximum, true, false});
+          if (piece.kind == SplineFittedPieceKind::cubic_bezier)
+            scene.track_beziers.push_back({id, path.net, route.layer, piece.start, piece.control1,
+                                          piece.control2, piece.end, route.width, false});
+          else if (piece.kind == SplineFittedPieceKind::circular_arc)
+            scene.track_arcs.push_back({id, path.net, route.layer, piece.start, piece.middle,
+                                        piece.end, route.width, false});
+          else
+            scene.tracks.push_back(
+                {id, path.net, route.layer, piece.start, piece.end, route.width, false});
+        }
+        first += route.centerline.size() - 1U;
+        continue;
+      }
+      const auto& a = path.points[first];
+      const auto& b = path.points[first + 1U];
+      if (a.layer == b.layer && a.position != b.position) {
+        const auto width =
+            first < path.segment_widths.size() && path.segment_widths[first].value() > 0
+                ? path.segment_widths[first]
+                : rules.track_width;
+        scene.tracks.push_back({id_for({path.net, a.layer, a.position, b.position, false, true}),
+                                path.net, a.layer, a.position, b.position, width, false});
+      }
+      ++first;
+    }
+    const bool multilayer = std::adjacent_find(path.points.begin(), path.points.end(),
+                                               [](const auto& a, const auto& b) {
+                                                 return a.layer != b.layer;
+                                               }) != path.points.end();
+    if (!multilayer)
+      continue;
+    const auto plan = plan_multilayer_route(source, path);
+    if (!plan) {
+      complete = false;
+      continue;
+    }
+    for (const auto& transition : plan->via_transitions) {
+      const auto covers = [&](const auto& layers) {
+        return std::all_of(transition.span.begin(), transition.span.end(), [&](const auto& layer) {
+          return std::find(layers.begin(), layers.end(), layer) != layers.end();
+        });
+      };
+      bool reused = std::any_of(scene.vias.begin(), scene.vias.end(), [&](const auto& via) {
+        return via.net == path.net && via.position == transition.site && covers(via.layers);
+      });
+      for (const auto& footprint : source.footprints)
+        for (const auto& pad : footprint.pads)
+          reused = reused || (pad.net == path.net && pad.plated && pad_has_drill(pad) &&
+                              pad_drill_world_position(footprint, pad) == transition.site &&
+                              covers(pad.layers));
+      if (!reused)
+        scene.vias.push_back({id_for({path.net, transition.span.front(), transition.site,
+                                      transition.site, false, false}),
+                              path.net, transition.site, rules.via_diameter, rules.via_drill,
+                              transition.span, false});
+    }
+  }
+  complete = complete && consumed.size() == regional.native_realization_manifest.size();
+  std::set<NetId> fixed_conflict_nets;
+  const auto copper = check_copper_rules(scene);
+  regional.native_scene_total_conflicts = copper.violation_count();
+  regional.native_scene_open_connections = analyze_connectivity(scene).open_connections;
+  for (const auto& violation : copper.violations) {
+    if (violation.kind == CopperViolationKind::differential_pair_skew)
+      continue;
+    std::vector<NetId> nets;
+    const Evidence* native = nullptr;
+    bool provisional = false;
+    for (const auto& id : violation.object_ids) {
+      const auto found = evidence.find(id);
+      if (found == evidence.end())
+        continue;
+      nets.push_back(found->second.net);
+      if (found->second.native)
+        native = &found->second;
+      provisional = provisional || found->second.provisional;
+    }
+    if (native == nullptr)
+      continue;
+    ++regional.native_scene_conflicts;
+    if (!provisional) {
+      ++regional.native_scene_fixed_conflicts;
+      fixed_conflict_nets.insert(nets.begin(), nets.end());
+    } else {
+      // The conflicting continuation belongs to a different mutable regional owner.  It is
+      // evidence for expansion/ranking, never a proof that this fixed retained pool is
+      // infeasible.
+      ++regional.straight_scene_provisional_context_conflicts;
+    }
+    std::sort(nets.begin(), nets.end());
+    nets.erase(std::unique(nets.begin(), nets.end()), nets.end());
+    RoutabilityDiagnosis diagnosis;
+    diagnosis.kind = RoutabilityFailureKind::quantization_clearance;
+    diagnosis.stage = RoutabilityFailureStage::quantization;
+    diagnosis.resource = {
+        "native-scene:" + std::to_string(regional.native_scene_conflicts),
+        native->layer,
+        {Point{std::min(native->start.x, native->end.x), std::min(native->start.y, native->end.y)},
+         Point{std::max(native->start.x, native->end.x), std::max(native->start.y, native->end.y)}},
+        nets};
+    diagnosis.clearance_deficit = Nanometres{static_cast<std::int64_t>(
+        std::ceil(std::max(0.0L, static_cast<long double>(violation.required_clearance.value()) -
+                                     violation.actual_distance_nm)))};
+    diagnosis.suggested_relaxation = RoutabilityRelaxation::change_corridor;
+    diagnosis.detail =
+        violation.code + (provisional
+                              ? ": native copper conflicts with provisional outside-window track"
+                              : ": assembled native/static/via scene is illegal");
+    for (const auto& id : violation.object_ids) {
+      diagnosis.detail += "; object=" + id;
+      if (const auto found = evidence.find(id); found != evidence.end()) {
+        const auto& item = found->second;
+        diagnosis.detail += ", net=" + item.net.value() + ", layer=" + item.layer.value() +
+            ", native=" + (item.native ? "yes" : "no") +
+            ", provisional=" + (item.provisional ? "yes" : "no");
+      }
+    }
+    if (regional.local_routability_diagnoses.size() <
+        regional.configured.max_local_routability_diagnoses)
+      regional.local_routability_diagnoses.push_back(std::move(diagnosis));
+  }
+  regional.native_scene_evaluated = true;
+  regional.native_scene_complete = complete;
+  // Save only an entirely DRC-clean scene, including conflicts outside native fragments.
+  // Detailed materialization revalidates it; this artifact never grants completion by itself.
+  if (complete && copper.ok() && regional.native_scene_open_connections == 0U) {
+    regional.validated_copper_scene.data = std::make_shared<const RegionalCopperSceneData>(
+        RegionalCopperSceneData{source, std::move(scene), regional.spline_candidate_paths,
+                                regional.native_realization_manifest,
+                                regional.configured.treat_saved_zone_fills_as_refillable});
+  }
+
+  // Preserve the native-scene gate independently of the quantized whole-path oracle.
+  if (!complete || regional.native_scene_total_conflicts > 0U ||
+      regional.native_scene_open_connections > 0U) {
+    regional.spline_candidate_available = false;
+    regional.spline_candidate_diagnostic =
+        !complete ? "native manifest does not match assembled paths"
+                  : "assembled native scene has unresolved physical repair obligations";
+    for (auto& assignment : regional.bundle_assignments)
+      if (!complete || std::any_of(assignment.spline_realizations.begin(),
+                                   assignment.spline_realizations.end(), [&](const auto& route) {
+                                     return fixed_conflict_nets.contains(route.fragment.net);
+                                   }))
+        assignment.stop_reason = RegionalBundleStopReason::spline_realization_failed;
+  }
+}
+
+// Proposal guidance from the actual retained copper scene, rather than from internal NavMesh
+// cell edges. Offset contours include the trace radius and pairwise clearance exactly once.
+// The final native scene remains authoritative; unavailable geometry disables this guidance.
+static SplineClearanceEvaluator tightening_obstacle_field(
+    const Board& scene, const RegionalSplineRealization& route, bool refillable_zones) {
+  const auto extracted = extract_polygonal_board_free_space(
+      scene, {route.layer, route.fragment.net, true, true, !refillable_zones});
+  if (!extracted.complete()) return {};
+  const auto half_width = Nanometres{(route.width.value() + 1) / 2};
+  const auto rules = resolve_net_routing_rules(scene, route.fragment.net);
+  FreeSpaceOffsetConfig policy{half_width + scene.rules.copper_to_edge_clearance, 20'000U};
+  const auto margins = [&](const auto& nets) {
+    std::vector<Nanometres> values;
+    values.reserve(nets.size());
+    for (const auto& net : nets)
+      values.push_back(half_width + (net ? resolve_pairwise_clearance(scene, route.fragment.net, *net)
+                                        : rules.clearance));
+    return values;
+  };
+  policy.obstacle_clearances = margins(extracted.obstacle_nets);
+  policy.filled_obstacle_clearances = margins(extracted.filled_obstacle_nets);
+  auto offset = offset_polygonal_free_space(extracted.domain, policy);
+  if (!offset.ok() || offset.regions.empty()) return {};
+  auto regions = std::make_shared<const std::vector<OffsetFreeSpaceRegion>>(std::move(offset.regions));
+  return [regions](SplineVector position) {
+    if (!std::isfinite(position.x) || !std::isfinite(position.y) ||
+        std::abs(position.x) > 1.0e15L || std::abs(position.y) > 1.0e15L)
+      return SplineClearanceProbe{-1.0L, {}, false};
+    const Point point{Nanometres{static_cast<std::int64_t>(std::llround(position.x))},
+                      Nanometres{static_cast<std::int64_t>(std::llround(position.y))}};
+    bool inside = false;
+    long double nearest_squared = std::numeric_limits<long double>::infinity();
+    SplineVector nearest;
+    const auto boundary = [&](const Polygon& polygon) {
+      for (std::size_t i = 0U; i < polygon.vertices.size(); ++i) {
+        const auto a = polygon.vertices[i];
+        const auto b = polygon.vertices[(i + 1U) % polygon.vertices.size()];
+        const long double ax = a.x.value(), ay = a.y.value();
+        const long double dx = static_cast<long double>(b.x.value()) - ax;
+        const long double dy = static_cast<long double>(b.y.value()) - ay;
+        const auto denominator = dx * dx + dy * dy;
+        const auto t = denominator > 0.0L
+            ? std::clamp(((position.x - ax) * dx + (position.y - ay) * dy) / denominator, 0.0L, 1.0L)
+            : 0.0L;
+        const SplineVector contact{ax + t * dx, ay + t * dy};
+        const auto x = position.x - contact.x, y = position.y - contact.y;
+        const auto squared = x * x + y * y;
+        if (squared < nearest_squared) { nearest_squared = squared; nearest = contact; }
+      }
+    };
+    for (const auto& region : *regions) {
+      bool contained = geometry::locate_point(region.area, point) != geometry::PointLocation::outside;
+      boundary(region.area);
+      for (const auto& hole : region.holes) {
+        if (geometry::locate_point(hole, point) != geometry::PointLocation::outside) contained = false;
+        boundary(hole);
+      }
+      inside = inside || contained;
+    }
+    const auto distance = std::sqrt(nearest_squared);
+    const auto sign = inside ? 1.0L : -1.0L;
+    const SplineVector normal = distance > 0.0L
+        ? SplineVector{sign * (position.x - nearest.x) / distance,
+                       sign * (position.y - nearest.y) / distance} : SplineVector{};
+    // Account for integer containment queries at sub-nanometre positions.
+    return SplineClearanceProbe{sign * distance - 1.0L, normal, inside && distance >= 1.0L};
+  };
+}
+
+bool tighten_regional_spline_candidate(const Board& board, const GlobalRouteResult& global,
+                                       RegionalRouteResult& regional,
+                                       const RegionalRouterConfig& config,
+                                       std::stop_token stop_token,
+                                       RouterTelemetrySink* telemetry) {
+  // This is deliberately a small, post-realization operation. It does not create alternate
+  // topology: each proposal clones the PH route and its prepared corridor, removes only a
+  // redundant interpolation node, then pays the ordinary complete native-scene assessment.
+  if (stop_token.stop_requested() || !regional.spline_candidate_available ||
+      !regional.validated_copper_scene.data ||
+      !regional.native_scene_evaluated || !regional.native_scene_complete ||
+      regional.native_scene_conflicts != 0U || config.max_post_realization_tighten_routes == 0U ||
+      config.max_post_realization_tighten_removals == 0U ||
+      config.max_post_realization_tighten_candidate_checks == 0U) {
+    return false;
+  }
+
+  struct CandidateRef {
+    std::size_t assignment{0U};
+    std::size_t realization{0U};
+    long double length{0.0L};
+    long double curvature{0.0L};
+  };
+  const auto route_length = [](const QuinticPHRoute& route) {
+    return std::accumulate(route.segments.begin(), route.segments.end(), 0.0L,
+                           [](long double length, const QuinticPHSegment& segment) {
+                             return length + quintic_ph_arc_length(segment);
+                           });
+  };
+  const auto scene_objective = [&](const RegionalRouteResult& scene) {
+    std::pair<long double, long double> objective;
+    for (const auto& assignment : scene.bundle_assignments)
+      for (const auto& realization : assignment.spline_realizations)
+        if (realization.ph_route) {
+          objective.first += route_length(*realization.ph_route);
+          objective.second += quintic_ph_curvature_objective(*realization.ph_route);
+        }
+    return objective;
+  };
+  const auto incumbent_objective = scene_objective(regional);
+  std::vector<CandidateRef> candidates;
+  for (std::size_t assignment_index = 0U;
+       assignment_index < regional.bundle_assignments.size(); ++assignment_index) {
+    const auto& assignment = regional.bundle_assignments[assignment_index];
+    if (!assignment.complete()) continue;
+    for (std::size_t realization_index = 0U;
+         realization_index < assignment.spline_realizations.size(); ++realization_index) {
+      const auto& realization = assignment.spline_realizations[realization_index];
+      if (realization.straight_realization || !realization.ph_route ||
+          realization.ph_route->control_points.size() <= 2U || !realization.native_copper_legal)
+        continue;
+      candidates.push_back({assignment_index, realization_index, route_length(*realization.ph_route),
+                            quintic_ph_curvature_objective(*realization.ph_route)});
+    }
+  }
+  // Explore a bounded legal set rather than making acceptance depend on the first physical
+  // window in storage order. Longer curves offer the most shortening opportunity; curvature is
+  // a deterministic secondary tie-breaker.
+  std::stable_sort(candidates.begin(), candidates.end(), [](const auto& lhs, const auto& rhs) {
+    if (lhs.length != rhs.length) return lhs.length > rhs.length;
+    return lhs.curvature > rhs.curvature;
+  });
+  if (candidates.size() > config.max_post_realization_tighten_routes)
+    candidates.resize(config.max_post_realization_tighten_routes);
+  regional.spline_tightening_routes_examined = candidates.size();
+  regional.spline_tightening_routes_accepted = 0U;
+  regional.spline_tightening_exact_length_before_nm = 0U;
+  regional.spline_tightening_exact_length_after_nm = 0U;
+
+  const auto point_of = [](SplineVector point) {
+    return Point{Nanometres{static_cast<std::int64_t>(std::llround(point.x))},
+                 Nanometres{static_cast<std::int64_t>(std::llround(point.y))}};
+  };
+  const auto same_point = [](SplineVector lhs, SplineVector rhs) {
+    return std::abs(lhs.x - rhs.x) < 0.5L && std::abs(lhs.y - rhs.y) < 0.5L;
+  };
+  std::optional<RegionalRouteResult> best;
+  std::size_t best_assignment_index{0U};
+  long double best_original_length = incumbent_objective.first;
+  long double best_length = std::numeric_limits<long double>::infinity();
+  long double best_curvature = std::numeric_limits<long double>::infinity();
+  std::size_t attempted = 0U;
+  for (const auto& reference : candidates) {
+    if (stop_token.stop_requested()) break;
+    const auto& incumbent =
+        regional.bundle_assignments[reference.assignment].spline_realizations[reference.realization];
+    QuinticPHRoute tightened = *incumbent.ph_route;
+    std::vector<SplineVector> protected_anchors{tightened.control_points.front(),
+                                                 tightened.control_points.back()};
+    for (const auto anchor : incumbent.protected_anchors) {
+      protected_anchors.push_back(
+          SplineVector{static_cast<long double>(anchor.x.value()),
+                       static_cast<long double>(anchor.y.value())});
+    }
+    const auto append_anchor = [&](const std::optional<Point>& anchor) {
+      if (anchor) {
+        protected_anchors.push_back(
+            SplineVector{static_cast<long double>(anchor->x.value()),
+                         static_cast<long double>(anchor->y.value())});
+      }
+    };
+    append_anchor(incumbent.entry_via_site);
+    append_anchor(incumbent.exit_via_site);
+    protected_anchors.push_back(
+        SplineVector{static_cast<long double>(incumbent.replacement_end.x.value()),
+                     static_cast<long double>(incumbent.replacement_end.y.value())});
+    // Paired supports need real obstacle boundary normals. If extraction is unavailable, an
+    // empty evaluator retains corridor-only deletion; never synthesize infinite clearance.
+    const auto clearance = config.enable_paired_obstacle_supports
+        ? tightening_obstacle_field(regional.validated_copper_scene.data->scene, incumbent,
+                                    regional.configured.treat_saved_zone_fills_as_refillable)
+        : SplineClearanceEvaluator{};
+    const auto constrained = [protected_anchors, same_point, point_of, stop_token,
+                              topology = incumbent.topology_certificate,
+                              corridor = tightened.prepared_corridor](const QuinticPHRoute& route) {
+      if (stop_token.stop_requested() || route.prepared_corridor != corridor ||
+          route.control_points.size() < 2U) return false;
+      const auto anchors_preserved =
+          std::all_of(protected_anchors.begin(), protected_anchors.end(), [&](auto anchor) {
+        return std::any_of(route.control_points.begin(), route.control_points.end(),
+                           [&](auto point) { return same_point(point, anchor); });
+      });
+      if (!anchors_preserved) return false;
+      if (!topology.valid) return true;
+      std::vector<Point> centerline;
+      for (const auto& sample :
+           adaptive_tessellate_quintic_ph(route, Nanometres::from_mm(0.02), 10U, 512U)) {
+        const auto point = point_of(sample.position);
+        if (centerline.empty() || centerline.back() != point) centerline.push_back(point);
+      }
+      return validate_navmesh_topology_signature(topology, centerline, true).preserved;
+    };
+    SplineTrajectoryOptimizationConfig tightening_config;
+    tightening_config.enable_paired_obstacle_supports = config.enable_paired_obstacle_supports;
+    tightening_config.maximum_candidate_checks = config.max_post_realization_tighten_candidate_checks;
+    tightening_config.maximum_iterations = 0U;
+    tightening_config.minimum_clearance = Nanometres{0};
+    tightening_config.minimum_bend_radius = incumbent.certified_minimum_bend_radius;
+    tightening_config.shape.minimum_bend_radius = incumbent.certified_minimum_bend_radius;
+    ++attempted;
+    if (!tauten_quintic_ph_route(tightened, tightening_config, clearance, constrained,
+                                 config.max_post_realization_tighten_removals)) {
+      continue;
+    }
+    const auto length = route_length(tightened);
+    if (!(length + 1.0e-9L < reference.length)) continue;
+
+    auto trial = regional;
+    auto& replacement =
+        trial.bundle_assignments[reference.assignment].spline_realizations[reference.realization];
+    replacement.ph_route = std::make_shared<const QuinticPHRoute>(tightened);
+    replacement.control_points.clear();
+    for (const auto control : quintic_ph_bezier_controls(tightened))
+      replacement.control_points.push_back(point_of(control));
+    replacement.centerline.clear();
+    for (const auto& sample : adaptive_tessellate_quintic_ph(
+             tightened, replacement.native_fit_policy.tessellation_tolerance,
+             replacement.native_fit_policy.maximum_depth, replacement.native_fit_policy.maximum_samples)) {
+      const auto point = point_of(sample.position);
+      if (replacement.centerline.empty() || replacement.centerline.back() != point)
+        replacement.centerline.push_back(point);
+    }
+    replacement.native_pieces =
+        fit_quintic_ph_to_cubic_copper(tightened, replacement.native_fit_policy, stop_token);
+    auto shape_policy = tightening_config.shape;
+    shape_policy.minimum_bend_radius = incumbent.certified_minimum_bend_radius;
+    const auto shape = certify_quintic_ph_shape(tightened, shape_policy);
+    replacement.shape_legal = shape.legal;
+    replacement.native_copper_legal = false;
+    replacement.mutually_legal = false;
+    replacement.quantized_mutually_legal = false;
+    if (replacement.centerline.size() < 2U || replacement.native_pieces.empty() || !shape.legal)
+      continue;
+
+    build_regional_spline_candidate(board, global, trial);
+    // Candidate assembly may already assess in native-authority mode; call it explicitly so a
+    // tightening commit always has a fresh complete native copper verdict in every mode.
+    assess_regional_native_scene(board, trial);
+    if (!trial.spline_candidate_available || !trial.native_scene_evaluated ||
+        !trial.native_scene_complete || trial.native_scene_conflicts != 0U ||
+        !trial.validated_copper_scene.data) {
+      continue;
+    }
+    const auto connectivity = analyze_connectivity(trial.validated_copper_scene.data->scene);
+    if (stop_token.stop_requested() || connectivity.open_connections != 0U) {
+      continue;
+    }
+    for (auto& assignment : trial.bundle_assignments)
+      for (auto& realization : assignment.spline_realizations)
+        if (realization.ph_route)
+          realization.native_copper_legal = realization.mutually_legal =
+              realization.quantized_mutually_legal = true;
+    for (auto& realization : trial.native_realization_manifest)
+      if (realization.ph_route)
+        realization.native_copper_legal = realization.mutually_legal =
+            realization.quantized_mutually_legal = true;
+    if (trial.validated_copper_scene.data) {
+      auto accepted =
+          std::make_shared<RegionalCopperSceneData>(*trial.validated_copper_scene.data);
+      accepted->manifest = trial.native_realization_manifest;
+      trial.validated_copper_scene.data = std::move(accepted);
+    }
+    const auto [trial_length, trial_curvature] = scene_objective(trial);
+    if (!best || trial_length + 1.0e-9L < best_length ||
+        (std::abs(trial_length - best_length) <= 1.0e-9L && trial_curvature < best_curvature)) {
+      best_assignment_index = reference.assignment;
+      best = std::move(trial);
+      best_length = trial_length;
+      best_curvature = trial_curvature;
+    }
+  }
+  if (!best) {
+    if (telemetry != nullptr && telemetry->accepts(RouterTelemetryLevel::diagnostic)) {
+      RouterTelemetryEvent event;
+      event.kind = RouterTelemetryEventKind::search_summary;
+      event.minimum_level = RouterTelemetryLevel::diagnostic;
+      event.stable_id = "regional-spline-tighten";
+      event.detail = "regional PH tightening retained incumbent: routes=" +
+          std::to_string(candidates.size()) + ", attempted=" + std::to_string(attempted) +
+          ", checks_per_route=" +
+          std::to_string(config.max_post_realization_tighten_candidate_checks);
+      static_cast<void>(telemetry->try_emit(std::move(event)));
+    }
+    return false;
+  }
+  regional = std::move(*best);
+  publish_regional_spline_assignment_telemetry(
+      regional.bundle_assignments[best_assignment_index], telemetry,
+      RouterTelemetryLevel::normal, "selected");
+  const auto length_nm = [](long double length) {
+    if (!(length > 0.0L)) return std::uint64_t{0U};
+    const auto maximum = static_cast<long double>(std::numeric_limits<std::uint64_t>::max());
+    return static_cast<std::uint64_t>(std::llround(std::min(length, maximum)));
+  };
+  regional.spline_tightening_routes_examined = candidates.size();
+  regional.spline_tightening_routes_accepted = 1U;
+  regional.spline_tightening_exact_length_before_nm = length_nm(best_original_length);
+  regional.spline_tightening_exact_length_after_nm = length_nm(best_length);
+  if (telemetry != nullptr && telemetry->accepts(RouterTelemetryLevel::diagnostic)) {
+    RouterTelemetryEvent event;
+    event.kind = RouterTelemetryEventKind::search_summary;
+    event.minimum_level = RouterTelemetryLevel::diagnostic;
+    event.stable_id = "regional-spline-tighten";
+    event.detail = "regional PH tightening accepted: routes=" + std::to_string(candidates.size()) +
+        ", attempted=" + std::to_string(attempted) + ", checks_per_route=" +
+        std::to_string(config.max_post_realization_tighten_candidate_checks) +
+        ", exact_length_nm=" +
+        std::to_string(regional.spline_tightening_exact_length_before_nm) + "->" +
+        std::to_string(regional.spline_tightening_exact_length_after_nm);
+    static_cast<void>(telemetry->try_emit(std::move(event)));
+  }
+  return true;
+}
 
 std::optional<RegionalMultilayerRoutePlan> plan_multilayer_route(const Board& board,
                                                                  const GlobalRoutePath& path) {
@@ -11593,19 +19039,33 @@ std::optional<RegionalMultilayerRoutePlan> plan_multilayer_route(const Board& bo
   return result;
 }
 
-RegionalRouteResult analyze_regional_conflicts(const Board& board, const GlobalRouteResult& global,
+static RegionalRouteResult analyze_regional_conflicts_impl(const Board& board, const GlobalRouteResult& global,
                                                const RegionalRouterConfig& config,
+                                               std::size_t remaining_scope_retries,
                                                std::stop_token stop_token,
-                                               RouterTelemetrySink* telemetry) {
+                                               RouterTelemetrySink* telemetry,
+                                               RegionalAlternativeDomainCache& scene_domain_cache) {
   RegionalRouteResult result;
   result.configured = config;
+  result.source_physical_repair_requests = config.physical_scaffold_requests.size();
+  for (const auto& request : config.physical_scaffold_requests) {
+    result.configured_physical_repair_blockers += request.configured_blocker_objects;
+    result.resolved_physical_repair_blockers += request.blocker_objects.size();
+  }
+  result.candidate_ranker_requested = !config.candidate_ranker_model_path.empty();
   result.source_clearance_shadow_conflicts = global.clearance_shadow_conflicts.size();
-  const auto emit_progress = [telemetry](std::string stable_id, std::string detail) {
+  result.source_packing_obligations = global.unresolved_corridor_packing.size();
+  result.packing_obligation_budget_exhausted = global.corridor_packing_obligation_budget_exhausted;
+  const auto emit_progress = [telemetry, &result](std::string stable_id, std::string detail) {
     if (telemetry == nullptr) {
       return;
     }
     RouterTelemetryEvent progress;
     progress.kind = RouterTelemetryEventKind::search_summary;
+    progress.packing_obligations_update = true;
+    progress.unresolved_packing_obligations = result.unresolved_packing_obligations();
+    progress.packing_obligation_budget_exhausted =
+        result.packing_obligation_budget_exhausted && !result.packing_proven();
     progress.stable_id = std::move(stable_id);
     progress.detail = std::move(detail);
     static_cast<void>(telemetry->try_emit(std::move(progress)));
@@ -11620,6 +19080,7 @@ RegionalRouteResult analyze_regional_conflicts(const Board& board, const GlobalR
     result.diagnostic = "regional routing requires positive bounded search configuration";
     return result;
   }
+  routing_kernel_checkpoint();
   if (stop_token.stop_requested()) {
     result.stop_reason = RegionalRouterStopReason::cancelled;
     result.diagnostic = "regional conflict analysis cancelled before fragment construction";
@@ -11640,14 +19101,127 @@ RegionalRouteResult analyze_regional_conflicts(const Board& board, const GlobalR
       }));
   emit_progress("regional-analysis:fragments", "regional fragments constructed: fragments=" +
                                                    std::to_string(result.fragments.size()));
+  emit_regional_decision(RegionalDecisionPhase::fragments_prepared, &result, false,
+                         "regional fragments prepared");
 
   std::vector<ConflictSample> samples;
   samples.reserve(global.clearance_shadow_conflicts.size());
-  for (const auto& conflict : global.clearance_shadow_conflicts) {
+  if (config.expand_frozen_copper_scope) {
+    for (const auto& witness : config.frozen_copper_scope_witnesses) {
+      const auto locate = [&](const auto& id) {
+        return std::find_if(result.fragments.begin(), result.fragments.end(),
+                           [&](const auto& fragment) { return fragment.id == id; });
+      };
+      const auto first = locate(witness.candidate);
+      const auto second = locate(witness.blocker);
+      ++result.source_exact_copper_witnesses;
+      if (first == result.fragments.end() || second == result.fragments.end()) {
+        ++result.unmapped_exact_copper_pairs;
+        continue;
+      }
+      ++result.mapped_exact_copper_pairs;
+      const auto bounds = union_bounds(first->bounds, second->bounds);
+      samples.push_back(ConflictSample{first->id, second->id, witness.layer, bounds,
+          witness.clearance_deficit, 1U, exact_copper_evidence, 0U, 0U, {}});
+    }
+  }
+  for (const auto& witness : config.physical_conflict_witnesses) {
+    if (witness.locally_resolved ||
+        (witness.stage != RoutabilityFailureStage::final_validation &&
+         witness.stage != RoutabilityFailureStage::quantization) ||
+        (witness.kind != RoutabilityFailureKind::packing_capacity_exceeded &&
+         witness.kind != RoutabilityFailureKind::quantization_clearance &&
+         witness.kind != RoutabilityFailureKind::via_site_exhausted))
+      continue;
+    ++result.source_exact_copper_witnesses;
+    if (!witness.source_segment_pairs.empty()) {
+      const auto locate_source = [&](const RoutabilitySourceSegment& source)
+          -> std::optional<std::size_t> {
+        const bool current_source = std::any_of(global.paths.begin(), global.paths.end(),
+            [&](const auto& path) {
+              return path.net == source.net && path.connection_index == source.connection_index &&
+                  path.points.size() >= 2U && source.segment_index < path.points.size() - 1U &&
+                  path.points[source.segment_index].position == source.start &&
+                  path.points[source.segment_index + 1U].position == source.end &&
+                  path.points[source.segment_index].layer == source.layer &&
+                  path.points[source.segment_index + 1U].layer == source.layer;
+            });
+        if (!current_source) return std::nullopt;
+        for (std::size_t index = 0U; index < result.fragments.size(); ++index) {
+          const auto& fragment = result.fragments[index];
+          if (fragment.id.net == source.net &&
+              fragment.id.connection_index == source.connection_index &&
+              fragment.layer == source.layer && source.layer == witness.resource.layer &&
+              source.segment_index >= fragment.first_source_segment &&
+              source.segment_index <= fragment.last_source_segment &&
+              source.start != source.end &&
+              geometry::point_on_segment(source.start, fragment.start, fragment.end) &&
+              geometry::point_on_segment(source.end, fragment.start, fragment.end))
+            return index;
+        }
+        return std::nullopt;
+      };
+      for (const auto& pair : witness.source_segment_pairs) {
+        const auto first = locate_source(pair.first);
+        const auto second = locate_source(pair.second);
+        if (!first || !second || pair.first.net == pair.second.net) {
+          ++result.unmapped_exact_copper_pairs;
+          continue;
+        }
+        ++result.mapped_exact_copper_pairs;
+        auto first_id = result.fragments[*first].id;
+        auto second_id = result.fragments[*second].id;
+        if (second_id < first_id) std::swap(first_id, second_id);
+        samples.push_back(ConflictSample{first_id, second_id, witness.resource.layer,
+            witness.resource.bounds, witness.clearance_deficit,
+            std::max(std::uint64_t{1}, geometry::segment_length_nm(
+                witness.resource.bounds.minimum, witness.resource.bounds.maximum)),
+            exact_copper_evidence, 0U, 0U, {}});
+      }
+      continue;
+    }
+    auto nets = witness.resource.nets;
+    std::sort(nets.begin(), nets.end());
+    nets.erase(std::unique(nets.begin(), nets.end()), nets.end());
+    const auto& bounds = witness.resource.bounds;
+    const ConflictReference reference{bounds.minimum, bounds.maximum, witness.resource.layer};
+    const auto locate = [&](const NetId& net) -> std::optional<std::size_t> {
+      const auto index = nearest_fragment(result.fragments, net, reference);
+      if (!index || witness.resource.layer.empty() ||
+          result.fragments[*index].layer != witness.resource.layer ||
+          !bounds_touch(result.fragments[*index].bounds, bounds))
+        return std::nullopt;
+      return index;
+    };
+    for (std::size_t a = 0U; a < nets.size(); ++a) {
+      for (std::size_t b = a + 1U; b < nets.size(); ++b) {
+        const auto first = locate(nets[a]);
+        const auto second = locate(nets[b]);
+        if (!first || !second) {
+          ++result.unmapped_exact_copper_pairs;
+          continue;
+        }
+        ++result.mapped_exact_copper_pairs;
+        samples.push_back(ConflictSample{
+            result.fragments[*first].id, result.fragments[*second].id, reference.layer, bounds,
+            witness.clearance_deficit,
+            std::max(std::uint64_t{1}, geometry::segment_length_nm(bounds.minimum, bounds.maximum)),
+            exact_copper_evidence, 0U, 0U, {}});
+      }
+    }
+  }
+  if (!config.physical_conflict_witnesses.empty())
+    emit_progress("regional-analysis:exact-witnesses",
+                  "exact copper repair scope: witnesses=" +
+                      std::to_string(result.source_exact_copper_witnesses) +
+                      ", mapped_pairs=" + std::to_string(result.mapped_exact_copper_pairs) +
+                      ", unmapped_pairs=" + std::to_string(result.unmapped_exact_copper_pairs));
+  const auto append_shadow_sample = [&](const RoutingClearanceShadowConflict& conflict, bool unresolved) {
+    routing_kernel_checkpoint();
     if (stop_token.stop_requested()) {
       result.stop_reason = RegionalRouterStopReason::cancelled;
       result.diagnostic = "regional conflict analysis cancelled during shadow attribution";
-      return result;
+      return;
     }
     const ConflictReference candidate{conflict.first.position, conflict.second.position,
                                       conflict.first.layer};
@@ -11659,8 +19233,9 @@ RegionalRouteResult analyze_regional_conflicts(const Board& board, const GlobalR
     const auto first = nearest_fragment(result.fragments, conflict.first_net, candidate);
     const auto second = nearest_fragment(result.fragments, conflict.second_net, owner);
     if (!first || !second || result.fragments[*first].id == result.fragments[*second].id) {
-      ++result.unmapped_clearance_shadow_conflicts;
-      continue;
+      if (unresolved) ++result.unmapped_packing_obligations;
+      else ++result.unmapped_clearance_shadow_conflicts;
+      return;
     }
     auto first_id = result.fragments[*first].id;
     auto second_id = result.fragments[*second].id;
@@ -11674,10 +19249,18 @@ RegionalRouteResult analyze_regional_conflicts(const Board& board, const GlobalR
                                                   segment_bounds(owner.start, owner.end)),
                                      conflict.clearance_deficit,
                                      observed_length(candidate, owner),
-                                     clearance_shadow_evidence,
+                                     unresolved ? packing_unresolved_evidence : clearance_shadow_evidence,
                                      0U,
                                      0U,
                                      {}});
+  };
+  for (const auto& conflict : global.clearance_shadow_conflicts) {
+    append_shadow_sample(conflict, false);
+    if (stop_token.stop_requested()) return result;
+  }
+  for (const auto& obligation : global.unresolved_corridor_packing) {
+    append_shadow_sample(obligation.witness, true);
+    if (stop_token.stop_requested()) return result;
   }
   const auto append_capacity_samples = [&](const std::vector<NetId>& nets,
                                            const ConflictReference& reference,
@@ -11761,8 +19344,10 @@ RegionalRouteResult analyze_regional_conflicts(const Board& board, const GlobalR
           0U, sample.first, sample.second, sample.layer, sample.bounds, sample.deficit,
           sample.observed_length_nm, 1U,
           sample.evidence_mask == clearance_shadow_evidence ? 1U : 0U,
-          sample.evidence_mask == clearance_shadow_evidence ? 0U : 1U, sample.evidence_mask,
-          sample.discrete_excess, sample.physical_excess_nm, sample.attributed_obstacles});
+          (sample.evidence_mask & (sampled_capacity_evidence | corridor_capacity_evidence |
+                                   physical_capacity_evidence)) != 0U ? 1U : 0U,
+          sample.evidence_mask, sample.discrete_excess, sample.physical_excess_nm,
+          sample.attributed_obstacles, sample.evidence_mask == exact_copper_evidence ? 1U : 0U});
       continue;
     }
     merge->conflict_bounds = union_bounds(merge->conflict_bounds, sample.bounds);
@@ -11775,6 +19360,8 @@ RegionalRouteResult analyze_regional_conflicts(const Board& board, const GlobalR
     ++merge->sample_count;
     if (sample.evidence_mask == clearance_shadow_evidence) {
       ++merge->clearance_shadow_sample_count;
+    } else if (sample.evidence_mask == exact_copper_evidence) {
+      ++merge->exact_copper_sample_count;
     } else {
       ++merge->capacity_sample_count;
     }
@@ -11820,28 +19407,199 @@ RegionalRouteResult analyze_regional_conflicts(const Board& board, const GlobalR
       "regional-analysis:conflicts",
       "regional conflict graph constructed: edges=" + std::to_string(result.conflict_edges.size()) +
           ", components=" + std::to_string(result.components.size()));
-  const auto solve_windows = [&](RegionalRouteResult& candidate, std::string_view phase) {
+  emit_regional_decision(RegionalDecisionPhase::conflicts_partitioned, &result, false,
+                         "regional conflict graph and components prepared");
+  const auto exceeds_physical_scope_budget = [&](const RegionalRouteResult& candidate) {
+    return config.prioritize_frozen_scope_expansion && config.enable_spline_realization &&
+        std::any_of(candidate.windows.begin(), candidate.windows.end(), [](const auto& window) {
+          return window.failure_reason == RegionalWindowFailureReason::oversized_fragment_set ||
+                 window.failure_reason == RegionalWindowFailureReason::oversized_net_set;
+        });
+  };
+  // The caller owns this cache for one immutable board/global invocation. Keyed navmesh inputs
+  // make it reusable by witness-only physical-scope retries without crossing configuration.
+  RegionalCandidatePipelineStats whole_analysis_pipeline_stats;
+  bool physical_feedback_started = false;
+  const auto commit_pipeline_attempt = [&](const RegionalRouteResult& candidate) {
+    accumulate_candidate_pipeline_stats(whole_analysis_pipeline_stats,
+                                        candidate.candidate_pipeline_stats);
+  };
+  const auto solve_windows = [&](RegionalRouteResult& candidate, std::string_view phase,
+                                 const RegionalNoGoodClauses* no_good_clauses = nullptr) {
+    std::optional<RegionalRouteResult> bounded_prefix;
     populate_blocks(candidate);
     populate_windows(board, candidate);
+    const auto regional_window_fragments =
+        std::accumulate(candidate.windows.begin(), candidate.windows.end(), std::size_t{0U},
+                        [](const auto total, const auto& window) {
+                          return total + window.fragments.size();
+                        });
+    const auto regional_owned_fragments =
+        std::accumulate(candidate.windows.begin(), candidate.windows.end(), std::size_t{0U},
+                        [](const auto total, const auto& window) {
+                          return total + window.owned_fragments.size();
+                        });
     emit_progress("regional-analysis:" + std::string(phase) + ":windows",
                   std::string(phase) + " regional windows constructed: windows=" +
-                      std::to_string(candidate.windows.size()));
-    populate_channels(board, global, candidate);
+                      std::to_string(candidate.windows.size()) + ", fragments=" +
+                      std::to_string(regional_window_fragments) + ", owned=" +
+                      std::to_string(regional_owned_fragments));
+    emit_regional_decision(RegionalDecisionPhase::window_prepared, &candidate, false,
+                           std::string(phase) + " regional windows prepared");
+    if (exceeds_physical_scope_budget(candidate)) {
+      // No local transaction can include this required component under the configured bounds.
+      // Preserve its explicit global-replan diagnosis instead of spending on independent windows
+      // or enlarging ownership further. Unsearched eligible windows are not diagnosed as failures.
+      candidate.bundle_assignments.clear();
+      candidate.channels.clear();
+      candidate.spline_candidate_available = false;
+      candidate.native_realization_manifest_available = false;
+      for (const auto& window : candidate.windows) {
+        if (window.failure_reason != RegionalWindowFailureReason::oversized_fragment_set &&
+            window.failure_reason != RegionalWindowFailureReason::oversized_net_set) continue;
+        RegionalBundleAssignment blocked;
+        blocked.window_id = window.id;
+        blocked.stop_reason = RegionalBundleStopReason::window_ineligible;
+        candidate.bundle_assignments.push_back(std::move(blocked));
+        emit_regional_experiment_window_completed(
+            candidate, window, candidate.bundle_assignments.back(),
+            candidate.bundle_assignments.size() - 1U, phase);
+        emit_progress("regional-analysis:oversized-scope",
+                      "regional size bound requires global replanning: window=" +
+                          std::to_string(window.id) + ", nets=" + std::to_string(window.nets.size()) +
+                          "/" + std::to_string(config.max_nets_per_window) + ", fragments=" +
+                          std::to_string(window.fragments.size()) + "/" +
+                          std::to_string(config.max_conflict_fragments_per_window));
+      }
+      return;
+    }
+    populate_channels(board, global, candidate, scene_domain_cache);
     emit_progress("regional-analysis:" + std::string(phase) + ":channels",
                   std::string(phase) + " regional corridors constructed: channels=" +
                       std::to_string(candidate.channels.size()));
-    populate_bundle_assignments(board, global, candidate, telemetry, phase);
+    // Reach an exact physical verdict from a bounded deterministic prefix before broad ordinary
+    // alternative enumeration. The domain cache belongs to the caller/preparation lease, so the
+    // later full pass reuses its immutable free-space/navmesh preparation rather than restarting.
+    if (config.enable_early_physical_feedback && config.enable_spline_realization &&
+        !stop_token.stop_requested()) {
+      auto prefix = candidate;
+      // Do not enumerate every independent regional window before the first exact physical
+      // observation.  Keep the highest-pressure eligible windows; the native assembly retains
+      // every unselected global path as provisional scene geometry, so its DRC/connectivity
+      // assessment remains whole-board evidence but this partial transaction is never accepted.
+      std::vector<std::size_t> prefix_window_ids;
+      for (const auto& window : prefix.windows)
+        if (window.eligible()) prefix_window_ids.push_back(window.id);
+      std::stable_sort(prefix_window_ids.begin(), prefix_window_ids.end(),
+                       [&](const auto lhs, const auto rhs) {
+        const auto first = std::find_if(prefix.windows.begin(), prefix.windows.end(),
+                                        [&](const auto& value) { return value.id == lhs; });
+        const auto second = std::find_if(prefix.windows.begin(), prefix.windows.end(),
+                                         [&](const auto& value) { return value.id == rhs; });
+        if (first->observed_overlap_length_nm != second->observed_overlap_length_nm)
+          return first->observed_overlap_length_nm > second->observed_overlap_length_nm;
+        if (first->peak_clearance_deficit != second->peak_clearance_deficit)
+          return first->peak_clearance_deficit > second->peak_clearance_deficit;
+        return lhs < rhs;
+      });
+      if (prefix_window_ids.size() > config.max_early_physical_windows)
+        prefix_window_ids.resize(config.max_early_physical_windows);
+      const bool partial_prefix = prefix_window_ids.size() <
+          static_cast<std::size_t>(std::count_if(candidate.windows.begin(), candidate.windows.end(),
+                                                 [](const auto& window) { return window.eligible(); }));
+      std::erase_if(prefix.windows, [&](const auto& window) {
+        return std::find(prefix_window_ids.begin(), prefix_window_ids.end(), window.id) ==
+               prefix_window_ids.end();
+      });
+      prefix.configured.max_alternative_template_checks =
+          std::min(config.max_early_alternative_template_checks,
+                   config.max_alternative_template_checks);
+      prefix.configured.max_bundle_search_states =
+          std::min(config.max_early_bundle_search_states, config.max_bundle_search_states);
+      prefix.configured.max_access_assignment_states = std::min(
+          config.max_early_access_assignment_states, config.max_access_assignment_states);
+      prefix.configured.max_lane_order_states =
+          std::min(config.max_early_lane_order_states, config.max_lane_order_states);
+      prefix.configured.max_xpbd_interpolation_nodes_per_route =
+          std::min(config.max_xpbd_interpolation_nodes_per_route,
+                   config.max_early_xpbd_interpolation_nodes_per_route);
+      prefix.configured.max_spline_sweeps = std::min<std::size_t>(1U, config.max_spline_sweeps);
+      prefix.configured.max_adaptive_pair_shove_checks_per_window =
+          std::min<std::size_t>(1U, config.max_adaptive_pair_shove_checks_per_window);
+      populate_bundle_assignments(board, global, prefix, telemetry,
+                                  std::string(phase) + "-physical-prefix", no_good_clauses,
+                                  scene_domain_cache);
+      commit_pipeline_attempt(prefix);
+      realize_bundle_splines(board, prefix, stop_token, telemetry);
+      // Cancellation during the bounded physical prefix must not fall through into the broad
+      // portfolio.  That would silently consume the repair allowance after the caller has
+      // withdrawn the transaction.  Preserve the completed prefix evidence for diagnostics, but
+      // do not manufacture a physical verdict or continue ordinary template enumeration.
+      if (stop_token.stop_requested() || prefix.stop_reason == RegionalRouterStopReason::cancelled) {
+        prefix.configured = config;
+        prefix.stop_reason = RegionalRouterStopReason::cancelled;
+        prefix.spline_candidate_available = false;
+        candidate = std::move(prefix);
+        return;
+      }
+      if (!physical_feedback_started) {
+        physical_feedback_started = true;
+        emit_regional_decision(RegionalDecisionPhase::physical_feedback_started, &prefix, false,
+                               std::string(phase) + " bounded physical prefix ready");
+      }
+      build_regional_spline_candidate(board, global, prefix);
+      if (prefix.native_realization_manifest_available && !prefix.native_scene_evaluated)
+        assess_regional_native_scene(board, prefix);
+      emit_regional_decision(RegionalDecisionPhase::scene_evaluated, &prefix,
+                             prefix.native_scene_evaluated || prefix.straight_scene_evaluated,
+                             std::string(phase) + " bounded physical prefix evaluated: " +
+                                 prefix.spline_candidate_diagnostic);
+      // A fully legal prefix is already an authoritative transaction. Avoid spending the broad
+      // portfolio budget; keep the original user configuration in the returned checkpoint.
+      if (!partial_prefix && prefix.spline_candidate_available && prefix.native_scene_evaluated &&
+          prefix.native_scene_complete && prefix.native_scene_total_conflicts == 0U &&
+          prefix.native_scene_open_connections == 0U) {
+        prefix.configured = config;
+        candidate = std::move(prefix);
+        return;
+      }
+      prefix.configured = config;
+      bounded_prefix.emplace(std::move(prefix));
+    }
+    populate_bundle_assignments(board, global, candidate, telemetry, phase, no_good_clauses,
+                                scene_domain_cache);
+    commit_pipeline_attempt(candidate);
     emit_progress(
         "regional-analysis:" + std::string(phase) + ":assignments",
         std::string(phase) + " regional bundle portfolio prepared: assignments=" +
             std::to_string(candidate.bundle_assignments.size()) +
             ", alternative_templates=" + std::to_string(candidate.accepted_alternative_templates));
+    emit_regional_decision(RegionalDecisionPhase::template_batch_completed, &candidate, false,
+                           std::string(phase) + " regional template batch completed");
     if (config.enable_spline_realization) {
       realize_bundle_splines(board, candidate, stop_token, telemetry);
       emit_progress("regional-analysis:" + std::string(phase) + ":splines",
                     std::string(phase) + " regional spline realization completed: splines=" +
                         std::to_string(spline_count(candidate)));
+      emit_regional_decision(RegionalDecisionPhase::spline_candidate_completed, &candidate, false,
+                             std::string(phase) + " regional spline batch completed");
+      if (!physical_feedback_started) {
+        physical_feedback_started = true;
+        emit_regional_decision(RegionalDecisionPhase::physical_feedback_started, &candidate, false,
+                               std::string(phase) + " physical realization ready");
+      }
       build_regional_spline_candidate(board, global, candidate);
+      if (bounded_prefix && bounded_prefix->spline_candidate_available &&
+          !candidate.spline_candidate_available) {
+        // The broad continuation is allowed to fail independently; keep the earlier exact
+        // checkpoint as the best partial physical result rather than replacing it with an
+        // unevaluated/discrete-only portfolio.
+        candidate = std::move(*bounded_prefix);
+      }
+    } else if (config.enable_straight_realization) {
+      realize_regional_straight_candidate(board, global, candidate, stop_token);
+      emit_progress("regional-analysis:" + std::string(phase) + ":straight",
+                    "straight regional copper checked: " + candidate.spline_candidate_diagnostic);
     }
   };
   const auto unresolved_objective = [](const RegionalRouteResult& candidate) {
@@ -11875,11 +19633,314 @@ RegionalRouteResult analyze_regional_conflicts(const Board& board, const GlobalR
   auto ordinary = result;
   solve_windows(ordinary, "ordinary");
   result = std::move(ordinary);
+  const bool expand_scope_first = regional_frozen_scope_retry_pending(
+      result, config, remaining_scope_retries);
+  const bool scope_budget_exceeded = exceeds_physical_scope_budget(result);
+  if (expand_scope_first) {
+    emit_progress("regional-frozen-scope-escalation",
+                  "ordinary native rejection identifies a new outside blocker; deferring "
+                  "same-scope topology/residual repair until ownership expands; retries_remaining=" +
+                      std::to_string(remaining_scope_retries));
+  }
   if (config.enable_spline_realization && !result.spline_candidate_available &&
-      !stop_token.stop_requested()) {
+      !expand_scope_first && !scope_budget_exceeded && !stop_token.stop_requested()) {
+    // The ordinary regional pass has candidate-specific physical failure evidence. Generate
+    // columns only for the implicated complete route runs and rerun the bounded discrete master.
+    // Only monotonic preflight certificates become lazy no-goods: a failed PH/native realization
+    // remains an unknown for other deformations with the same discrete topology.
+    std::vector<std::size_t> failed_windows;
+    for (const auto& assignment : result.bundle_assignments) {
+      if (!assignment.complete()) {
+        failed_windows.push_back(assignment.window_id);
+      }
+    }
+    std::sort(failed_windows.begin(), failed_windows.end());
+    failed_windows.erase(std::unique(failed_windows.begin(), failed_windows.end()),
+                         failed_windows.end());
+    if (failed_windows.size() > config.max_conflict_directed_topology_windows) {
+      failed_windows.resize(config.max_conflict_directed_topology_windows);
+    }
+
+    RegionalNoGoodClauses no_good_clauses;
+    const auto append_failed_states = [&](const RegionalRouteResult& source,
+                                          const RegionalBundleAssignment& assignment) {
+      auto& clauses = no_good_clauses[assignment.window_id];
+      for (const auto& summary : assignment.spline_candidate_summaries) {
+        if (summary.complete) {
+          continue;
+        }
+        if (!summary.no_good_certified) {
+          ++result.conflict_directed_no_good_unknown_withheld;
+          continue;
+        }
+        const RegionalBundleSelection selection{summary.templates,
+                                                summary.via_choices,
+                                                summary.via_assignment_region_order,
+                                                summary.packed_cross_sections,
+                                                0U,
+                                                0U,
+                                                0U};
+        clauses.insert(regional_discrete_state_key(source, assignment.templates, selection));
+      }
+      if (assignment.spline_candidate_summaries.empty() && !assignment.selected_templates.empty() &&
+          regional_assignment_is_no_good_certificate(assignment.stop_reason)) {
+        const RegionalBundleSelection selection{assignment.selected_templates,
+                                                assignment.selected_via_choices,
+                                                assignment.via_assignment_region_order,
+                                                assignment.packed_cross_sections,
+                                                assignment.selected_via_alternative_switches,
+                                                assignment.selected_template_conflicts,
+                                                assignment.selected_residual_conflicts};
+        clauses.insert(regional_discrete_state_key(source, assignment.templates, selection));
+      } else if (assignment.spline_candidate_summaries.empty() &&
+                 !assignment.selected_templates.empty()) {
+        ++result.conflict_directed_no_good_unknown_withheld;
+      }
+    };
+    for (const auto& assignment : result.bundle_assignments) {
+      if (std::binary_search(failed_windows.begin(), failed_windows.end(), assignment.window_id)) {
+        append_failed_states(result, assignment);
+      }
+    }
+
+    const auto make_retry_base = [&]() {
+      RegionalRouteResult retry;
+      retry.configured = config;
+      retry.source_clearance_shadow_conflicts = result.source_clearance_shadow_conflicts;
+      retry.source_packing_obligations = result.source_packing_obligations;
+      retry.source_physical_repair_requests = result.source_physical_repair_requests;
+      retry.admitted_physical_repair_requests = result.admitted_physical_repair_requests;
+      retry.configured_physical_repair_blockers = result.configured_physical_repair_blockers;
+      retry.resolved_physical_repair_blockers = result.resolved_physical_repair_blockers;
+      retry.unmapped_packing_obligations = result.unmapped_packing_obligations;
+      retry.packing_obligation_budget_exhausted = result.packing_obligation_budget_exhausted;
+    retry.source_exact_copper_witnesses = result.source_exact_copper_witnesses;
+    retry.mapped_exact_copper_pairs = result.mapped_exact_copper_pairs;
+    retry.unmapped_exact_copper_pairs = result.unmapped_exact_copper_pairs;
+      retry.coalesced_clearance_shadow_samples = result.coalesced_clearance_shadow_samples;
+      retry.unmapped_clearance_shadow_conflicts = result.unmapped_clearance_shadow_conflicts;
+      retry.source_sampled_capacity_conflicts = result.source_sampled_capacity_conflicts;
+      retry.source_corridor_capacity_conflicts = result.source_corridor_capacity_conflicts;
+      retry.source_physical_capacity_conflicts = result.source_physical_capacity_conflicts;
+      retry.unmapped_capacity_conflicts = result.unmapped_capacity_conflicts;
+      retry.fragments = result.fragments;
+      retry.conflict_edges = result.conflict_edges;
+      retry.components = result.components;
+      retry.biconnected_blocks = result.biconnected_blocks;
+      retry.articulation_fragments = result.articulation_fragments;
+      retry.refittable_terminal_width_fragments = result.refittable_terminal_width_fragments;
+      retry.fixed_resource_width_fragments = result.fixed_resource_width_fragments;
+      retry.total_observed_overlap_length_nm = result.total_observed_overlap_length_nm;
+      retry.peak_clearance_deficit = result.peak_clearance_deficit;
+      return retry;
+    };
+
+    for (const auto window_id : failed_windows) {
+      if (stop_token.stop_requested() || result.spline_candidate_available) {
+        break;
+      }
+      const auto source_window =
+          std::find_if(result.windows.begin(), result.windows.end(),
+                       [&](const auto& window) { return window.id == window_id; });
+      const auto source_assignment =
+          std::find_if(result.bundle_assignments.begin(), result.bundle_assignments.end(),
+                       [&](const auto& assignment) { return assignment.window_id == window_id; });
+      if (source_window == result.windows.end() ||
+          source_assignment == result.bundle_assignments.end() || !source_window->eligible()) {
+        continue;
+      }
+
+      std::vector<RegionalRouteFragmentId> direct_core;
+      for (const auto& realization : source_assignment->spline_realizations) {
+        if (realization.centerline.size() < 2U || !realization.topology_legal ||
+            !realization.shape_legal || !realization.mutually_legal ||
+            !realization.quantized_mutually_legal) {
+          direct_core.push_back(realization.fragment);
+        }
+      }
+      if (direct_core.empty()) {
+        for (const auto template_id : source_assignment->selected_templates) {
+          if (template_id < source_assignment->templates.size()) {
+            direct_core.push_back(source_assignment->templates[template_id].fragment);
+          }
+        }
+      }
+      if (direct_core.empty()) {
+        direct_core = source_window->owned_fragments;
+      }
+      std::sort(direct_core.begin(), direct_core.end());
+      direct_core.erase(std::unique(direct_core.begin(), direct_core.end()), direct_core.end());
+
+      // A PH failure on one fragment diagnoses the route run, not merely that sampled segment.
+      // Generate layer/corridor/via columns for its complete in-window run so a valid excursion
+      // can leave and return through an explicit sequence of transitions.
+      std::vector<RegionalRouteFragmentId> core = direct_core;
+      for (const auto& seed : direct_core) {
+        for (const auto& fragment : source_window->fragments) {
+          if (fragment.net == seed.net && fragment.connection_index == seed.connection_index &&
+              fragment.run_index == seed.run_index) {
+            core.push_back(fragment);
+          }
+        }
+      }
+      std::sort(core.begin(), core.end(), [&](const auto& lhs, const auto& rhs) {
+        const auto lhs_direct = std::binary_search(direct_core.begin(), direct_core.end(), lhs);
+        const auto rhs_direct = std::binary_search(direct_core.begin(), direct_core.end(), rhs);
+        return lhs_direct != rhs_direct ? lhs_direct : lhs < rhs;
+      });
+      core.erase(std::unique(core.begin(), core.end()), core.end());
+      if (core.size() > config.max_conflict_directed_fragments_per_window) {
+        core.resize(config.max_conflict_directed_fragments_per_window);
+      }
+      std::sort(core.begin(), core.end());
+      if (core.empty()) {
+        continue;
+      }
+
+      ++result.conflict_directed_topology_cores;
+      result.conflict_directed_topology_fragments += core.size();
+      const auto initial_clause_count = no_good_clauses[window_id].size();
+      result.conflict_directed_no_good_clauses += initial_clause_count;
+      bool recovered = false;
+      const auto maximum_master_rounds =
+          std::max<std::size_t>(1U, config.max_joint_spline_fallback_waves);
+      for (std::size_t round = 0U;
+           round < maximum_master_rounds && !recovered && !stop_token.stop_requested(); ++round) {
+        auto directed = make_retry_base();
+        auto window = *source_window;
+        window.residual_conflict_cone = true;
+        window.owned_fragments = core;
+        directed.windows = {std::move(window)};
+        ++result.conflict_directed_master_reruns;
+        emit_progress("regional-analysis:conflict-directed-master",
+                      "conflict-directed exact master: window=" + std::to_string(window_id) +
+                          ", round=" + std::to_string(round + 1U) +
+                          ", core_fragments=" + std::to_string(core.size()) +
+                          ", no_goods=" + std::to_string(no_good_clauses[window_id].size()));
+        populate_channels(board, global, directed, scene_domain_cache);
+        populate_bundle_assignments(board, global, directed, telemetry, "conflict-directed",
+                                    &no_good_clauses, scene_domain_cache);
+        commit_pipeline_attempt(directed);
+        result.conflict_directed_no_good_rejections +=
+            directed.conflict_directed_no_good_rejections;
+        if (directed.bundle_assignments.empty()) {
+          result.confined_anisotropic_erosion_checks +=
+              directed.confined_anisotropic_erosion_checks;
+          result.confined_anisotropic_erosion_accepted +=
+              directed.confined_anisotropic_erosion_accepted;
+          result.confined_anisotropic_erosion_rejected +=
+              directed.confined_anisotropic_erosion_rejected;
+          result.confined_anisotropic_erosion_gpu_routes +=
+              directed.confined_anisotropic_erosion_gpu_routes;
+          result.confined_anisotropic_erosion_cpu_routes +=
+              directed.confined_anisotropic_erosion_cpu_routes;
+          result.confined_anisotropic_erosion_exact_chords +=
+              directed.confined_anisotropic_erosion_exact_chords;
+          break;
+        }
+
+        std::set<RegionalTemplateStateKey> prior_columns;
+        for (const auto& route_template : source_assignment->templates) {
+          prior_columns.insert(RegionalTemplateStateKey{
+              route_template.fragment, route_template.routing_layer, route_template.layer_sequence,
+              route_template.topology_signature.fingerprint, route_template.topology_centerline,
+              {}, {}, {}, {}});
+        }
+        std::size_t new_columns = 0U;
+        for (const auto& assignment : directed.bundle_assignments) {
+          for (const auto& route_template : assignment.templates) {
+            new_columns +=
+                !prior_columns.contains(RegionalTemplateStateKey{
+                    route_template.fragment, route_template.routing_layer,
+                    route_template.layer_sequence, route_template.topology_signature.fingerprint,
+                    route_template.topology_centerline, {}, {}, {}, {}})
+                    ? 1U
+                    : 0U;
+          }
+        }
+        result.conflict_directed_columns_generated += new_columns;
+        // The exact master loop already owns lazy no-good generation.  Do not nest the ordinary
+        // reserve-promotion loop inside it: only the reduced winner's failed states survive into
+        // the next clause, so nested waves repeatedly pay exact PH/copper certification without
+        // advancing the master.  One deterministic active batch per round gives every failure to
+        // the master immediately; the configured round bound remains the sole local expansion
+        // budget before escalation to global reallocation.
+        realize_bundle_splines(board, directed, stop_token, telemetry, 0U);
+        const auto complete =
+            !directed.bundle_assignments.empty() &&
+            std::all_of(directed.bundle_assignments.begin(), directed.bundle_assignments.end(),
+                        [](const auto& assignment) { return assignment.complete(); });
+        if (complete) {
+          auto combined = merge_residual_cone_checkpoint(result, directed, {window_id});
+          // This is a conflict-directed master replacement, not the broader residual-cone retry.
+          combined.residual_conflict_cone_retries = result.residual_conflict_cone_retries;
+          combined.residual_conflict_cones_built = result.residual_conflict_cones_built;
+          combined.residual_conflict_cone_windows_merged =
+              result.residual_conflict_cone_windows_merged;
+          combined.residual_conflict_cone_stub_fragments =
+              result.residual_conflict_cone_stub_fragments;
+          combined.residual_conflict_cone_reused_assignments =
+              result.residual_conflict_cone_reused_assignments;
+          combined.residual_conflict_cone_recomputed_assignments =
+              result.residual_conflict_cone_recomputed_assignments;
+          build_regional_spline_candidate(board, global, combined);
+          if (combined.native_realization_manifest_available)
+            assess_regional_native_scene(board, combined);
+          if (unresolved_objective(combined) < unresolved_objective(result)) {
+            ++combined.conflict_directed_windows_recovered;
+            result = std::move(combined);
+            recovered = true;
+            break;
+          }
+        }
+
+        result.confined_anisotropic_erosion_checks +=
+            directed.confined_anisotropic_erosion_checks;
+        result.confined_anisotropic_erosion_accepted +=
+            directed.confined_anisotropic_erosion_accepted;
+        result.confined_anisotropic_erosion_rejected +=
+            directed.confined_anisotropic_erosion_rejected;
+        result.confined_anisotropic_erosion_gpu_routes +=
+            directed.confined_anisotropic_erosion_gpu_routes;
+        result.confined_anisotropic_erosion_cpu_routes +=
+            directed.confined_anisotropic_erosion_cpu_routes;
+        result.confined_anisotropic_erosion_exact_chords +=
+            directed.confined_anisotropic_erosion_exact_chords;
+
+        const auto clauses_before = no_good_clauses[window_id].size();
+        for (const auto& assignment : directed.bundle_assignments) {
+          append_failed_states(directed, assignment);
+        }
+        const auto clauses_after = no_good_clauses[window_id].size();
+        result.conflict_directed_no_good_clauses += clauses_after - clauses_before;
+        if (clauses_after == clauses_before) {
+          break;
+        }
+      }
+      if (!recovered) {
+        ++result.conflict_directed_windows_exhausted;
+        // This bounded core did not recover. It is not an infeasibility proof unless a monotonic
+        // preflight clause established one, so preserve the unknown diagnosis and escalate to
+        // the larger residual-cone/global feedback loops which can change the fixed boundary.
+        break;
+      }
+    }
+  }
+  if (config.enable_spline_realization && !result.spline_candidate_available &&
+      !expand_scope_first && !scope_budget_exceeded && !stop_token.stop_requested()) {
     auto retry = RegionalRouteResult{};
     retry.configured = config;
     retry.source_clearance_shadow_conflicts = result.source_clearance_shadow_conflicts;
+      retry.source_packing_obligations = result.source_packing_obligations;
+      retry.source_physical_repair_requests = result.source_physical_repair_requests;
+      retry.admitted_physical_repair_requests = result.admitted_physical_repair_requests;
+      retry.configured_physical_repair_blockers = result.configured_physical_repair_blockers;
+      retry.resolved_physical_repair_blockers = result.resolved_physical_repair_blockers;
+      retry.unmapped_packing_obligations = result.unmapped_packing_obligations;
+      retry.packing_obligation_budget_exhausted = result.packing_obligation_budget_exhausted;
+    retry.source_exact_copper_witnesses = result.source_exact_copper_witnesses;
+    retry.mapped_exact_copper_pairs = result.mapped_exact_copper_pairs;
+    retry.unmapped_exact_copper_pairs = result.unmapped_exact_copper_pairs;
     retry.coalesced_clearance_shadow_samples = result.coalesced_clearance_shadow_samples;
     retry.unmapped_clearance_shadow_conflicts = result.unmapped_clearance_shadow_conflicts;
     retry.source_sampled_capacity_conflicts = result.source_sampled_capacity_conflicts;
@@ -11915,6 +19976,9 @@ RegionalRouteResult analyze_regional_conflicts(const Board& board, const GlobalR
       std::size_t retry_lane_analytical_rejections = 0U;
       std::size_t retry_lane_budget_exhaustions = 0U;
       std::size_t retry_partial_lane_capacity_pruned = 0U;
+      std::size_t retry_frozen_copper_via_pruned = 0U;
+      std::size_t retry_frozen_copper_via_rejected = 0U;
+      std::size_t retry_lane_precedence_rejections = 0U;
       emit_progress("regional-analysis:residual-cones",
                     "residual conflict cones constructed: cones=" + std::to_string(cones_built) +
                         ", windows=" + std::to_string(retry_windows.size()));
@@ -11923,6 +19987,7 @@ RegionalRouteResult analyze_regional_conflicts(const Board& board, const GlobalR
       // transaction.  Recompute and admit one cone at a time; its member assignments still move
       // atomically, and the complete canonical-board DRC transaction remains the only commit.
       for (const auto& cone_window : retry_windows) {
+        routing_kernel_checkpoint();
         if (stop_token.stop_requested()) {
           break;
         }
@@ -11944,8 +20009,10 @@ RegionalRouteResult analyze_regional_conflicts(const Board& board, const GlobalR
         emit_progress("regional-analysis:residual-channels",
                       "residual cone corridors constructed: window=" +
                           std::to_string(cone_window.id));
-        populate_channels(board, global, cone);
-        populate_bundle_assignments(board, global, cone, telemetry, "residual");
+        populate_channels(board, global, cone, scene_domain_cache);
+        populate_bundle_assignments(board, global, cone, telemetry, "residual", nullptr,
+                                    scene_domain_cache);
+        commit_pipeline_attempt(cone);
         ++recomputed;
         emit_progress("regional-analysis:residual-assignments",
                       "residual cone portfolio prepared: window=" + std::to_string(cone_window.id) +
@@ -11963,6 +20030,9 @@ RegionalRouteResult analyze_regional_conflicts(const Board& board, const GlobalR
         retry_lane_analytical_rejections += cone.lane_solver_analytical_rejections;
         retry_lane_budget_exhaustions += cone.lane_solver_budget_exhaustions;
         retry_partial_lane_capacity_pruned += cone.partial_lane_capacity_pruned_states;
+        retry_frozen_copper_via_pruned += cone.frozen_copper_via_pruned_states;
+        retry_frozen_copper_via_rejected += cone.frozen_copper_via_rejected_states;
+        retry_lane_precedence_rejections += cone.lane_precedence_rejected_states;
         const auto complete_cone_transaction =
             !cone.bundle_assignments.empty() &&
             std::all_of(cone.bundle_assignments.begin(), cone.bundle_assignments.end(),
@@ -12025,6 +20095,8 @@ RegionalRouteResult analyze_regional_conflicts(const Board& board, const GlobalR
         }
         auto combined = merge_residual_cone_checkpoint(result, std::move(cone), members->second);
         build_regional_spline_candidate(board, global, combined);
+        if (combined.native_realization_manifest_available)
+          assess_regional_native_scene(board, combined);
         // Retained windows are immutable.  A complete recomputed cone may replace only its own
         // member assignments and only on a strict feasibility-first improvement.  Exact detailed
         // copper, connectivity, and DRC remain downstream transactional gates.
@@ -12041,6 +20113,9 @@ RegionalRouteResult analyze_regional_conflicts(const Board& board, const GlobalR
       result.lane_solver_analytical_rejections += retry_lane_analytical_rejections;
       result.lane_solver_budget_exhaustions += retry_lane_budget_exhaustions;
       result.partial_lane_capacity_pruned_states += retry_partial_lane_capacity_pruned;
+      result.frozen_copper_via_pruned_states += retry_frozen_copper_via_pruned;
+      result.frozen_copper_via_rejected_states += retry_frozen_copper_via_rejected;
+      result.lane_precedence_rejected_states += retry_lane_precedence_rejections;
       result.residual_conflict_cone_retries = recomputed == 0U ? 0U : 1U;
       result.residual_conflict_cones_built = cones_built;
       result.residual_conflict_cone_windows_merged = windows_merged;
@@ -12058,8 +20133,9 @@ RegionalRouteResult analyze_regional_conflicts(const Board& board, const GlobalR
     }
   }
 
-  if (result.conflict_edges.empty() && result.unmapped_clearance_shadow_conflicts == 0U &&
-      result.unmapped_capacity_conflicts == 0U) {
+  if (result.conflict_edges.empty() && result.unmapped_exact_copper_pairs == 0U && result.unmapped_clearance_shadow_conflicts == 0U &&
+      result.unmapped_capacity_conflicts == 0U && result.source_packing_obligations == 0U &&
+      result.admitted_physical_repair_requests == 0U && !result.packing_obligation_budget_exhausted) {
     result.stop_reason = RegionalRouterStopReason::no_conflicts;
     result.diagnostic = "selected global paths contain no regional physical conflicts";
   } else {
@@ -12073,8 +20149,206 @@ RegionalRouteResult analyze_regional_conflicts(const Board& board, const GlobalR
                       std::size_t{0}, [](const auto total, const auto& assignment) {
                         return total + assignment.spline_candidate_reserve.size();
                       });
+  if (scope_budget_exceeded)
+    result.diagnostic = "regional size bound exceeded; global topology replanning required";
   publish_regional_telemetry(board, result, telemetry);
+  result.candidate_pipeline_stats = whole_analysis_pipeline_stats;
   return result;
+}
+
+struct RegionalRoutingPreparation::Impl {
+  RegionalAlternativeDomainCache cache;
+  std::mutex lease;
+  std::optional<Board> board_binding;
+  std::atomic<std::uint64_t> builds{0U};
+  std::atomic<std::uint64_t> reuses{0U};
+};
+
+RegionalRoutingPreparation::RegionalRoutingPreparation() : impl_(std::make_unique<Impl>()) {}
+RegionalRoutingPreparation::~RegionalRoutingPreparation() = default;
+std::uint64_t RegionalRoutingPreparation::build_count() const { return impl_->builds.load(); }
+std::uint64_t RegionalRoutingPreparation::reuse_count() const { return impl_->reuses.load(); }
+std::optional<std::size_t> RegionalRoutingPreparation::retained_bytes_estimate() const {
+  std::unique_lock lock(impl_->lease, std::try_to_lock);
+  if (!lock.owns_lock()) return std::nullopt;
+  return impl_->cache.retained_bytes_estimate();
+}
+
+std::shared_ptr<RegionalRoutingPreparation> prepare_regional_routing(
+    const Board& board, const GlobalRouteResult&, const RegionalRouterConfig& config,
+    std::stop_token stop_token) {
+  auto preparation = std::make_shared<RegionalRoutingPreparation>();
+  std::lock_guard lock(preparation->impl_->lease);
+  preparation->impl_->board_binding = board;
+  preparation->impl_->builds.store(1U);
+  constexpr std::size_t maximum_source_entries = 8U;
+  std::size_t warmed = 0U;
+  for (const auto& net : board.nets) {
+    for (const auto& layer : board.layers) {
+      if (stop_token.stop_requested() || warmed == maximum_source_entries) return preparation;
+      if (layer.kind != LayerKind::copper) continue;
+      const RegionalAlternativeSourceKey key{net.id, layer.id,
+                                              config.treat_saved_zone_fills_as_refillable};
+      if (preparation->impl_->cache.sources.contains(key)) continue;
+      preparation->impl_->cache.sources.emplace(
+          key, extract_polygonal_board_free_space(
+                   board, BoardFreeSpaceExtractionConfig{
+                              layer.id, net.id, true, true,
+                              !config.treat_saved_zone_fills_as_refillable}));
+      preparation->impl_->cache.touch_source(key);
+      ++warmed;
+    }
+  }
+  return preparation;
+}
+
+RegionalRouteResult analyze_regional_conflicts(const Board& board, const GlobalRouteResult& global,
+                                               const RegionalRouterConfig& config,
+                                               std::stop_token stop_token,
+                                               RouterTelemetrySink* telemetry,
+                                               RegionalDecisionObserver observer,
+                                               std::shared_ptr<RegionalRoutingPreparation> preparation) {
+  ScopedRegionalDecisionObserver observer_scope(observer);
+  emit_regional_decision(RegionalDecisionPhase::pre_scene, nullptr, false, "regional analysis started");
+  std::vector<RegionalPhysicalScopeAttempt> scope_attempts;
+  const auto incomplete_assignments = [](const RegionalRouteResult& candidate) {
+    return static_cast<std::size_t>(std::count_if(
+        candidate.bundle_assignments.begin(), candidate.bundle_assignments.end(),
+        [](const auto& assignment) { return !assignment.complete(); }));
+  };
+  const auto record_attempt = [&](const RegionalRouteResult& candidate, std::size_t retry_index) {
+    scope_attempts.push_back({retry_index, false,
+        candidate.native_scene_evaluated, candidate.native_scene_complete,
+        candidate.straight_scene_evaluated, incomplete_assignments(candidate),
+        candidate.straight_scene_open_connections,
+        candidate.straight_scene_evaluated ? candidate.straight_scene_drc_violations
+                                           : candidate.native_scene_total_conflicts});
+  };
+  auto scoped = config;
+  RegionalCandidatePipelineStats whole_scope_pipeline_stats;
+  RegionalAlternativeDomainCache local_domain_cache;
+  RegionalAlternativeDomainCache* domain_cache = &local_domain_cache;
+  std::unique_lock<std::mutex> preparation_lease;
+  if (preparation) {
+    preparation_lease = std::unique_lock<std::mutex>(preparation->impl_->lease);
+    if (!preparation->impl_->board_binding || *preparation->impl_->board_binding != board) {
+      preparation->impl_->cache = RegionalAlternativeDomainCache{};
+      preparation->impl_->board_binding = board;
+      ++preparation->impl_->builds;
+    } else {
+      ++preparation->impl_->reuses;
+    }
+    domain_cache = &preparation->impl_->cache;
+  }
+  auto current = analyze_regional_conflicts_impl(board, global, scoped,
+      config.max_physical_scope_retries, stop_token, telemetry, *domain_cache);
+  accumulate_candidate_pipeline_stats(whole_scope_pipeline_stats,
+                                      current.candidate_pipeline_stats);
+  record_attempt(current, 0U);
+  emit_regional_decision(RegionalDecisionPhase::scene_evaluated, &current,
+                         current.native_scene_evaluated || current.straight_scene_evaluated,
+                         current.diagnostic);
+  auto best = current;
+  for (std::size_t pass = 0; pass < config.max_physical_scope_retries &&
+       !stop_token.stop_requested(); ++pass) {
+    bool added = append_regional_frozen_scope_witnesses(current, scoped);
+    if (current.native_scene_conflicts > 0U || current.linear_scaffold_rejections > 0U)
+    for (const auto& diagnosis : current.local_routability_diagnoses) {
+      if (diagnosis.locally_resolved || diagnosis.resource.nets.size() < 2U ||
+          (!diagnosis.resource.stable_id.starts_with("native-scene:") &&
+           !diagnosis.resource.stable_id.starts_with("linear-scaffold:"))) continue;
+      const auto same = [&](const auto& previous) {
+        return previous.resource.layer == diagnosis.resource.layer &&
+               previous.resource.nets == diagnosis.resource.nets &&
+               previous.resource.bounds == diagnosis.resource.bounds;
+      };
+      if (std::none_of(scoped.physical_conflict_witnesses.begin(),
+                       scoped.physical_conflict_witnesses.end(), same)) {
+        scoped.physical_conflict_witnesses.push_back(diagnosis);
+        added = true;
+      }
+    }
+    // Never repeat the same repair scope and constraints hoping for a different result.
+    if (!added) break;
+    emit_regional_decision(RegionalDecisionPhase::before_scope_retry, &current,
+                           current.native_scene_evaluated || current.straight_scene_evaluated,
+                           "expanding regional physical scope");
+    current = analyze_regional_conflicts_impl(board, global, scoped,
+        config.max_physical_scope_retries - pass - 1U, stop_token, telemetry,
+        *domain_cache);
+    accumulate_candidate_pipeline_stats(whole_scope_pipeline_stats,
+                                        current.candidate_pipeline_stats);
+    current.physical_scope_retries = pass + 1U;
+    current.physical_scope_retries_explored = pass + 1U;
+    record_attempt(current, pass + 1U);
+    emit_regional_decision(RegionalDecisionPhase::after_scope_retry, &current,
+                           current.native_scene_evaluated || current.straight_scene_evaluated,
+                           current.diagnostic);
+    if (regional_checkpoint_better(current, best)) {
+      current.selected_physical_scope_retry = pass + 1U;
+      // The next expansion must use the latest explored scene, even when this scene became the
+      // incumbent.  Copy the checkpoint; moving would leave the witness source unspecified.
+      best = current;
+    }
+  }
+  best.physical_scope_attempts = std::move(scope_attempts);
+  best.physical_scope_retries_explored = best.physical_scope_attempts.empty()
+                                             ? 0U : best.physical_scope_attempts.size() - 1U;
+  for (auto& attempt : best.physical_scope_attempts)
+    attempt.selected = attempt.retry_index == best.selected_physical_scope_retry;
+  if (stop_token.stop_requested() || current.stop_reason == RegionalRouterStopReason::cancelled) {
+    best.stop_reason = RegionalRouterStopReason::cancelled;
+    best.spline_candidate_available = false;
+    best.diagnostic = "regional routing cancelled during physical scope exploration";
+  }
+  best.candidate_pipeline_stats = whole_scope_pipeline_stats;
+  return best;
+}
+
+static bool regional_checkpoint_physically_legal(const RegionalRouteResult& candidate) {
+  const bool native_legal = candidate.native_scene_evaluated && candidate.native_scene_complete &&
+                            candidate.native_scene_total_conflicts == 0U &&
+                            candidate.native_scene_open_connections == 0U;
+  const bool straight_legal = candidate.straight_scene_evaluated &&
+                              candidate.straight_scene_open_connections == 0U &&
+                              candidate.straight_scene_drc_violations == 0U;
+  return candidate.complete() && (native_legal || straight_legal);
+}
+
+bool regional_checkpoint_better(const RegionalRouteResult& lhs, const RegionalRouteResult& rhs) {
+  const auto incomplete = [](const RegionalRouteResult& candidate) {
+    return static_cast<std::size_t>(std::count_if(
+        candidate.bundle_assignments.begin(), candidate.bundle_assignments.end(),
+        [](const auto& assignment) { return !assignment.complete(); }));
+  };
+  const auto unknown = std::numeric_limits<std::size_t>::max();
+  const auto coverage = [](const RegionalRouteResult& candidate) {
+    return candidate.native_scene_evaluated && candidate.native_scene_complete &&
+           ((!candidate.configured.enable_straight_realization &&
+             candidate.straight_scene_trials == 0U) || candidate.straight_scene_evaluated);
+  };
+  const auto opens = [&](const RegionalRouteResult& candidate) {
+    if (candidate.straight_scene_evaluated) return candidate.straight_scene_open_connections;
+    return candidate.native_scene_evaluated && candidate.native_scene_complete
+               ? candidate.native_scene_open_connections
+               : unknown;
+  };
+  const auto errors = [&](const RegionalRouteResult& candidate) {
+    // The straight oracle supersedes native-scene counts. Summing them double-counts the same
+    // collision at two representation levels.
+    if (candidate.straight_scene_evaluated) return candidate.straight_scene_drc_violations;
+    return candidate.native_scene_evaluated && candidate.native_scene_complete
+               ? candidate.native_scene_total_conflicts
+               : unknown;
+  };
+  return std::tuple{regional_checkpoint_physically_legal(lhs) ? 0U : 1U,
+                    coverage(lhs) ? 0U : 1U, opens(lhs), errors(lhs),
+                    incomplete(lhs), lhs.unmapped_exact_copper_pairs,
+                    lhs.unmapped_clearance_shadow_conflicts, lhs.unmapped_capacity_conflicts} <
+         std::tuple{regional_checkpoint_physically_legal(rhs) ? 0U : 1U,
+                    coverage(rhs) ? 0U : 1U, opens(rhs), errors(rhs),
+                    incomplete(rhs), rhs.unmapped_exact_copper_pairs,
+                    rhs.unmapped_clearance_shadow_conflicts, rhs.unmapped_capacity_conflicts};
 }
 
 std::vector<RegionalRouteFragmentId>
@@ -12209,6 +20483,7 @@ pack_regional_cross_section(const std::vector<RegionalRouteFragment>& fragments,
 
 void partition_regional_conflicts(const Board& board, RegionalRouteResult& regional,
                                   std::stop_token stop_token) {
+  routing_kernel_checkpoint();
   if (stop_token.stop_requested()) {
     regional.stop_reason = RegionalRouterStopReason::cancelled;
     regional.diagnostic = "regional conflict partitioning cancelled";
@@ -12218,11 +20493,39 @@ void partition_regional_conflicts(const Board& board, RegionalRouteResult& regio
   populate_windows(board, regional);
 }
 
-RoutingPlanResult plan_routes(const Board& board, const RoutingPlannerConfig& config,
+void accumulate_regional_candidate_pipeline_stats(RegionalCandidatePipelineStats& total,
+                                                 const RegionalCandidatePipelineStats& increment) {
+  accumulate_candidate_pipeline_stats(total, increment);
+}
+
+RoutingPlanResult plan_routes_legacy(const Board& board, const RoutingPlannerConfig& requested_config,
                               std::stop_token stop_token, RouterTelemetrySink* telemetry) {
+  auto config = requested_config;
+  if (!config.curved_tracks) {
+    config.regional.enable_spline_realization = false;
+    config.regional.enable_straight_realization = true;
+    config.global.use_navmesh_funnel_spline_seeds = false;
+    config.global.single_lane_direct_voronoi_resources = true;
+  }
+  // Explicit legacy/oracle scheduling overrides the default broad policy. Retry counts are
+  // upper bounds: a one-iteration caller must remain valid and must not gain hidden iterations.
+  config.full_strength_first_pass = config.full_strength_first_pass &&
+      config.interleave_routability_feedback && !config.oracle_first_feedback;
+  if (config.full_strength_first_pass && config.global.max_iterations > 0U)
+    config.max_routability_feedback_retries = std::min(
+        config.max_routability_feedback_retries, config.global.max_iterations - 1U);
   RoutabilityKnowledge knowledge;
   knowledge.history = config.global.routability_history;
   knowledge.success_history = config.global.hydraulic_success_history;
+  std::set<std::string> published_global_route_ids;
+  const auto global_route_id = [](const GlobalRoutePath& path) {
+    return "global-route:" + path.net.value() + ':' + std::to_string(path.connection_index);
+  };
+  const auto track_published_global_routes = [&](const GlobalRouteResult& global) {
+    for (const auto& path : global.paths) {
+      published_global_route_ids.insert(global_route_id(path));
+    }
+  };
   std::vector<RoutingPlanFeedbackProbe> feedback_probes;
   std::optional<RoutingPlanResult> best;
   // The global router retains a pass-local beam.  Keep a second, small beam across physical
@@ -12240,11 +20543,19 @@ RoutingPlanResult plan_routes(const Board& board, const RoutingPlannerConfig& co
   std::size_t regional_feedback_passes = 0U;
   std::size_t stagnant_physical_feedback_passes = 0U;
   std::size_t cumulative_global_iterations = 0U;
+  RegionalCandidatePipelineStats cumulative_candidate_pipeline_stats;
   std::size_t retained_global_portfolio_peak = 0U;
   std::size_t retained_global_portfolios_evaluated = 0U;
   std::size_t intermediate_regional_probes = 0U;
+  std::size_t provisional_exact_promotions_attempted = 0U;
+  std::size_t provisional_exact_promotions_succeeded = 0U;
+  std::size_t discarded_portfolio_diagnoses = 0U;
+  bool assembled_feedback_pending = false;
 
-  if (config.retained_global_portfolios == 0U || config.intermediate_regional_portfolios == 0U ||
+  if ((config.full_strength_first_pass &&
+       (!config.interleave_routability_feedback ||
+        config.max_routability_feedback_retries >= config.global.max_iterations)) ||
+      config.retained_global_portfolios == 0U || config.intermediate_regional_portfolios == 0U ||
       config.intermediate_regional_portfolios > config.retained_global_portfolios ||
       config.intermediate_regional_bundle_states == 0U ||
       config.intermediate_regional_exact_transactions == 0U ||
@@ -12256,11 +20567,12 @@ RoutingPlanResult plan_routes(const Board& board, const RoutingPlannerConfig& co
     return invalid;
   }
   const auto feedback_epoch_count = config.max_routability_feedback_retries + 1U;
-  const auto global_epoch_iterations =
-      !config.interleave_routability_feedback || feedback_epoch_count == 1U
-          ? config.global.max_iterations
-          : std::max<std::size_t>(1U, (config.global.max_iterations + feedback_epoch_count - 1U) /
-                                          feedback_epoch_count);
+  // Advisory shadows require a consumer for the exact no-goods. A deliberately single-pass
+  // legacy planner has no later global epoch in which to apply them, so it retains the former
+  // shadow negotiation rather than silently discarding its only physical feedback signal.
+  const bool quantized_oracle_owns_shadows =
+      config.clearance_shadows_advisory.value_or(
+          config.quantized_copper_oracle.enabled && config.max_routability_feedback_retries > 0U);
 
   auto regional_config = config.regional;
   regional_config.treat_saved_zone_fills_as_refillable =
@@ -12299,26 +20611,49 @@ RoutingPlanResult plan_routes(const Board& board, const RoutingPlannerConfig& co
     // provisional shadow count can nevertheless leave fewer unsolved lane/via/spline windows.
     // Preserve connectivity and topology as hard lexicographic gates, then retain that partial
     // physical improvement for the next feedback pass before comparing coarse overflow.
-    return std::tuple{lhs.complete() ? 0U : 1U,
-                      lhs.coarse_global.unrouted_nets.size(),
-                      coarse_topology_complete(lhs.coarse_global) ? 0U : 1U,
-                      incomplete_assignments(lhs),
-                      lhs.coarse_global.total_overflow,
-                      lhs.coarse_global.total_cost} <
-           std::tuple{rhs.complete() ? 0U : 1U,
-                      rhs.coarse_global.unrouted_nets.size(),
-                      coarse_topology_complete(rhs.coarse_global) ? 0U : 1U,
-                      incomplete_assignments(rhs),
-                      rhs.coarse_global.total_overflow,
-                      rhs.coarse_global.total_cost};
+    // A deferred region has no assignments because it was never examined. Its empty failure
+    // count cannot outrank an evaluated physical checkpoint, even when that checkpoint fails.
+    const auto oracle_opens = [](const RoutingPlanResult& plan) {
+      return plan.quantized_copper_oracle.evaluated
+                 ? plan.quantized_copper_oracle.open_connections
+                 : std::numeric_limits<std::size_t>::max();
+    };
+    const auto oracle_violations = [](const RoutingPlanResult& plan) {
+      return plan.quantized_copper_oracle.evaluated
+                 ? plan.quantized_copper_oracle.drc_violations
+                 : std::numeric_limits<std::size_t>::max();
+    };
+    const auto gates = [](const RoutingPlanResult& plan) {
+      const bool measured_complete = plan.complete() &&
+          (regional_checkpoint_physically_legal(plan.regional) ||
+           (!plan.regional.spline_candidate_available && plan.quantized_copper_oracle.feasible()));
+      return std::tuple{measured_complete ? 0U : 1U, plan.coarse_global.unrouted_nets.size(),
+                        coarse_topology_complete(plan.coarse_global) ? 0U : 1U,
+                        plan.regional_evaluated ? 0U : 1U};
+    };
+    if (gates(lhs) != gates(rhs)) return gates(lhs) < gates(rhs);
+    // A checked assembled regional scene carries stronger physical evidence than the count of
+    // unassembled assignments.  Preserve it before falling back to the coarse oracle.
+    if (lhs.regional_evaluated && rhs.regional_evaluated) {
+      if (regional_checkpoint_better(lhs.regional, rhs.regional)) return true;
+      if (regional_checkpoint_better(rhs.regional, lhs.regional)) return false;
+    }
+    return std::tuple{oracle_opens(lhs), oracle_violations(lhs), incomplete_assignments(lhs),
+                      lhs.coarse_global.total_overflow, lhs.coarse_global.total_cost} <
+           std::tuple{oracle_opens(rhs), oracle_violations(rhs), incomplete_assignments(rhs),
+                      rhs.coarse_global.total_overflow, rhs.coarse_global.total_cost};
   };
   const auto attach_feedback_probes = [&](RoutingPlanResult& candidate) {
     candidate.feedback_probes = feedback_probes;
     candidate.global_feedback_epochs = feedback_probes.size();
     candidate.cumulative_global_iterations = cumulative_global_iterations;
+    candidate.cumulative_candidate_pipeline_stats = cumulative_candidate_pipeline_stats;
     candidate.retained_global_portfolio_peak = retained_global_portfolio_peak;
     candidate.retained_global_portfolios_evaluated = retained_global_portfolios_evaluated;
     candidate.intermediate_regional_probes = intermediate_regional_probes;
+    candidate.provisional_exact_promotions_attempted = provisional_exact_promotions_attempted;
+    candidate.provisional_exact_promotions_succeeded = provisional_exact_promotions_succeeded;
+    candidate.discarded_portfolio_diagnoses = discarded_portfolio_diagnoses;
   };
   const auto same_global_topology = [](const GlobalRouteResult& lhs, const GlobalRouteResult& rhs) {
     return lhs.paths == rhs.paths && lhs.unrouted_nets == rhs.unrouted_nets;
@@ -12385,6 +20720,8 @@ RoutingPlanResult plan_routes(const Board& board, const RoutingPlannerConfig& co
     summary.global_rerouted_nets = global.rerouted_nets.size();
     summary.global_unrouted_nets = global.unrouted_nets.size();
     summary.global_total_overflow = global.total_overflow;
+    summary.global_sampled_overflow = global.sampled_overflow;
+    summary.global_corridor_overflow = global.corridor_overflow;
     summary.global_clearance_shadow_conflicts = global.clearance_shadow_conflicts.size();
     summary.global_unaccepted_lane_transitions =
         global.unaccepted_selected_voronoi_lane_transitions;
@@ -12412,6 +20749,41 @@ RoutingPlanResult plan_routes(const Board& board, const RoutingPlannerConfig& co
     if (telemetry == nullptr) {
       return;
     }
+    std::set<std::string> selected_route_ids;
+    for (const auto& path : selected.paths) {
+      const auto id = global_route_id(path);
+      selected_route_ids.insert(id);
+      published_global_route_ids.insert(id);
+      RouterTelemetryEvent route;
+      route.kind = RouterTelemetryEventKind::route_candidate_selected;
+      route.stable_id = id;
+      route.net = path.net;
+      route.route_revision = selected.selected_iteration;
+      route.route_family = "selected";
+      route.route_lifecycle = "active";
+      const auto rules = resolve_net_routing_rules(board, path.net);
+      route.route_width_nm =
+          static_cast<std::uint64_t>(std::max<std::int64_t>(0, rules.track_width.value()));
+      route.route_points.reserve(path.points.size());
+      for (const auto& point : path.points) {
+        route.route_points.push_back(
+            RouterTelemetryPathPoint{point.position.x.value(), point.position.y.value(), point.layer});
+      }
+      route.detail = "selected global polyline; planning geometry, not committed copper";
+      static_cast<void>(telemetry->try_emit(std::move(route)));
+    }
+    for (const auto& id : published_global_route_ids) {
+      if (selected_route_ids.contains(id)) {
+        continue;
+      }
+      RouterTelemetryEvent removed;
+      removed.kind = RouterTelemetryEventKind::route_removed;
+      removed.stable_id = id;
+      removed.route_family = "selected";
+      removed.route_lifecycle = "active";
+      removed.detail = "global route absent from retained feedback checkpoint";
+      static_cast<void>(telemetry->try_emit(std::move(removed)));
+    }
     RouterTelemetryEvent checkpoint;
     checkpoint.kind = RouterTelemetryEventKind::checkpoint_selected;
     checkpoint.iteration = selected.selected_iteration;
@@ -12428,6 +20800,8 @@ RoutingPlanResult plan_routes(const Board& board, const RoutingPlannerConfig& co
     checkpoint.corridor_overflow = selected.corridor_overflow;
     checkpoint.physical_overflow_nm = selected.total_voronoi_overflow_nm;
     checkpoint.clearance_shadow_conflicts = selected.clearance_shadow_conflicts.size();
+    checkpoint.unresolved_packing_obligations = selected.unresolved_corridor_packing.size();
+    checkpoint.packing_obligation_budget_exhausted = selected.corridor_packing_obligation_budget_exhausted;
     checkpoint.route_cost = selected.total_cost;
     checkpoint.detail =
         "feasibility-first physical-feedback global candidate selected for regional realization";
@@ -12438,14 +20812,78 @@ RoutingPlanResult plan_routes(const Board& board, const RoutingPlannerConfig& co
     RoutingPlanFeedbackProbe feedback_probe;
     feedback_probe.pass = pass;
     const bool final_epoch = pass == config.max_routability_feedback_retries;
-    const auto epoch_iterations =
-        config.interleave_routability_feedback
-            ? std::min(global_epoch_iterations, config.global.max_iterations)
-            : config.global.max_iterations;
+    const bool full_strength_epoch = config.full_strength_first_pass;
+    // Leave one already-budgeted allocation epoch to consume actual assembled copper evidence.
+    const bool assembled_feedback_epoch = config.enable_assembled_straight_feedback &&
+        config.interleave_routability_feedback &&
+        !config.curved_tracks && !final_epoch &&
+        pass + 1U == config.max_routability_feedback_retries;
+    const auto epoch_iterations = [&] {
+      if (!config.interleave_routability_feedback || feedback_epoch_count == 1U) {
+        return config.global.max_iterations;
+      }
+      // The iteration-zero seed allocation is qualitatively different from later negotiated
+      // states and is often already physically realizable.  Certify it after one PathFinder pass
+      // instead of hiding it inside a six-iteration epoch whose scalar global comparator can
+      // replace it with an equal-overflow but materially worse topology.  If the promoted
+      // regional transaction is incomplete, distribute the remaining global budget across the
+      // ordinary feedback epochs.  This preserves the configured search breadth while allowing
+      // an early exact-feasible topology to terminate the planner.
+      if (pass == 0U) {
+        return std::size_t{1U};
+      }
+      const auto retry_epochs = config.max_routability_feedback_retries;
+      const auto remaining_iterations =
+          config.global.max_iterations > 1U ? config.global.max_iterations - 1U : 0U;
+      const auto base = retry_epochs > 0U ? remaining_iterations / retry_epochs : 0U;
+      const auto extra = retry_epochs > 0U ? remaining_iterations % retry_epochs : 0U;
+      return std::max<std::size_t>(1U, base + ((pass - 1U) < extra ? 1U : 0U));
+    }();
     feedback_probe.global_epoch_iterations = epoch_iterations;
     feedback_probe.history_entries_before = knowledge.history.size();
     feedback_probe.history_pressure_before = knowledge.pressure();
     auto global_config = config.global;
+    if (full_strength_epoch) {
+      global_config.enable_search_diversification = true;
+      global_config.atomic_complete_net_routing = true;
+      global_config.diversify_pin_access_rings = true;
+      global_config.use_multisource_steiner_growth = true;
+      global_config.use_bidirectional_route_growth = true;
+      global_config.expansion_retry_heuristic_weight_per_mille = std::max(
+          global_config.expansion_retry_heuristic_weight_per_mille, std::uint32_t{1250U});
+      global_config.reuse_weighted_search_frontier = true;
+      global_config.bidirectional_route_growth_start_iteration = 1U;
+      global_config.large_neighborhood_stagnation_iterations = 1U;
+      global_config.hard_capacity_start_iteration = 1U;
+      global_config.max_hard_capacity_ripup_attempts_per_pass = std::max(
+          global_config.max_hard_capacity_ripup_attempts_per_pass, std::size_t{8U});
+      global_config.max_hard_capacity_ripup_nets_per_attempt = std::max(
+          global_config.max_hard_capacity_ripup_nets_per_attempt, std::size_t{4U});
+      global_config.max_hard_capacity_conflict_set_states_per_attempt = std::max(
+          global_config.max_hard_capacity_conflict_set_states_per_attempt, std::size_t{64U});
+      global_config.rollback_failed_hard_capacity_ripup = true;
+      global_config.defer_hard_capacity_ripup_victims_to_pass_tail = true;
+      global_config.protect_recovered_hard_capacity_ripup_nets = true;
+      global_config.selective_congestion_reroute = true;
+      global_config.selective_full_reroute_interval = 2U;
+      global_config.max_hard_capacity_blocker_reuse_invalidations_per_failed_net = std::max(
+          global_config.max_hard_capacity_blocker_reuse_invalidations_per_failed_net, std::size_t{4U});
+      global_config.global_navmesh_usped.enabled = true;
+      // Preserve user-selected topology backends. Enable shared-medial lane feedback only
+      // when that backend is already in use, rather than silently replacing the graph.
+      if (global_config.use_voronoi_allocation_resources) {
+        global_config.negotiate_voronoi_lane_conflicts = true;
+      }
+    }
+    // The exact fine-grid oracle owns physical feasibility and typed corrective history. Raster
+    // clearance shadows remain available as coalesced scope/telemetry witnesses only.
+    // A default seed must not change merely because the caller allows later retries.
+    // Match single-epoch shadow policy for its first physical certification; explicit
+    // advisory/enforced overrides remain authoritative on every epoch.
+    const bool epoch_advisory_shadows = full_strength_epoch && pass == 0U &&
+            !config.clearance_shadows_advisory.has_value()
+        ? false : quantized_oracle_owns_shadows;
+    global_config.clearance_shadows_advisory_only = epoch_advisory_shadows;
     global_config.max_iterations = epoch_iterations;
     global_config.feedback_epoch_index = pass;
     // Iteration ordinals restart inside route_global_incremental.  Later epochs have already
@@ -12492,7 +20930,10 @@ RoutingPlanResult plan_routes(const Board& board, const RoutingPlannerConfig& co
         incremental_feedback
             ? route_global_incremental(board, *feedback_checkpoint, feedback_affected_nets,
                                        global_config, stop_token, telemetry, true)
-            : route_global(board, global_config, stop_token, telemetry);
+            : full_strength_epoch
+                ? route_global_with_sampled_conflict_repair(board, global_config, 2U, stop_token, telemetry)
+                : route_global(board, global_config, stop_token, telemetry);
+    track_published_global_routes(probed_global);
     cumulative_global_iterations += probed_global.iterations;
     feedback_probe.cumulative_global_iterations = cumulative_global_iterations;
     candidate.cheap_physical_probes = pass + 1U;
@@ -12508,6 +20949,7 @@ RoutingPlanResult plan_routes(const Board& board, const RoutingPlannerConfig& co
                                      feedback_fell_back_to_full_global, affected_count));
       feedback_probes.push_back(std::move(feedback_probe));
       attach_feedback_probes(candidate);
+      publish_feedback_selection(candidate.coarse_global);
       return candidate;
     }
     if (probed_global.stop_reason == GlobalRouterStopReason::invalid_input) {
@@ -12520,10 +20962,53 @@ RoutingPlanResult plan_routes(const Board& board, const RoutingPlannerConfig& co
                                      feedback_fell_back_to_full_global, affected_count));
       feedback_probes.push_back(std::move(feedback_probe));
       attach_feedback_probes(candidate);
+      publish_feedback_selection(candidate.coarse_global);
       return candidate;
     }
 
-    const auto global_diagnoses = probe_global_routability(probed_global, config.routability_probe);
+    auto probe_config = config.routability_probe;
+    probe_config.clearance_shadows_contribute_to_history =
+        !epoch_advisory_shadows;
+    auto global_diagnoses = probe_global_routability(probed_global, probe_config);
+    const auto quantized_oracle = probe_quantized_copper_feasibility(
+        board, probed_global, config.quantized_copper_oracle, stop_token);
+    feedback_probe.quantized_copper_oracle_evaluated = quantized_oracle.evaluated;
+    feedback_probe.quantized_copper_oracle_feasible = quantized_oracle.feasible();
+    feedback_probe.quantized_copper_oracle_diagnoses = quantized_oracle.diagnoses.size();
+    feedback_probe.quantized_copper_oracle_violations = quantized_oracle.drc_violations;
+    feedback_probe.quantized_copper_oracle_opens = quantized_oracle.open_connections;
+    feedback_probe.quantized_copper_oracle_us = quantized_oracle.elapsed_us;
+    global_diagnoses.insert(global_diagnoses.end(), quantized_oracle.diagnoses.begin(),
+                              quantized_oracle.diagnoses.end());
+    if (telemetry != nullptr && telemetry->accepts(RouterTelemetryLevel::diagnostic)) {
+      const auto event_count = std::min<std::size_t>(quantized_oracle.diagnoses.size(), 64U);
+      for (std::size_t index = 0U; index < event_count; ++index) {
+        const auto& diagnosis = quantized_oracle.diagnoses[index];
+        RouterTelemetryEvent event;
+        event.kind = RouterTelemetryEventKind::conflict_added;
+        event.minimum_level = RouterTelemetryLevel::diagnostic;
+        event.stable_id = diagnosis.resource.stable_id;
+        event.resource_id = diagnosis.resource.stable_id;
+        event.conflict_kind = "physical";
+        event.group_id = "quantized-copper-oracle:" +
+                         std::string(to_string(diagnosis.kind));
+        event.layer = diagnosis.resource.layer;
+        event.x_nm = std::midpoint(diagnosis.resource.bounds.minimum.x.value(),
+                                   diagnosis.resource.bounds.maximum.x.value());
+        event.y_nm = std::midpoint(diagnosis.resource.bounds.minimum.y.value(),
+                                   diagnosis.resource.bounds.maximum.y.value());
+        event.clearance_deficit_nm = diagnosis.clearance_deficit.value();
+        event.pressure = static_cast<double>(diagnosis.severity);
+        event.detail = diagnosis.detail;
+        if (!diagnosis.resource.nets.empty()) {
+          event.net = diagnosis.resource.nets.front();
+        }
+        if (diagnosis.resource.nets.size() > 1U) {
+          event.other_net = diagnosis.resource.nets[1U];
+        }
+        static_cast<void>(telemetry->try_emit(std::move(event)));
+      }
+    }
     feedback_probe.global_diagnoses = global_diagnoses.size();
     accumulate_routability_knowledge(knowledge, global_diagnoses, config.routability_probe);
     feedback_probe.history_entries_after_global = knowledge.history.size();
@@ -12537,9 +21022,45 @@ RoutingPlanResult plan_routes(const Board& board, const RoutingPlannerConfig& co
     feedback_probe.retained_global_portfolios = retained_global_portfolios.size();
 
     std::vector<std::pair<GlobalRouteResult, bool>> regional_inputs;
-    const auto regional_portfolio_limit = config.intermediate_regional_portfolios;
-    if (final_epoch && best) {
+    const bool fresh_feedback_checkpoint_first =
+        config.regional.prioritize_frozen_scope_expansion && pass > 0U && !final_epoch;
+    const auto regional_portfolio_limit =
+        (assembled_feedback_epoch || fresh_feedback_checkpoint_first) ? 1U :
+        full_strength_epoch ? config.retained_global_portfolios : config.intermediate_regional_portfolios;
+    const auto globally_negotiated_checkpoint = [](const GlobalRouteResult& global) {
+      return coarse_topology_complete(global) && global.sampled_overflow == 0U &&
+          global.corridor_overflow == 0U &&
+          global.unaccepted_selected_voronoi_lane_transitions == 0U;
+    };
+    if (assembled_feedback_epoch) {
+      // Global diagnoses accumulated above describe this fresh topology. Assess that same
+      // checkpoint so its regional evidence and next retry retain matching provenance.
+      regional_inputs.emplace_back(probed_global, pass > 0U);
+    }
+    if (fresh_feedback_checkpoint_first && regional_inputs.empty()) {
+      // Learn from the newly negotiated topology now. Historical fallbacks remain retained and
+      // receive full physical search in the final epoch, after global feedback has matured.
+      regional_inputs.emplace_back(probed_global, true);
+      if (telemetry != nullptr) {
+        RouterTelemetryEvent deferred;
+        deferred.kind = RouterTelemetryEventKind::search_summary;
+        deferred.stable_id = "regional-analysis:fresh-feedback-checkpoint";
+        deferred.detail = "physical feedback prioritizes the fresh global checkpoint; retained "
+                          "fallbacks deferred to final epoch=" +
+                          std::to_string(retained_global_portfolios.size());
+        static_cast<void>(telemetry->try_emit(std::move(deferred)));
+      }
+    }
+    if (final_epoch && best && (!assembled_feedback_pending || regional_portfolio_limit > 1U)) {
       regional_inputs.emplace_back(best->coarse_global, true);
+    }
+    // A retry informed by assembled geometry must itself reach physical assessment, even if
+    // the coarse beam would prune it. Keep the best prior physical checkpoint as a fallback.
+    if (assembled_feedback_pending && final_epoch &&
+        std::none_of(regional_inputs.begin(), regional_inputs.end(), [&](const auto& input) {
+          return same_global_topology(input.first, probed_global);
+        })) {
+      regional_inputs.emplace_back(probed_global, true);
     }
     for (const auto& retained : retained_global_portfolios) {
       if (regional_inputs.size() >= regional_portfolio_limit) {
@@ -12556,14 +21077,18 @@ RoutingPlanResult plan_routes(const Board& board, const RoutingPlannerConfig& co
       regional_inputs.emplace_back(std::move(probed_global), pass > 0U);
     }
     retained_global_portfolios_evaluated += regional_inputs.size();
-    const bool intermediate_regional_probe = config.interleave_routability_feedback && !final_epoch;
+    const bool intermediate_regional_probe =
+        config.interleave_routability_feedback && !final_epoch && !assembled_feedback_epoch &&
+        (!full_strength_epoch || !config.curved_tracks);
     feedback_probe.intermediate_regional_probe = intermediate_regional_probe;
     if (intermediate_regional_probe) {
       ++intermediate_regional_probes;
     }
     std::optional<RoutingPlanResult> pass_best;
+    std::vector<RoutabilityDiagnosis> pass_best_regional_diagnoses;
+    std::size_t pass_regional_diagnoses = 0U;
     std::optional<GlobalRouteResult> lane_transition_repair_branch;
-    bool has_regional_diagnoses = false;
+    std::size_t regional_input_index = 0U;
     for (auto& [global, history_informed] : regional_inputs) {
       RoutingPlanFeedbackCandidate feedback_candidate = feedback_candidate_summary(
           global, history_informed, history_informed && incremental_feedback,
@@ -12572,12 +21097,35 @@ RoutingPlanResult plan_routes(const Board& board, const RoutingPlannerConfig& co
 
       RoutingPlanResult regional_candidate;
       regional_candidate.coarse_global = std::move(global);
+      regional_candidate.quantized_copper_oracle = probe_quantized_copper_feasibility(
+          board, regional_candidate.coarse_global, config.quantized_copper_oracle, stop_token);
       regional_candidate.paths = regional_candidate.coarse_global.paths;
       regional_candidate.cheap_physical_probes = pass + 1U;
       regional_candidate.global_feedback_passes = global_feedback_passes;
       regional_candidate.regional_feedback_passes = regional_feedback_passes;
       auto regional_attempt_config = regional_config;
+      if (full_strength_epoch) {
+        regional_attempt_config.enable_terminal_portal_templates = true;
+        regional_attempt_config.enable_spline_realization = config.curved_tracks;
+        regional_attempt_config.enable_xpbd_relaxation = true;
+        regional_attempt_config.enable_xpbd_feedback = true;
+        regional_attempt_config.frozen_copper_context = true;
+        regional_attempt_config.expand_frozen_copper_scope = true;
+        // Certify the initial seed with the same scope budget as a one-iteration run.
+        // Otherwise increasing the global budget can discard physically realizable topology
+        // before it gets the local ownership expansion needed to demonstrate legality.
+        // Intermediate retries still return failures upstream before rebuilding local scope.
+        if (pass > 0U && !final_epoch) regional_attempt_config.max_physical_scope_retries = 0U;
+        // A colliding straight scaffold is a seed failure, not proof that PH/shove cannot
+        // construct legal copper. This broad experiment lets those operators try; assembled
+        // native-scene, quantization and final DRC acceptance remain unchanged.
+        regional_attempt_config.require_legal_linear_scaffold = false;
+      }
       regional_attempt_config.xpbd_history = knowledge.history;
+      regional_attempt_config.frozen_copper_scope_witnesses.clear();
+      // Exact observations belong to this portfolio, not a previous epoch's paths.
+      regional_attempt_config.physical_conflict_witnesses =
+          regional_candidate.quantized_copper_oracle.diagnoses;
       if (intermediate_regional_probe) {
         regional_attempt_config.max_bundle_search_states =
             std::min(regional_attempt_config.max_bundle_search_states,
@@ -12599,32 +21147,151 @@ RoutingPlanResult plan_routes(const Board& board, const RoutingPlannerConfig& co
             std::min(regional_attempt_config.max_spline_sweeps, std::size_t{2U});
         regional_attempt_config.max_quantization_feedback_iterations =
             std::min(regional_attempt_config.max_quantization_feedback_iterations, std::size_t{1U});
+        // This is the deliberately cheap global-routability probe, not an early detail pass.
+        // Discrete regional decomposition already exposes packing, corridor, terminal, lane,
+        // layer, and via feasibility. Defer PH realization, XPBD/PNS, residual-cone retry, and
+        // quantization to the final retained checkpoint so every global epoch can consume fresh
+        // physical evidence inside the caller's total budget.
+        regional_attempt_config.enable_spline_realization = false;
+        regional_attempt_config.enable_straight_realization = false;
       }
+      // The global probe already turns sampled/corridor/physical pressure into negotiated
+      // history.  Do not spend the next several minutes rebuilding regional windows while the
+      // global state still has ordinary discrete overflow or an unaccepted lane transition:
+      // PathFinder and its rip-up/LNS operators have direct authority over those resources and
+      // must consume the remaining epoch budget first.  Once that coarse state is clean, a cheap
+      // regional probe can discover the genuinely sub-grid packing failures.  The final epoch is
+      // deliberately exempt and still performs the full mandatory regional/PH transaction even
+      // when global negotiation exhausts its budget.
+      const bool globally_negotiated =
+          globally_negotiated_checkpoint(regional_candidate.coarse_global);
+      const bool oracle_feedback_pending = (config.oracle_first_feedback || !config.curved_tracks) &&
+          config.quantized_copper_oracle.enabled &&
+          !regional_candidate.quantized_copper_oracle.feasible();
+      const bool intermediate_regional_ready = assembled_feedback_epoch
+          ? globally_negotiated
+          : !intermediate_regional_probe || (globally_negotiated && !oracle_feedback_pending);
       if (regional_realization_is_bounded(regional_candidate.coarse_global,
-                                          regional_attempt_config)) {
+                                          regional_attempt_config) &&
+          intermediate_regional_ready) {
         feedback_candidate.regional_consulted = true;
+        regional_candidate.regional_evaluated = true;
         regional_candidate.regional =
             analyze_regional_conflicts(board, regional_candidate.coarse_global,
                                        regional_attempt_config, stop_token, telemetry);
+        accumulate_candidate_pipeline_stats(cumulative_candidate_pipeline_stats,
+                                            regional_candidate.regional.candidate_pipeline_stats);
       } else {
         regional_candidate.regional.configured = regional_attempt_config;
         regional_candidate.regional.stop_reason = RegionalRouterStopReason::conflicts_detected;
-        regional_candidate.regional.diagnostic =
-            "regional realization deferred until every coarse connection is routed";
+        if (!regional_realization_is_bounded(regional_candidate.coarse_global,
+                                             regional_attempt_config)) {
+          regional_candidate.regional.diagnostic =
+              "regional realization deferred until every coarse connection is routed";
+        } else {
+          regional_candidate.regional.diagnostic = oracle_feedback_pending
+              ? "intermediate regional realization deferred: exact copper oracle owns next feedback"
+              : "intermediate regional realization deferred while PathFinder/rip-up retains negotiated overflow";
+          if (telemetry != nullptr) {
+            RouterTelemetryEvent deferred;
+            deferred.kind = RouterTelemetryEventKind::search_summary;
+            deferred.stable_id = "regional-probe-deferred:" + std::to_string(pass + 1U) + ":" +
+                                 std::to_string(regional_input_index);
+            deferred.iteration = pass + 1U;
+            deferred.sampled_overflow = regional_candidate.coarse_global.sampled_overflow;
+            deferred.corridor_overflow = regional_candidate.coarse_global.corridor_overflow;
+            deferred.physical_overflow_nm =
+                regional_candidate.coarse_global.total_voronoi_overflow_nm;
+            deferred.clearance_shadow_conflicts =
+                regional_candidate.coarse_global.clearance_shadow_conflicts.size();
+            deferred.detail = regional_candidate.regional.diagnostic +
+                "; remaining PathFinder/rip-up budget owns sampled=" +
+                std::to_string(regional_candidate.coarse_global.sampled_overflow) +
+                ", corridor=" +
+                std::to_string(regional_candidate.coarse_global.corridor_overflow) +
+                ", unaccepted_lane_transitions=" +
+                std::to_string(regional_candidate.coarse_global
+                                   .unaccepted_selected_voronoi_lane_transitions);
+            static_cast<void>(telemetry->try_emit(std::move(deferred)));
+          }
+        }
       }
       if (regional_candidate.regional.spline_candidate_available) {
         regional_candidate.paths = regional_candidate.regional.spline_candidate_paths;
       }
-      const auto regional_diagnoses =
+      auto regional_diagnoses =
           diagnose_regional_routability(regional_candidate.regional, config.routability_probe);
+      feedback_candidate.regional_spline_realization_enabled =
+          regional_attempt_config.enable_spline_realization;
+
+      // A cheap discrete probe answers only whether a plausible regional assignment exists.  It
+      // must not terminate the outer loop before the selected topology has survived the actual
+      // PH/copper-aware regional transaction.  Promote immediately while all topology and
+      // portfolio state is still live, and let the exact result replace the provisional one.
+      const auto discrete_regional_plausible =
+          regional_candidate.regional.unmapped_clearance_shadow_conflicts == 0U &&
+          regional_candidate.regional.unmapped_capacity_conflicts == 0U &&
+          (regional_candidate.regional.stop_reason == RegionalRouterStopReason::no_conflicts ||
+           (!regional_candidate.regional.bundle_assignments.empty() &&
+            std::all_of(regional_candidate.regional.bundle_assignments.begin(),
+                        regional_candidate.regional.bundle_assignments.end(),
+                        [](const auto& assignment) { return assignment.complete(); })));
+      if (config.curved_tracks && intermediate_regional_probe && globally_negotiated &&
+          regional_input_index == 0U && discrete_regional_plausible) {
+        feedback_candidate.provisional_plan_complete = true;
+        feedback_candidate.exact_promotion_attempted = true;
+        ++provisional_exact_promotions_attempted;
+        auto promotion_config = regional_config;
+        promotion_config.enable_spline_realization = true;
+        promotion_config.xpbd_history = knowledge.history;
+        promotion_config.physical_conflict_witnesses =
+            regional_candidate.quantized_copper_oracle.diagnoses;
+        regional_candidate.regional = analyze_regional_conflicts(
+            board, regional_candidate.coarse_global, promotion_config, stop_token, telemetry);
+        accumulate_candidate_pipeline_stats(cumulative_candidate_pipeline_stats,
+                                            regional_candidate.regional.candidate_pipeline_stats);
+        regional_candidate.regional_evaluated = true;
+        regional_candidate.paths = regional_candidate.regional.spline_candidate_available
+                                       ? regional_candidate.regional.spline_candidate_paths
+                                       : regional_candidate.coarse_global.paths;
+        regional_diagnoses =
+            diagnose_regional_routability(regional_candidate.regional, config.routability_probe);
+        feedback_candidate.regional_spline_realization_enabled = true;
+        feedback_candidate.exact_promotion_succeeded = regional_candidate.regional.complete();
+        if (feedback_candidate.exact_promotion_succeeded) {
+          ++provisional_exact_promotions_succeeded;
+        }
+      }
+      if (stop_token.stop_requested() ||
+          regional_candidate.regional.stop_reason == RegionalRouterStopReason::cancelled) {
+        regional_candidate.stop_reason = RoutingPlanStopReason::cancelled;
+        regional_candidate.diagnostic = "routing planner cancelled during regional routing";
+        feedback_probe.candidates.push_back(std::move(feedback_candidate));
+        feedback_probes.push_back(std::move(feedback_probe));
+        attach_feedback_probes(regional_candidate);
+        return regional_candidate;
+      }
       feedback_candidate.regional_incomplete_bundle_assignments = static_cast<std::size_t>(
           std::count_if(regional_candidate.regional.bundle_assignments.begin(),
                         regional_candidate.regional.bundle_assignments.end(),
                         [](const auto& assignment) { return !assignment.complete(); }));
+      feedback_candidate.regional_straight_realization_enabled =
+          regional_attempt_config.enable_straight_realization;
+      feedback_candidate.regional_straight_scene_evaluated =
+          regional_candidate.regional.straight_scene_evaluated;
+      feedback_candidate.regional_straight_scene_violations =
+          regional_candidate.regional.straight_scene_drc_violations;
+      feedback_candidate.regional_spline_candidates_evaluated =
+          regional_candidate.regional.joint_spline_candidates_evaluated;
       feedback_candidate.regional_diagnoses = regional_diagnoses.size();
-      has_regional_diagnoses = has_regional_diagnoses || !regional_diagnoses.empty();
-      accumulate_routability_knowledge(knowledge, regional_diagnoses, config.routability_probe);
-      regional_candidate.routability_knowledge = knowledge;
+      pass_regional_diagnoses += regional_diagnoses.size();
+      // Downstream failures are topology-dependent.  Keep them on the portfolio which produced
+      // them; merging failures from discarded homotopies into shared history teaches unrelated
+      // candidates that their otherwise legal corridors are expensive.
+      auto candidate_knowledge = knowledge;
+      accumulate_routability_knowledge(candidate_knowledge, regional_diagnoses,
+                                       config.routability_probe);
+      regional_candidate.routability_knowledge = std::move(candidate_knowledge);
       classify(regional_candidate);
       feedback_candidate.plan_complete = regional_candidate.complete();
       feedback_probe.candidates.push_back(std::move(feedback_candidate));
@@ -12638,9 +21305,17 @@ RoutingPlanResult plan_routes(const Board& board, const RoutingPlannerConfig& co
         lane_transition_repair_branch = regional_candidate.coarse_global;
       }
       if (!pass_best || better(regional_candidate, *pass_best)) {
+        pass_best_regional_diagnoses = regional_diagnoses;
         pass_best = std::move(regional_candidate);
       }
+      ++regional_input_index;
     }
+    if (pass_best) {
+      knowledge = pass_best->routability_knowledge;
+      discarded_portfolio_diagnoses +=
+          pass_regional_diagnoses - pass_best_regional_diagnoses.size();
+    }
+    const bool has_regional_diagnoses = !pass_best_regional_diagnoses.empty();
     feedback_probe.history_entries_after_regional = knowledge.history.size();
     feedback_probe.history_pressure_after_regional = knowledge.pressure();
     if (telemetry != nullptr) {
@@ -12656,11 +21331,27 @@ RoutingPlanResult plan_routes(const Board& board, const RoutingPlannerConfig& co
           pass_best ? pass_best->coarse_global.total_voronoi_overflow_nm : 0U;
       epoch.clearance_shadow_conflicts =
           pass_best ? pass_best->coarse_global.clearance_shadow_conflicts.size() : 0U;
+      epoch.unresolved_packing_obligations = pass_best ?
+          (pass_best->regional_evaluated && pass_best->regional.packing_proven() ? 0U :
+           pass_best->coarse_global.unresolved_corridor_packing.size()) : 0U;
       epoch.detail = "interleaved routing epoch completed: regional_candidates=" +
                      std::to_string(regional_inputs.size()) +
                      ", history_entries=" + std::to_string(knowledge.history.size()) +
-                     ", history_pressure=" + std::to_string(knowledge.pressure());
+                     ", history_pressure=" + std::to_string(knowledge.pressure()) +
+                     ", quantized_oracle_violations=" +
+                     std::to_string(feedback_probe.quantized_copper_oracle_violations) +
+                     ", quantized_oracle_opens=" +
+                     std::to_string(feedback_probe.quantized_copper_oracle_opens);
       static_cast<void>(telemetry->try_emit(std::move(epoch)));
+    }
+    std::optional<GlobalRouteResult> assembled_checkpoint;
+    std::vector<NetId> assembled_affected_nets;
+    if (assembled_feedback_epoch && pass_best &&
+        pass_best->regional.straight_scene_evaluated &&
+        pass_best->regional.native_scene_complete && !pass_best->complete()) {
+      assembled_affected_nets = expand_feedback_nets(
+          pass_best->coarse_global, diagnosis_nets(pass_best_regional_diagnoses));
+      if (!assembled_affected_nets.empty()) assembled_checkpoint = pass_best->coarse_global;
     }
     const auto final_equivalent_refresh = final_epoch && pass_best && best &&
                                           !better(*pass_best, *best) && !better(*best, *pass_best);
@@ -12683,8 +21374,12 @@ RoutingPlanResult plan_routes(const Board& board, const RoutingPlannerConfig& co
       // move together instead of repeatedly recreating the same impossible local ordering.
       if (!best->complete()) {
         if (retry_available && lane_transition_repair_branch) {
-          const auto repair_diagnoses =
-              probe_global_routability(*lane_transition_repair_branch, config.routability_probe);
+          auto repair_diagnoses =
+              probe_global_routability(*lane_transition_repair_branch, probe_config);
+          const auto repair_oracle = probe_quantized_copper_feasibility(
+              board, *lane_transition_repair_branch, config.quantized_copper_oracle, stop_token);
+          repair_diagnoses.insert(repair_diagnoses.end(), repair_oracle.diagnoses.begin(),
+                                  repair_oracle.diagnoses.end());
           const auto repair_nets = expand_feedback_nets(*lane_transition_repair_branch,
                                                         diagnosis_nets(repair_diagnoses));
           if (!repair_nets.empty()) {
@@ -12695,7 +21390,11 @@ RoutingPlanResult plan_routes(const Board& board, const RoutingPlannerConfig& co
         }
         if (!feedback_probe.next_feedback_uses_repair_branch) {
           auto selected_diagnoses =
-              probe_global_routability(best->coarse_global, config.routability_probe);
+              probe_global_routability(best->coarse_global, probe_config);
+          const auto selected_oracle = probe_quantized_copper_feasibility(
+              board, best->coarse_global, config.quantized_copper_oracle, stop_token);
+          selected_diagnoses.insert(selected_diagnoses.end(), selected_oracle.diagnoses.begin(),
+                                    selected_oracle.diagnoses.end());
           const auto selected_regional =
               diagnose_regional_routability(best->regional, config.routability_probe);
           selected_diagnoses.insert(selected_diagnoses.end(), selected_regional.begin(),
@@ -12709,7 +21408,11 @@ RoutingPlanResult plan_routes(const Board& board, const RoutingPlannerConfig& co
                 stagnant_physical_feedback_passes % retained_global_portfolios.size();
             selected_checkpoint = &retained_global_portfolios[alternative_index];
             selected_diagnoses =
-                probe_global_routability(*selected_checkpoint, config.routability_probe);
+                probe_global_routability(*selected_checkpoint, probe_config);
+            const auto alternative_oracle = probe_quantized_copper_feasibility(
+                board, *selected_checkpoint, config.quantized_copper_oracle, stop_token);
+            selected_diagnoses.insert(selected_diagnoses.end(), alternative_oracle.diagnoses.begin(),
+                                      alternative_oracle.diagnoses.end());
           }
           feedback_checkpoint = *selected_checkpoint;
           feedback_affected_nets =
@@ -12717,6 +21420,15 @@ RoutingPlanResult plan_routes(const Board& board, const RoutingPlannerConfig& co
         }
         feedback_probe.next_feedback_affected_nets = feedback_affected_nets.size();
       }
+    }
+    if (assembled_checkpoint) {
+      // Keep the checkpoint paired with the selected portfolio's private regional history.
+      // Ordinary stagnation diversification must not strand this fresh exact evidence.
+      feedback_checkpoint = std::move(*assembled_checkpoint);
+      feedback_affected_nets = std::move(assembled_affected_nets);
+      feedback_probe.next_feedback_uses_repair_branch = false;
+      feedback_probe.next_feedback_affected_nets = feedback_affected_nets.size();
+      assembled_feedback_pending = true;
     }
     feedback_probes.push_back(std::move(feedback_probe));
     if (best) {
@@ -12736,13 +21448,17 @@ RoutingPlanResult plan_routes(const Board& board, const RoutingPlannerConfig& co
                           std::to_string(stagnant_physical_feedback_passes) +
                           " non-improving epochs";
     }
-    if ((has_regional_diagnoses || !global_diagnoses.empty()) && retry_available) {
+    const bool global_negotiation_pending =
+        best && (!coarse_topology_complete(best->coarse_global) ||
+                 best->coarse_global.total_overflow > 0U);
+    if ((global_negotiation_pending || has_regional_diagnoses || !global_diagnoses.empty()) &&
+        retry_available) {
       ++regional_feedback_passes;
       continue;
     }
     if (best) {
       best->routability_feedback_budget_exhausted =
-          !global_diagnoses.empty() || has_regional_diagnoses;
+          global_negotiation_pending || !global_diagnoses.empty() || has_regional_diagnoses;
       best->routability_knowledge = knowledge;
       best->global_feedback_passes = global_feedback_passes;
       best->regional_feedback_passes = regional_feedback_passes;
@@ -12757,6 +21473,7 @@ RoutingPlanResult plan_routes(const Board& board, const RoutingPlannerConfig& co
   exhausted.global_feedback_passes = global_feedback_passes;
   exhausted.regional_feedback_passes = regional_feedback_passes;
   exhausted.routability_feedback_budget_exhausted = true;
+  publish_feedback_selection(exhausted.coarse_global);
   return exhausted;
 }
 

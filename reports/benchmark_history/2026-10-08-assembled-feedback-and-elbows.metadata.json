@@ -1,0 +1,121 @@
+{
+  "generated_utc": "2026-10-08T09:56:13.299630+00:00",
+  "git_revision": "94aa691ad89576d1c0ac07a5346020da21fc9d06",
+  "experiments": {
+    "V74": {
+      "experiment": "V74",
+      "generated_utc": "2026-10-08T09:56:13.300430+00:00",
+      "git_revision": "94aa691ad89576d1c0ac07a5346020da21fc9d06",
+      "files": {
+        "src/regional_router.cpp": {
+          "old_snapshot": "build/assembled-feedback-20261008/baseline/regional_router.cpp",
+          "new_snapshot": "build/assembled-feedback-20261008/source/regional_router.cpp",
+          "old_sha256": "d899931132d8f69c8a15fcdc7dc4d225c96c284194429aff3d9b2923159f7a8f",
+          "new_sha256": "e71cf7aa19726cce9ae74424ff0bbb38a04ed172bb81f306d7ffe5dbc67e9fb0",
+          "old_bytes": 950757,
+          "new_bytes": 953189
+        },
+        "tests/unit/core_tests.cpp": {
+          "old_snapshot": "build/assembled-feedback-20261008/baseline/core_tests.cpp",
+          "new_snapshot": "build/assembled-feedback-20261008/source/core_tests.cpp",
+          "old_sha256": "397434ccf7ef83f4a01cc0bed029cea6305da8affabac1fe14ab6bf614e1cb6d",
+          "new_sha256": "01d6f5472be15644112e38c43f5246c1eece85c035253ffd8fa5269f8c60189b",
+          "old_bytes": 603877,
+          "new_bytes": 610554
+        }
+      },
+      "snapshot_vs_production": {
+        "V74:old:src/regional_router.cpp": {
+          "identical": false,
+          "diff_lines": 316
+        },
+        "V74:new:src/regional_router.cpp": {
+          "identical": false,
+          "diff_lines": 194
+        },
+        "V74:old:tests/unit/core_tests.cpp": {
+          "identical": false,
+          "diff_lines": 239
+        },
+        "V74:new:tests/unit/core_tests.cpp": {
+          "identical": false,
+          "diff_lines": 128
+        }
+      }
+    },
+    "V75": {
+      "experiment": "V75",
+      "generated_utc": "2026-10-08T09:56:13.310083+00:00",
+      "git_revision": "94aa691ad89576d1c0ac07a5346020da21fc9d06",
+      "files": {
+        "src/regional_router.cpp": {
+          "old_snapshot": "build/dogleg-alternatives-20261008/baseline-regional_router.cpp",
+          "new_snapshot": "build/dogleg-alternatives-20261008/final-source/regional_router.cpp",
+          "old_sha256": "e71cf7aa19726cce9ae74424ff0bbb38a04ed172bb81f306d7ffe5dbc67e9fb0",
+          "new_sha256": "2dcd4b3e1ee449cad5ed9fd68e372d4cba92909b5a9909e779f0670f5474b1de",
+          "old_bytes": 953189,
+          "new_bytes": 960138
+        },
+        "tests/unit/core_tests.cpp": {
+          "old_snapshot": "build/assembled-feedback-20261008/source/core_tests.cpp",
+          "new_snapshot": "build/dogleg-alternatives-20261008/final-source/core_tests.cpp",
+          "old_sha256": "01d6f5472be15644112e38c43f5246c1eece85c035253ffd8fa5269f8c60189b",
+          "new_sha256": "67c965cb1341faa28221b206de4a24c5f2911033f5c276d7ec4cef39dc9d096a",
+          "old_bytes": 610554,
+          "new_bytes": 617272
+        },
+        "include/flux/core/regional_router.hpp": {
+          "old_snapshot": "build/dogleg-alternatives-20261008/baseline/regional_router.hpp",
+          "new_snapshot": "build/dogleg-alternatives-20261008/final-source/regional_router.hpp",
+          "old_sha256": "98d3f630d436f7d5afc6af7de98daae4aec680068835232d6e7811ab43e35df0",
+          "new_sha256": "7b3882cd07182c5287fc359c4ddc22c32178566dc9702236f1d09e6828f5d5dc",
+          "old_bytes": 72812,
+          "new_bytes": 73001
+        },
+        "apps/flux-cli/main.cpp": {
+          "old_snapshot": "build/dogleg-alternatives-20261008/baseline/main.cpp",
+          "new_snapshot": "build/dogleg-alternatives-20261008/final-source/main.cpp",
+          "old_sha256": "dc162ea5c2d31f9716aeb64c47363614150c5300b8d1bdb9f5336bedd429b524",
+          "new_sha256": "aeb6ba7bc54d096f5230543f334b41b7be0b23beb882b9f5a545fe9834b7d4ea",
+          "old_bytes": 528132,
+          "new_bytes": 528506
+        }
+      },
+      "snapshot_vs_production": {
+        "V75:old:src/regional_router.cpp": {
+          "identical": false,
+          "diff_lines": 194
+        },
+        "V75:new:src/regional_router.cpp": {
+          "identical": true,
+          "diff_lines": 0
+        },
+        "V75:old:tests/unit/core_tests.cpp": {
+          "identical": false,
+          "diff_lines": 128
+        },
+        "V75:new:tests/unit/core_tests.cpp": {
+          "identical": true,
+          "diff_lines": 0
+        },
+        "V75:old:include/flux/core/regional_router.hpp": {
+          "identical": false,
+          "diff_lines": 12
+        },
+        "V75:new:include/flux/core/regional_router.hpp": {
+          "identical": true,
+          "diff_lines": 0
+        },
+        "V75:old:apps/flux-cli/main.cpp": {
+          "identical": false,
+          "diff_lines": 13
+        },
+        "V75:new:apps/flux-cli/main.cpp": {
+          "identical": true,
+          "diff_lines": 0
+        }
+      }
+    }
+  },
+  "patch": "reports/benchmark_history/2026-10-08-assembled-feedback-and-elbows.patch"
+}

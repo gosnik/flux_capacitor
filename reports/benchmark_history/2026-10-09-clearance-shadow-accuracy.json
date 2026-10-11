@@ -1,0 +1,137 @@
+{
+  "experiment": "actual-geometry clearance shadows",
+  "date": "2026-10-09",
+  "baseline_artifact": "build/paired-final-tier1-20261009",
+  "baseline_binary": "build/shadow-accuracy-20261009/flux-cli-baseline",
+  "baseline": {
+    "duration_seconds": 907.2157418169954,
+    "paths": 78,
+    "unrouted_nets": 0,
+    "routing_plan_complete": false,
+    "routing_engine_outcome": "timed-out",
+    "clearance_shadow_conflicts": 398,
+    "clearance_shadow_raster_samples": 724,
+    "clearance_shadow_coalesced_samples": 326,
+    "clearance_shadow_history_increment": 0
+  },
+  "hypothesis": "Canonical diagonal capacity identities leak into geometric clearance certificates, and nominal candidate widths overstate selected narrow copper. Separating identity and width should eliminate false witnesses while retaining true collisions. Long direct edges also require exact segment checks because one-pitch raster keys miss interior conflicts.",
+  "validation_status": "Complete for clearance-shadow fix: 64/64 core tests, four focused shadow cases, kernel/policy tests and repeated crash reproducer pass; CLI/viewer build. Tier0 baseline copper preserved; Tier1 remains unqualified.",
+  "focused_regressions": {
+    "result": "passed",
+    "cases": 4,
+    "log": "build/shadow-accuracy-20261009/new-shadow-tests.log",
+    "coverage": [
+      "legal diagonal versus aliased opposite capacity chord",
+      "true crossing in enforced and advisory modes",
+      "selected neck-down width versus nominal-width collision control",
+      "retained multi-cell direct chord midpoint collision and legal offset"
+    ]
+  },
+  "review": "Independent review found no further actionable issue after exact direct-edge cache fix.",
+  "interrupted_comparisons": {
+    "tier0": "build/shadow-final-tier0-20261009",
+    "tier1": "build/shadow-final-tier1-20261009",
+    "reason": "Stopped with SIGINT after full core regression revealed concurrent writes in new mutable direct-edge clearance cache. Not final validation evidence."
+  },
+  "regression_failure": {
+    "test": "global_to_detailed_route_is_transactional_and_capacity_gated",
+    "cause": "Parallel static seed searches mutate shared direct clearance cache; destructor double free.",
+    "debugger_log": "build/shadow-accuracy-20261009/unit-gdb.log"
+  },
+  "concurrency_fix": {
+    "date": "2026-10-10",
+    "design": "Value-owned synchronized direct-edge cache; immutable completed entries; early empty-owner return; serial occupancy invalidation.",
+    "review": "No remaining actionable concurrency or lifetime finding.",
+    "reproducer_runs": 2,
+    "reproducer_result": "passed",
+    "focused_result": "shadow, kernel, engine policy passed",
+    "logs_prefix": "build/shadow-accuracy-20261009/post-fix2-"
+  },
+  "core_regressions": {
+    "build": "Release",
+    "passed": 64,
+    "total": 64,
+    "exit_code": 0,
+    "log": "build/shadow-accuracy-20261009/post-fix2-full-unit.log"
+  },
+  "git_revision": "94aa691ad89576d1c0ac07a5346020da21fc9d06",
+  "working_tree": "Pre-existing uncommitted work retained; this experiment is not an isolated commit.",
+  "sha256": {
+    "src/global_router.cpp": "fe862dd38fcaa70ec9ef74499c8f854487e23fa2ec43c940de2d59e8319f74aa",
+    "apps/flux-viewer/viewer_app.cpp": "f2e1afefcf3d52f2d44b8e7ed5e2fb41bd27cef0c445c3de185ad71b0d3095a5",
+    "tests/unit/clearance_shadow_tests.cpp": "a552b94da5acafebd8e73cb4f1ee05347e8b3e8ffaaa320a8341459eb18b2747",
+    "build/tautening-release/flux-cli": "297b7598e79ca00330cf493a4ae2f21e9b1d644f7b99391b37a11a81ef0cdd01"
+  },
+  "configuration": {
+    "track_geometry": "curved",
+    "routing_timeout_seconds": 900,
+    "planning_process_timeout_seconds": 960,
+    "detailed_process_timeout_seconds": 960,
+    "telemetry": "diagnostic",
+    "boards": [
+      "pt2399_delay",
+      "bm_svf"
+    ],
+    "concurrent_runs": true,
+    "performance_note": "These runs overlapped and cannot establish performance changes. User requires all future tier runs to be sequential with recorded telemetry; saved in AGENTS.md on 2026-10-10."
+  },
+  "tier0_after": {
+    "artifact": "build/shadow-verified-tier0-20261010",
+    "global_duration_seconds": 65.059,
+    "detailed_duration_seconds": 519.538,
+    "baseline_detailed_duration_seconds": 489.264,
+    "qualified": false,
+    "routing_plan_complete": true,
+    "detailed_complete": false,
+    "unsmoothed_nonjunction_joints": 7,
+    "clearance_shadow_conflicts": 3,
+    "tracks": 47,
+    "vias": 3,
+    "added_track_beziers": 199,
+    "fitted_cubic_beziers_telemetry": 398,
+    "open_connections": 0,
+    "internal_copper_violations": 0,
+    "configured_kicad_drc_violations": 0,
+    "kicad_unconnected_items": 0,
+    "visual_comparison": "Both exported copper PNGs are byte-identical to paired-final-tier0-20261009. Inspected both: generally smooth bends with remaining sharp joints and broad detours.",
+    "interpretation": "Same existing curved qualification failure; no copper-image or legality regression from this fix."
+  },
+  "tier1_after": {
+    "artifact": "build/shadow-verified-tier1-20261010",
+    "duration_seconds": 900.2086963269976,
+    "paths": 78,
+    "unrouted_nets": 0,
+    "topological_complete": true,
+    "routing_plan_complete": false,
+    "routing_engine_outcome": "timed-out",
+    "qualified": false,
+    "clearance_shadow_conflicts": 275,
+    "clearance_shadow_raster_samples": 497,
+    "clearance_shadow_coalesced_samples": 222,
+    "clearance_shadow_history_increment": 0,
+    "ordinary_total_overflow": 0,
+    "quantized_oracle": {
+      "authoritative_final_kicad_drc": false,
+      "diagnoses": 310,
+      "internal_drc_violations": 799,
+      "tracks": 1329,
+      "vias": 56,
+      "feasible": false
+    },
+    "baseline_quantized_oracle": {
+      "diagnoses": 417,
+      "internal_drc_violations": 1114,
+      "tracks": 1429,
+      "vias": 76,
+      "feasible": false
+    },
+    "final_kicad_drc": "not run; incomplete regional plan skipped detailed materialization",
+    "visual_inspection": "Provisional overview inspected: predominantly unsmoothed coarse geometry and crossings; not legal final copper."
+  },
+  "sampled_peak_rss_kib": {
+    "pt2399_delay": 880476,
+    "bm_svf": 936492
+  },
+  "memory_sample_log": "build/shadow-accuracy-20261009/verified-memory-samples.jsonl",
+  "decision": "Keep accuracy fix; no tier promotion. Future tiers must run sequentially with recorded telemetry."
+}

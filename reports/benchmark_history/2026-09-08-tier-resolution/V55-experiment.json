@@ -1,0 +1,55 @@
+{
+  "schema": 1,
+  "experiment": "V55",
+  "board": "bm_svf",
+  "tier": 1,
+  "failure_stage": "physical feedback scheduling",
+  "evidence": {
+    "source": "../2026-09-07-tier-resolution/V52-completed-tier1.json",
+    "exact_straight_scenes": 12,
+    "scenes_before_final_epoch": 0,
+    "best_first_portfolio": {
+      "drc_reports": 644,
+      "opens": 0
+    }
+  },
+  "ranked_hypotheses": [
+    {
+      "rank": 1,
+      "mechanism": "Straight regional witnesses arrive only in the final epoch, leaving no global retry that can consume changed copper/via failures.",
+      "experiment": "Enable one early bounded scene via --early-straight-feedback; one portfolio, no scope retries, original global budget."
+    },
+    {
+      "rank": 2,
+      "mechanism": "Retained via/corridor alternatives cannot escape the measured pairwise fixed point.",
+      "experiment": "Generate a new coordinated alternative for the largest physical conflict component."
+    },
+    {
+      "rank": 3,
+      "mechanism": "Fixed diagonal-first elbows invalidate a physically packable lane assignment.",
+      "experiment": "Compare alternative elbow orientations within the selected corridor using exact frozen-copper checks."
+    }
+  ],
+  "research": [
+    {
+      "technique": "Separate track assignment from search/repair",
+      "source": "https://openroad.readthedocs.io/en/latest/main/src/drt/README.html",
+      "match": "Discrete packing does not establish final copper legality.",
+      "integration": "Existing regional transaction and subsequent global feedback.",
+      "downside": "Additional early whole-scene cost."
+    },
+    {
+      "technique": "Negotiated congestion with physical history",
+      "source": "https://docs.verilogtorouting.org/en/latest/vpr/command_line_usage/",
+      "match": "Flux already has net- and geometry-bound history entries; no replacement architecture required.",
+      "integration": "Existing accumulate_routability_knowledge and prepare_routability_history.",
+      "downside": "History from a failed realization may penalize otherwise useful global routes."
+    }
+  ],
+  "success_criterion": "Physically measured failures reach the next global epoch, improve final copper without lost connectivity; Tier 0 remains qualified.",
+  "regression_criterion": "Worse physical feasibility, excess runtime, or any lost lower-tier qualification.",
+  "default_enabled": false,
+  "status": "deferred and reverted",
+  "reason": "Independent KiCad pad-position comparison exposes earlier back-side footprint import error. Correct canonical geometry before interpreting routing-policy experiments.",
+  "micro_test": "Initial fixture did not remain incomplete as assumed; test not promoted. No successful scheduling result claimed."
+}

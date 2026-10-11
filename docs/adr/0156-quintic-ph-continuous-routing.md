@@ -36,12 +36,14 @@ distance.
 
 First-order Hermite interpolation enumerates the formal square-root and quadratic branches. Branch
 selection is deterministic and penalizes self-intersections, unnecessary inflections, absolute
-rotation, excess length, and control-hull reversal. A looping algebraic solution is never accepted
-merely because it satisfies the endpoint equations. Route nodes use bounded centripetal/chord
+rotation, excess length, curvature variation, excess curvature extrema, and control-hull reversal.
+A looping algebraic solution is never accepted merely because it satisfies the endpoint equations.
+Route nodes use bounded centripetal/chord
 parameter selection. Adjacent segments use one shared nodal derivative scaled by each non-uniform
-parameter interval, so the chain is C1 with respect to the route parameter. An optional C2 mode
-relaxes shared derivatives while keeping interpolation points fixed and fails closed when its
-explicit mismatch tolerance is not reached.
+parameter interval, so the chain is C1 with respect to the route parameter. Optional geometric-G2
+promotion uses a damped bounded Newton solve that relaxes only internal tangent magnitudes while
+keeping interpolation points and tangent directions fixed. It fails closed when its explicit
+scalar-curvature mismatch tolerance is not reached.
 
 Interpolation nodes are the only continuous deformation variables. XPBD, elastic-band repair, and
 PNS feedback may move those nodes inside their selected corridor, after which all affected PH
@@ -59,8 +61,11 @@ The signed offset is represented exactly as a homogeneous rational degree-nine B
 Offset evaluation is rational, and bounded homogeneous subdivision followed by a two-parameter
 Newton solve finds transverse rational-offset intersections. Curvature extrema are isolated from
 the degree-five numerator of the curvature derivative; inflections are isolated from the quadratic
-curvature numerator. These operations complement, rather than replace, authoritative quantized
-copper DRC.
+curvature numerator. Final regional candidates are first fitted to the exact native circular arcs
+and straight segments that Flux would emit. DRC over that native copper scene is the ordinary
+regional authority; rational offsets are evaluated only as attribution diagnostics after native
+rejection, or when the native-materialization authority is explicitly disabled. Final detailed
+transaction and external KiCad DRC remain the board-level authorities.
 
 GPU advisory evaluation receives flattened six-control PH Bézier spans and their quintic Bernstein
 basis. Telemetry publishes the same representation with geometry kind `quintic_ph`, degree five,
@@ -120,9 +125,10 @@ unchanged in authority.
 
 PH interpolation can have several mathematically valid branches, so branch ranking and shape
 certification are hard gates. A bounded enter/leave inflection pair is permitted for a genuine
-obstacle-avoidance bulge; extra sign changes are treated as a wiggle. Rational offset intersection
-is an additional final regional rejection test, while closest-distance checks remain necessary for
-parallel overlap and containment.
+obstacle-avoidance bulge; extra sign changes are treated as a wiggle. Curvature-variation and
+excess-extremum terms rank fair spiral-like branches without overriding corridor or DRC gates.
+Rational offset intersection remains available for rejected-candidate diagnosis, while the emitted
+native arcs and segments decide ordinary regional copper legality.
 
 ## References
 
@@ -132,3 +138,22 @@ parallel overlap and containment.
   Software* 41(4) (2015), article 28, DOI 10.1145/2699467.
 - R. T. Farouki et al., “Path planning with Pythagorean-hodograph curves for unmanned or autonomous
   vehicles,” *Proceedings of the IMechE, Part G* (2017).
+
+## KiCad 10 cubic copper backend (2026-10-09)
+
+The active curved pipeline now degree-reduces PH quintics into piecewise cubic Béziers,
+represented canonically as `TrackBezier` (schema 22) and exported as net-assigned copper
+`gr_curve` objects. PH remains the continuous routing representation. The previous line/arc
+fitter remains available for explicit diagnostic uses; it is no longer the active PH output path.
+
+Each candidate cubic matches the quintic's endpoint derivatives before integer quantization.
+Degree elevation back to quintic bounds the maximum positional error by the largest control-point
+difference. Failed bounds trigger exact subdivision; exhausted work budgets reject the fit.
+Accepted spans also require monotone chord projection and bounded join angles.
+
+Planning and DRC use adaptive, certified outer segment envelopes. Connectivity uses contracted
+inner envelopes plus exact endpoint caps so an obstacle approximation cannot invent contact.
+Export preserves the four integer controls, layer, width, net and lock state. Final KiCad DRC
+remains required. KiCad 10 does not enforce track-width rules on graphic copper in the tested
+configuration, so Flux separately enforces the canonical minimum width. Marginal contacts may
+be conservatively rejected by internal connectivity; a preview is never a completion certificate.

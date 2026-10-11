@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "board": "pt2399_delay",
+  "tier": 0,
+  "failing_stage": "sampling configuration followed by physical global allocation",
+  "rules": {"track_width_mm": 0.7, "clearance_mm": 0.2, "hole_to_hole_mm": 0.25},
+  "default": {"grid_pitch_mm": 0.5, "outcome": "invalid_input: pitch below width plus clearance"},
+  "coarse_control": {
+    "artifact": "build/tier0-project-minimum-v18-900um-20260906",
+    "grid_pitch_mm": 0.9,
+    "duration_seconds": 322.2478840650001,
+    "paths": 50,
+    "unrouted_nets": 0,
+    "total_overflow": 26,
+    "clearance_shadow_conflicts": 25,
+    "regional_conflict_edges": 14,
+    "regional_windows": 3,
+    "complete_regional_assignments": 1,
+    "quantized_tracks": 586,
+    "quantized_vias": 4,
+    "quantized_opens": 0,
+    "quantized_drc_violations": 50,
+    "final_copper": false,
+    "final_kicad_drc": "not evaluated"
+  },
+  "oracle": "The strict independent reference uses 0.10 mm candidate samples with 0.70 mm tracks and passes original-project DRC; sampling density need not equal simultaneously occupied copper spacing.",
+  "ranked_candidates": [
+    "Permit a denser planar candidate lattice only while exact sampled-clearance conflicts are enforced, retaining capacity and final DRC gates.",
+    "Automatically raise an unspecified lattice pitch to resolved copper spacing; legal configuration but the 0.90 mm control has not solved physical allocation.",
+    "Improve terminal/corridor alternatives in the navmesh if denser existing samples cannot represent a legal escape."
+  ],
+  "v19_hypothesis": "The pitch gate confuses candidate separation with occupied-copper separation. Existing exact clearance shadows can reject incompatible selections while a denser candidate graph retains useful escape and via choices.",
+  "experiment": "Opt-in dense planar candidates. Reject sub-envelope pitch unless reserve_sampled_route_clearance is true and clearance_shadows_advisory_only is false. Keep the option disabled until micro-tests and corrected-rule Tier-0 results justify it.",
+  "success": "More physically feasible copper under unchanged project rules, not merely all nets having paths.",
+  "regression_guard": "No bypass with missing/advisory physical conflict enforcement; no reduced trace width, clearance, hole spacing or external DRC severity.",
+  "tier_promoted": false
+}

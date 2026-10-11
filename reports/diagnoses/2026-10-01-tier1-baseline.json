@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "board": "bm_svf",
+  "tier": 1,
+  "failing_stage": "physical copper, then regional checkpoint selection",
+  "classification": [
+    "detailed geometry",
+    "via/layer",
+    "search checkpoint retention"
+  ],
+  "topology": "78 paths, all materialized, zero opens in matched frozen coarse replay",
+  "geometric_legality": false,
+  "dominant_drc_categories": {
+    "track_clearance": 420,
+    "track_via_clearance": 47,
+    "hole_clearance": 24
+  },
+  "smallest_implicated_set": {
+    "nets": [
+      "kicad-net-13",
+      "kicad-net-14"
+    ],
+    "names": [
+      "Net-(U4A--)",
+      "Net-(R4-Pad1)"
+    ],
+    "layer": "F.Cu",
+    "coalesced_diagnoses": 15,
+    "worst_deficit_nm": 675000,
+    "bounds_nm": [
+      51502499,
+      84377499,
+      53615000,
+      85302501
+    ],
+    "limitation": "Largest measured pair, not proven minimal unsatisfiable set"
+  },
+  "alternative_route_exists": "Whole-board known routed reference available; frozen local scope feasibility unproven",
+  "earliest_confirmed_decision": "scope retry discards prior measured checkpoint; earliest topology error still under investigation",
+  "supporting_artifact": "reports/benchmark_history/2026-10-01-tier-resolution/frozen-baseline.json",
+  "normal_baseline": "Partial run ended without harness result or external DRC; coarse errors674,613,499,540 all zeroopens; first assembled straight scene1159errors/0opens; final qualification unknown",
+  "additional_confirmed_feedback_loss": "immutable sourcevia/hole planar conflicts receive change_via_site and cannot charge planar history; V63 testing"
+}

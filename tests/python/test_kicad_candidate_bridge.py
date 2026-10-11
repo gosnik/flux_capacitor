@@ -23,6 +23,7 @@ TRACK_1_ID = "10000000-0000-0000-0000-000000000001"
 TRACK_2_ID = "10000000-0000-0000-0000-000000000002"
 ARC_ID = "20000000-0000-0000-0000-000000000001"
 VIA_ID = "30000000-0000-0000-0000-000000000001"
+BEZIER_ID = "40000000-0000-0000-0000-000000000001"
 
 
 class Point:
@@ -66,6 +67,17 @@ class FakeArc(FakeRoute):
         self.width = 200_000
 
 
+class FakeBezier(FakeRoute):
+    def __init__(self):
+        super().__init__()
+        self.layer = "F.Cu"
+        self.start = Point(1_000_000, 0)
+        self.control1 = Point(1_250_000, 500_000)
+        self.control2 = Point(1_750_000, 500_000)
+        self.end = Point(2_000_000, 0)
+        self.attributes = types.SimpleNamespace(stroke=types.SimpleNamespace(width=200_000))
+
+
 class FakeVia(FakeRoute):
     def __init__(self):
         super().__init__()
@@ -99,6 +111,7 @@ class FakeBoard:
     def __init__(self, *, fail_create=False, mutate_on_begin=False):
         self.footprints = [FakeFootprint()]
         self.tracks = [make_track(TRACK_1_ID, 0, 1_000_000), make_track(TRACK_2_ID, 0, 2_000_000)]
+        self.shapes = [make_bezier(BEZIER_ID)]
         self.vias = []
         self.fail_create = fail_create
         self.mutate_on_begin = mutate_on_begin
@@ -118,6 +131,9 @@ class FakeBoard:
     def get_vias(self):
         return list(self.vias)
 
+    def get_shapes(self):
+        return list(self.shapes)
+
     def get_nets(self):
         return [types.SimpleNamespace(name="SIGNAL")]
 
@@ -134,6 +150,8 @@ class FakeBoard:
                 self.tracks.remove(item)
             elif item in self.vias:
                 self.vias.remove(item)
+            elif item in self.shapes:
+                self.shapes.remove(item)
 
     def update_items(self, items):
         self.update_calls += 1
@@ -142,6 +160,7 @@ class FakeBoard:
     def create_items(self, items):
         self.create_calls += 1
         self.tracks.extend(item for item in items if isinstance(item, (FakeTrack, FakeArc)))
+        self.shapes.extend(item for item in items if isinstance(item, FakeBezier))
         self.vias.extend(item for item in items if isinstance(item, FakeVia))
         if self.fail_create:
             return []
@@ -167,6 +186,7 @@ BINDINGS = BRIDGE.LiveBindings(
     unknown_layer="unknown",
     via_through="through",
     via_blind_buried="blind-buried",
+    bezier_type=FakeBezier,
 )
 
 
@@ -207,14 +227,36 @@ def via_state():
     }
 
 
+def bezier_state(control2_x=1_750_000):
+    return {
+        "id": BEZIER_ID,
+        "net": "SIGNAL",
+        "layer": "F.Cu",
+        "start_nm": [1_000_000, 0],
+        "control1_nm": [1_250_000, 500_000],
+        "control2_nm": [control2_x, 500_000],
+        "end_nm": [2_000_000, 0],
+        "width_nm": 200_000,
+        "locked": False,
+    }
+
+
+def make_bezier(item_id):
+    item = FakeBezier()
+    item.proto.id.value = item_id
+    return item
+
+
 def change_set():
     first = track_state(TRACK_1_ID, 0, 1_000_000)
     second = track_state(TRACK_2_ID, 0, 2_000_000)
     updated = track_state(TRACK_1_ID, 0, 1_500_000)
+    source_bezier = bezier_state()
+    updated_bezier = bezier_state(1_800_000)
     return {
         "ok": True,
         "version": 1,
-        "board_schema": 21,
+        "board_schema": 22,
         "source_revision": "sha256:test-revision",
         "source_inventory": {
             "footprints": [
@@ -230,6 +272,7 @@ def change_set():
             ],
             "tracks": [first, second],
             "track_arcs": [],
+            "track_beziers": [source_bezier],
             "vias": [],
         },
         "footprint_transforms": [],
@@ -238,6 +281,9 @@ def change_set():
             {"operation": "remove", "source": copy.deepcopy(second), "candidate": None},
         ],
         "track_arcs": [{"operation": "create", "source": None, "candidate": arc_state()}],
+        "track_beziers": [
+            {"operation": "update", "source": source_bezier, "candidate": updated_bezier}
+        ],
         "vias": [{"operation": "create", "source": None, "candidate": via_state()}],
         "diagnostics": [],
     }
@@ -253,6 +299,7 @@ class CandidateBridgeTests(unittest.TestCase):
                 "footprint_transforms": 0,
                 "track_operations": 2,
                 "track_arc_operations": 1,
+                "track_bezier_operations": 1,
                 "via_operations": 1,
             },
         )
@@ -297,15 +344,31 @@ class CandidateBridgeTests(unittest.TestCase):
         with self.assertRaisesRegex(BRIDGE.ChangeSetError, "stale live footprint reference"):
             BRIDGE.verify_live_source(board, document, BINDINGS)
 
+        board = FakeBoard()
+        board.shapes[0].control2.x += 1
+        with self.assertRaisesRegex(BRIDGE.ChangeSetError, "stale live track_bezier precondition"):
+            BRIDGE.verify_live_source(board, document, BINDINGS)
+
     def test_routing_apply_is_one_verified_unsaved_transaction(self):
         document = change_set()
         board = FakeBoard()
         counts = BRIDGE.apply_routing_transaction(board, document, BINDINGS)
         self.assertEqual(counts["track_operations"], 2)
         self.assertEqual((board.begin_calls, board.push_calls, board.drop_calls), (1, 1, 0))
-        self.assertEqual((board.remove_calls, board.update_calls, board.create_calls), (1, 1, 2))
+        self.assertEqual((board.remove_calls, board.update_calls, board.create_calls), (1, 2, 2))
         self.assertFalse(hasattr(board, "save"))
         self.assertEqual(board.commit_message, "Apply Flux placement/routing candidate (routing only)")
+
+    def test_curve_only_routing_transaction_is_accepted(self):
+        document = change_set()
+        document["tracks"] = []
+        document["track_arcs"] = []
+        document["vias"] = []
+        board = FakeBoard()
+        counts = BRIDGE.apply_routing_transaction(board, document, BINDINGS)
+        self.assertEqual(counts["track_bezier_operations"], 1)
+        self.assertEqual((board.remove_calls, board.update_calls, board.create_calls), (0, 1, 0))
+        self.assertEqual(board.shapes[0].control2.x, 1_800_000)
 
     def test_bad_kicad_response_drops_commit(self):
         board = FakeBoard(fail_create=True)

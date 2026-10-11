@@ -1,0 +1,50 @@
+{
+  "schema": "flux_usped_global_ablation_v1",
+  "interpretation": "Inconclusive smoke only: both 60-second limits expired before JSON. Build/test work overlapped and the executable was rebuilt between probes; initial binary identity is not guaranteed for the enabled probe. Not a controlled performance or quality comparison.",
+  "date": "2026-09-05T12:12:53.190804+00:00",
+  "git_revision": "25e3b884be9b359d9c5bf0cc4fbb6cc836fd4f82",
+  "dirty_worktree": true,
+  "board": "/home/adam/qtbits/flux_capacitor/tests/fixtures/routing-corpus/pt2399_delay.kicad_pcb",
+  "board_sha256": "c48693b458eb28ae11f2ef099acf33ee9a797d87f430457c6961b41e2f2c4cab",
+  "binary_sha256": "d6c661f1007e84ca52c3bce05cc672fc5c9adac78eb0138ab80428565efb0d4c",
+  "scope": "global only; no detailed copper, external DRC or tier qualification",
+  "runs": [
+    {
+      "enabled": false,
+      "command": [
+        "/home/adam/qtbits/flux_capacitor/build/dev/flux-cli",
+        "route-kicad",
+        "/home/adam/qtbits/flux_capacitor/tests/fixtures/routing-corpus/pt2399_delay.kicad_pcb",
+        "--max-router-iterations",
+        "1",
+        "--max-expansions",
+        "50000",
+        "--max-static-seed-workers",
+        "2",
+        "--search-diversification"
+      ],
+      "timeout_seconds": 60.0,
+      "timeout": true,
+      "wall_seconds": 60.11036554999737
+    },
+    {
+      "enabled": true,
+      "command": [
+        "/home/adam/qtbits/flux_capacitor/build/dev/flux-cli",
+        "route-kicad",
+        "/home/adam/qtbits/flux_capacitor/tests/fixtures/routing-corpus/pt2399_delay.kicad_pcb",
+        "--max-router-iterations",
+        "1",
+        "--max-expansions",
+        "50000",
+        "--max-static-seed-workers",
+        "2",
+        "--search-diversification",
+        "--usped-navmesh"
+      ],
+      "timeout_seconds": 60.0,
+      "timeout": true,
+      "wall_seconds": 60.112623349996284
+    }
+  ]
+}

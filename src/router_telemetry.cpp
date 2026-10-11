@@ -298,6 +298,16 @@ make_source_board_scene(const Board& board, std::string source_path) {
     primitive.locked = arc.locked;
     scene->primitives.push_back(std::move(primitive));
   }
+  for (const auto& curve : board.track_beziers) {
+    telemetry::SourcePrimitive primitive;
+    primitive.id = curve.id.value(); primitive.kind = "track_bezier";
+    primitive.net = curve.net.value(); primitive.layers = {curve.layer.value()};
+    primitive.points = {source_point(curve.start, curve.layer), source_point(curve.control1, curve.layer),
+                        source_point(curve.control2, curve.layer), source_point(curve.end, curve.layer)};
+    primitive.width_nm = static_cast<std::uint64_t>(std::max<std::int64_t>(0, curve.width.value()));
+    primitive.locked = curve.locked;
+    scene->primitives.push_back(std::move(primitive));
+  }
   for (const auto& via : board.vias) {
     telemetry::SourcePrimitive primitive;
     primitive.id = via.id.value();
@@ -342,6 +352,21 @@ make_source_board_scene(const Board& board, std::string source_path) {
   return scene;
 }
 
+[[nodiscard]] std::shared_ptr<const telemetry::SourceBoard>
+make_generated_copper_scene(const Board& board) {
+  auto full = make_source_board_scene(board, "generated copper");
+  auto scene = std::make_shared<telemetry::SourceBoard>(*full);
+  // Generated snapshots replace one another even if the source revision changes during an
+  // interactive workflow. Source scenes keep their revision-qualified identities separately.
+  scene->id = "generated-copper:latest";
+  scene->path.clear();
+  std::erase_if(scene->primitives, [](const telemetry::SourcePrimitive& primitive) {
+    return primitive.kind != "track" && primitive.kind != "track_arc" &&
+           primitive.kind != "track_bezier" && primitive.kind != "via";
+  });
+  return scene;
+}
+
 [[nodiscard]] std::uint64_t deterministic_text_hash(std::string_view value) {
   constexpr std::uint64_t offset_basis = 14695981039346656037ULL;
   constexpr std::uint64_t prime = 1099511628211ULL;
@@ -361,6 +386,10 @@ make_source_board_scene(const Board& board, std::string source_path) {
     return Target::routing_started;
   case Source::routing_finished:
     return Target::routing_finished;
+  case Source::routing_completed:
+    return Target::routing_completed;
+  case Source::copper_generated:
+    return Target::copper_generated;
   case Source::global_routing_started:
   case Source::global_routing_finished:
     return Target::search_summary;
@@ -442,6 +471,8 @@ make_source_board_scene(const Board& board, std::string source_path) {
   metrics.vias = event.via_count;
   metrics.rip_ups = event.ripup_count;
   metrics.search_expansions = event.search_expansions;
+  metrics.unresolved_packing_obligations = event.unresolved_packing_obligations;
+  metrics.packing_obligation_budget_exhausted = event.packing_obligation_budget_exhausted;
   metrics.total_groups = event.total_groups;
   metrics.regional_conflicts = event.regional_conflicts;
   return metrics;
@@ -508,6 +539,13 @@ make_source_board_scene(const Board& board, std::string source_path) {
   route.control_points.reserve(event.spline_control_points.size());
   for (const auto& point : event.spline_control_points) {
     route.control_points.push_back(telemetry::Point{point.x_nm, point.y_nm, point.layer.value()});
+  }
+  route.navmesh_cells.reserve(event.navmesh_cells.size());
+  for (const auto& cell : event.navmesh_cells) {
+    route.navmesh_cells.push_back(telemetry::Route::NavMeshCell{
+        telemetry::Point{cell.minimum_x_nm, cell.minimum_y_nm, cell.layer.value()},
+        telemetry::Point{cell.maximum_x_nm, cell.maximum_y_nm, cell.layer.value()},
+        cell.refinement_level});
   }
   return route;
 }
@@ -609,14 +647,16 @@ make_source_board_scene(const Board& board, std::string source_path) {
     result.message = event.detail;
   }
   if (event.kind == RouterTelemetryEventKind::routing_started ||
-      event.kind == RouterTelemetryEventKind::routing_finished ||
       event.kind == RouterTelemetryEventKind::global_routing_started ||
       event.kind == RouterTelemetryEventKind::global_routing_finished ||
       event.kind == RouterTelemetryEventKind::pathfinder_iteration_started ||
       event.kind == RouterTelemetryEventKind::pathfinder_iteration_completed ||
       event.kind == RouterTelemetryEventKind::best_checkpoint_updated ||
-      event.kind == RouterTelemetryEventKind::checkpoint_selected) {
+      event.kind == RouterTelemetryEventKind::checkpoint_selected ||
+      event.packing_obligations_update) {
     result.metrics = iteration_metrics(event);
+    result.packing_metrics_only = event.packing_obligations_update &&
+        event.kind == RouterTelemetryEventKind::search_summary;
   }
   if (event.kind == RouterTelemetryEventKind::net_queued && !event.net.empty()) {
     result.priorities.push_back(priority_record(event));
@@ -642,6 +682,23 @@ make_source_board_scene(const Board& board, std::string source_path) {
   }
   if (event.kind == RouterTelemetryEventKind::residual_group_updated) {
     result.metrics = iteration_metrics(event);
+  }
+  if (event.kind == RouterTelemetryEventKind::search_summary && !event.progress_phase.empty()) {
+    result.progress = telemetry::PhaseProgress{event.progress_phase, event.progress_work_units,
+                                               event.progress_elapsed_us};
+  }
+  if (event.region_update) {
+    telemetry::ActiveRegion region;
+    region.id = event.group_id;
+    region.label = event.detail;
+    region.minimum_x_nm = event.region_minimum_x_nm;
+    region.minimum_y_nm = event.region_minimum_y_nm;
+    region.maximum_x_nm = event.region_maximum_x_nm;
+    region.maximum_y_nm = event.region_maximum_y_nm;
+    region.active = event.region_active;
+    for (const LayerId& layer : event.region_layers) region.layers.push_back(layer.value());
+    for (const NetId& net : event.region_nets) region.nets.push_back(net.value());
+    result.active_region = std::move(region);
   }
   return result;
 }
@@ -675,11 +732,32 @@ make_source_board_scene(const Board& board, std::string source_path) {
   metrics.vias = state.via_count;
   metrics.rip_ups = state.ripup_count;
   metrics.search_expansions = state.search_expansions;
+  metrics.unresolved_packing_obligations = state.unresolved_packing_obligations;
+  metrics.packing_obligation_budget_exhausted = state.packing_obligation_budget_exhausted;
   snapshot.metrics = metrics;
+  if (!state.progress_phase.empty()) {
+    snapshot.progress = telemetry::PhaseProgress{state.progress_phase, state.progress_work_units,
+                                                 state.progress_elapsed_us};
+  }
+  if (state.region_update) {
+    telemetry::ActiveRegion region;
+    region.id = state.region_group_id;
+    region.label = state.region_label;
+    region.minimum_x_nm = state.region_minimum_x_nm;
+    region.minimum_y_nm = state.region_minimum_y_nm;
+    region.maximum_x_nm = state.region_maximum_x_nm;
+    region.maximum_y_nm = state.region_maximum_y_nm;
+    region.active = state.region_active;
+    for (const LayerId& layer : state.region_layers) region.layers.push_back(layer.value());
+    for (const NetId& net : state.region_nets) region.nets.push_back(net.value());
+    snapshot.active_region = std::move(region);
+  }
   snapshot.counters =
       telemetry::Counters{statistics.produced, statistics.dropped, statistics.coalesced,
-                          statistics.consumed, statistics.snapshots};
-  snapshot.message = state.routing_finished ? "Routing finished" : "Routing snapshot";
+                          statistics.consumed, statistics.snapshots, statistics.websocket_dropped};
+  snapshot.message = state.routing_completed  ? "Routing completed"
+                     : state.routing_finished ? "Routing stopped"
+                                              : "Routing snapshot";
   snapshot.source_state_included = include_source && state.source_state_included;
   if (snapshot.source_state_included) {
     snapshot.source_boards = state.source_boards;
@@ -714,6 +792,8 @@ public:
   }
 
   void run() {
+    websocket_.read_message_max(maximum_message_bytes);
+    read_buffer_.max_size(maximum_message_bytes);
     websocket_.set_option(websocket::stream_base::timeout::suggested(beast::role_type::server));
     websocket_.set_option(websocket::stream_base::decorator([](websocket::response_type& response) {
       response.set(beast::http::field::sec_websocket_protocol,
@@ -743,10 +823,12 @@ public:
     if (closed_flag_) {
       return false;
     }
-    if (writes_.size() >= queue_capacity_) {
+    if (payload->size() > maximum_message_bytes || writes_.size() >= queue_capacity_ ||
+        queued_bytes_ > maximum_queued_bytes - payload->size()) {
       return false;
     }
     const bool idle = writes_.empty();
+    queued_bytes_ += payload->size();
     writes_.push_back(std::move(payload));
     if (idle && accepted_) {
       write_next();
@@ -803,6 +885,7 @@ private:
                                self->finish();
                                return;
                              }
+                             self->queued_bytes_ -= self->writes_.front()->size();
                              self->writes_.pop_front();
                              if (!self->writes_.empty()) {
                                self->write_next();
@@ -824,6 +907,9 @@ private:
   beast::flat_buffer read_buffer_;
   beast::http::request<beast::http::string_body> request_;
   std::deque<std::shared_ptr<const std::string>> writes_;
+  static constexpr std::size_t maximum_message_bytes = 8U * 1024U * 1024U;
+  static constexpr std::size_t maximum_queued_bytes = 32U * 1024U * 1024U;
+  std::size_t queued_bytes_{0U};
   std::size_t queue_capacity_{0};
   Closed closed_;
   bool accepted_{false};
@@ -855,12 +941,16 @@ public:
     try {
       std::unique_lock lock(pending_mutex_, std::try_to_lock);
       if (!lock.owns_lock() || stopped_.load(std::memory_order_relaxed) ||
-          pending_.size() >= maximum_pending_messages) {
+          payload.size() > maximum_message_bytes ||
+          pending_.size() >= maximum_pending_messages ||
+          pending_bytes_ > maximum_pending_bytes - payload.size()) {
         dropped_.fetch_add(1U, std::memory_order_relaxed);
         return false;
       }
+      const auto payload_bytes = payload.size();
       pending_.push_back(Pending{std::make_shared<const std::string>(std::move(payload)), snapshot,
                                  source_snapshot});
+      pending_bytes_ += payload_bytes;
       asio::post(strand_, [this]() { drain_pending(); });
       return true;
     } catch (...) {
@@ -929,6 +1019,7 @@ private:
     {
       std::lock_guard lock(pending_mutex_);
       local.swap(pending_);
+      pending_bytes_ = 0U;
     }
     for (auto& pending : local) {
       if (pending.source_snapshot) {
@@ -947,6 +1038,8 @@ private:
 
   static constexpr std::size_t maximum_sessions = 8U;
   static constexpr std::size_t maximum_pending_messages = 128U;
+  static constexpr std::size_t maximum_message_bytes = 8U * 1024U * 1024U;
+  static constexpr std::size_t maximum_pending_bytes = 32U * 1024U * 1024U;
   asio::io_context io_;
   tcp::acceptor acceptor_;
   asio::strand<asio::io_context::executor_type> strand_;
@@ -955,6 +1048,7 @@ private:
   std::atomic_bool stopped_{false};
   std::mutex pending_mutex_;
   std::deque<Pending> pending_;
+  std::size_t pending_bytes_{0U};
   std::vector<std::shared_ptr<WebSocketTelemetrySession>> sessions_;
   std::shared_ptr<const std::string> latest_source_snapshot_;
   std::shared_ptr<const std::string> latest_snapshot_;
@@ -970,6 +1064,10 @@ std::string_view router_telemetry_event_kind_name(RouterTelemetryEventKind kind)
     return "RoutingStarted";
   case RouterTelemetryEventKind::routing_finished:
     return "RoutingFinished";
+  case RouterTelemetryEventKind::routing_completed:
+    return "RoutingCompleted";
+  case RouterTelemetryEventKind::copper_generated:
+    return "CopperGenerated";
   case RouterTelemetryEventKind::global_routing_started:
     return "GlobalRoutingStarted";
   case RouterTelemetryEventKind::global_routing_finished:
@@ -1178,6 +1276,32 @@ public:
     queue_condition_.notify_one();
   }
 
+  void publish_generated_copper(std::shared_ptr<const telemetry::SourceBoard> board,
+                                std::string detail) {
+    if (!board) {
+      return;
+    }
+    {
+      std::lock_guard lock(state_mutex_);
+      const auto found =
+          std::find_if(state_.source_boards.begin(), state_.source_boards.end(),
+                       [&](const auto& existing) { return existing && existing->id == board->id; });
+      if (found == state_.source_boards.end()) {
+        state_.source_boards.push_back(std::move(board));
+      } else {
+        *found = std::move(board);
+      }
+      state_.source_state_included = true;
+    }
+    RouterTelemetryEvent generated;
+    generated.kind = RouterTelemetryEventKind::copper_generated;
+    generated.stable_id = "generated-copper";
+    generated.detail = std::move(detail);
+    static_cast<void>(try_emit(std::move(generated)));
+    source_snapshot_requested_.store(true, std::memory_order_release);
+    queue_condition_.notify_one();
+  }
+
 private:
   struct QueueCell {
     std::atomic_size_t sequence{0U};
@@ -1210,7 +1334,6 @@ private:
     state_.sequence = event.sequence;
     const auto summary_event =
         event.kind == RouterTelemetryEventKind::routing_started ||
-        event.kind == RouterTelemetryEventKind::routing_finished ||
         event.kind == RouterTelemetryEventKind::global_routing_started ||
         event.kind == RouterTelemetryEventKind::global_routing_finished ||
         event.kind == RouterTelemetryEventKind::pathfinder_iteration_started ||
@@ -1229,6 +1352,27 @@ private:
       state_.physical_overflow_nm = event.physical_overflow_nm;
       state_.route_cost = event.route_cost;
       state_.search_expansions = event.search_expansions;
+    }
+    if (summary_event || event.packing_obligations_update) {
+      state_.unresolved_packing_obligations = event.unresolved_packing_obligations;
+      state_.packing_obligation_budget_exhausted = event.packing_obligation_budget_exhausted;
+    }
+    if (event.kind == RouterTelemetryEventKind::search_summary && !event.progress_phase.empty()) {
+      state_.progress_phase = event.progress_phase;
+      state_.progress_work_units = event.progress_work_units;
+      state_.progress_elapsed_us = event.progress_elapsed_us;
+    }
+    if (event.region_update) {
+      state_.region_update = true;
+      state_.region_active = event.region_active;
+      state_.region_minimum_x_nm = event.region_minimum_x_nm;
+      state_.region_minimum_y_nm = event.region_minimum_y_nm;
+      state_.region_maximum_x_nm = event.region_maximum_x_nm;
+      state_.region_maximum_y_nm = event.region_maximum_y_nm;
+      state_.region_layers = event.region_layers;
+      state_.region_nets = event.region_nets;
+      state_.region_group_id = event.group_id;
+      state_.region_label = event.detail;
     }
     if (event.kind == RouterTelemetryEventKind::residual_group_updated) {
       state_.total_groups = event.total_groups;
@@ -1310,10 +1454,31 @@ private:
                               state_.clearance_shadow_conflicts + state_.regional_conflicts;
     if (event.kind == RouterTelemetryEventKind::routing_finished) {
       state_.routing_finished = true;
+      state_.routing_completed = false;
       state_.active_net = NetId{};
+      state_.progress_phase.clear();
+      state_.progress_work_units = 0U;
+      state_.progress_elapsed_us = 0U;
+      state_.region_update = true;
+      state_.region_active = false;
+    } else if (event.kind == RouterTelemetryEventKind::routing_completed) {
+      state_.routing_finished = true;
+      state_.routing_completed = true;
+      state_.active_net = NetId{};
+      state_.progress_phase.clear();
+      state_.progress_work_units = 0U;
+      state_.progress_elapsed_us = 0U;
+      state_.region_update = true;
+      state_.region_active = false;
     } else if (event.kind == RouterTelemetryEventKind::routing_started) {
       state_.source_identity = event.detail;
       state_.routing_finished = false;
+      state_.routing_completed = false;
+      state_.progress_phase.clear();
+      state_.progress_work_units = 0U;
+      state_.progress_elapsed_us = 0U;
+      state_.region_update = true;
+      state_.region_active = false;
       state_.dynamic_state_included = true;
       state_.observed_priorities.clear();
       state_.observed_routes.clear();
@@ -1387,6 +1552,8 @@ private:
       const auto now = std::chrono::steady_clock::now();
       const auto force_snapshot = std::any_of(events.begin(), events.end(), [](const auto& event) {
         return event.kind == RouterTelemetryEventKind::routing_finished ||
+               event.kind == RouterTelemetryEventKind::routing_completed ||
+               event.kind == RouterTelemetryEventKind::copper_generated ||
                event.kind == RouterTelemetryEventKind::global_routing_finished ||
                event.kind == RouterTelemetryEventKind::best_checkpoint_updated ||
                event.kind == RouterTelemetryEventKind::residual_group_updated;
@@ -1415,11 +1582,6 @@ private:
     // post-drain recovery point so a trace never requires those events to be lossless in order to
     // reconstruct the final observed state.
     try {
-      {
-        std::lock_guard lock(state_mutex_);
-        state_.routing_finished = true;
-        state_.active_net = NetId{};
-      }
       publish_snapshot();
     } catch (...) {
       transport_failures_.fetch_add(1U, std::memory_order_relaxed);
@@ -1466,6 +1628,15 @@ bool RouterTelemetryService::try_emit(RouterTelemetryEvent event) noexcept {
 
 void RouterTelemetryService::publish_source_board(const Board& board, std::string source_path) {
   impl_->publish_source_board(make_source_board_scene(board, std::move(source_path)));
+}
+
+void RouterTelemetryService::publish_generated_copper(const Board& board, std::string detail) {
+  try {
+    impl_->publish_generated_copper(make_generated_copper_scene(board), std::move(detail));
+  } catch (...) {
+    // Diagnostic publication must never affect routing or turn an observer allocation failure
+    // into a routing failure.
+  }
 }
 
 void RouterTelemetryService::stop() noexcept { impl_->stop(); }

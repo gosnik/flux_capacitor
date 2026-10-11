@@ -1,0 +1,82 @@
+{
+  "schema": 1,
+  "experiment": "V68 whole-scene straight portfolio selection",
+  "status": "implemented opt-in; final review counter fix rebuilding, default normal baseline running",
+  "board": "bm_svf",
+  "tier": 1,
+  "failure": {
+    "artifact": "build/tier-resolution-20261001-v63/tier1-normal/run-result.json",
+    "global_paths": 78,
+    "overflow": 0,
+    "coarse_errors": 540,
+    "straight_errors": 764,
+    "opens": 0,
+    "regional_windows": 33,
+    "retained_active_candidates": 264,
+    "generated_joint_candidates": 384513,
+    "whole_scene_trials": 2,
+    "joint_spline_candidates_evaluated": 0
+  },
+  "ranked_candidates": [
+    {
+      "rank": 1,
+      "mechanism": "Existing straight bundle alternatives are scored discretely but not physically compared in assembled scene",
+      "evidence": "realize_regional_straight_candidate evaluates selected transaction and source-topology fallback; retained shortlist unused for straight physical selection",
+      "experiment": "opt-in bounded one-window existing-portfolio neighborhood, exact assembled native/quantized proof, atomic incumbent retention"
+    },
+    {
+      "rank": 2,
+      "mechanism": "Layer/corridor allocation diverges from legal reference",
+      "evidence": "matchedV67 selected coarse snapshot exactreplay and KiCad-native inventory show different layer lengths/unique transition sites; numerical differences are not topology equivalence proof",
+      "experiment": "portfolio physical comparison can first test available structural diversity before creating new layer candidates"
+    },
+    {
+      "rank": 3,
+      "mechanism": "Deterministic bend orientations create avoidable collisions",
+      "evidence": "22 frozen checks reduce812to798 withzeroopens, unchanged78paths60vias; only1.7percent improvement and74preexistingzero/offangle segments",
+      "decision": "defer active heuristic; insufficient measured benefit"
+    }
+  ],
+  "research": [
+    {
+      "technique": "MAPF-LNS2 bounded neighborhoods with rollback",
+      "source": "https://ojs.aaai.org/index.php/AAAI/article/view/21266",
+      "integration": "retain/rebuild legal discrete window alternatives, accept exact whole-scene objective improvements, expand neighborhoods only with evidence",
+      "mismatch": "static PCB copper, clearance widths and multilayer via geometry; no MAPF completeness transfers"
+    },
+    {
+      "technique": "FastRoute alternative bend pattern cost comparison",
+      "source": "https://raw.githubusercontent.com/The-OpenROAD-Project-Attic/FastRoute/master/third_party/fastroute/src/route.cpp",
+      "integration": "compare retained alternatives instead of choosing a fixed construction purely by discrete score",
+      "mismatch": "rectilinear global capacities are not PCB exact DRC; no source copied"
+    }
+  ],
+  "success_criterion": "Microcase alternative transaction reaches native/quantizedzeroerrors0opens; matched full-scene board improves represented feasibility withoutlower-tierregression; qualificationstillrequiresfinalKiCadDRC",
+  "regression_criterion": "Defaultbehaviorunchanged; no opens/materializationdegradation, unknownassessmentnotaccepted; cancellationfailclosed; existingcurvedindependentproofunchanged",
+  "scope": "opt-in; existing retained shortlisted selections only; explicit evaluationbound anddiagnostics",
+  "control_n2_r1_s256": {
+    "outcome": "600s timeout before authoritative final result",
+    "scene_evaluation": "unknown",
+    "qualification": "not evaluated",
+    "artifact": "build/tier-resolution-20261001-v68/control-n2-r1-s256/run-result.json",
+    "interpretation": "No claim that this bound establishes feasibility; test treatment under successful default assembly controls"
+  },
+  "implementation": {
+    "parameter": "max_straight_portfolio_checks",
+    "range": "0..4096",
+    "default": 0,
+    "pool": "retained active shortlist only",
+    "checks": "all owned replacements, native complete plus quantized scene, original discrete statuses preserved",
+    "budget": "per realization invocation, preparation bounded by remaining checks",
+    "source_patch": "V68-straight-portfolio-selection.patch",
+    "review": "counter undercount fixed with separate aggregate deltas; incorrect optional-zero warning explicitly retracted",
+    "initial_validation": "54/54 after detour corrected; final counter fixture pending rebuild",
+    "tier1_strategy": "normal manifest settings +24checks versus immutable reviewedV67 baseline"
+  },
+  "stopped_initial_normal_trial": {
+    "artifact": "build/tier-resolution-20261001-v68/tier1-normal-p24",
+    "binary_sha256": "ce8c3131e112624770c36efa61760016d5a579e0deaec24dad4badb6946ad92c",
+    "reason": "Run used pre-aggregation immutable CLI; stopped during runner coordination; no completed metrics/qualification. Current counter-fixed source uses separate reviewed immutable binary/run folder.",
+    "quality_result": "unknown"
+  }
+}

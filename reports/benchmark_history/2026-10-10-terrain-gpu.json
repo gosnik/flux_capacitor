@@ -1,0 +1,187 @@
+{
+  "experiment": "Vulkan LittlePlanets height evolution",
+  "date": "2026-10-10",
+  "git_revision": "94aa691ad89576d1c0ac07a5346020da21fc9d06",
+  "working_tree": "Existing uncommitted router work retained; per-file hashes will identify the tested implementation.",
+  "baseline_binary": "build/terrain-gpu-20261010/flux-cli-cpu-baseline",
+  "baseline_binary_sha256": "b3dfe2c2c999872cbfeec16976537c1d78df794d803d5dbb7a80dabaaac433c4",
+  "hypothesis": "Resident GPU downhill selection, logarithmic integer flow accumulation and conservative bounded height updates accelerate the proven terrain mechanism while preserving legal masks, current copper feedback and CPU-authoritative extraction.",
+  "gpu_device": "NVIDIA GeForce RTX 5080",
+  "verification_status": "64/64 core cases, focused terrain and CLI checks passed. Sequential telemetry tiers preserve prior copper/feasibility; neither promoted under curved qualification.",
+  "tier_execution_policy": "Sequential with recorded diagnostic telemetry; no concurrent tier runs.",
+  "microbenchmark": {
+    "method": "Three sequential warm-cache runs, 16 iterations, same synthetic masked fields and feedback; wall times include transfer/dispatch overhead and CPU extraction. No tier/build concurrency.",
+    "log_pattern": "build/terrain-gpu-20261010/benchmark-final-{1,2,3}.jsonl",
+    "results": [
+      {
+        "width": 64,
+        "height": 64,
+        "iterations": 16,
+        "samples": 3,
+        "cpu_total_median_us": 5155,
+        "gpu_total_median_us": 1665,
+        "total_speedup": 3.096096096096096,
+        "cpu_field_median_us": 4780,
+        "gpu_field_median_us": 1345,
+        "field_speedup": 3.553903345724907
+      },
+      {
+        "width": 128,
+        "height": 128,
+        "iterations": 16,
+        "samples": 3,
+        "cpu_total_median_us": 22328,
+        "gpu_total_median_us": 3237,
+        "total_speedup": 6.897744825455669,
+        "cpu_field_median_us": 20896,
+        "gpu_field_median_us": 1813,
+        "field_speedup": 11.525648097076669
+      },
+      {
+        "width": 256,
+        "height": 256,
+        "iterations": 16,
+        "samples": 3,
+        "cpu_total_median_us": 100459,
+        "gpu_total_median_us": 8709,
+        "total_speedup": 11.535078654265702,
+        "cpu_field_median_us": 94195,
+        "gpu_field_median_us": 2462,
+        "field_speedup": 38.25954508529651
+      },
+      {
+        "width": 512,
+        "height": 512,
+        "iterations": 16,
+        "samples": 3,
+        "cpu_total_median_us": 484481,
+        "gpu_total_median_us": 34478,
+        "total_speedup": 14.051888160566158,
+        "cpu_field_median_us": 456745,
+        "gpu_field_median_us": 4927,
+        "field_speedup": 92.70245585549016
+      }
+    ]
+  },
+  "rejected_layout": "Initial host-visible working buffers were slower than CPU on larger fields. Replaced by device-local working fields, staged uploads/final readback and coherent cached readback allocations.",
+  "excluded_runs": [
+    {
+      "log": "build/terrain-gpu-20261010/full-core64-final.log",
+      "reason": "Accidental all-CTest parallel invocation; stopped overlapping tier harnesses; excluded from verification and timing."
+    }
+  ],
+  "tested_sha256": {
+    "src/terrain_evolution.cpp": "6f7eee1ccb13f4d5c903f0d6c3567075a8deedcb66e3ba48edea7bd588bc3518",
+    "src/terrain_evolution_vulkan.cpp": "ff0a07f22c1f994cc0edfa9c692be9dac09d55852393225e60cbc752472f865c",
+    "src/terrain_evolution_gpu.hpp": "65cef8b4a0b6408c3c7ed2d5174f91af204f7958b6ac2a79354232f32a0b0c25",
+    "shaders/flux_terrain_evolution.comp": "c291920961e350376bff6937f48a51bdfb36cc38e4323e90c54748ecba9e6fc7",
+    "src/hydraulic_path.cpp": "5892432ce25d79ebb15d7ccc2acbb41dab19cefef213a72c24526fba6f1aaebd",
+    "src/global_router.cpp": "6894eadc551fb1f30ac7a8f745bd61b4e4ac9066a8b3c4745382672f4883bf52",
+    "src/navmesh_route.cpp": "9c35a47e39ffd1285cc93153703b283bff0c197d55b61f5c68258b3c3431c595",
+    "apps/flux-cli/main.cpp": "5ac58d00a03c2ab86e11ef46345806b3a12f34589d6834e26109861fac141c94",
+    "tests/unit/terrain_evolution_gpu_tests.cpp": "6a9704dcf3a9060a06b2ef792e34e2d8cbb057c44ecdf11cd65bbd0e53eada79",
+    "build/tautening-release/flux-cli": "1685fc460daf219b37e94c24ee54d966158dddffc9924d33eff0a1bb6793eed5"
+  },
+  "tier_results": {
+    "tier0": {
+      "status": "baseline preserved; curved qualification still fails",
+      "artifacts": "build/terrain-gpu-tier0-20261010/tier-0-pt2399_delay",
+      "planning_seconds": 64.86509359601769,
+      "routing_plan_complete": true,
+      "unrouted_nets": 0,
+      "clearance_shadow_conflicts": 3,
+      "terrain": {
+        "static_seed_height_evolution_accepted": 46,
+        "static_seed_height_evolution_attempts": 48,
+        "static_seed_height_evolution_changed_cells": 553875,
+        "static_seed_height_evolution_expanded_nodes": 39891,
+        "static_seed_height_evolution_extraction_us": 4599,
+        "static_seed_height_evolution_field_us": 105564,
+        "static_seed_height_evolution_gpu_dispatches": 15180,
+        "static_seed_height_evolution_gpu_invoked": 46,
+        "static_seed_height_evolution_invoked": 46,
+        "static_seed_height_evolution_iterations": 460
+      },
+      "detail_seconds": 485.3403409239836,
+      "detail_metrics": {
+        "complete": false,
+        "diagnostic": "materialized curved route retains 7 non-junction direction changes without quintic PH curve realization",
+        "open_connections": 0,
+        "copper_violations": 0,
+        "added_tracks": 47,
+        "added_track_beziers": 199,
+        "added_vias": 3
+      },
+      "kicad_drc_violations": 0,
+      "kicad_unconnected": 0,
+      "drc_scope": "Configured benchmark checks; see saved kicad-drc.context.json",
+      "copper_pngs_byte_identical_to_baseline": true,
+      "peak_detail_rss_kib": 960296
+    },
+    "tier1": {
+      "status": "timed out; baseline feasibility unchanged",
+      "artifacts": "build/terrain-gpu-tier1-20261010/tier-1-bm_svf",
+      "planning_seconds": 900.5967894479982,
+      "routing_plan_complete": false,
+      "engine_outcome": "timed-out",
+      "unrouted_nets": 0,
+      "clearance_shadow_conflicts": 275,
+      "internal_quantized_copper_oracle": {
+        "configured_grid_pitch_nm": 1,
+        "diagnoses": 310,
+        "drc_violation_counts": {
+          "hole_clearance": 70,
+          "track_clearance": 544,
+          "track_via_clearance": 179,
+          "via_clearance": 6
+        },
+        "drc_violations": 799,
+        "elapsed_us": 152314,
+        "feasible": false,
+        "malformed_paths": 0,
+        "open_connections": 0,
+        "paths_examined": 78,
+        "paths_materialized": 78,
+        "reused_transitions": 2,
+        "tracks": 1329,
+        "unrouted_nets": 0,
+        "vias": 56
+      },
+      "final_kicad_drc": null,
+      "peak_rss_kib": 861028,
+      "terrain": {
+        "static_seed_height_evolution_accepted": 42,
+        "static_seed_height_evolution_attempts": 78,
+        "static_seed_height_evolution_changed_cells": 700356,
+        "static_seed_height_evolution_expanded_nodes": 86162,
+        "static_seed_height_evolution_extraction_us": 9778,
+        "static_seed_height_evolution_field_us": 178755,
+        "static_seed_height_evolution_gpu_dispatches": 15750,
+        "static_seed_height_evolution_gpu_invoked": 45,
+        "static_seed_height_evolution_invoked": 45,
+        "static_seed_height_evolution_iterations": 450
+      }
+    }
+  },
+  "regional_acceleration_followup": {
+    "source": "tier0 global-result.json and detail telemetry",
+    "planning_seconds": 64.86509359601769,
+    "channel_construction_seconds": 44.309482,
+    "candidate_timing_events": 135,
+    "candidate_summed_seconds": {
+      "elapsed": 52.058,
+      "trajectory_polish": 14.819,
+      "joint_shove": 13.648,
+      "interpolation": 8.987,
+      "setup": 6.131,
+      "native_drc": 3.271,
+      "adaptive_pair": 3.051,
+      "quantization": 1.326,
+      "post_polish": 0.352,
+      "xpbd": 0.1
+    },
+    "timing_caveat": "Candidate sums are task times, not wall-time fractions. Detail JSON omits the complete regional breakdown.",
+    "priority": "Partition channel construction timing, reuse/index prepared geometry, then batch independent geometry predicates; bounded candidate parallelism next. Ordered CPU commit remains authoritative."
+  },
+  "decision": "Keep GPU terrain evolution; 3.1\u201314.1x terrain solve speedup measured, no whole-board speedup claim."
+}

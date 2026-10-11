@@ -1,0 +1,235 @@
+{
+  "experiment": "Bounded regional geometry and candidate acceleration",
+  "date": "2026-10-10",
+  "git_revision": "94aa691ad89576d1c0ac07a5346020da21fc9d06",
+  "working_tree": "Existing uncommitted work preserved; implementation hashes recorded after validation.",
+  "baseline_binary": "build/terrain-gpu-20261010/flux-cli-regional-baseline",
+  "baseline_tiers": {
+    "tier0": {
+      "status": "baseline preserved; curved qualification still fails",
+      "artifacts": "build/terrain-gpu-tier0-20261010/tier-0-pt2399_delay",
+      "planning_seconds": 64.86509359601769,
+      "routing_plan_complete": true,
+      "unrouted_nets": 0,
+      "clearance_shadow_conflicts": 3,
+      "terrain": {
+        "static_seed_height_evolution_accepted": 46,
+        "static_seed_height_evolution_attempts": 48,
+        "static_seed_height_evolution_changed_cells": 553875,
+        "static_seed_height_evolution_expanded_nodes": 39891,
+        "static_seed_height_evolution_extraction_us": 4599,
+        "static_seed_height_evolution_field_us": 105564,
+        "static_seed_height_evolution_gpu_dispatches": 15180,
+        "static_seed_height_evolution_gpu_invoked": 46,
+        "static_seed_height_evolution_invoked": 46,
+        "static_seed_height_evolution_iterations": 460
+      },
+      "detail_seconds": 485.3403409239836,
+      "detail_metrics": {
+        "complete": false,
+        "diagnostic": "materialized curved route retains 7 non-junction direction changes without quintic PH curve realization",
+        "open_connections": 0,
+        "copper_violations": 0,
+        "added_tracks": 47,
+        "added_track_beziers": 199,
+        "added_vias": 3
+      },
+      "kicad_drc_violations": 0,
+      "kicad_unconnected": 0,
+      "drc_scope": "Configured benchmark checks; see saved kicad-drc.context.json",
+      "copper_pngs_byte_identical_to_baseline": true,
+      "peak_detail_rss_kib": 960296
+    },
+    "tier1": {
+      "status": "timed out; baseline feasibility unchanged",
+      "artifacts": "build/terrain-gpu-tier1-20261010/tier-1-bm_svf",
+      "planning_seconds": 900.5967894479982,
+      "routing_plan_complete": false,
+      "engine_outcome": "timed-out",
+      "unrouted_nets": 0,
+      "clearance_shadow_conflicts": 275,
+      "internal_quantized_copper_oracle": {
+        "configured_grid_pitch_nm": 1,
+        "diagnoses": 310,
+        "drc_violation_counts": {
+          "hole_clearance": 70,
+          "track_clearance": 544,
+          "track_via_clearance": 179,
+          "via_clearance": 6
+        },
+        "drc_violations": 799,
+        "elapsed_us": 152314,
+        "feasible": false,
+        "malformed_paths": 0,
+        "open_connections": 0,
+        "paths_examined": 78,
+        "paths_materialized": 78,
+        "reused_transitions": 2,
+        "tracks": 1329,
+        "unrouted_nets": 0,
+        "vias": 56
+      },
+      "final_kicad_drc": null,
+      "peak_rss_kib": 861028,
+      "terrain": {
+        "static_seed_height_evolution_accepted": 42,
+        "static_seed_height_evolution_attempts": 78,
+        "static_seed_height_evolution_changed_cells": 700356,
+        "static_seed_height_evolution_expanded_nodes": 86162,
+        "static_seed_height_evolution_extraction_us": 9778,
+        "static_seed_height_evolution_field_us": 178755,
+        "static_seed_height_evolution_gpu_dispatches": 15750,
+        "static_seed_height_evolution_gpu_invoked": 45,
+        "static_seed_height_evolution_invoked": 45,
+        "static_seed_height_evolution_iterations": 450
+      }
+    }
+  },
+  "hypothesis": "Prepared geometry plus indexed overlap eliminates repeated channel preparation; bounded independent candidates use shared CPU capacity while conservative GPU chunks preserve exact acceptance.",
+  "tier_execution_policy": "Sequential with recorded diagnostic telemetry.",
+  "implementation": {
+    "source_cache": "Board-equality invalidation; extraction/chord validation reused; bounded LRU and immutable source BVH",
+    "channel_index": "Prepared polygons; per-layer bounded spatial grid; conservative oversized fallback; >=8 eligible channels use bounded CPU overlap batches; stable first exact matching channel",
+    "gpu_batches": {
+      "maximum_boundary_segments": 1024,
+      "maximum_pair_checks": 262144,
+      "exact_ambiguous_survivors": true
+    },
+    "cpu_budget": "Shared nonblocking leases across static seed, regional/window/candidate, PH exact, detail materialization and speculative prewarm",
+    "candidate_batch_default": 2,
+    "estimated_scratch_budget_bytes": 268435456,
+    "kernel_suspension": "All child workers park before managed parent yields; semantic decisions preserved"
+  },
+  "verification_status": "Complete:65/65 core cases,11/11 focused suites,releaseCLI and viewer builds pass; Tier0 then Tier1 run sequentially with diagnostic telemetry.",
+  "tests": {
+    "core": {
+      "passed": 65,
+      "total": 65,
+      "log": "build/regional-acceleration-20261010/core-final.log"
+    },
+    "focused": {
+      "passed": 11,
+      "total": 11,
+      "log": "build/regional-acceleration-20261010/focused-final-tests.log"
+    },
+    "candidate_parity": "Actual concurrent candidate tasks; identical selected geometry and physical outcome to serial",
+    "channel_parity": "Eight eligible channels; actual batched checks exceed early-exit serial; identical channel topology and occupants",
+    "independent_review": "No remaining material findings; single-worker lease release corrected"
+  },
+  "implementation_sha256": {
+    "src/regional_router.cpp": "33740947d7998a696e64016fc71dec869ad835c09116c6c654516793c931b44c",
+    "src/regional_source_index.hpp": "3384f23044a26227061c1df0fbbb81b4ae93135198c01d47e2c2af3a6386abb7",
+    "src/cpu_worker_budget.cpp": "3224bb6de318eb2caf4b6e3321465beff5e478865d3e616980af1c21cd9638eb",
+    "src/routing_kernel.cpp": "f80958295f80747e05e1386c777104aaaad6f7c6997c9c2e46e5b8ba95dfa59d",
+    "src/routing_compute_vulkan.cpp": "0a24b6a5dafb20f493f45234ec165287c260af7c4c6aaa056a93bc3fa4702e41",
+    "include/flux/core/regional_channel_spatial_index.hpp": "4e6f806354ec6464bb371a89904bcc5566cf547eb652aa90e80b4dbc0023be8f",
+    "include/flux/core/regional_router.hpp": "563d7da0aa7a4aa57484650cf268029a21ef6e4b5d2f01858613d692c03a39e4",
+    "tests/unit/core_tests.cpp": "771aec88b80d63d48884eb4f3eb779bbd6c6743160a9509516e3e7490b05d69f",
+    "tests/unit/regional_preparation_tests.cpp": "cb49d505ef749af86f8fbf3b525803e5653415e452ac276e8adf32ac6dfec290"
+  },
+  "binary": {
+    "path": "build/tautening-release/flux-cli",
+    "sha256": "4f75936bd3597a2300832343d96f976a80eed95e708b40142d6251c794205136"
+  },
+  "tier0_planning": {
+    "duration_seconds": 23.79427704497357,
+    "metrics": {
+      "clearance_shadow_conflicts": 3,
+      "configured_centerline_channel_cuts": false,
+      "configured_local_channel_occupancy": false,
+      "configured_shared_channel_copper": false,
+      "cumulative_regional_channel_construction_invocations": 1,
+      "cumulative_regional_channel_construction_us": 141019,
+      "physical_channel_obstacle_impacts": [],
+      "regional_candidate_channel_construction_invocations": 1,
+      "regional_candidate_channel_construction_us": 141019,
+      "regional_channel_exact_overlap_checks": 577,
+      "regional_channel_prepared_cells": 53532,
+      "regional_channel_spatial_index_queries": 567,
+      "regional_fragments_without_channel_topology": 89,
+      "regional_spline_candidate_parallel_batches": 4,
+      "regional_spline_candidate_parallel_discarded": 1,
+      "regional_spline_candidate_parallel_tasks": 8,
+      "regional_spline_candidate_parallel_workers": 2,
+      "routing_plan_complete": true,
+      "unrouted_nets": 0
+    }
+  },
+  "tier0_detail": {
+    "duration_seconds": 418.485155656992,
+    "metrics": {
+      "complete": false,
+      "diagnostic": "materialized curved route retains 7 non-junction direction changes without quintic PH curve realization",
+      "open_connections": 0,
+      "copper_violations": 0,
+      "added_tracks": 47,
+      "added_track_beziers": 199,
+      "added_vias": 3,
+      "routing_engine_outcome": "exhausted"
+    },
+    "configured_kicad_drc_violations": 0,
+    "kicad_unconnected": 0,
+    "copper_pngs_byte_identical_to_baseline": true,
+    "both_copper_layers_visually_inspected": true,
+    "peak_rss_kib": 1169872
+  },
+  "tier0_comparison": {
+    "planning_speedup": 2.72607961458195,
+    "planning_and_detail_seconds_before": 550.2054345200013,
+    "planning_and_detail_seconds_after": 442.27943270196556,
+    "channel_construction_seconds_before": 44.309482,
+    "channel_construction_seconds_after": 0.141019,
+    "physical_outcome": "Unchanged, including existing seven unsmoothed nonjunction joints; no tier promotion",
+    "memory_comparison": "1169872 KiB process peak vs960296 KiB sampled baseline peak (approximately22% increase)",
+    "measurement_limit": "One sequential run per configuration, diagnostic telemetry enabled; phase attribution not isolated by ablation"
+  },
+  "tier0_phase_telemetry": {
+    "baseline_global_phase_sum_seconds": 1.354,
+    "new_global_phase_sum_seconds": 3.086,
+    "baseline_detail_phase_sum_seconds": 52.058,
+    "new_detail_phase_sum_seconds": 191.815,
+    "interpretation": "These are sums of phase durations across candidate workers, not CPU-seconds or elapsed wall time. Scheduling, serialization of nested exact checks and speculative work change these sums; no per-component speedup is claimed."
+  },
+  "tier1": {
+    "status": "timed out; physical feasibility unchanged",
+    "artifacts": "build/regional-acceleration-tier1-20261010/tier-1-bm_svf",
+    "planning_seconds": 900.4332821019925,
+    "routing_plan_complete": false,
+    "engine_outcome": "timed-out",
+    "unrouted_nets": 0,
+    "clearance_shadow_conflicts": 275,
+    "internal_quantized_copper_oracle": {
+      "configured_grid_pitch_nm": 1,
+      "diagnoses": 310,
+      "drc_violation_counts": {
+        "hole_clearance": 70,
+        "track_clearance": 544,
+        "track_via_clearance": 179,
+        "via_clearance": 6
+      },
+      "drc_violations": 799,
+      "elapsed_us": 156188,
+      "feasible": false,
+      "malformed_paths": 0,
+      "open_connections": 0,
+      "paths_examined": 78,
+      "paths_materialized": 78,
+      "reused_transitions": 2,
+      "tracks": 1329,
+      "unrouted_nets": 0,
+      "vias": 56
+    },
+    "final_kicad_drc": null,
+    "peak_rss_kib": 897888,
+    "both_provisional_copper_layers_inspected": true,
+    "telemetry_parallel_path_observed": true,
+    "partial_metrics_warning": "Final regional counters are zero because timeout interrupted an uncommitted action; telemetry records completed parallel candidates and later regional work. Zero counters do not mean parallel work was absent."
+  },
+  "decision": "Retain general acceleration: Tier0 identical copper and configured DRC,19.6% lower planning+detail elapsed time in a single matched comparison,approximately22% greater peak memory. Tier1 physical frontier unchanged at900s. No tier promotion.",
+  "limitations": [
+    "Scratch concurrency bound is an estimate, not a hard RSS cap.",
+    "Summed candidate phase times are not CPU time or elapsed wall time.",
+    "This combined experiment does not isolate each component by ablation.",
+    "Existing seven unsmoothed Tier0 joints and Tier1 copper conflicts remain unresolved."
+  ]
+}

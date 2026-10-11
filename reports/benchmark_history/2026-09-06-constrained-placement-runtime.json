@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "date": "2026-09-06",
+  "test": "flux_cli_constrained_refine_kicad_export",
+  "fixture": "minimal KiCad board with orientation constraints",
+  "classification": "performance regression; not a proven deadlock",
+  "control": {
+    "binary": "build/feedback-four-v20-bin/flux-cli",
+    "binary_sha256": "d5880f1b744288da5c7dc28495e2a715ddb1f282201035d29d5a56819c28527a",
+    "artifact": "build/constrained-v20-control-B6pJH1/candidate.kicad_pcb",
+    "elapsed_seconds": 66.461672961,
+    "exit_code": 0,
+    "complete": true,
+    "accepted_moves": 0,
+    "peak_rss_kib": 542200
+  },
+  "observations_after_terminal_membership_fix": [
+    {"experiment": "V23", "elapsed_seconds": 645.405, "outcome": "export explicitly stopped while still using CPU", "junit": "build/release/build-terminal-membership-ctest.xml"},
+    {"experiment": "V24 isolated CTest", "elapsed_seconds": 300.109, "outcome": "timeout; dependent DRC then lacked output", "junit": "build/release/build-constrained-isolated-v24.xml"},
+    {"experiment": "V24 diagnostic", "elapsed_seconds": 180.399716247, "outcome": "timeout", "peak_rss_kib": 632152, "telemetry": "build/constrained-v24-diagnostic-eU9FmS/telemetry.jsonl", "progress_observed": "Repeated global searches and regional evaluations continued; approximately 26 global iterations and 413 search summaries by 100 seconds"}
+  ],
+  "suspected_integration_point": "Constrained placement repeatedly scores candidate boards through routing; terminal correctness changes the evaluated routing outcomes. Candidate-level timing/acceptance instrumentation is needed before assigning the regression to a specific search stage.",
+  "decision": "open regression, not counted as passing or dismissed as a deadlock",
+  "next_experiment": "Instrument bounded placement candidate evaluations and compare identical V20/V24 candidate sequence and per-stage costs"
+}

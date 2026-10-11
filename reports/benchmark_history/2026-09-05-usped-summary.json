@@ -1,0 +1,60 @@
+{
+  "schema": "flux_feature_qualification",
+  "schema_version": 1,
+  "date": "2026-09-05",
+  "feature": "usped_informed_initial_navmesh_refinement",
+  "git_revision": "25e3b884be9b359d9c5bf0cc4fbb6cc836fd4f82",
+  "dirty_worktree": true,
+  "binary_sha256": "4e3bec9e6cd32199cc46ef75d9d7ce7a9038f9c949b4d2c98c5dfe4ac7e53a5b",
+  "enabled_by_default": false,
+  "backend": "cpu",
+  "cli_flag": "--usped-navmesh",
+  "verification": {
+    "core": {"passed": 28, "failed": 0, "seconds": 119.19},
+    "cli_opt_in": {"passed": 1, "failed": 0, "seconds": 0.31},
+    "existing_native_arc_multilayer_export_and_external_kicad_drc": {
+      "passed": 9,
+      "failed": 0,
+      "seconds": 26.27,
+      "usped_enabled": false,
+      "scope": "default-path regression, not enabled-feature copper qualification"
+    },
+    "micro": {
+      "baseline_cells": 192,
+      "enabled_cells": 258,
+      "usped_refined_parents": 22,
+      "raster_cells": 120,
+      "certified_route": true,
+      "obstacle_exclusion": true,
+      "conservative_flux": true,
+      "deterministic_repeat": true,
+      "flat_and_diagonal_mask_checks": true,
+      "tight_mesh_budget_baseline_fallback": true
+    },
+    "diff_whitespace_check": "pass",
+    "python_benchmark_syntax": "pass"
+  },
+  "global_ablation": {
+    "report": "2026-09-05-usped-cap-chain-final.json",
+    "board": "cap_chain",
+    "both_modes": {"paths": 4, "unrouted_nets": 0, "overflow": 0, "navmesh_failures": 0},
+    "baseline_route_summed_cells": 33208,
+    "enabled_route_summed_cells": 45496,
+    "enabled_route_summed_usped_parents": 4096,
+    "same_binary": true,
+    "timing_canonical": false,
+    "external_kicad_drc": "not_run"
+  },
+  "tier_0": {
+    "report": "2026-09-05-usped-tier0-bounded.json",
+    "outcome": "inconclusive",
+    "both_modes_timeout_seconds": 60,
+    "controlled_comparison": false,
+    "reason": "Both timed out before JSON; concurrent build/test work and binary replacement between trials.",
+    "final_copper": "not_produced",
+    "external_kicad_drc": "not_run"
+  },
+  "higher_tiers": "not_run",
+  "decision": "retain opt-in experiment; no tier promotion or performance improvement established",
+  "next": "isolated fixed-binary full-duration Tier-0 comparison, including detailed copper and KiCad DRC, followed by matched actual-cell-count clearance-only control"
+}

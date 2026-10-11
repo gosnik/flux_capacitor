@@ -9,6 +9,7 @@ struct OverlayPreferences {
   bool source_board{true};
   bool source_footprints{true};
   bool source_copper{true};
+  bool resulting_copper{true};
   bool source_zones_keepouts{true};
   bool committed_routes{true};
   bool current_routes{true};
@@ -28,6 +29,7 @@ struct OverlayPreferences {
   bool selected_vias{true};
   bool contested_vias{true};
   bool rejected_vias{false};
+  bool active_region{true};
   bool grid{true};
   std::string layer;
 

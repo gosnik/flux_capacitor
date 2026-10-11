@@ -161,9 +161,11 @@ struct WorkPlanExistingCopperAuthority {
   std::vector<NetId> reroutable_nets;
   std::vector<ObjectId> removable_tracks;
   std::vector<ObjectId> removable_track_arcs;
+  std::vector<ObjectId> removable_track_beziers;
   std::vector<ObjectId> removable_vias;
   std::vector<ObjectId> immutable_tracks;
   std::vector<ObjectId> immutable_track_arcs;
+  std::vector<ObjectId> immutable_track_beziers;
   std::vector<ObjectId> immutable_vias;
   std::vector<ObjectId> immutable_zones;
 

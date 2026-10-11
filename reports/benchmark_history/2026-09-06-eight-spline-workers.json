@@ -1,0 +1,68 @@
+{
+  "schema": 1,
+  "experiment": "eight-regional-spline-window-workers",
+  "hypothesis": "The four-worker breadth-first regional spline batch underuses a 24-core host. Doubling only the independent-window worker bound should shorten the active tier without changing candidate order or legality gates.",
+  "binary": {
+    "path": "build/eight-workers-v11-bin/flux-cli",
+    "sha256": "42bc5ef5286a25c92a0c9d8482f0b1705a03f7fb1e7d8b20845b5a429f61674a"
+  },
+  "runs": [
+    {
+      "board": "pt2399_delay",
+      "tier": 0,
+      "artifact": "build/tier0-eight-spline-workers-v11-20260906",
+      "status": "passed",
+      "paths": 50,
+      "tracks": 75,
+      "arcs": 299,
+      "vias": 5,
+      "opens": 0,
+      "internal_copper_violations": 0,
+      "external_kicad_drc_violations": 0,
+      "output_sha256": "459bffc8258348a89eafcc275a35decdfc59e8afb1278b0731a58e0fd9df35ac",
+      "output_matches_v5_v8_v10": true,
+      "workers_observed": 3,
+      "global_duration_seconds": 316.952,
+      "detailed_duration_seconds": 383.3662011229899
+    },
+    {
+      "board": "bm_svf",
+      "tier": 1,
+      "policy": "prioritized_frozen_scope_expansion",
+      "artifact": "build/tier1-eight-spline-workers-v11-20260906",
+      "status": "diagnostic_timeout",
+      "timeout_seconds": 1200,
+      "pre_native_checkpoints": [
+        {"epoch": 1, "violations": 764, "opens": 0},
+        {"epoch": 2, "violations": 1297, "opens": 0},
+        {"epoch": 3, "violations": 2216, "opens": 0},
+        {"epoch": 4, "windows": 25, "owned_fragments": 226, "corridors": 89, "alternatives": 649, "portfolio_ready_seconds": 660.322216}
+      ],
+      "active_tier_barrier_seconds": 987.64585,
+      "active_tier_duration_seconds": 327.323634,
+      "fallback_windows_queued": 15,
+      "all_fallback_windows_promoted_seconds": 1070.393687,
+      "observed_rss_gib": [1.0, 1.6],
+      "observed_cpu_percent": [119, 205],
+      "final_kicad_drc": "not_evaluated"
+    }
+  ],
+  "comparison": {
+    "v10_four_workers": {
+      "portfolio_ready_seconds": 684.78462,
+      "active_tier_barrier_seconds": 1011.127689,
+      "active_tier_duration_seconds": 326.343069
+    },
+    "v11_eight_workers": {
+      "portfolio_ready_seconds": 660.322216,
+      "active_tier_barrier_seconds": 987.64585,
+      "active_tier_duration_seconds": 327.323634
+    }
+  },
+  "interpretation": {
+    "hypothesis_result": "disproven",
+    "decision": "revert",
+    "reason": "The apparent 23.5-second earlier barrier is fully explained by the portfolio becoming ready 24.5 seconds earlier. Measured active-tier duration increased by about one second while memory and CPU demand rose. One large window remained the sequential critical path.",
+    "next_experiment": "Replace proposal-facing whole-board DRC inside native regional candidate assessment with the existing exact dynamic-object DRC API. It preserves all selected-to-static and selected-to-selected checks while omitting immutable source-only relationships that the caller already discards."
+  }
+}

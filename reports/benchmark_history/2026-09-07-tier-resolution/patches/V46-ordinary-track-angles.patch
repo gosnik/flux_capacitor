@@ -1,0 +1,331 @@
+--- a/src/detailed_router.cpp
++++ b/src/detailed_router.cpp
+@@ -130,6 +130,12 @@
+ 
+ [[nodiscard]] std::int64_t direction(std::int64_t value) {
+   return value < 0 ? -1 : value > 0 ? 1 : 0;
++}
++
++[[nodiscard]] bool ordinary_track_angle(Point first, Point last) {
++  const auto dx = magnitude(last.x.value() - first.x.value());
++  const auto dy = magnitude(last.y.value() - first.y.value());
++  return dx == 0 || dy == 0 || dx == dy;
+ }
+ 
+ [[nodiscard]] std::vector<GlobalRoutePoint>
+@@ -5329,6 +5335,58 @@
+   return SkewTuningStatus::completed;
+ }
+ 
++// Preserve electrical contacts before replacing off-angle terminal/medial adapters. Proposals
++// are bounded (two shortest octilinear elbows, then two Manhattan elbows), and exact copper
++// checks own acceptance. The ordinary final connectivity/DRC transaction still checks the result.
++void constrain_straight_track_angles(Board& board, const std::set<ObjectId>& protected_ids,
++                                     std::set<std::string>& used_ids, DetailedRouteResult& result,
++                                     std::stop_token stop_token) {
++  const auto needs_conversion = [&](const auto& track) {
++    return !track.locked && !protected_ids.contains(track.id) &&
++           !ordinary_track_angle(track.start, track.end);
++  };
++  if (std::none_of(board.tracks.begin(), board.tracks.end(), needs_conversion)) return;
++  std::set<std::string> protected_strings;
++  for (const auto& id : protected_ids) protected_strings.insert(id.value());
++  for (const auto& track : board.tracks) {
++    if (ordinary_track_angle(track.start, track.end)) protected_strings.insert(track.id.value());
++  }
++  result.added_tracks += split_tracks_at_exact_same_net_branches(board, used_ids, protected_strings);
++  const auto count = board.tracks.size();
++  for (std::size_t index = 0U; index < count; ++index) {
++    if (stop_token.stop_requested()) return;
++    const auto track = board.tracks[index];
++    if (!needs_conversion(track)) continue;
++    const auto dx = track.end.x.value() - track.start.x.value();
++    const auto dy = track.end.y.value() - track.start.y.value();
++    const auto diagonal = std::min(magnitude(dx), magnitude(dy));
++    const std::array<Point, 4> elbows{
++        Point{Nanometres{track.start.x.value() + direction(dx) * diagonal},
++              Nanometres{track.start.y.value() + direction(dy) * diagonal}},
++        Point{Nanometres{track.end.x.value() - direction(dx) * diagonal},
++              Nanometres{track.end.y.value() - direction(dy) * diagonal}},
++        Point{track.start.x, track.end.y}, Point{track.end.x, track.start.y}};
++    bool converted = false;
++    for (const auto elbow : elbows) {
++      if (stop_token.stop_requested()) return;
++      ++result.straight_angle_candidate_checks;
++      if (!continuous_candidate_clear(board, track.net, track.layer, track.start, elbow,
++                                      track.end, track.width,
++                                      result.straight_angle_candidate_checks)) continue;
++      auto second = track;
++      second.id = unique_id(track.id.value() + "-45-adapter", used_ids);
++      second.start = elbow;
++      board.tracks[index].end = elbow;
++      board.tracks.push_back(std::move(second));
++      ++result.added_tracks;
++      ++result.straight_angle_segments_converted;
++      converted = true;
++      break;
++    }
++    if (!converted) ++result.straight_angle_segments_unresolved;
++  }
++}
++
+ DetailedRouteResult
+ materialize_impl(const Board& source, const GlobalRouteResult& global,
+                  const DetailedRouterConfig& config, const DetailedRouteResult* checkpoint,
+@@ -5337,6 +5395,11 @@
+                  bool use_continuous_refinement, const std::set<NetId>& topology_excluded_nets = {},
+                  const std::vector<RegionalSplineRealization>* regional_splines = nullptr) {
+   DetailedRouteResult result;
++  if (config.restrict_straight_track_angles && config.circular_arc_refinement) {
++    result.stop_reason = DetailedRouterStopReason::invalid_input;
++    result.diagnostic = "ordinary straight-track angles and curved refinement are incompatible";
++    return result;
++  }
+   if (stop_token.stop_requested()) {
+     result.stop_reason = DetailedRouterStopReason::cancelled;
+     result.diagnostic = "detailed routing cancelled before materialization";
+@@ -6314,6 +6377,16 @@
+     return result;
+   }
+ 
++  if (config.restrict_straight_track_angles) {
++    constrain_straight_track_angles(candidate, protected_track_ids, used_ids, result, stop_token);
++    if (stop_token.stop_requested()) {
++      result.candidate = std::move(candidate);
++      result.stop_reason = DetailedRouterStopReason::cancelled;
++      result.diagnostic = "detailed routing cancelled during straight-track angle conversion";
++      return result;
++    }
++  }
++
+   result.validation = validate_board(candidate);
+   result.connectivity = analyze_connectivity(candidate);
+   if (!global.configured_selected_nets.empty()) {
+@@ -6371,6 +6444,9 @@
+                             ? "bounded residual spline/PNS repair did not clear every represented "
+                               "copper conflict"
+                             : "materialized route violates represented copper rules";
++  } else if (result.straight_angle_segments_unresolved > 0U) {
++    result.stop_reason = DetailedRouterStopReason::invalid_path;
++    result.diagnostic = "ordinary straight-track angle conversion has no legal bounded adapter";
+   } else if (config.circular_arc_refinement && result.unrounded_non_junction_bends > 0U) {
+     result.stop_reason = DetailedRouterStopReason::invalid_path;
+     result.diagnostic = "materialized curved route retains " +
+--- a/include/flux/core/detailed_router.hpp
++++ b/include/flux/core/detailed_router.hpp
+@@ -32,6 +32,9 @@
+   // Check detailed copper without saved zone-fill polygons, then return a provisional result that
+   // requires external KiCad refill, strict re-import, connectivity, and DRC before acceptance.
+   bool defer_saved_zone_fill_clearance_to_refill{false};
++  // New copper must use horizontal, vertical or 45-degree sections. Existing protected copper
++  // remains immutable; failed exact-clearance conversion prevents completion.
++  bool restrict_straight_track_angles{false};
+   bool pull_tight_45_degrees{true};
+   bool continuous_refinement{true};
+   bool topology_locked_medial_materialization{false};
+@@ -178,6 +181,9 @@
+   std::size_t reused_tracks{0};
+   std::size_t reused_track_arcs{0};
+   std::size_t reused_vias{0};
++  std::size_t straight_angle_candidate_checks{0};
++  std::size_t straight_angle_segments_converted{0};
++  std::size_t straight_angle_segments_unresolved{0};
+   std::size_t pulled_tight_corners{0};
+   std::size_t continuously_refined_points{0};
+   std::size_t continuous_refinement_iterations{0};
+--- a/apps/flux-cli/main.cpp
++++ b/apps/flux-cli/main.cpp
+@@ -4050,6 +4050,9 @@
+   }
+   std::cout
+       << ",\n"
++      << "  \"straight_angle_candidate_checks\": " << result.straight_angle_candidate_checks << ",\n"
++      << "  \"straight_angle_segments_converted\": " << result.straight_angle_segments_converted << ",\n"
++      << "  \"straight_angle_segments_unresolved\": " << result.straight_angle_segments_unresolved << ",\n"
+       << "  \"added_tracks\": " << result.added_tracks << ",\n"
+       << "  \"added_track_arcs\": " << result.added_track_arcs << ",\n"
+       << "  \"unrounded_non_junction_bends\": " << result.unrounded_non_junction_bends << ",\n"
+@@ -9707,6 +9710,7 @@
+     detailed_config.topology_locked_medial_materialization =
+         !tail->refillable_zone_fills && tail->strict_medial_topology;
+     detailed_config.circular_arc_refinement = planner_config.curved_tracks;
++    detailed_config.restrict_straight_track_angles = !planner_config.curved_tracks;
+     detailed_config.differential_pair_skew_tuning =
+         !tail->refillable_zone_fills && (tail->differential_pair_skew_tuning || planner_config.full_strength_first_pass);
+     detailed_config.differential_pair_skew_tuning_batch_assignment =
+@@ -9817,6 +9821,8 @@
+     }
+     config.detailed_router.topology_locked_medial_materialization = tail->strict_medial_topology;
+     config.detailed_router.circular_arc_refinement = tail->circular_arc_refinement || tail->curved_tracks;
++    config.detailed_router.restrict_straight_track_angles =
++        !config.detailed_router.circular_arc_refinement;
+     config.detailed_router.differential_pair_skew_tuning = tail->differential_pair_skew_tuning;
+     config.detailed_router.differential_pair_skew_tuning_batch_assignment =
+         tail->differential_pair_skew_tuning_batch_assignment;
+@@ -9899,6 +9905,8 @@
+     }
+     config.detailed_router.topology_locked_medial_materialization = tail->strict_medial_topology;
+     config.detailed_router.circular_arc_refinement = tail->circular_arc_refinement || tail->curved_tracks;
++    config.detailed_router.restrict_straight_track_angles =
++        !config.detailed_router.circular_arc_refinement;
+     config.detailed_router.differential_pair_skew_tuning = tail->differential_pair_skew_tuning;
+     config.detailed_router.differential_pair_skew_tuning_batch_assignment =
+         tail->differential_pair_skew_tuning_batch_assignment;
+--- a/src/work_plan_router.cpp
++++ b/src/work_plan_router.cpp
+@@ -605,6 +605,8 @@
+     set_bool("circular_arc_refinement", compiled.configuration.detailed.circular_arc_refinement);
+     compiled.configuration.planner.curved_tracks =
+         compiled.configuration.detailed.circular_arc_refinement;
++    compiled.configuration.detailed.restrict_straight_track_angles =
++        !compiled.configuration.planner.curved_tracks;
+     set_bool("differential_pair_skew_tuning",
+              compiled.configuration.detailed.differential_pair_skew_tuning);
+     set_bool("differential_pair_skew_tuning_batch_assignment",
+--- a/tests/unit/core_tests.cpp
++++ b/tests/unit/core_tests.cpp
+@@ -1344,6 +1344,59 @@
+               knowledge.success_history.front().end == mm(20.0, 20.0),
+           "clean quantized copper must accumulate a bounded directional success prior separately "
+           "from failure pressure");
++}
++
++void straight_track_angles_preserve_off_grid_endpoints_and_clearance() {
++  auto board = two_pad_board();
++  board.footprints.back().position = mm(80.3, 42.7);
++  Keepout first_elbow_obstacle;
++  first_elbow_obstacle.id = ObjectId{"first-elbow-obstacle"};
++  first_elbow_obstacle.area = rectangle(20.8, 40.8, 21.2, 41.2);
++  first_elbow_obstacle.layers = {LayerId{"F.Cu"}};
++  first_elbow_obstacle.prohibit.tracks = true;
++  board.keepouts.push_back(first_elbow_obstacle);
++  flux::GlobalRouteResult global;
++  global.stop_reason = flux::GlobalRouterStopReason::complete;
++  global.paths = {flux::GlobalRoutePath{NetId{"net-1"}, 0U,
++                  {{mm(20.0, 40.0), LayerId{"F.Cu"}},
++                   {mm(80.3, 42.7), LayerId{"F.Cu"}}}}};
++  flux::DetailedRouterConfig config;
++  config.continuous_refinement = false;
++  config.pull_tight_45_degrees = false;
++  config.restrict_straight_track_angles = true;
++  const auto detailed = flux::materialize_detailed_route(board, global, config);
++  const auto ordinary = [](const auto& track) {
++    const auto dx = std::abs(track.end.x.value() - track.start.x.value());
++    const auto dy = std::abs(track.end.y.value() - track.start.y.value());
++    return dx == 0 || dy == 0 || dx == dy;
++  };
++  require(detailed.complete() && detailed.candidate && detailed.copper_drc.ok() &&
++              detailed.connectivity.open_connections == 0U &&
++              detailed.straight_angle_segments_converted == 1U &&
++              detailed.straight_angle_candidate_checks >= 2U &&
++              detailed.candidate->tracks.size() == 2U && detailed.candidate->track_arcs.empty() &&
++              std::all_of(detailed.candidate->tracks.begin(), detailed.candidate->tracks.end(), ordinary),
++          "an obstructed first octilinear elbow must select a legal alternate while retaining "
++          "exact off-grid pad contacts: " + detailed.diagnostic);
++  auto anchored = board;
++  const auto via_position = mm(50.15, 41.35);
++  anchored.vias.push_back(flux::Via{ObjectId{"mid-span-via"}, NetId{"net-1"}, via_position,
++                                   Nanometres::from_mm(0.6), Nanometres::from_mm(0.3),
++                                   {LayerId{"F.Cu"}, LayerId{"B.Cu"}}, false});
++  const auto with_via = flux::materialize_detailed_route(anchored, global, config);
++  require(with_via.complete() && with_via.candidate && with_via.copper_drc.ok() &&
++              with_via.candidate->vias == anchored.vias &&
++              std::count_if(with_via.candidate->tracks.begin(), with_via.candidate->tracks.end(),
++                            [&](const auto& track) {
++                              return track.start == via_position || track.end == via_position;
++                            }) >= 2 &&
++              std::all_of(with_via.candidate->tracks.begin(), with_via.candidate->tracks.end(), ordinary),
++          "angle conversion must keep an exact interior same-net via as an electrical junction");
++  auto blocked = board;
++  blocked.keepouts.front().area = rectangle(49.0, 39.0, 51.0, 44.0);
++  const auto rejected = flux::materialize_detailed_route(blocked, global, config);
++  require(!rejected.complete() && rejected.straight_angle_segments_unresolved == 1U,
++          "failure of all bounded ordinary-angle adapters must never accept arbitrary copper");
+ }
+ 
+ void soft_capacity_cuts_exclude_legally_separated_shadows() {
+@@ -8695,6 +8748,8 @@
+        physical_checkpoint_ordering_is_feasibility_first_and_fail_closed},
+       {"routing_xpbd_joint_relaxation_preserves_endpoints_and_reports_stress",
+        routing_xpbd_joint_relaxation_preserves_endpoints_and_reports_stress},
++      {"straight_track_angles_preserve_off_grid_endpoints_and_clearance",
++       straight_track_angles_preserve_off_grid_endpoints_and_clearance},
+       {"soft_capacity_cuts_exclude_legally_separated_shadows",
+        soft_capacity_cuts_exclude_legally_separated_shadows},
+       {"global_to_detailed_route_is_transactional_and_capacity_gated",
+--- a/tests/python/verify_routing_corpus.py
++++ b/tests/python/verify_routing_corpus.py
+@@ -5,10 +5,12 @@
+ 
+ import argparse
+ import datetime
++import decimal
+ import hashlib
+ import json
+ import os
+ import platform
++import re
+ import shutil
+ import subprocess
+ import sys
+@@ -232,6 +234,27 @@
+             f"KiCad DRC rejected final copper ({completed.returncode}): {board}\n"
+             f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
+         )
++
++
++def audit_straight_copper_angles(candidate: Path) -> dict:
++    """Audit exact decimal coordinates in exported KiCad segment records, independent of Flux."""
++    source = candidate.read_text(encoding="utf-8")
++    records = re.findall(r"\(segment\b((?:[^()]|\([^()]*\))*)\)", source)
++    require(len(records) == len(re.findall(r"\(segment\s", source)),
++            "cannot audit every exported track segment")
++    counts = {"horizontal": 0, "vertical": 0, "diagonal_45": 0, "other": 0}
++    for record in records:
++        start = re.search(r"\(start\s+([^\s()]+)\s+([^\s()]+)\)", record)
++        end = re.search(r"\(end\s+([^\s()]+)\s+([^\s()]+)\)", record)
++        require(start is not None and end is not None, "track angle audit needs exact endpoints")
++        x, y = map(decimal.Decimal, start.groups())
++        xx, yy = map(decimal.Decimal, end.groups())
++        dx, dy = abs(xx - x), abs(yy - y)
++        kind = "horizontal" if dy == 0 else "vertical" if dx == 0 else "diagonal_45" if dx == dy else "other"
++        counts[kind] += 1
++    arcs = len(re.findall(r"\(arc\s", source))
++    return {"tracks": len(records), "angles": counts, "arcs": arcs,
++            "passed": counts["other"] == 0 and arcs == 0}
+ 
+ 
+ def detailed_copper_ready_for_final_drc(detailed: dict, expected: dict, candidate: Path) -> bool:
+@@ -548,6 +571,11 @@
+                         failed_route_png_mode,
+                         max_failed_route_png_results,
+                     )
++                if candidate_board.is_file() and board.get("track_geometry") == "straight":
++                    angle_audit = audit_straight_copper_angles(candidate_board)
++                    write_json_once(tier_dir / "straight-angle-audit.json", angle_audit)
++                    board_result["straight_angle_audit"] = angle_audit
++                    detailed_qualified = detailed_qualified and angle_audit["passed"]
+                 if detailed_qualified:
+                     try:
+                         require_kicad_drc(candidate_board, tier_dir / "kicad-drc.json",
+--- a/tests/python/test_routing_corpus_rule_context.py
++++ b/tests/python/test_routing_corpus_rule_context.py
+@@ -23,6 +23,18 @@
+         self.candidate.write_text("candidate board", encoding="utf-8")
+         self.project = b'{"board":{"design_settings":{"rules":{"min_track_width":0.7}}}}\n'
+         self.source.with_suffix(".kicad_pro").write_bytes(self.project)
++
++    def test_straight_angle_audit_checks_exported_decimal_copper(self):
++        self.candidate.write_text("""(kicad_pcb
++          (segment (start 1.1 2) (end 3.1 2) (width 0.25) (layer "F.Cu"))
++          (segment (end 3.1 4) (start 3.1 2) (width 0.25) (layer "F.Cu"))
++          (segment (start 3.1 4) (end 3.100001 4.000001) (width 0.25) (layer "F.Cu")))""")
++        self.assertTrue(corpus.audit_straight_copper_angles(self.candidate)["passed"])
++        with self.candidate.open("a") as out:
++            out.write('(segment (start 0 0) (end 1 1.000001) (width 0.25) (layer "F.Cu"))')
++        audit = corpus.audit_straight_copper_angles(self.candidate)
++        self.assertFalse(audit["passed"])
++        self.assertEqual(audit["angles"]["other"], 1)
+ 
+     def test_drc_sees_original_project_and_custom_rules_before_launch(self):
+         rules = b'(version 1)\n(rule "hole spacing" (constraint hole_to_hole (min 0.25mm)))\n'

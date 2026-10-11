@@ -1,11 +1,13 @@
 #include "flux/core/connectivity.hpp"
 
+#include "flux/core/bezier_copper.hpp"
 #include "flux/core/copper_geometry.hpp"
 #include "flux/core/geometry.hpp"
 
 #include <algorithm>
 #include <cstddef>
 #include <numeric>
+#include <string>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -47,6 +49,7 @@ private:
 };
 
 struct PadContact {
+  ObjectId id;
   Point position;
   const std::vector<LayerId>* layers;
   CopperPadShape copper;
@@ -66,9 +69,121 @@ struct ZoneContact {
                      [&rhs](const auto& layer) { return contains_layer(rhs, layer); });
 }
 
+[[nodiscard]] bool probe_touches_copper(const Board& board, const NetId& net,
+                                         const CopperConnectivityProbe& probe) {
+  if (probe.layers.empty() || !geometry::coordinate_in_range(probe.position)) return false;
+  const auto on_layer = [&probe](const std::vector<LayerId>& layers) {
+    return share_layer(probe.layers, layers);
+  };
+  for (const auto& pad : copper_pad_shapes(board))
+    if (pad.net == net && on_layer(pad.layers) &&
+        point_to_pad_copper_distance_nm(probe.position, pad) <= 0.0L) return true;
+  for (const auto& track : board.tracks)
+    if (track.net == net && contains_layer(probe.layers, track.layer) &&
+        geometry::point_segment_distance_nm(probe.position, track.start, track.end) <=
+            static_cast<long double>(track.width.value()) / 2.0L) return true;
+  for (const auto& arc : board.track_arcs)
+    if (arc.net == net && contains_layer(probe.layers, arc.layer) &&
+        geometry::point_circular_arc_distance_nm(probe.position, arc.start, arc.middle, arc.end) <=
+            static_cast<long double>(arc.width.value()) / 2.0L) return true;
+  for (const auto& via : board.vias)
+    if (via.net == net && on_layer(via.layers) &&
+        geometry::point_distance_nm(probe.position, via.position) <=
+            static_cast<long double>(via.diameter.value()) / 2.0L) return true;
+  for (const auto& zone : board.zones) if (zone.net == net)
+    for (const auto& fill : zone.fills)
+      if (contains_layer(probe.layers, fill.layer) &&
+          geometry::point_filled_region_copper_distance_nm(probe.position, fill) <= 0.0L) return true;
+  // Keep Bezier membership identical to the oracle's contracted-chord representation.  In
+  // particular, do not accept a point merely because it lies inside an uncontracted proxy.
+  for (const auto& curve : board.track_beziers) {
+    if (curve.net != net || !contains_layer(probe.layers, curve.layer)) continue;
+    const auto flattened = tessellate_track_bezier(curve);
+    if (!flattened.certified) continue;
+    const auto endpoint_radius = static_cast<long double>(curve.width.value()) / 2.0L;
+    if (geometry::point_distance_nm(probe.position, curve.start) <= endpoint_radius ||
+        geometry::point_distance_nm(probe.position, curve.end) <= endpoint_radius) return true;
+    for (const auto& segment : flattened.segments) {
+      const auto guard = segment.centerline_deviation_nm.value() + segment.quantization_error_nm.value();
+      if (guard < 0 || guard > curve.width.value() / 2) continue;
+      const auto inner_radius = static_cast<long double>(curve.width.value() - 2 * guard) / 2.0L;
+      if (geometry::point_segment_distance_nm(probe.position, segment.start, segment.end) <= inner_radius)
+        return true;
+    }
+  }
+  return false;
+}
+
+void append_probe_pads(Board& result, const NetId& net, const CopperConnectivityProbe& probe,
+                       std::size_t ordinal, std::vector<ObjectId>& ids) {
+  const auto id_in_use = [&result](const ObjectId& id) {
+    if (std::any_of(result.footprints.begin(), result.footprints.end(),
+                    [&id](const Footprint& footprint) { return footprint.id == id; })) return true;
+    return std::any_of(result.footprints.begin(), result.footprints.end(), [&id](const Footprint& footprint) {
+      return std::any_of(footprint.pads.begin(), footprint.pads.end(),
+                         [&id](const Pad& pad) { return pad.id == id; });
+    });
+  };
+  Footprint footprint;
+  auto prefix = std::string{"__flux-connectivity-probe-"} + std::to_string(ordinal);
+  const auto prefix_in_use = [&id_in_use, &probe](const std::string& candidate) {
+    if (id_in_use(ObjectId{candidate + "-footprint"})) return true;
+    for (std::size_t index = 0U; index < probe.layers.size(); ++index)
+      if (id_in_use(ObjectId{candidate + "-pad-" + std::to_string(index)})) return true;
+    return false;
+  };
+  while (prefix_in_use(prefix)) prefix += "_";
+  footprint.id = ObjectId{prefix + "-footprint"};
+  footprint.position = {};
+  footprint.reference = footprint.id.value();
+  for (std::size_t layer_index = 0U; layer_index < probe.layers.size(); ++layer_index) {
+    Pad pad;
+    pad.id = ObjectId{prefix + "-pad-" + std::to_string(layer_index)};
+    pad.net = net;
+    pad.local_position = probe.position;
+    // One pad per layer is essential: a multi-layer temporary pad would itself be an invented
+    // plated connection between otherwise separate copper layers.
+    pad.layers = {probe.layers[layer_index]};
+    pad.width = Nanometres{0};
+    pad.height = Nanometres{0};
+    pad.plated = false;
+    ids.push_back(pad.id);
+    footprint.pads.push_back(std::move(pad));
+  }
+  result.footprints.push_back(std::move(footprint));
+}
+
 } // namespace
 
 ConnectivityReport analyze_connectivity(const Board& board) {
+  // Chords are contracted by their certified deviation so every proxy copper point is contained
+  // in the actual curve's copper.  This may report an open marginal connection, but it cannot
+  // create electrical contact through tessellation inflation.  Degenerate endpoint disks are
+  // exact because a round trace cap is present at each cubic endpoint.
+  if (!board.track_beziers.empty()) {
+    Board proxy = board;
+    proxy.track_beziers.clear();
+    for (const auto& curve : board.track_beziers) {
+      const auto flattened = tessellate_track_bezier(curve);
+      if (!flattened.certified) continue;
+      for (const auto& segment : flattened.segments) {
+        const auto guard = segment.centerline_deviation_nm.value() + segment.quantization_error_nm.value();
+        // If the certified error consumes the whole copper radius, there is no non-empty inner
+        // chord.  Omit it rather than inventing a one-nanometre bridge outside the real copper.
+        if (guard < 0 || guard > curve.width.value() / 2) continue;
+        const auto inner_width = curve.width.value() - 2 * guard;
+        proxy.tracks.push_back({curve.id, curve.net, curve.layer, segment.start, segment.end,
+                                Nanometres{inner_width}, curve.locked});
+      }
+      proxy.tracks.push_back({curve.id, curve.net, curve.layer, curve.start, curve.start,
+                              curve.width, curve.locked});
+      if (curve.end != curve.start) {
+        proxy.tracks.push_back({curve.id, curve.net, curve.layer, curve.end, curve.end,
+                                curve.width, curve.locked});
+      }
+    }
+    return analyze_connectivity(proxy);
+  }
   ConnectivityReport report;
   report.nets.reserve(board.nets.size());
   const auto copper_pads = copper_pad_shapes(board);
@@ -87,7 +202,7 @@ ConnectivityReport analyze_connectivity(const Board& board) {
               copper_pads.begin(), copper_pads.end(),
               [&pad](const CopperPadShape& candidate) { return candidate.id == pad.id; });
           if (copper != copper_pads.end()) {
-            pads.push_back(PadContact{copper->position, &pad.layers, *copper});
+            pads.push_back(PadContact{pad.id, copper->position, &pad.layers, *copper});
           }
         }
       }
@@ -278,7 +393,9 @@ ConnectivityReport analyze_connectivity(const Board& board) {
 
     std::unordered_set<std::size_t> pad_groups;
     for (std::size_t i = 0; i < pads.size(); ++i) {
-      pad_groups.insert(sets.find(i));
+      const auto component = sets.find(i);
+      pad_groups.insert(component);
+      report.pad_components.push_back(PadConnectivityComponent{pads[i].id, net.id, component});
     }
     const auto group_count = pad_groups.size();
     const auto open_count = group_count > 0U ? group_count - 1U : 0U;
@@ -290,6 +407,53 @@ ConnectivityReport analyze_connectivity(const Board& board) {
   }
 
   return report;
+}
+
+std::vector<CopperProbeComponentMembership>
+copper_probe_component_memberships(const Board& board, const NetId& net,
+                                   const std::vector<CopperConnectivityProbe>& probes) {
+  std::vector<CopperProbeComponentMembership> result(probes.size());
+  const auto net_it = std::find_if(board.nets.begin(), board.nets.end(),
+                                   [&net](const Net& candidate) { return candidate.id == net; });
+  if (net_it == board.nets.end() || net_it->name.empty()) return result;
+  Board probe_board = board;
+  // The DSU result for one net is independent of all other nets.  Keeping only the requested
+  // net avoids re-running their potentially large connectivity scenes for every access batch.
+  probe_board.nets = {*net_it};
+  std::vector<std::vector<ObjectId>> ids(probes.size());
+  for (std::size_t index = 0U; index < probes.size(); ++index) {
+    if (!probe_touches_copper(board, net, probes[index])) continue;
+    result[index].contained_by_copper = true;
+    append_probe_pads(probe_board, net, probes[index], index, ids[index]);
+  }
+  const auto report = analyze_connectivity(probe_board);
+  for (std::size_t index = 0U; index < ids.size(); ++index) {
+    for (const auto& id : ids[index]) {
+      const auto found = std::find_if(report.pad_components.begin(), report.pad_components.end(),
+                                      [&id, &net](const PadConnectivityComponent& item) {
+                                        return item.net == net && item.pad == id;
+                                      });
+      if (found != report.pad_components.end()) result[index].components.push_back(found->component);
+    }
+    std::sort(result[index].components.begin(), result[index].components.end());
+    result[index].components.erase(std::unique(result[index].components.begin(),
+                                                result[index].components.end()),
+                                   result[index].components.end());
+  }
+  return result;
+}
+
+bool copper_probes_share_component(const Board& board, const NetId& net,
+                                   const CopperConnectivityProbe& first,
+                                   const CopperConnectivityProbe& second) {
+  const auto memberships = copper_probe_component_memberships(board, net, {first, second});
+  if (memberships.size() != 2U || !memberships[0].contained_by_copper ||
+      !memberships[1].contained_by_copper) return false;
+  return std::any_of(memberships[0].components.begin(), memberships[0].components.end(),
+                     [&memberships](const std::size_t component) {
+                       return std::binary_search(memberships[1].components.begin(),
+                                                 memberships[1].components.end(), component);
+                     });
 }
 
 } // namespace flux

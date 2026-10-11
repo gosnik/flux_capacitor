@@ -1,0 +1,53 @@
+{
+  "schema": "flux_benchmark_history",
+  "schema_version": 1,
+  "date": "2026-09-05T15:24:05+08:00",
+  "git_revision": "25e3b884be9b359d9c5bf0cc4fbb6cc836fd4f82",
+  "working_tree_modified": true,
+  "configuration": {
+    "tier": 0,
+    "max_router_iterations": 30,
+    "max_expansions": 50000,
+    "max_static_seed_workers": 2,
+    "telemetry_level": "diagnostic",
+    "curved_materialization": true
+  },
+  "board": {
+    "id": "pt2399_delay",
+    "tier": 0,
+    "status": "failed",
+    "stop_reason": "connectivity_incomplete",
+    "global_runtime_seconds": 188.09286361,
+    "detailed_runtime_seconds_approx": 433,
+    "routed_connections": 50,
+    "unrouted_nets": 0,
+    "sampled_overflow": 0,
+    "corridor_overflow": 0,
+    "clearance_shadow_conflicts": 16,
+    "regional_complete_bundles": 5,
+    "regional_spline_realizations": 9,
+    "regional_spline_candidate_available": true,
+    "regional_spline_candidate_diagnostic": "complete regional spline transaction assembled",
+    "regional_conflicting_articulation": false,
+    "ph_centerline_simd_batches": 454,
+    "ph_centerline_simd_lanes": 454,
+    "ph_centerline_multiprecision_comparisons": 0,
+    "open_connections": 3,
+    "open_nets": ["kicad-net-2", "kicad-net-16", "kicad-net-17"],
+    "copper_violations": 37,
+    "copper_violation_counts": {
+      "track_clearance": 32,
+      "track_via_clearance": 5
+    },
+    "failure_stage": "exact_detailed_materialization",
+    "diagnostic": "Regional PH assembly succeeds; exact materialization opens three nets and discards the atomic transaction. The fallback remains physically illegal."
+  },
+  "artifacts": {
+    "root": "build/tiers-check-20260905-pad-attachment-tier0",
+    "global_result": "tier-0-pt2399_delay/global-result.json",
+    "global_telemetry": "tier-0-pt2399_delay/telemetry/pt2399_delay-global.jsonl",
+    "detail_telemetry": "tier-0-pt2399_delay/telemetry/pt2399_delay-detail.jsonl",
+    "analysis": "tier-0-pt2399_delay/analysis/global",
+    "analysis_near_results": 5
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "date": "2026-09-06",
+  "source_revision": "25e3b884be9b359d9c5bf0cc4fbb6cc836fd4f82",
+  "dirty_worktree": true,
+  "router_sha256": "2b8e01dabc6735093937e701f5b6948142695f5962283943f514a20bcc50b711",
+  "experiment": "candidate-via envelope guidance in existing spline optimisation",
+  "regressions": {
+    "command": "ctest --test-dir build/dev -R '^flux_unit_tests$|arc_detour|arc_export|multilayer' --output-on-failure",
+    "passed": 10,
+    "failed": 0,
+    "runtime_seconds": 183.53,
+    "core_runtime_seconds": 152.56,
+    "kicad_drc_fixture_checks_passed": 2
+  },
+  "expanded_micro_test": {
+    "command": "build/dev/tests/flux_unit_tests constrained_ph_rebound_avoids_inter_sample_obstacle",
+    "passed": true,
+    "initial_via_clearance_deficit_nm": 125000,
+    "final_continuous_clearance_legal": true,
+    "final_native_copper_check_legal": true,
+    "ordinary_regional_budget": {"iterations": 2, "check_limit": 64, "checks_used": 44, "legal": true, "exhausted": false},
+    "note": "Run after adding native-fit copper validation; routing binary unchanged. CPU/GPU disk broad-phase checks included."
+  },
+  "diff_check": "passed",
+  "performance_note": "Regressions overlapped the beginning of the frontier run; runtime comparisons are approximate.",
+  "frontier_status": "900-second timeout; no accepted board or final DRC"
+}

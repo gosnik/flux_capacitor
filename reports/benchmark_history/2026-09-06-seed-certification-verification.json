@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "experiment": "seed-first full physical certification",
+  "git_revision": "25e3b884be9b359d9c5bf0cc4fbb6cc836fd4f82",
+  "worktree": "dirty; existing changes preserved",
+  "build_type": "Release",
+  "binary_sha256": "40c9e0203cdcc5f574d0ec211f53bdab592ec3f713d04befe4cf4e1612c74cfb",
+  "ctest_selection": "^flux_unit_tests$|arc_detour|arc_export|multilayer|flux_cli_(route_kicad|detail_kicad|usped_navmesh)",
+  "passed": 45,
+  "failed": 0,
+  "duration_seconds": 68.90,
+  "core_duration_seconds": 60.10,
+  "kicad_drc_fixture_checks": 2,
+  "extended_budget_test": {"core_suite_passed": true, "duration_seconds": 67.80, "failed_seed_epoch_budgets": [1, 3, 2], "total_budget": 6},
+  "focused_tests": ["larger budget preserves certifiable N1 seed", "initial scope budget preserved", "three failed physical epochs remain bounded"],
+  "tier_qualification": "pending real-board export and DRC"
+}

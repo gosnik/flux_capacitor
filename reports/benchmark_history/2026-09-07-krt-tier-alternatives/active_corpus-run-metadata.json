@@ -1,0 +1,193 @@
+{
+  "artifact_contract": {
+    "analysis_pngs_required_for_routing": true,
+    "failed_route_png_mode": "both",
+    "files_write_once": true,
+    "max_failed_route_png_results": 8,
+    "source_boards_immutable": true,
+    "telemetry_level": null,
+    "telemetry_required_for_routing": true
+  },
+  "capability_contract": {
+    "reference": {
+      "commit": "e239e067c204870b4ac570fc9e931a374bdfd5b4",
+      "project": "KiCadRoutingTools",
+      "repository": "https://github.com/drandyhaas/KiCadRoutingTools",
+      "version": "0.21.5"
+    },
+    "schema": "flux_parity_manifest",
+    "schema_version": 1,
+    "sha256": "d8b57b3e1ba5c761fa2c610ffea1aa2e1f70f845f988ab7e92fbceca36fda5d0"
+  },
+  "corpus": {
+    "manifest_sha256": "6b00be762aa565c685832601612a0ce8b349bccc4d51784f956753523bd8df78",
+    "path": "/home/adam/qtbits/flux_capacitor/tests/fixtures/routing-corpus",
+    "source_corpus": {
+      "commit": "661c88b3c3b0ebc9ade65eab63d30b1cde217fb4",
+      "discussion": "https://github.com/drandyhaas/KiCadRoutingTools/discussions/117",
+      "repository": "drandyhaas/KiCadRoutingTools",
+      "stress_directory": "https://github.com/drandyhaas/KiCadRoutingTools/tree/main/tests/stress"
+    }
+  },
+  "created_utc": "2026-09-07T10:59:46.365109+00:00",
+  "environment": {
+    "flux": {
+      "board_schema": 21,
+      "engine": "flux_capacitor",
+      "gpu_api_version_raw": 4211017,
+      "gpu_available": true,
+      "gpu_device": "NVIDIA GeForce RTX 5080",
+      "gpu_device_id": 11266,
+      "gpu_device_type": "discrete",
+      "gpu_diagnostic": "",
+      "gpu_driver_version_raw": 2496987136,
+      "gpu_override": null,
+      "gpu_vendor_id": 4318,
+      "production_gpu_required": true,
+      "version": "0.140.0"
+    },
+    "flux_vulkan_device_override": null,
+    "inkscape": {
+      "available": true,
+      "command": [
+        "/snap/bin/inkscape",
+        "--version"
+      ],
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "Inkscape 1.4.4 (dcaf3e7d9e, 2026-05-05)"
+    },
+    "kicad_cli": {
+      "available": true,
+      "command": [
+        "/usr/bin/kicad-cli",
+        "--version"
+      ],
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "9.0.8"
+    },
+    "platform": "Linux-7.0.0-31-generic-x86_64-with-glibc2.43",
+    "python": "3.14.4 (main, Jun 18 2026, 14:25:02) [GCC 15.2.0]"
+  },
+  "executable": {
+    "path": "/home/adam/qtbits/flux_capacitor/build/dev/flux-cli",
+    "sha256": "9debe448d545944824693e02bdf25d63d9bd6fade53a17758a0aae521f748b28"
+  },
+  "git_revision": {
+    "available": true,
+    "command": [
+      "git",
+      "-C",
+      "/home/adam/qtbits/flux_capacitor",
+      "rev-parse",
+      "HEAD"
+    ],
+    "returncode": 0,
+    "stderr": "",
+    "stdout": "94aa691ad89576d1c0ac07a5346020da21fc9d06"
+  },
+  "invocation": [
+    "/home/adam/qtbits/flux_capacitor/tests/python/verify_routing_corpus.py",
+    "--flux-cli",
+    "build/dev/flux-cli",
+    "--corpus",
+    "tests/fixtures/routing-corpus",
+    "--level",
+    "all",
+    "--preflight-only",
+    "--artifacts",
+    "build/krt-alternatives-active-corpus-preflight"
+  ],
+  "mode": "preflight",
+  "schema": "flux_routing_baseline",
+  "schema_version": 1,
+  "selection": {
+    "boards": [
+      {
+        "effective_planning_timeout_seconds": 600,
+        "id": "pt2399_delay",
+        "level": 0,
+        "project_sha256": "ddbcc3d30ca8a4e88f38be0bb5a12f4f29f67048bd503d3e77b2e615196bab8a",
+        "qualification": "detailed_complete",
+        "reference_sha256": "0ffb5710e07ee6f65bb6951a9ca1ebf9d52bb701852b1e9f83696991043d7eb6",
+        "router_args": [],
+        "source_sha256": "c48693b458eb28ae11f2ef099acf33ee9a797d87f430457c6961b41e2f2c4cab",
+        "status": "qualified"
+      },
+      {
+        "effective_planning_timeout_seconds": 7200,
+        "id": "bm_svf",
+        "level": 1,
+        "project_sha256": "04856904fe9070f7decd33b676d3f58e44676b6c930e65fa8a16f0ddd65d54db",
+        "qualification": "detailed_complete",
+        "reference_sha256": "52317a66f7442b3b260f07ff1b7c16dd94f99c088c61533b81698cbda6d4d77b",
+        "router_args": [
+          "--crossing-safe-diagonal-grid",
+          "--direct-medial",
+          "--grid-pitch-nm",
+          "650000",
+          "--xpbd-relaxation",
+          "--xpbd-feedback",
+          "--atomic-net-trees",
+          "--hard-capacity-start-iteration",
+          "4",
+          "--max-hard-capacity-ripup-attempts-per-pass",
+          "8",
+          "--max-hard-capacity-ripup-nets-per-attempt",
+          "8",
+          "--max-hard-capacity-conflict-set-states-per-attempt",
+          "256",
+          "--terminal-escape-proximity-cost",
+          "500",
+          "--rollback-failed-hard-capacity-ripup",
+          "--defer-hard-capacity-ripup-victims-to-pass-tail",
+          "--protect-recovered-hard-capacity-ripup-nets"
+        ],
+        "source_sha256": "308ce5513cb6b2b33820648a0062a54f548f6b3c13d856cdcd9b7c3ac8a20d2a",
+        "status": "unlocked"
+      },
+      {
+        "effective_planning_timeout_seconds": 180,
+        "id": "zigbee_sensor",
+        "level": 2,
+        "project_sha256": "4d5d3ae08d6f944cf8186fa326869d3485af5a811fe0ca7e7d05d6e488722334",
+        "qualification": "detailed_complete",
+        "reference_sha256": "2f7d5bb837efdc0e07f3b43518c3969b9febc449ec213bde0cede43d7d1b73e0",
+        "router_args": [],
+        "source_sha256": "ca97fd068e25318a0aeb650f72eec30a7c7ca8a30766d15e91b5f8c93a11c390",
+        "status": "locked"
+      },
+      {
+        "effective_planning_timeout_seconds": 180,
+        "id": "ch32v003_usb",
+        "level": 3,
+        "project_sha256": "d54291f8eee461a1e6e44a7c5ecb03f7fab3e6aa5a014118f5e773278aa19456",
+        "qualification": "detailed_complete",
+        "reference_sha256": "be5e7830488746e2506c484611c32d24872b11537a4700ed0e457b29d0078c17",
+        "router_args": [],
+        "source_sha256": "72d62b839467119b5d3addbe78c5ec27698fa79f2be1f11eef548949a7af6f05",
+        "status": "locked"
+      },
+      {
+        "effective_planning_timeout_seconds": 180,
+        "id": "usbgpib",
+        "level": 4,
+        "project_sha256": "b88f7c102e75d96afd8309c5e7d111897916c076fe3a24fe5e76450a647570c6",
+        "qualification": "detailed_complete",
+        "reference_sha256": "0a9c40057ce6cecde503d87eb376f3932fd956040fafeeaa4acffe28c6016507",
+        "router_args": [],
+        "source_sha256": "c4dcec9c91c54ea67b068ca1ec91ff227909e2e236a32b3a117073c3d7294c27",
+        "status": "locked"
+      }
+    ],
+    "explicit_boards": [],
+    "grid_pitch_nm_control_override": null,
+    "iteration_budget_override": null,
+    "level": "all",
+    "planning_timeout_override_seconds": null,
+    "sampled_control_override": false,
+    "strict_medial_control_override": false,
+    "track_geometry": "straight"
+  }
+}

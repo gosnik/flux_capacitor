@@ -1,0 +1,188 @@
+{
+  "schema": 1,
+  "date": "2026-10-10",
+  "revision": "94aa691ad89576d1c0ac07a5346020da21fc9d06",
+  "working_tree": "dirty; preserve unrelated existing work",
+  "experiment": "physical continuation dependencies and shared immutable GPU buffers",
+  "baseline_report": "reports/benchmark_history/2026-10-10-repair-experiments.json",
+  "status": "validated_implementation_tier1_still_fails",
+  "tier_order": [
+    "pt2399_delay",
+    "bm_svf"
+  ],
+  "telemetry_level": "diagnostic",
+  "runs": [
+    {
+      "tier": 0,
+      "board": "pt2399_delay",
+      "artifacts": "build/history-sharing-tier0-20261010/tier-0-pt2399_delay",
+      "global_seconds": 33.842059241986135,
+      "detail_seconds": 507.7188799029973,
+      "engine_outcome": "exhausted",
+      "scheduler": {
+        "routing_engine_experiment_active_us": 393156991,
+        "routing_engine_experiment_initial_explorations": 37,
+        "routing_engine_experiment_invalidated": 19,
+        "routing_engine_experiment_memory_evictions": 0,
+        "routing_engine_experiment_resumed": 57,
+        "routing_engine_experiment_retired": 16,
+        "routing_engine_experiment_started": 37,
+        "routing_engine_experiment_state_suppressions": 0,
+        "routing_engine_experiment_suspended": 78
+      },
+      "gpu_mask": {
+        "static_seed_height_evolution_gpu_mask_cross_pipeline_reuses": 0,
+        "static_seed_height_evolution_gpu_mask_upload_reuses": 26,
+        "static_seed_height_evolution_gpu_mask_uploads": 20,
+        "static_seed_hydraulic_gpu_mask_cross_pipeline_reuses": 0,
+        "static_seed_hydraulic_gpu_mask_upload_reuses": 26,
+        "static_seed_hydraulic_gpu_mask_uploads": 20
+      },
+      "regional_evaluated": true,
+      "oracle": {
+        "configured_grid_pitch_nm": 1,
+        "diagnoses": 1,
+        "drc_violation_counts": {
+          "track_clearance": 8
+        },
+        "drc_violations": 8,
+        "elapsed_us": 66238,
+        "feasible": false,
+        "malformed_paths": 0,
+        "open_connections": 0,
+        "paths_examined": 50,
+        "paths_materialized": 50,
+        "reused_transitions": 3,
+        "tracks": 563,
+        "unrouted_nets": 0,
+        "vias": 3
+      },
+      "open_connections": 0,
+      "copper_violations": 0,
+      "unrounded_non_junction_bends": 7,
+      "added_tracks": 47,
+      "added_track_beziers": 199,
+      "added_vias": 3,
+      "peak_rss_kib": 1336144,
+      "external_drc": 0,
+      "external_opens": 0,
+      "copper_image_sha256": {
+        "analysis/detailed-rejected/copper/01-B_Cu.png": "37e124173068c2e4c85d9ce30cffbccff6bf798be05600f5e5db0b27611094a7",
+        "analysis/detailed-rejected/copper/00-F_Cu.png": "2f4bf0aa0947b8aed99fba46b477745e1e32955570184d85991d9d4ff63020c2"
+      },
+      "outcome": "unchanged_drc_clean_copper_strict_curve_failure",
+      "interpretation": "19 versus 28 invalidations; 57 versus 24 resumptions; detail 507.719 versus 529.299 seconds. Same copper image hashes and seven unrounded joints."
+    },
+    {
+      "tier": 1,
+      "board": "bm_svf",
+      "artifacts": "build/history-sharing-tier1-20261010/tier-1-bm_svf",
+      "global_seconds": 900.1990864340041,
+      "detail_seconds": null,
+      "engine_outcome": "timed-out",
+      "scheduler": {
+        "routing_engine_experiment_active_us": 836793339,
+        "routing_engine_experiment_initial_explorations": 19,
+        "routing_engine_experiment_invalidated": 14,
+        "routing_engine_experiment_memory_evictions": 0,
+        "routing_engine_experiment_resumed": 69,
+        "routing_engine_experiment_retired": 3,
+        "routing_engine_experiment_started": 19,
+        "routing_engine_experiment_state_suppressions": 0,
+        "routing_engine_experiment_suspended": 84
+      },
+      "gpu_mask": {
+        "static_seed_height_evolution_gpu_mask_cross_pipeline_reuses": 0,
+        "static_seed_height_evolution_gpu_mask_upload_reuses": 22,
+        "static_seed_height_evolution_gpu_mask_uploads": 23,
+        "static_seed_hydraulic_gpu_mask_cross_pipeline_reuses": 0,
+        "static_seed_hydraulic_gpu_mask_upload_reuses": 22,
+        "static_seed_hydraulic_gpu_mask_uploads": 23
+      },
+      "regional_evaluated": false,
+      "oracle": {
+        "configured_grid_pitch_nm": 1,
+        "diagnoses": 310,
+        "drc_violation_counts": {
+          "hole_clearance": 70,
+          "track_clearance": 544,
+          "track_via_clearance": 179,
+          "via_clearance": 6
+        },
+        "drc_violations": 799,
+        "elapsed_us": 148584,
+        "feasible": false,
+        "malformed_paths": 0,
+        "open_connections": 0,
+        "paths_examined": 78,
+        "paths_materialized": 78,
+        "reused_transitions": 2,
+        "tracks": 1329,
+        "unrouted_nets": 0,
+        "vias": 56
+      },
+      "open_connections": null,
+      "copper_violations": null,
+      "unrounded_non_junction_bends": null,
+      "added_tracks": null,
+      "added_track_beziers": null,
+      "added_vias": null,
+      "peak_rss_kib": 1428236,
+      "external_drc": null,
+      "external_opens": null,
+      "copper_image_sha256": {},
+      "outcome": "timed_out_no_physical_improvement",
+      "interpretation": "14 versus 53 invalidations; 19 versus 61 experiment starts. Same 799 violations and no evaluated regional scene. Peak RSS increased 11.7%."
+    }
+  ],
+  "validation": {
+    "focused_suites_passed": 17,
+    "core_tests_passed": 65,
+    "core_tests_total": 65,
+    "gpu_tests": "actual Vulkan parity, cross-consumer reuse, concurrent acquisition, pinned eviction, polygon isolation passed",
+    "khronos_validation_layer": "not installed; no validation-layer claim",
+    "final_source_rebuild_and_tests": "17/17 focused suites and 65/65 core tests passed after final record interning",
+    "builds": [
+      "build/tautening-release: CLI and regression targets passed",
+      "build/release: flux-cli passed",
+      "build/viewer: flux-cli and flux-viewer targets passed"
+    ]
+  },
+  "source_sha256": {
+    "src/routing_engine.cpp": "6d84b2da591aa4014860cf64271f5f8acc251eea1128716cf259df72efdb23da",
+    "include/flux/core/routing_engine.hpp": "4155b26d19e79cbbfba757d97f73a138af88dba933170ea7e6e0da8533e5a401",
+    "src/vulkan_runtime.cpp": "8a6a34927cf13e5a07e0c68627a6ad7e3859e0bb8996bab4530aa5e73049f16a",
+    "src/vulkan_runtime.hpp": "4207db46c5a7f2d417e205af4ed2cd30d244450e732e76b6a086ee04b5fa3f1c",
+    "src/terrain_evolution_vulkan.cpp": "ade14acd55df6d7f6304959761b94025c2652e6fbb3e1c9e84b31774e7a2c382",
+    "src/hydraulic_path_vulkan.cpp": "f2ca23a2096d48f849750f429ec666c6df28e102ed7d4e657191e0bdbf713a87",
+    "tests/unit/routing_engine_experiment_tests.cpp": "806fbdadb126786584eae75b484b178b4915a71854e6030988b84b891a921ec7",
+    "tests/unit/terrain_evolution_gpu_tests.cpp": "2a85b3f5575b0d8eb69e9818990d45c6725840b8c562ba41141044444c88b711",
+    "tests/unit/core_tests.cpp": "0126968f9234e07af575a2d01ff75d699e2384e42f3c5d415229df3f76eb7801"
+  },
+  "intermediate_runs": [
+    {
+      "artifacts": "build/history-sharing-tier0-key-bound-20261010",
+      "outcome": "metadata key storage regression; superseded"
+    },
+    {
+      "artifacts": "build/history-sharing-tier0-state-intern-20261010",
+      "outcome": "physically unchanged; runtime not used for final comparison; superseded by record interning"
+    },
+    {
+      "artifacts": "build/history-sharing-tier1-interrupted-20261010",
+      "outcome": "interrupted by agent before source correction; not a benchmark result"
+    }
+  ],
+  "limitations": [
+    "Tier 0 retains seven existing unrounded joints despite clean KiCad DRC.",
+    "Tier 1 still times out before an evaluated regional scene.",
+    "Cross-pipeline sharing is verified by GPU tests; these terrain-only benchmark runs recorded zero cross-consumer reuse.",
+    "Shared immutable walkability masks only; mutable polygon masks, height and flow fields remain private.",
+    "Vulkan fence-error drain path reviewed but not fault-injected; Khronos validation layer unavailable."
+  ],
+  "binary_sha256": {
+    "build/tautening-release/flux-cli": "0987a60a137d67cc39b78502c20cd3546e561ad81ba6c12f3836a7fcad2695d9",
+    "build/release/flux-cli": "c15d6e3eb6e7f0f267a57323004a1370d96dae4806b1e510315dbc837dfcc7c7",
+    "build/viewer/flux-cli": "cbed6f087bb73e789959291bb1adf04dc3dd51dba0e6a7eea0caefaa11ec19b4"
+  }
+}

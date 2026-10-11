@@ -1,0 +1,2062 @@
+{
+  "schema": 1,
+  "experiment": "bundle-forward-checking-v16b",
+  "notes": [],
+  "runs": [
+    {
+      "root": "build/tier1-forward-check-v16b-20260906",
+      "metadata": {
+        "artifact_contract": {
+          "analysis_pngs_required_for_routing": true,
+          "failed_route_png_mode": "both",
+          "files_write_once": true,
+          "max_failed_route_png_results": 1,
+          "source_boards_immutable": true,
+          "telemetry_level": null,
+          "telemetry_required_for_routing": true
+        },
+        "capability_contract": {
+          "reference": {
+            "commit": "e239e067c204870b4ac570fc9e931a374bdfd5b4",
+            "project": "KiCadRoutingTools",
+            "repository": "https://github.com/drandyhaas/KiCadRoutingTools",
+            "version": "0.21.5"
+          },
+          "schema": "flux_parity_manifest",
+          "schema_version": 1,
+          "sha256": "d8b57b3e1ba5c761fa2c610ffea1aa2e1f70f845f988ab7e92fbceca36fda5d0"
+        },
+        "corpus": {
+          "manifest_sha256": "e5685277e3917f4a153d29a2214afb717b13b41395bcf48b04f555adb923bede",
+          "path": "/home/adam/qtbits/flux_capacitor/tests/fixtures/routing-corpus",
+          "source_corpus": {
+            "commit": "661c88b3c3b0ebc9ade65eab63d30b1cde217fb4",
+            "discussion": "https://github.com/drandyhaas/KiCadRoutingTools/discussions/117",
+            "repository": "drandyhaas/KiCadRoutingTools",
+            "stress_directory": "https://github.com/drandyhaas/KiCadRoutingTools/tree/main/tests/stress"
+          }
+        },
+        "created_utc": "2026-09-06T13:03:31.950904+00:00",
+        "environment": {
+          "flux": {
+            "board_schema": 21,
+            "engine": "flux_capacitor",
+            "gpu_api_version_raw": 4211017,
+            "gpu_available": true,
+            "gpu_device": "NVIDIA GeForce RTX 5080",
+            "gpu_device_id": 11266,
+            "gpu_device_type": "discrete",
+            "gpu_diagnostic": "",
+            "gpu_driver_version_raw": 2496987136,
+            "gpu_override": null,
+            "gpu_vendor_id": 4318,
+            "production_gpu_required": true,
+            "version": "0.140.0"
+          },
+          "flux_vulkan_device_override": null,
+          "inkscape": {
+            "available": true,
+            "command": [
+              "/snap/bin/inkscape",
+              "--version"
+            ],
+            "returncode": 0,
+            "stderr": "",
+            "stdout": "Inkscape 1.4.4 (dcaf3e7d9e, 2026-05-05)"
+          },
+          "kicad_cli": {
+            "available": true,
+            "command": [
+              "/usr/bin/kicad-cli",
+              "--version"
+            ],
+            "returncode": 0,
+            "stderr": "",
+            "stdout": "9.0.8"
+          },
+          "platform": "Linux-7.0.0-31-generic-x86_64-with-glibc2.43",
+          "python": "3.14.4 (main, Jun 18 2026, 14:25:02) [GCC 15.2.0]"
+        },
+        "executable": {
+          "path": "/home/adam/qtbits/flux_capacitor/build/forward-check-v16b-bin/flux-cli",
+          "sha256": "0be271b8eb1b5e565467cfe40eb892e7279131e62fc0ba25db16990cd3a2cbc8"
+        },
+        "invocation": [
+          "/home/adam/qtbits/flux_capacitor/tests/python/verify_routing_corpus.py",
+          "--flux-cli",
+          "build/forward-check-v16b-bin/flux-cli",
+          "--corpus",
+          "tests/fixtures/routing-corpus",
+          "--board",
+          "bm_svf",
+          "--prioritize-frozen-scope-expansion",
+          "--planning-timeout-seconds",
+          "1800",
+          "--artifacts",
+          "build/tier1-forward-check-v16b-20260906",
+          "--kicad-cli",
+          "/usr/bin/kicad-cli",
+          "--inkscape",
+          "/snap/bin/inkscape",
+          "--max-failed-route-png-results",
+          "1"
+        ],
+        "mode": "routing",
+        "schema": "flux_routing_baseline",
+        "schema_version": 1,
+        "selection": {
+          "boards": [
+            {
+              "effective_planning_timeout_seconds": 1800,
+              "id": "bm_svf",
+              "level": 1,
+              "project_sha256": "04856904fe9070f7decd33b676d3f58e44676b6c930e65fa8a16f0ddd65d54db",
+              "qualification": "detailed_complete",
+              "reference_sha256": "52317a66f7442b3b260f07ff1b7c16dd94f99c088c61533b81698cbda6d4d77b",
+              "router_args": [
+                "--crossing-safe-diagonal-grid",
+                "--direct-medial",
+                "--grid-pitch-nm",
+                "650000",
+                "--xpbd-relaxation",
+                "--xpbd-feedback",
+                "--atomic-net-trees",
+                "--hard-capacity-start-iteration",
+                "4",
+                "--max-hard-capacity-ripup-attempts-per-pass",
+                "8",
+                "--max-hard-capacity-ripup-nets-per-attempt",
+                "8",
+                "--max-hard-capacity-conflict-set-states-per-attempt",
+                "256",
+                "--terminal-escape-proximity-cost",
+                "500",
+                "--rollback-failed-hard-capacity-ripup",
+                "--defer-hard-capacity-ripup-victims-to-pass-tail",
+                "--protect-recovered-hard-capacity-ripup-nets",
+                "--prioritize-frozen-scope-expansion"
+              ],
+              "source_sha256": "308ce5513cb6b2b33820648a0062a54f548f6b3c13d856cdcd9b7c3ac8a20d2a",
+              "status": "unlocked"
+            }
+          ],
+          "explicit_boards": [
+            "bm_svf"
+          ],
+          "grid_pitch_nm_control_override": null,
+          "iteration_budget_override": null,
+          "level": "unlocked",
+          "planning_timeout_override_seconds": 1800,
+          "strict_medial_control_override": false
+        }
+      },
+      "outcome": {
+        "artifacts": [
+          {
+            "bytes": 4722,
+            "path": "run-metadata.json",
+            "sha256": "eea19b8f55fae3ea125ade50fdf7ec8bbb20076ac378895a94e0c25db2b6ae59"
+          },
+          {
+            "bytes": 1325,
+            "path": "tier-1-bm_svf/analysis/global/failed-route-previews.json",
+            "sha256": "563a3ab9ce97149a85cff24459fa180404386165c916ff80183bf159bfa02718"
+          },
+          {
+            "bytes": 339640,
+            "path": "tier-1-bm_svf/analysis/global/near-00-window-11/copper-00-B_Cu.png",
+            "sha256": "e2f12e2aa284a718e86f7e0366b33a2968d6f8fb9d65a51cfbc2beca890ee6ea"
+          },
+          {
+            "bytes": 341470,
+            "path": "tier-1-bm_svf/analysis/global/near-00-window-11/copper-01-F_Cu.png",
+            "sha256": "44bb6c3c4da87a92566f10dc7ca2a066c4148483150d5106daf6fb2c03129042"
+          },
+          {
+            "bytes": 480988,
+            "path": "tier-1-bm_svf/analysis/global/near-00-window-11/provisional-overview.png",
+            "sha256": "6d2c1cae79acfca2ae54e312e10b586aeda1ce09bc2088a6641d9eaf09b3b210"
+          },
+          {
+            "bytes": 24926,
+            "path": "tier-1-bm_svf/analysis/global/near-00-window-11/spline-controls-closeup.png",
+            "sha256": "ae2b9034e1c3020940839fbdfa1e44bb6d984246c831e19ba61fc2800337d6dc"
+          },
+          {
+            "bytes": 296447,
+            "path": "tier-1-bm_svf/analysis/global/near-00-window-11/spline-controls.png",
+            "sha256": "b135257f6e6238153dc8c823d028edf06eb74580ddb47a9acb4abb07e6031676"
+          },
+          {
+            "bytes": 734218076,
+            "path": "tier-1-bm_svf/telemetry/bm_svf-global.jsonl",
+            "sha256": "5abcdf68e7f1aeb4a13776fdb39686ca2417dd206530d142daa68864292aa09d"
+          }
+        ],
+        "boards": [],
+        "diagnostic": "Command '['/home/adam/qtbits/flux_capacitor/build/forward-check-v16b-bin/flux-cli', 'route-kicad', '/home/adam/qtbits/flux_capacitor/tests/fixtures/routing-corpus/bm_svf.kicad_pcb', '--max-router-iterations', '30', '--max-expansions', '50000', '--max-static-seed-workers', '2', '--search-diversification', '--crossing-safe-diagonal-grid', '--direct-medial', '--grid-pitch-nm', '650000', '--xpbd-relaxation', '--xpbd-feedback', '--atomic-net-trees', '--hard-capacity-start-iteration', '4', '--max-hard-capacity-ripup-attempts-per-pass', '8', '--max-hard-capacity-ripup-nets-per-attempt', '8', '--max-hard-capacity-conflict-set-states-per-attempt', '256', '--terminal-escape-proximity-cost', '500', '--rollback-failed-hard-capacity-ripup', '--defer-hard-capacity-ripup-victims-to-pass-tail', '--protect-recovered-hard-capacity-ripup-nets', '--prioritize-frozen-scope-expansion', '--telemetry-level', 'diagnostic', '--telemetry-record', '/home/adam/qtbits/flux_capacitor/build/tier1-forward-check-v16b-20260906/tier-1-bm_svf/telemetry/bm_svf-global.jsonl']' timed out after 1800 seconds",
+        "schema": "flux_routing_baseline_result",
+        "schema_version": 1,
+        "status": "failed"
+      },
+      "planning_records": [],
+      "detailed_records": [],
+      "epoch_telemetry": [
+        {
+          "artifact": "build/tier1-forward-check-v16b-20260906/tier-1-bm_svf/telemetry/bm_svf-global.jsonl",
+          "messages": [
+            "interleaved routing epoch started: pathfinder_budget=1, retained_portfolios=0, physical_history_entries=0",
+            "interleaved routing epoch completed: regional_candidates=1, history_entries=309, history_pressure=3595, quantized_oracle_violations=764, quantized_oracle_opens=0",
+            "interleaved routing epoch started: pathfinder_budget=8, retained_portfolios=1, physical_history_entries=309",
+            "interleaved routing epoch completed: regional_candidates=1, history_entries=648, history_pressure=6159, quantized_oracle_violations=1297, quantized_oracle_opens=0",
+            "interleaved routing epoch started: pathfinder_budget=7, retained_portfolios=2, physical_history_entries=648",
+            "interleaved routing epoch completed: regional_candidates=1, history_entries=1191, history_pressure=10364, quantized_oracle_violations=2216, quantized_oracle_opens=0",
+            "interleaved routing epoch started: pathfinder_budget=7, retained_portfolios=3, physical_history_entries=1191"
+          ],
+          "events": [
+            {
+              "monotonic_time_us": 1799,
+              "message": "interleaved routing epoch started: pathfinder_budget=1, retained_portfolios=0, physical_history_entries=0"
+            },
+            {
+              "monotonic_time_us": 36318876,
+              "message": "interleaved routing epoch completed: regional_candidates=1, history_entries=309, history_pressure=3595, quantized_oracle_violations=764, quantized_oracle_opens=0"
+            },
+            {
+              "monotonic_time_us": 36396321,
+              "message": "interleaved routing epoch started: pathfinder_budget=8, retained_portfolios=1, physical_history_entries=309"
+            },
+            {
+              "monotonic_time_us": 216543977,
+              "message": "interleaved routing epoch completed: regional_candidates=1, history_entries=648, history_pressure=6159, quantized_oracle_violations=1297, quantized_oracle_opens=0"
+            },
+            {
+              "monotonic_time_us": 216678672,
+              "message": "interleaved routing epoch started: pathfinder_budget=7, retained_portfolios=2, physical_history_entries=648"
+            },
+            {
+              "monotonic_time_us": 287856883,
+              "message": "interleaved routing epoch completed: regional_candidates=1, history_entries=1191, history_pressure=10364, quantized_oracle_violations=2216, quantized_oracle_opens=0"
+            },
+            {
+              "monotonic_time_us": 288028030,
+              "message": "interleaved routing epoch started: pathfinder_budget=7, retained_portfolios=3, physical_history_entries=1191"
+            }
+          ],
+          "event_counts": {
+            "RoutingStarted": 1,
+            "snapshot": 342,
+            "SearchSummary": 4615,
+            "RouteCandidateSelected": 5024,
+            "HydraulicFieldUpdated": 238,
+            "NetQueued": 150,
+            "PathFinderIterationStarted": 39,
+            "RouteRippedUp": 64,
+            "PathFinderIterationCompleted": 39,
+            "ConflictAdded": 1164,
+            "ResidualGroupUpdated": 71,
+            "CheckpointSelected": 3,
+            "BestCheckpointUpdated": 2,
+            "NetFailed": 8
+          },
+          "regional_progress": [
+            {
+              "monotonic_time_us": 36309214,
+              "message": "regional conflict extraction and joint physical packing started"
+            },
+            {
+              "monotonic_time_us": 36309232,
+              "message": "regional fragments constructed: fragments=406"
+            },
+            {
+              "monotonic_time_us": 36309540,
+              "message": "exact copper repair scope: witnesses=153, mapped_pairs=334, unmapped_pairs=0"
+            },
+            {
+              "monotonic_time_us": 36311271,
+              "message": "regional conflict graph constructed: edges=177, components=16"
+            },
+            {
+              "monotonic_time_us": 36311758,
+              "message": "ordinary regional windows constructed: windows=17, fragments=131, owned=130"
+            },
+            {
+              "monotonic_time_us": 36311764,
+              "message": "regional size bound requires global replanning: window=0, nets=13/12, fragments=59/64"
+            },
+            {
+              "monotonic_time_us": 216405944,
+              "message": "physical feedback prioritizes the fresh global checkpoint; retained fallbacks deferred to final epoch=2"
+            },
+            {
+              "monotonic_time_us": 216531058,
+              "message": "regional conflict extraction and joint physical packing started"
+            },
+            {
+              "monotonic_time_us": 216531078,
+              "message": "regional fragments constructed: fragments=423"
+            },
+            {
+              "monotonic_time_us": 216531898,
+              "message": "exact copper repair scope: witnesses=215, mapped_pairs=573, unmapped_pairs=0"
+            },
+            {
+              "monotonic_time_us": 216535106,
+              "message": "regional conflict graph constructed: edges=222, components=22"
+            },
+            {
+              "monotonic_time_us": 216536545,
+              "message": "ordinary regional windows constructed: windows=24, fragments=172, owned=170"
+            },
+            {
+              "monotonic_time_us": 216536554,
+              "message": "regional size bound requires global replanning: window=0, nets=14/12, fragments=89/64"
+            },
+            {
+              "monotonic_time_us": 287667838,
+              "message": "physical feedback prioritizes the fresh global checkpoint; retained fallbacks deferred to final epoch=3"
+            },
+            {
+              "monotonic_time_us": 287835692,
+              "message": "regional conflict extraction and joint physical packing started"
+            },
+            {
+              "monotonic_time_us": 287836226,
+              "message": "regional fragments constructed: fragments=556"
+            },
+            {
+              "monotonic_time_us": 287837716,
+              "message": "exact copper repair scope: witnesses=366, mapped_pairs=1001, unmapped_pairs=0"
+            },
+            {
+              "monotonic_time_us": 287846481,
+              "message": "regional conflict graph constructed: edges=509, components=27"
+            },
+            {
+              "monotonic_time_us": 287847661,
+              "message": "ordinary regional windows constructed: windows=27, fragments=276, owned=276"
+            },
+            {
+              "monotonic_time_us": 287847671,
+              "message": "regional size bound requires global replanning: window=0, nets=12/12, fragments=89/64"
+            },
+            {
+              "monotonic_time_us": 390150141,
+              "message": "physical feedback prioritizes the fresh global checkpoint; retained fallbacks deferred to final epoch=4"
+            },
+            {
+              "monotonic_time_us": 390253642,
+              "message": "regional conflict extraction and joint physical packing started"
+            },
+            {
+              "monotonic_time_us": 390253745,
+              "message": "regional fragments constructed: fragments=525"
+            },
+            {
+              "monotonic_time_us": 390254476,
+              "message": "exact copper repair scope: witnesses=256, mapped_pairs=560, unmapped_pairs=0"
+            },
+            {
+              "monotonic_time_us": 390257341,
+              "message": "regional conflict graph constructed: edges=300, components=25"
+            },
+            {
+              "monotonic_time_us": 390258167,
+              "message": "ordinary regional windows constructed: windows=25, fragments=226, owned=226"
+            },
+            {
+              "monotonic_time_us": 390399355,
+              "message": "ordinary regional corridors constructed: channels=89"
+            },
+            {
+              "monotonic_time_us": 730239586,
+              "message": "ordinary regional bundle portfolio prepared: assignments=25, alternative_templates=649"
+            },
+            {
+              "monotonic_time_us": 1088248742,
+              "message": "ordinary regional spline realization completed: splines=146"
+            },
+            {
+              "monotonic_time_us": 1088251113,
+              "message": "conflict-directed exact master: window=0, round=1, core_fragments=8, no_goods=0"
+            },
+            {
+              "monotonic_time_us": 1119615028,
+              "message": "residual conflict cones constructed: cones=3, windows=3"
+            },
+            {
+              "monotonic_time_us": 1119615195,
+              "message": "residual cone corridors constructed: window=0"
+            },
+            {
+              "monotonic_time_us": 1204472258,
+              "message": "residual cone portfolio prepared: window=0, assignments=1"
+            },
+            {
+              "monotonic_time_us": 1204472710,
+              "message": "residual cone spline realization completed: window=0, splines=0"
+            },
+            {
+              "monotonic_time_us": 1204478654,
+              "message": "residual cone corridors constructed: window=1"
+            },
+            {
+              "monotonic_time_us": 1287405252,
+              "message": "residual cone portfolio prepared: window=1, assignments=1"
+            }
+          ],
+          "regional_bundle_portfolios": [
+            {
+              "monotonic_time_us": 573745460,
+              "group": "regional-window-portfolio:0",
+              "metrics": {
+                "templates": 142,
+                "alternatives": 96,
+                "topology_classes": 96,
+                "terminal_templates": 10,
+                "via_templates": 99,
+                "complete_states": 0,
+                "active": 0,
+                "reserve": 0,
+                "bundle_states": 20,
+                "bundle_search_us": 37899,
+                "generated_choices": 0,
+                "access_pruned": 0,
+                "access_exhaustions": 0,
+                "forward_wipeouts": 0,
+                "run_layer_pruned": 0,
+                "coupled_pruned": 0,
+                "late_access_rejected": 0,
+                "late_coupled_rejected": 0,
+                "packing_rejected": 0,
+                "phase": "ordinary",
+                "stop": 2
+              }
+            },
+            {
+              "monotonic_time_us": 646691080,
+              "group": "regional-window-portfolio:1",
+              "metrics": {
+                "templates": 89,
+                "alternatives": 56,
+                "topology_classes": 55,
+                "terminal_templates": 0,
+                "via_templates": 69,
+                "complete_states": 584,
+                "active": 8,
+                "reserve": 512,
+                "bundle_states": 100000,
+                "bundle_search_us": 16584183,
+                "generated_choices": 48209,
+                "access_pruned": 119,
+                "access_exhaustions": 0,
+                "forward_wipeouts": 240,
+                "run_layer_pruned": 0,
+                "coupled_pruned": 0,
+                "late_access_rejected": 0,
+                "late_coupled_rejected": 0,
+                "packing_rejected": 0,
+                "phase": "ordinary",
+                "stop": 0
+              }
+            },
+            {
+              "monotonic_time_us": 650061721,
+              "group": "regional-window-portfolio:2",
+              "metrics": {
+                "templates": 44,
+                "alternatives": 25,
+                "topology_classes": 25,
+                "terminal_templates": 0,
+                "via_templates": 32,
+                "complete_states": 584,
+                "active": 8,
+                "reserve": 512,
+                "bundle_states": 14280,
+                "bundle_search_us": 891488,
+                "generated_choices": 8400,
+                "access_pruned": 35,
+                "access_exhaustions": 0,
+                "forward_wipeouts": 2,
+                "run_layer_pruned": 0,
+                "coupled_pruned": 0,
+                "late_access_rejected": 0,
+                "late_coupled_rejected": 0,
+                "packing_rejected": 0,
+                "phase": "ordinary",
+                "stop": 0
+              }
+            },
+            {
+              "monotonic_time_us": 679809606,
+              "group": "regional-window-portfolio:3",
+              "metrics": {
+                "templates": 76,
+                "alternatives": 62,
+                "topology_classes": 62,
+                "terminal_templates": 0,
+                "via_templates": 59,
+                "complete_states": 584,
+                "active": 8,
+                "reserve": 512,
+                "bundle_states": 100000,
+                "bundle_search_us": 2239778,
+                "generated_choices": 71839,
+                "access_pruned": 107,
+                "access_exhaustions": 0,
+                "forward_wipeouts": 0,
+                "run_layer_pruned": 0,
+                "coupled_pruned": 0,
+                "late_access_rejected": 0,
+                "late_coupled_rejected": 0,
+                "packing_rejected": 0,
+                "phase": "ordinary",
+                "stop": 0
+              }
+            },
+            {
+              "monotonic_time_us": 690015310,
+              "group": "regional-window-portfolio:4",
+              "metrics": {
+                "templates": 62,
+                "alternatives": 49,
+                "topology_classes": 49,
+                "terminal_templates": 0,
+                "via_templates": 54,
+                "complete_states": 584,
+                "active": 8,
+                "reserve": 512,
+                "bundle_states": 100000,
+                "bundle_search_us": 3351444,
+                "generated_choices": 35504,
+                "access_pruned": 235,
+                "access_exhaustions": 0,
+                "forward_wipeouts": 16,
+                "run_layer_pruned": 0,
+                "coupled_pruned": 0,
+                "late_access_rejected": 0,
+                "late_coupled_rejected": 0,
+                "packing_rejected": 0,
+                "phase": "ordinary",
+                "stop": 0
+              }
+            },
+            {
+              "monotonic_time_us": 691149174,
+              "group": "regional-window-portfolio:5",
+              "metrics": {
+                "templates": 32,
+                "alternatives": 26,
+                "topology_classes": 26,
+                "terminal_templates": 0,
+                "via_templates": 24,
+                "complete_states": 584,
+                "active": 8,
+                "reserve": 512,
+                "bundle_states": 9238,
+                "bundle_search_us": 136167,
+                "generated_choices": 7552,
+                "access_pruned": 5,
+                "access_exhaustions": 0,
+                "forward_wipeouts": 0,
+                "run_layer_pruned": 0,
+                "coupled_pruned": 0,
+                "late_access_rejected": 0,
+                "late_coupled_rejected": 0,
+                "packing_rejected": 0,
+                "phase": "ordinary",
+                "stop": 0
+              }
+            },
+            {
+              "monotonic_time_us": 702828360,
+              "group": "regional-window-portfolio:6",
+              "metrics": {
+                "templates": 53,
+                "alternatives": 45,
+                "topology_classes": 45,
+                "terminal_templates": 0,
+                "via_templates": 45,
+                "complete_states": 584,
+                "active": 8,
+                "reserve": 512,
+                "bundle_states": 100000,
+                "bundle_search_us": 2632657,
+                "generated_choices": 77815,
+                "access_pruned": 17,
+                "access_exhaustions": 0,
+                "forward_wipeouts": 0,
+                "run_layer_pruned": 0,
+                "coupled_pruned": 0,
+                "late_access_rejected": 0,
+                "late_coupled_rejected": 0,
+                "packing_rejected": 0,
+                "phase": "ordinary",
+                "stop": 0
+              }
+            },
+            {
+              "monotonic_time_us": 718953975,
+              "group": "regional-window-portfolio:7",
+              "metrics": {
+                "templates": 49,
+                "alternatives": 39,
+                "topology_classes": 39,
+                "terminal_templates": 16,
+                "via_templates": 41,
+                "complete_states": 584,
+                "active": 8,
+                "reserve": 512,
+                "bundle_states": 100000,
+                "bundle_search_us": 3957053,
+                "generated_choices": 56329,
+                "access_pruned": 65,
+                "access_exhaustions": 0,
+                "forward_wipeouts": 0,
+                "run_layer_pruned": 0,
+                "coupled_pruned": 0,
+                "late_access_rejected": 0,
+                "late_coupled_rejected": 0,
+                "packing_rejected": 0,
+                "phase": "ordinary",
+                "stop": 0
+              }
+            },
+            {
+              "monotonic_time_us": 719200088,
+              "group": "regional-window-portfolio:8",
+              "metrics": {
+                "templates": 48,
+                "alternatives": 41,
+                "topology_classes": 38,
+                "terminal_templates": 0,
+                "via_templates": 42,
+                "complete_states": 584,
+                "active": 8,
+                "reserve": 512,
+                "bundle_states": 23648,
+                "bundle_search_us": 90235,
+                "generated_choices": 1832,
+                "access_pruned": 155,
+                "access_exhaustions": 0,
+                "forward_wipeouts": 0,
+                "run_layer_pruned": 0,
+                "coupled_pruned": 0,
+                "late_access_rejected": 0,
+                "late_coupled_rejected": 0,
+                "packing_rejected": 0,
+                "phase": "ordinary",
+                "stop": 0
+              }
+            },
+            {
+              "monotonic_time_us": 730046984,
+              "group": "regional-window-portfolio:9",
+              "metrics": {
+                "templates": 53,
+                "alternatives": 39,
+                "topology_classes": 39,
+                "terminal_templates": 0,
+                "via_templates": 43,
+                "complete_states": 584,
+                "active": 8,
+                "reserve": 512,
+                "bundle_states": 100000,
+                "bundle_search_us": 4179929,
+                "generated_choices": 36985,
+                "access_pruned": 128,
+                "access_exhaustions": 0,
+                "forward_wipeouts": 0,
+                "run_layer_pruned": 0,
+                "coupled_pruned": 0,
+                "late_access_rejected": 0,
+                "late_coupled_rejected": 0,
+                "packing_rejected": 0,
+                "phase": "ordinary",
+                "stop": 0
+              }
+            },
+            {
+              "monotonic_time_us": 730065479,
+              "group": "regional-window-portfolio:10",
+              "metrics": {
+                "templates": 20,
+                "alternatives": 13,
+                "topology_classes": 13,
+                "terminal_templates": 0,
+                "via_templates": 15,
+                "complete_states": 160,
+                "active": 8,
+                "reserve": 152,
+                "bundle_states": 304,
+                "bundle_search_us": 5312,
+                "generated_choices": 160,
+                "access_pruned": 6,
+                "access_exhaustions": 0,
+                "forward_wipeouts": 0,
+                "run_layer_pruned": 0,
+                "coupled_pruned": 0,
+                "late_access_rejected": 0,
+                "late_coupled_rejected": 0,
+                "packing_rejected": 0,
+                "phase": "ordinary",
+                "stop": 0
+              }
+            },
+            {
+              "monotonic_time_us": 730115862,
+              "group": "regional-window-portfolio:11",
+              "metrics": {
+                "templates": 17,
+                "alternatives": 9,
+                "topology_classes": 9,
+                "terminal_templates": 0,
+                "via_templates": 10,
+                "complete_states": 384,
+                "active": 8,
+                "reserve": 376,
+                "bundle_states": 638,
+                "bundle_search_us": 10476,
+                "generated_choices": 384,
+                "access_pruned": 0,
+                "access_exhaustions": 0,
+                "forward_wipeouts": 0,
+                "run_layer_pruned": 0,
+                "coupled_pruned": 0,
+                "late_access_rejected": 0,
+                "late_coupled_rejected": 0,
+                "packing_rejected": 0,
+                "phase": "ordinary",
+                "stop": 0
+              }
+            },
+            {
+              "monotonic_time_us": 730126494,
+              "group": "regional-window-portfolio:12",
+              "metrics": {
+                "templates": 21,
+                "alternatives": 15,
+                "topology_classes": 15,
+                "terminal_templates": 0,
+                "via_templates": 17,
+                "complete_states": 204,
+                "active": 8,
+                "reserve": 196,
+                "bundle_states": 389,
+                "bundle_search_us": 3871,
+                "generated_choices": 204,
+                "access_pruned": 24,
+                "access_exhaustions": 0,
+                "forward_wipeouts": 0,
+                "run_layer_pruned": 0,
+                "coupled_pruned": 0,
+                "late_access_rejected": 0,
+                "late_coupled_rejected": 0,
+                "packing_rejected": 0,
+                "phase": "ordinary",
+                "stop": 0
+              }
+            },
+            {
+              "monotonic_time_us": 730131623,
+              "group": "regional-window-portfolio:13",
+              "metrics": {
+                "templates": 19,
+                "alternatives": 15,
+                "topology_classes": 15,
+                "terminal_templates": 0,
+                "via_templates": 15,
+                "complete_states": 36,
+                "active": 8,
+                "reserve": 28,
+                "bundle_states": 147,
+                "bundle_search_us": 1399,
+                "generated_choices": 36,
+                "access_pruned": 43,
+                "access_exhaustions": 0,
+                "forward_wipeouts": 0,
+                "run_layer_pruned": 0,
+                "coupled_pruned": 0,
+                "late_access_rejected": 0,
+                "late_coupled_rejected": 0,
+                "packing_rejected": 0,
+                "phase": "ordinary",
+                "stop": 0
+              }
+            },
+            {
+              "monotonic_time_us": 730135780,
+              "group": "regional-window-portfolio:14",
+              "metrics": {
+                "templates": 17,
+                "alternatives": 14,
+                "topology_classes": 13,
+                "terminal_templates": 0,
+                "via_templates": 14,
+                "complete_states": 29,
+                "active": 8,
+                "reserve": 21,
+                "bundle_states": 73,
+                "bundle_search_us": 1210,
+                "generated_choices": 29,
+                "access_pruned": 35,
+                "access_exhaustions": 0,
+                "forward_wipeouts": 0,
+                "run_layer_pruned": 0,
+                "coupled_pruned": 0,
+                "late_access_rejected": 0,
+                "late_coupled_rejected": 0,
+                "packing_rejected": 0,
+                "phase": "ordinary",
+                "stop": 0
+              }
+            },
+            {
+              "monotonic_time_us": 730144321,
+              "group": "regional-window-portfolio:15",
+              "metrics": {
+                "templates": 19,
+                "alternatives": 15,
+                "topology_classes": 15,
+                "terminal_templates": 0,
+                "via_templates": 16,
+                "complete_states": 98,
+                "active": 8,
+                "reserve": 90,
+                "bundle_states": 131,
+                "bundle_search_us": 2320,
+                "generated_choices": 98,
+                "access_pruned": 6,
+                "access_exhaustions": 0,
+                "forward_wipeouts": 0,
+                "run_layer_pruned": 0,
+                "coupled_pruned": 0,
+                "late_access_rejected": 0,
+                "late_coupled_rejected": 0,
+                "packing_rejected": 0,
+                "phase": "ordinary",
+                "stop": 0
+              }
+            },
+            {
+              "monotonic_time_us": 730169026,
+              "group": "regional-window-portfolio:16",
+              "metrics": {
+                "templates": 24,
+                "alternatives": 20,
+                "topology_classes": 21,
+                "terminal_templates": 4,
+                "via_templates": 21,
+                "complete_states": 515,
+                "active": 8,
+                "reserve": 507,
+                "bundle_states": 948,
+                "bundle_search_us": 8948,
+                "generated_choices": 515,
+                "access_pruned": 33,
+                "access_exhaustions": 0,
+                "forward_wipeouts": 0,
+                "run_layer_pruned": 0,
+                "coupled_pruned": 0,
+                "late_access_rejected": 0,
+                "late_coupled_rejected": 0,
+                "packing_rejected": 0,
+                "phase": "ordinary",
+                "stop": 0
+              }
+            },
+            {
+              "monotonic_time_us": 730205044,
+              "group": "regional-window-portfolio:17",
+              "metrics": {
+                "templates": 32,
+                "alternatives": 28,
+                "topology_classes": 26,
+                "terminal_templates": 8,
+                "via_templates": 28,
+                "complete_states": 417,
+                "active": 8,
+                "reserve": 409,
+                "bundle_states": 1504,
+                "bundle_search_us": 20344,
+                "generated_choices": 417,
+                "access_pruned": 134,
+                "access_exhaustions": 0,
+                "forward_wipeouts": 0,
+                "run_layer_pruned": 0,
+                "coupled_pruned": 0,
+                "late_access_rejected": 0,
+                "late_coupled_rejected": 0,
+                "packing_rejected": 0,
+                "phase": "ordinary",
+                "stop": 0
+              }
+            },
+            {
+              "monotonic_time_us": 730209677,
+              "group": "regional-window-portfolio:18",
+              "metrics": {
+                "templates": 12,
+                "alternatives": 10,
+                "topology_classes": 10,
+                "terminal_templates": 0,
+                "via_templates": 7,
+                "complete_states": 32,
+                "active": 8,
+                "reserve": 24,
+                "bundle_states": 36,
+                "bundle_search_us": 356,
+                "generated_choices": 32,
+                "access_pruned": 0,
+                "access_exhaustions": 0,
+                "forward_wipeouts": 0,
+                "run_layer_pruned": 0,
+                "coupled_pruned": 0,
+                "late_access_rejected": 0,
+                "late_coupled_rejected": 0,
+                "packing_rejected": 0,
+                "phase": "ordinary",
+                "stop": 0
+              }
+            },
+            {
+              "monotonic_time_us": 730216676,
+              "group": "regional-window-portfolio:19",
+              "metrics": {
+                "templates": 18,
+                "alternatives": 15,
+                "topology_classes": 15,
+                "terminal_templates": 0,
+                "via_templates": 17,
+                "complete_states": 110,
+                "active": 8,
+                "reserve": 102,
+                "bundle_states": 146,
+                "bundle_search_us": 2360,
+                "generated_choices": 110,
+                "access_pruned": 9,
+                "access_exhaustions": 0,
+                "forward_wipeouts": 0,
+                "run_layer_pruned": 0,
+                "coupled_pruned": 0,
+                "late_access_rejected": 0,
+                "late_coupled_rejected": 0,
+                "packing_rejected": 0,
+                "phase": "ordinary",
+                "stop": 0
+              }
+            },
+            {
+              "monotonic_time_us": 730220772,
+              "group": "regional-window-portfolio:20",
+              "metrics": {
+                "templates": 10,
+                "alternatives": 8,
+                "topology_classes": 8,
+                "terminal_templates": 0,
+                "via_templates": 9,
+                "complete_states": 16,
+                "active": 8,
+                "reserve": 8,
+                "bundle_states": 18,
+                "bundle_search_us": 362,
+                "generated_choices": 16,
+                "access_pruned": 0,
+                "access_exhaustions": 0,
+                "forward_wipeouts": 0,
+                "run_layer_pruned": 0,
+                "coupled_pruned": 0,
+                "late_access_rejected": 0,
+                "late_coupled_rejected": 0,
+                "packing_rejected": 0,
+                "phase": "ordinary",
+                "stop": 0
+              }
+            },
+            {
+              "monotonic_time_us": 730227876,
+              "group": "regional-window-portfolio:21",
+              "metrics": {
+                "templates": 21,
+                "alternatives": 18,
+                "topology_classes": 18,
+                "terminal_templates": 8,
+                "via_templates": 19,
+                "complete_states": 169,
+                "active": 8,
+                "reserve": 161,
+                "bundle_states": 229,
+                "bundle_search_us": 2854,
+                "generated_choices": 169,
+                "access_pruned": 22,
+                "access_exhaustions": 0,
+                "forward_wipeouts": 0,
+                "run_layer_pruned": 0,
+                "coupled_pruned": 0,
+                "late_access_rejected": 0,
+                "late_coupled_rejected": 0,
+                "packing_rejected": 0,
+                "phase": "ordinary",
+                "stop": 0
+              }
+            },
+            {
+              "monotonic_time_us": 730231916,
+              "group": "regional-window-portfolio:22",
+              "metrics": {
+                "templates": 2,
+                "alternatives": 0,
+                "topology_classes": 0,
+                "terminal_templates": 0,
+                "via_templates": 0,
+                "complete_states": 1,
+                "active": 1,
+                "reserve": 0,
+                "bundle_states": 2,
+                "bundle_search_us": 123,
+                "generated_choices": 1,
+                "access_pruned": 0,
+                "access_exhaustions": 0,
+                "forward_wipeouts": 0,
+                "run_layer_pruned": 0,
+                "coupled_pruned": 0,
+                "late_access_rejected": 0,
+                "late_coupled_rejected": 0,
+                "packing_rejected": 0,
+                "phase": "ordinary",
+                "stop": 0
+              }
+            },
+            {
+              "monotonic_time_us": 730234038,
+              "group": "regional-window-portfolio:23",
+              "metrics": {
+                "templates": 5,
+                "alternatives": 3,
+                "topology_classes": 3,
+                "terminal_templates": 0,
+                "via_templates": 5,
+                "complete_states": 6,
+                "active": 6,
+                "reserve": 0,
+                "bundle_states": 8,
+                "bundle_search_us": 229,
+                "generated_choices": 6,
+                "access_pruned": 0,
+                "access_exhaustions": 0,
+                "forward_wipeouts": 0,
+                "run_layer_pruned": 0,
+                "coupled_pruned": 0,
+                "late_access_rejected": 0,
+                "late_coupled_rejected": 0,
+                "packing_rejected": 0,
+                "phase": "ordinary",
+                "stop": 0
+              }
+            },
+            {
+              "monotonic_time_us": 730236314,
+              "group": "regional-window-portfolio:24",
+              "metrics": {
+                "templates": 4,
+                "alternatives": 2,
+                "topology_classes": 2,
+                "terminal_templates": 0,
+                "via_templates": 4,
+                "complete_states": 4,
+                "active": 4,
+                "reserve": 0,
+                "bundle_states": 6,
+                "bundle_search_us": 193,
+                "generated_choices": 4,
+                "access_pruned": 0,
+                "access_exhaustions": 0,
+                "forward_wipeouts": 0,
+                "run_layer_pruned": 0,
+                "coupled_pruned": 0,
+                "late_access_rejected": 0,
+                "late_coupled_rejected": 0,
+                "packing_rejected": 0,
+                "phase": "ordinary",
+                "stop": 0
+              }
+            },
+            {
+              "monotonic_time_us": 1119610476,
+              "group": "regional-window-portfolio:0",
+              "metrics": {
+                "templates": 106,
+                "alternatives": 60,
+                "topology_classes": 59,
+                "terminal_templates": 11,
+                "via_templates": 55,
+                "complete_states": 0,
+                "active": 0,
+                "reserve": 0,
+                "bundle_states": 18,
+                "bundle_search_us": 36212,
+                "generated_choices": 0,
+                "access_pruned": 0,
+                "access_exhaustions": 0,
+                "forward_wipeouts": 0,
+                "run_layer_pruned": 0,
+                "coupled_pruned": 0,
+                "late_access_rejected": 0,
+                "late_coupled_rejected": 1,
+                "packing_rejected": 1,
+                "phase": "conflict-directed",
+                "stop": 2
+              }
+            },
+            {
+              "monotonic_time_us": 1204464789,
+              "group": "regional-window-portfolio:0",
+              "metrics": {
+                "templates": 268,
+                "alternatives": 209,
+                "topology_classes": 199,
+                "terminal_templates": 24,
+                "via_templates": 212,
+                "complete_states": 0,
+                "active": 0,
+                "reserve": 0,
+                "bundle_states": 100000,
+                "bundle_search_us": 314756,
+                "generated_choices": 0,
+                "access_pruned": 5,
+                "access_exhaustions": 0,
+                "forward_wipeouts": 0,
+                "run_layer_pruned": 0,
+                "coupled_pruned": 0,
+                "late_access_rejected": 1,
+                "late_coupled_rejected": 0,
+                "packing_rejected": 7,
+                "phase": "residual",
+                "stop": 4
+              }
+            },
+            {
+              "monotonic_time_us": 1287399370,
+              "group": "regional-window-portfolio:1",
+              "metrics": {
+                "templates": 155,
+                "alternatives": 113,
+                "topology_classes": 107,
+                "terminal_templates": 0,
+                "via_templates": 127,
+                "complete_states": 584,
+                "active": 8,
+                "reserve": 512,
+                "bundle_states": 100000,
+                "bundle_search_us": 4893317,
+                "generated_choices": 11965,
+                "access_pruned": 1730,
+                "access_exhaustions": 0,
+                "forward_wipeouts": 26,
+                "run_layer_pruned": 0,
+                "coupled_pruned": 0,
+                "late_access_rejected": 0,
+                "late_coupled_rejected": 0,
+                "packing_rejected": 0,
+                "phase": "residual",
+                "stop": 0
+              }
+            }
+          ],
+          "regional_bundle_contexts": [
+            {
+              "monotonic_time_us": 573706840,
+              "group": "regional-bundle-context:ordinary:0",
+              "occurrence": 1,
+              "schema": 1,
+              "phase": "ordinary",
+              "window": 0,
+              "source_revision": "kicad-20241229:pcbnew:61194dd059bfb26a",
+              "templates": 142,
+              "domain_sizes": [
+                4,
+                4,
+                8,
+                1,
+                1,
+                1,
+                4,
+                1,
+                4,
+                1,
+                4,
+                4,
+                4,
+                1,
+                8,
+                4,
+                1,
+                8,
+                8,
+                1,
+                1,
+                1,
+                1,
+                4,
+                4,
+                1,
+                1,
+                1,
+                1,
+                4,
+                4,
+                1,
+                1,
+                2,
+                1,
+                8,
+                8,
+                1,
+                1,
+                1,
+                4,
+                1,
+                1,
+                8,
+                8,
+                1
+              ],
+              "nets": [
+                "kicad-net-11",
+                "kicad-net-12",
+                "kicad-net-21",
+                "kicad-net-22",
+                "kicad-net-25",
+                "kicad-net-26",
+                "kicad-net-9"
+              ]
+            },
+            {
+              "monotonic_time_us": 573748284,
+              "group": "regional-bundle-context:ordinary:1",
+              "occurrence": 1,
+              "schema": 1,
+              "phase": "ordinary",
+              "window": 1,
+              "source_revision": "kicad-20241229:pcbnew:61194dd059bfb26a",
+              "templates": 89,
+              "domain_sizes": [
+                2,
+                1,
+                8,
+                1,
+                1,
+                2,
+                2,
+                2,
+                2,
+                8,
+                8,
+                1,
+                1,
+                2,
+                2,
+                8,
+                2,
+                2,
+                1,
+                1,
+                2,
+                1,
+                3,
+                2,
+                1,
+                8,
+                2,
+                1,
+                1,
+                1,
+                1,
+                1,
+                8
+              ],
+              "nets": [
+                "kicad-net-1",
+                "kicad-net-13",
+                "kicad-net-14",
+                "kicad-net-16",
+                "kicad-net-24",
+                "kicad-net-4",
+                "kicad-net-5"
+              ]
+            },
+            {
+              "monotonic_time_us": 646694127,
+              "group": "regional-bundle-context:ordinary:2",
+              "occurrence": 1,
+              "schema": 1,
+              "phase": "ordinary",
+              "window": 2,
+              "source_revision": "kicad-20241229:pcbnew:61194dd059bfb26a",
+              "templates": 44,
+              "domain_sizes": [
+                1,
+                2,
+                2,
+                8,
+                2,
+                1,
+                1,
+                1,
+                1,
+                2,
+                2,
+                2,
+                1,
+                2,
+                2,
+                2,
+                8,
+                2,
+                2
+              ],
+              "nets": [
+                "kicad-net-1",
+                "kicad-net-13",
+                "kicad-net-16",
+                "kicad-net-2",
+                "kicad-net-3"
+              ]
+            },
+            {
+              "monotonic_time_us": 650064289,
+              "group": "regional-bundle-context:ordinary:3",
+              "occurrence": 1,
+              "schema": 1,
+              "phase": "ordinary",
+              "window": 3,
+              "source_revision": "kicad-20241229:pcbnew:61194dd059bfb26a",
+              "templates": 76,
+              "domain_sizes": [
+                1,
+                2,
+                8,
+                2,
+                1,
+                8,
+                1,
+                8,
+                8,
+                2,
+                7,
+                8,
+                8,
+                12
+              ],
+              "nets": [
+                "kicad-net-1",
+                "kicad-net-11",
+                "kicad-net-17",
+                "kicad-net-5",
+                "kicad-net-8"
+              ]
+            },
+            {
+              "monotonic_time_us": 679811981,
+              "group": "regional-bundle-context:ordinary:4",
+              "occurrence": 1,
+              "schema": 1,
+              "phase": "ordinary",
+              "window": 4,
+              "source_revision": "kicad-20241229:pcbnew:61194dd059bfb26a",
+              "templates": 62,
+              "domain_sizes": [
+                2,
+                2,
+                8,
+                2,
+                1,
+                3,
+                8,
+                8,
+                2,
+                8,
+                8,
+                2,
+                8
+              ],
+              "nets": [
+                "kicad-net-12",
+                "kicad-net-24",
+                "kicad-net-25",
+                "kicad-net-8"
+              ]
+            },
+            {
+              "monotonic_time_us": 690017900,
+              "group": "regional-bundle-context:ordinary:5",
+              "occurrence": 1,
+              "schema": 1,
+              "phase": "ordinary",
+              "window": 5,
+              "source_revision": "kicad-20241229:pcbnew:61194dd059bfb26a",
+              "templates": 32,
+              "domain_sizes": [
+                2,
+                8,
+                2,
+                8,
+                8,
+                4
+              ],
+              "nets": [
+                "kicad-net-1",
+                "kicad-net-14",
+                "kicad-net-4"
+              ]
+            },
+            {
+              "monotonic_time_us": 691151604,
+              "group": "regional-bundle-context:ordinary:6",
+              "occurrence": 1,
+              "schema": 1,
+              "phase": "ordinary",
+              "window": 6,
+              "source_revision": "kicad-20241229:pcbnew:61194dd059bfb26a",
+              "templates": 53,
+              "domain_sizes": [
+                8,
+                1,
+                8,
+                8,
+                8,
+                8,
+                8,
+                4
+              ],
+              "nets": [
+                "kicad-net-11",
+                "kicad-net-12",
+                "kicad-net-8",
+                "kicad-net-9"
+              ]
+            },
+            {
+              "monotonic_time_us": 702830719,
+              "group": "regional-bundle-context:ordinary:7",
+              "occurrence": 1,
+              "schema": 1,
+              "phase": "ordinary",
+              "window": 7,
+              "source_revision": "kicad-20241229:pcbnew:61194dd059bfb26a",
+              "templates": 49,
+              "domain_sizes": [
+                8,
+                8,
+                7,
+                2,
+                8,
+                2,
+                2,
+                8,
+                2,
+                2
+              ],
+              "nets": [
+                "kicad-net-12",
+                "kicad-net-19",
+                "kicad-net-20",
+                "kicad-net-24"
+              ]
+            },
+            {
+              "monotonic_time_us": 718956451,
+              "group": "regional-bundle-context:ordinary:8",
+              "occurrence": 1,
+              "schema": 1,
+              "phase": "ordinary",
+              "window": 8,
+              "source_revision": "kicad-20241229:pcbnew:61194dd059bfb26a",
+              "templates": 48,
+              "domain_sizes": [
+                8,
+                8,
+                8,
+                7,
+                8,
+                8,
+                1
+              ],
+              "nets": [
+                "kicad-net-16",
+                "kicad-net-7"
+              ]
+            },
+            {
+              "monotonic_time_us": 719202961,
+              "group": "regional-bundle-context:ordinary:9",
+              "occurrence": 1,
+              "schema": 1,
+              "phase": "ordinary",
+              "window": 9,
+              "source_revision": "kicad-20241229:pcbnew:61194dd059bfb26a",
+              "templates": 53,
+              "domain_sizes": [
+                4,
+                4,
+                4,
+                4,
+                1,
+                7,
+                4,
+                4,
+                1,
+                4,
+                4,
+                4,
+                4,
+                4
+              ],
+              "nets": [
+                "kicad-net-12",
+                "kicad-net-25",
+                "kicad-net-7",
+                "kicad-net-8"
+              ]
+            },
+            {
+              "monotonic_time_us": 730049283,
+              "group": "regional-bundle-context:ordinary:10",
+              "occurrence": 1,
+              "schema": 1,
+              "phase": "ordinary",
+              "window": 10,
+              "source_revision": "kicad-20241229:pcbnew:61194dd059bfb26a",
+              "templates": 20,
+              "domain_sizes": [
+                2,
+                2,
+                8,
+                4,
+                1,
+                1,
+                2
+              ],
+              "nets": [
+                "kicad-net-1",
+                "kicad-net-20",
+                "kicad-net-25"
+              ]
+            },
+            {
+              "monotonic_time_us": 730068238,
+              "group": "regional-bundle-context:ordinary:11",
+              "occurrence": 1,
+              "schema": 1,
+              "phase": "ordinary",
+              "window": 11,
+              "source_revision": "kicad-20241229:pcbnew:61194dd059bfb26a",
+              "templates": 17,
+              "domain_sizes": [
+                2,
+                2,
+                2,
+                2,
+                3,
+                2,
+                2,
+                2
+              ],
+              "nets": [
+                "kicad-net-1",
+                "kicad-net-11",
+                "kicad-net-9"
+              ]
+            },
+            {
+              "monotonic_time_us": 730118329,
+              "group": "regional-bundle-context:ordinary:12",
+              "occurrence": 1,
+              "schema": 1,
+              "phase": "ordinary",
+              "window": 12,
+              "source_revision": "kicad-20241229:pcbnew:61194dd059bfb26a",
+              "templates": 21,
+              "domain_sizes": [
+                4,
+                4,
+                4,
+                4,
+                4,
+                1
+              ],
+              "nets": [
+                "kicad-net-1",
+                "kicad-net-11",
+                "kicad-net-12"
+              ]
+            },
+            {
+              "monotonic_time_us": 730128501,
+              "group": "regional-bundle-context:ordinary:13",
+              "occurrence": 1,
+              "schema": 1,
+              "phase": "ordinary",
+              "window": 13,
+              "source_revision": "kicad-20241229:pcbnew:61194dd059bfb26a",
+              "templates": 19,
+              "domain_sizes": [
+                2,
+                8,
+                8,
+                1
+              ],
+              "nets": [
+                "kicad-net-13",
+                "kicad-net-16"
+              ]
+            },
+            {
+              "monotonic_time_us": 730133544,
+              "group": "regional-bundle-context:ordinary:14",
+              "occurrence": 1,
+              "schema": 1,
+              "phase": "ordinary",
+              "window": 14,
+              "source_revision": "kicad-20241229:pcbnew:61194dd059bfb26a",
+              "templates": 17,
+              "domain_sizes": [
+                8,
+                1,
+                8
+              ],
+              "nets": [
+                "kicad-net-22",
+                "kicad-net-7"
+              ]
+            },
+            {
+              "monotonic_time_us": 730137434,
+              "group": "regional-bundle-context:ordinary:15",
+              "occurrence": 1,
+              "schema": 1,
+              "phase": "ordinary",
+              "window": 15,
+              "source_revision": "kicad-20241229:pcbnew:61194dd059bfb26a",
+              "templates": 19,
+              "domain_sizes": [
+                1,
+                2,
+                8,
+                8
+              ],
+              "nets": [
+                "kicad-net-12",
+                "kicad-net-13",
+                "kicad-net-3"
+              ]
+            },
+            {
+              "monotonic_time_us": 730146245,
+              "group": "regional-bundle-context:ordinary:16",
+              "occurrence": 1,
+              "schema": 1,
+              "phase": "ordinary",
+              "window": 16,
+              "source_revision": "kicad-20241229:pcbnew:61194dd059bfb26a",
+              "templates": 24,
+              "domain_sizes": [
+                8,
+                4,
+                8,
+                4
+              ],
+              "nets": [
+                "kicad-net-1",
+                "kicad-net-5"
+              ]
+            },
+            {
+              "monotonic_time_us": 730172030,
+              "group": "regional-bundle-context:ordinary:17",
+              "occurrence": 1,
+              "schema": 1,
+              "phase": "ordinary",
+              "window": 17,
+              "source_revision": "kicad-20241229:pcbnew:61194dd059bfb26a",
+              "templates": 32,
+              "domain_sizes": [
+                8,
+                8,
+                8,
+                8
+              ],
+              "nets": [
+                "kicad-net-12",
+                "kicad-net-26"
+              ]
+            },
+            {
+              "monotonic_time_us": 730207278,
+              "group": "regional-bundle-context:ordinary:18",
+              "occurrence": 1,
+              "schema": 1,
+              "phase": "ordinary",
+              "window": 18,
+              "source_revision": "kicad-20241229:pcbnew:61194dd059bfb26a",
+              "templates": 12,
+              "domain_sizes": [
+                8,
+                4
+              ],
+              "nets": [
+                "kicad-net-1",
+                "kicad-net-7"
+              ]
+            },
+            {
+              "monotonic_time_us": 730211246,
+              "group": "regional-bundle-context:ordinary:19",
+              "occurrence": 1,
+              "schema": 1,
+              "phase": "ordinary",
+              "window": 19,
+              "source_revision": "kicad-20241229:pcbnew:61194dd059bfb26a",
+              "templates": 18,
+              "domain_sizes": [
+                2,
+                8,
+                8
+              ],
+              "nets": [
+                "kicad-net-1",
+                "kicad-net-12",
+                "kicad-net-20"
+              ]
+            },
+            {
+              "monotonic_time_us": 730218391,
+              "group": "regional-bundle-context:ordinary:20",
+              "occurrence": 1,
+              "schema": 1,
+              "phase": "ordinary",
+              "window": 20,
+              "source_revision": "kicad-20241229:pcbnew:61194dd059bfb26a",
+              "templates": 10,
+              "domain_sizes": [
+                8,
+                2
+              ],
+              "nets": [
+                "kicad-net-15",
+                "kicad-net-3"
+              ]
+            },
+            {
+              "monotonic_time_us": 730221405,
+              "group": "regional-bundle-context:ordinary:21",
+              "occurrence": 1,
+              "schema": 1,
+              "phase": "ordinary",
+              "window": 21,
+              "source_revision": "kicad-20241229:pcbnew:61194dd059bfb26a",
+              "templates": 21,
+              "domain_sizes": [
+                5,
+                8,
+                8
+              ],
+              "nets": [
+                "kicad-net-1",
+                "kicad-net-14"
+              ]
+            },
+            {
+              "monotonic_time_us": 730229725,
+              "group": "regional-bundle-context:ordinary:22",
+              "occurrence": 1,
+              "schema": 1,
+              "phase": "ordinary",
+              "window": 22,
+              "source_revision": "kicad-20241229:pcbnew:61194dd059bfb26a",
+              "templates": 2,
+              "domain_sizes": [
+                1,
+                1
+              ],
+              "nets": [
+                "kicad-net-10",
+                "kicad-net-13"
+              ]
+            },
+            {
+              "monotonic_time_us": 730231921,
+              "group": "regional-bundle-context:ordinary:23",
+              "occurrence": 1,
+              "schema": 1,
+              "phase": "ordinary",
+              "window": 23,
+              "source_revision": "kicad-20241229:pcbnew:61194dd059bfb26a",
+              "templates": 5,
+              "domain_sizes": [
+                3,
+                2
+              ],
+              "nets": [
+                "kicad-net-1",
+                "kicad-net-14"
+              ]
+            },
+            {
+              "monotonic_time_us": 730234150,
+              "group": "regional-bundle-context:ordinary:24",
+              "occurrence": 1,
+              "schema": 1,
+              "phase": "ordinary",
+              "window": 24,
+              "source_revision": "kicad-20241229:pcbnew:61194dd059bfb26a",
+              "templates": 4,
+              "domain_sizes": [
+                2,
+                2
+              ],
+              "nets": [
+                "kicad-net-1",
+                "kicad-net-20"
+              ]
+            },
+            {
+              "monotonic_time_us": 1119573420,
+              "group": "regional-bundle-context:conflict-directed:0",
+              "occurrence": 1,
+              "schema": 1,
+              "phase": "conflict-directed",
+              "window": 0,
+              "source_revision": "kicad-20241229:pcbnew:61194dd059bfb26a",
+              "templates": 106,
+              "domain_sizes": [
+                8,
+                8,
+                8,
+                8,
+                12,
+                8,
+                8,
+                8,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "nets": [
+                "kicad-net-11",
+                "kicad-net-12",
+                "kicad-net-21",
+                "kicad-net-22",
+                "kicad-net-25",
+                "kicad-net-26",
+                "kicad-net-9"
+              ]
+            },
+            {
+              "monotonic_time_us": 1204146975,
+              "group": "regional-bundle-context:residual:0",
+              "occurrence": 1,
+              "schema": 1,
+              "phase": "residual",
+              "window": 0,
+              "source_revision": "kicad-20241229:pcbnew:61194dd059bfb26a",
+              "templates": 268,
+              "domain_sizes": [
+                4,
+                4,
+                8,
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                8,
+                4,
+                4,
+                4,
+                8,
+                8,
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                8,
+                8,
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                4,
+                8,
+                8,
+                4,
+                4
+              ],
+              "nets": [
+                "kicad-net-11",
+                "kicad-net-12",
+                "kicad-net-21",
+                "kicad-net-22",
+                "kicad-net-25",
+                "kicad-net-26",
+                "kicad-net-9"
+              ]
+            },
+            {
+              "monotonic_time_us": 1267956494,
+              "group": "regional-bundle-context:residual:1",
+              "occurrence": 1,
+              "schema": 1,
+              "phase": "residual",
+              "window": 1,
+              "source_revision": "kicad-20241229:pcbnew:61194dd059bfb26a",
+              "templates": 155,
+              "domain_sizes": [
+                4,
+                1,
+                8,
+                1,
+                1,
+                1,
+                4,
+                4,
+                4,
+                4,
+                8,
+                8,
+                1,
+                4,
+                4,
+                1,
+                4,
+                4,
+                4,
+                8,
+                4,
+                4,
+                4,
+                4,
+                1,
+                1,
+                4,
+                4,
+                4,
+                1,
+                8,
+                8,
+                4,
+                1,
+                8,
+                4,
+                1,
+                1,
+                1,
+                1,
+                1,
+                8
+              ],
+              "nets": [
+                "kicad-net-1",
+                "kicad-net-13",
+                "kicad-net-14",
+                "kicad-net-16",
+                "kicad-net-24",
+                "kicad-net-4",
+                "kicad-net-5"
+              ]
+            }
+          ],
+          "non_authoritative_last_snapshot": {
+            "monotonic_time_us": 1793011516,
+            "metrics": {
+              "iteration": 0,
+              "total_nets": 25,
+              "routed_nets": 25,
+              "unrouted_nets": 0,
+              "total_groups": 27,
+              "routed_groups": 0,
+              "unrouted_groups": 0,
+              "sampled_overflow": 40,
+              "corridor_overflow": 2,
+              "physical_overflow_nm": 4150612,
+              "clearance_shadow_conflicts": 274,
+              "regional_conflicts": 759,
+              "route_cost": 636062,
+              "vias": 0,
+              "rip_ups": 9,
+              "search_expansions": 0,
+              "selected_checkpoint": 0,
+              "best_checkpoint": 0,
+              "selected_is_best": false
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -43,6 +43,13 @@ def run(command: list[str]) -> None:
         )
 
 
+def kicad_cli_command(executable: Path) -> list[str]:
+    command = [str(executable)]
+    if executable.name.lower().endswith(".appimage"):
+        command.append("kicad-cli")
+    return command
+
+
 def render(board: Path, output_dir: Path, kicad_cli: Path, inkscape: Path, width: int) -> list[Path]:
     layers = copper_layers(board)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -58,7 +65,7 @@ def render(board: Path, output_dir: Path, kicad_cli: Path, inkscape: Path, width
             png = output_dir / f"{stem}.png"
             run(
                 [
-                    str(kicad_cli),
+                    *kicad_cli_command(kicad_cli),
                     "pcb",
                     "export",
                     "svg",

@@ -1,0 +1,241 @@
+--- a/src/global_router.cpp
++++ b/src/global_router.cpp
+@@ -8600,9 +8600,22 @@
+ }
+ 
+ [[nodiscard]] std::map<NetId, std::size_t> soft_capacity_route_blockers(
+-    const NetId& net, const std::vector<std::size_t>& nodes, const Grid& grid,
++    const NetTask& task, const SearchResult& probe, const Grid& grid,
+     const CorridorGraph& corridors, const CorridorGraph& corridor_neck_downs,
+-    const SharedVoronoiAllocationGraph& allocation, const RoutingOccupancy& occupancy) {
++    const SharedVoronoiAllocationGraph& allocation, const RoutingOccupancy& occupancy,
++    const GlobalRouterConfig& config, std::size_t& legal_shadow_observations) {
++  const auto& net = task.net;
++  const auto& nodes = probe.nodes;
++  const auto required_for_segment = [&](std::size_t index) {
++    const bool via = std::get<2>(grid.decode(nodes[index])) !=
++                     std::get<2>(grid.decode(nodes[index + 1U]));
++    const auto width = probe.segment_widths.size() + 1U == nodes.size() &&
++                               probe.segment_widths[index].value() > 0
++                           ? probe.segment_widths[index]
++                           : task.nominal_track_width;
++    return static_cast<long double>((via ? task.via_diameter : width).value()) / 2.0L +
++           static_cast<long double>(task.physical_clearance.value());
++  };
+   std::map<NetId, std::size_t> blockers;
+   const auto add_owners = [&blockers, &net](const auto& owners) {
+     for (const auto& owner : owners) {
+@@ -8611,15 +8624,25 @@
+       }
+     }
+   };
+-  const auto add_clearance_owners = [&blockers, &net](const auto& owners) {
++  const auto add_clearance_owners = [&](const auto& owners, long double required_nm) {
++    if (!config.reserve_sampled_route_clearance || config.clearance_shadows_advisory_only) {
++      return;
++    }
+     for (const auto& [owner, certificate] : owners) {
+-      static_cast<void>(certificate);
+-      if (owner != net) {
++      if (owner == net) {
++        continue;
++      }
++      // These certificates cover the largest possible candidate (including vias). A nearby
++      // owner is a rip-up blocker only when this probe's actual copper violates its clearance.
++      if (certificate.available_nm < required_nm) {
+         blockers[owner] = saturating_count_add(blockers[owner], 1U);
++      } else {
++        legal_shadow_observations = saturating_count_add(legal_shadow_observations, 1U);
+       }
+     }
+   };
+-  for (const auto node : nodes) {
++  for (std::size_t index = 0U; index < nodes.size(); ++index) {
++    const auto node = nodes[index];
+     if (const auto found = occupancy.nodes.find(node); found != occupancy.nodes.end()) {
+       const auto occupied = found->second.size() - found->second.count(net);
+       if (occupied >= 1U) {
+@@ -8628,7 +8651,16 @@
+     }
+     if (const auto found = occupancy.clearance_nodes.find(node);
+         found != occupancy.clearance_nodes.end()) {
+-      add_clearance_owners(found->second);
++      // A junction needs room for both incident tracks, or for the full via diameter.
++      auto required_nm = static_cast<long double>(task.nominal_track_width.value()) / 2.0L +
++                         static_cast<long double>(task.physical_clearance.value());
++      if (nodes.size() > 1U) {
++        required_nm = index == 0U ? required_for_segment(0U) : required_for_segment(index - 1U);
++        if (index + 1U < nodes.size()) {
++          required_nm = std::max(required_nm, required_for_segment(index));
++        }
++      }
++      add_clearance_owners(found->second, required_nm);
+     }
+   }
+   for (std::size_t index = 1U; index < nodes.size(); ++index) {
+@@ -8647,7 +8679,7 @@
+     }
+     if (const auto found = occupancy.clearance_edges.find(sampled);
+         found != occupancy.clearance_edges.end()) {
+-      add_clearance_owners(found->second);
++      add_clearance_owners(found->second, required_for_segment(index - 1U));
+     }
+     if (const auto corridor = corridors.corridor_for(edge)) {
+       if (const auto found = occupancy.corridors.find(*corridor);
+@@ -12600,6 +12632,7 @@
+   std::size_t hard_capacity_soft_cut_probes = 0U;
+   std::size_t hard_capacity_soft_cut_routes = 0U;
+   std::size_t hard_capacity_soft_cut_blockers = 0U;
++  std::size_t hard_capacity_soft_cut_legal_shadow_observations = 0U;
+   std::size_t hard_capacity_failed_retry_rollbacks = 0U;
+   std::size_t hard_capacity_tail_deferred_victims = 0U;
+   std::size_t hard_capacity_protected_recoveries = 0U;
+@@ -12979,6 +13012,8 @@
+     result.hard_capacity_soft_cut_probes = hard_capacity_soft_cut_probes;
+     result.hard_capacity_soft_cut_routes = hard_capacity_soft_cut_routes;
+     result.hard_capacity_soft_cut_blockers = hard_capacity_soft_cut_blockers;
++    result.hard_capacity_soft_cut_legal_shadow_observations =
++        hard_capacity_soft_cut_legal_shadow_observations;
+     result.hard_capacity_conflict_set_states = hard_capacity_conflict_set_states;
+     result.hard_capacity_joint_ripup_attempts = hard_capacity_joint_ripup_attempts;
+     result.hard_capacity_conflict_sets_withheld = hard_capacity_conflict_sets_withheld;
+@@ -14555,9 +14590,11 @@
+               }
+               if (!probe.cancelled && !probe.nodes.empty()) {
+                 ++hard_capacity_soft_cut_routes;
+-                const auto cut = soft_capacity_route_blockers(task.net, probe.nodes, *grid,
+-                                                              *corridors, corridor_neck_downs,
+-                                                              *voronoi_allocation, occupancy);
++                const auto legal_observations_before =
++                    hard_capacity_soft_cut_legal_shadow_observations;
++                const auto cut = soft_capacity_route_blockers(
++                    task, probe, *grid, *corridors, corridor_neck_downs, *voronoi_allocation,
++                    occupancy, probe_config, hard_capacity_soft_cut_legal_shadow_observations);
+                 hard_capacity_soft_cut_blockers =
+                     saturating_count_add(hard_capacity_soft_cut_blockers, cut.size());
+                 std::vector<NetId> cut_set;
+@@ -14581,7 +14618,10 @@
+                   cut_event.search_expansions = probe.expansions;
+                   cut_event.detail = "non-committing soft-capacity cut probe found " +
+                                      std::to_string(cut.size()) +
+-                                     " routed blockers for progressive rip-up";
++                                     " routed blockers for progressive rip-up; legally separated "
++                                     "shadow observations excluded=" +
++                                     std::to_string(hard_capacity_soft_cut_legal_shadow_observations -
++                                                    legal_observations_before);
+                   emit_telemetry(std::move(cut_event));
+                 }
+               }
+--- a/include/flux/core/global_router.hpp
++++ b/include/flux/core/global_router.hpp
+@@ -1068,6 +1068,8 @@
+   std::size_t hard_capacity_soft_cut_probes{0};
+   std::size_t hard_capacity_soft_cut_routes{0};
+   std::size_t hard_capacity_soft_cut_blockers{0};
++  // Broad-phase shadow hits that do not violate the probe's selected copper clearance.
++  std::size_t hard_capacity_soft_cut_legal_shadow_observations{0};
+   bool configured_rollback_failed_hard_capacity_ripup{false};
+   std::size_t hard_capacity_failed_retry_rollbacks{0};
+   bool configured_defer_hard_capacity_ripup_victims_to_pass_tail{false};
+--- a/apps/flux-cli/main.cpp
++++ b/apps/flux-cli/main.cpp
+@@ -1093,6 +1093,8 @@
+       << "  \"hard_capacity_soft_cut_routes\": " << result.hard_capacity_soft_cut_routes << ",\n"
+       << "  \"hard_capacity_soft_cut_blockers\": " << result.hard_capacity_soft_cut_blockers
+       << ",\n"
++      << "  \"hard_capacity_soft_cut_legal_shadow_observations\": "
++      << result.hard_capacity_soft_cut_legal_shadow_observations << ",\n"
+       << "  \"configured_rollback_failed_hard_capacity_ripup\": "
+       << (result.configured_rollback_failed_hard_capacity_ripup ? "true" : "false") << ",\n"
+       << "  \"hard_capacity_failed_retry_rollbacks\": "
+@@ -4987,6 +4989,8 @@
+       << result.global_route.hard_capacity_soft_cut_routes << ",\n"
+       << "  \"hard_capacity_soft_cut_blockers\": "
+       << result.global_route.hard_capacity_soft_cut_blockers << ",\n"
++      << "  \"hard_capacity_soft_cut_legal_shadow_observations\": "
++      << result.global_route.hard_capacity_soft_cut_legal_shadow_observations << ",\n"
+       << "  \"configured_rollback_failed_hard_capacity_ripup\": "
+       << (result.global_route.configured_rollback_failed_hard_capacity_ripup ? "true" : "false")
+       << ",\n"
+--- a/tests/unit/core_tests.cpp
++++ b/tests/unit/core_tests.cpp
+@@ -1344,6 +1344,70 @@
+               knowledge.success_history.front().end == mm(20.0, 20.0),
+           "clean quantized copper must accumulate a bounded directional success prior separately "
+           "from failure pressure");
++}
++
++void soft_capacity_cuts_exclude_legally_separated_shadows() {
++  Board hard_capacity_source;
++  hard_capacity_source.source_revision = "hard-capacity-risk-fixture";
++  hard_capacity_source.outline = rectangle(0.0, 0.0, 100.0, 80.0);
++  hard_capacity_source.layers = {{LayerId{"F.Cu"}, "F.Cu", LayerKind::copper, 0}};
++  hard_capacity_source.nets = {{NetId{"hard-a"}, "HARD_A", 0}, {NetId{"hard-b"}, "HARD_B", 0}};
++  hard_capacity_source.rules.default_track_width = Nanometres::from_mm(0.35);
++  const auto hard_terminal = [](std::string id, const NetId& net, Point position) {
++    Footprint footprint;
++    footprint.id = ObjectId{id};
++    footprint.reference = id;
++    footprint.position = position;
++    footprint.courtyard = local_rectangle(0.1, 0.1);
++    flux::Pad pad;
++    pad.id = ObjectId{id + "-pad"};
++    pad.net = net;
++    pad.layers = {LayerId{"F.Cu"}};
++    pad.shape = flux::PadShape::rectangle;
++    pad.width = Nanometres::from_mm(0.1);
++    pad.height = Nanometres::from_mm(0.1);
++    footprint.pads.push_back(std::move(pad));
++    return footprint;
++  };
++  hard_capacity_source.footprints = {hard_terminal("HA1", NetId{"hard-a"}, mm(20.0, 35.0)),
++                                     hard_terminal("HA2", NetId{"hard-a"}, mm(80.0, 35.0)),
++                                     hard_terminal("HB1", NetId{"hard-b"}, mm(20.0, 45.0)),
++                                     hard_terminal("HB2", NetId{"hard-b"}, mm(80.0, 45.0))};
++  Keepout hard_upper;
++  hard_upper.id = ObjectId{"hard-upper"};
++  hard_upper.area = rectangle(30.0, 0.0, 70.0, 39.3);
++  hard_upper.layers = {LayerId{"F.Cu"}};
++  hard_upper.prohibit.tracks = true;
++  hard_upper.prohibit.vias = true;
++  auto hard_lower = hard_upper;
++  hard_lower.id = ObjectId{"hard-lower"};
++  hard_lower.area = rectangle(30.0, 40.7, 70.0, 80.0);
++  hard_capacity_source.keepouts = {std::move(hard_upper), std::move(hard_lower)};
++  GlobalRouterConfig hard_capacity_config;
++  hard_capacity_config.grid_pitch = Nanometres::from_mm(1.0);
++  hard_capacity_config.max_iterations = 2U;
++  hard_capacity_config.max_expansions_per_connection = 50'000U;
++  // Two ordinary seeds plus the mandatory hydraulic family; RRT is disabled below.
++  hard_capacity_config.max_static_seed_candidates_per_connection = 3U;
++  hard_capacity_config.use_static_seed_rrt_connect_alternatives = false;
++  hard_capacity_config.use_voronoi_allocation_resources = true;
++  hard_capacity_config.atomic_complete_net_routing = true;
++  hard_capacity_config.hard_capacity_start_iteration = 2U;
++  hard_capacity_config.max_hard_capacity_ripup_attempts_per_pass = 2U;
++  hard_capacity_config.max_hard_capacity_ripup_nets_per_attempt = 1U;
++  hard_capacity_config.max_hard_capacity_conflict_set_states_per_attempt = 16U;
++  hard_capacity_config.rollback_failed_hard_capacity_ripup = true;
++  hard_capacity_config.defer_hard_capacity_ripup_victims_to_pass_tail = true;
++  hard_capacity_source.rules.default_via_diameter = Nanometres::from_mm(3.0);
++  const auto hard_capacity_route = flux::route_global(hard_capacity_source, hard_capacity_config);
++  require(hard_capacity_route.hard_capacity_soft_cut_routes > 0U &&
++              hard_capacity_route.hard_capacity_soft_cut_blockers > 0U &&
++              hard_capacity_route.hard_capacity_soft_cut_legal_shadow_observations > 0U,
++          "a broad via-sized shadow must retain true bottleneck blockers while excluding legal "
++          "track-clearance observations: probes=" +
++              std::to_string(hard_capacity_route.hard_capacity_soft_cut_routes) + ", blockers=" +
++              std::to_string(hard_capacity_route.hard_capacity_soft_cut_blockers) + ", excluded=" +
++              std::to_string(hard_capacity_route.hard_capacity_soft_cut_legal_shadow_observations));
+ }
+ 
+ void global_to_detailed_route_is_transactional_and_capacity_gated() {
+@@ -8631,6 +8695,8 @@
+        physical_checkpoint_ordering_is_feasibility_first_and_fail_closed},
+       {"routing_xpbd_joint_relaxation_preserves_endpoints_and_reports_stress",
+        routing_xpbd_joint_relaxation_preserves_endpoints_and_reports_stress},
++      {"soft_capacity_cuts_exclude_legally_separated_shadows",
++       soft_capacity_cuts_exclude_legally_separated_shadows},
+       {"global_to_detailed_route_is_transactional_and_capacity_gated",
+        global_to_detailed_route_is_transactional_and_capacity_gated},
+       {"constrained_ph_rebound_avoids_inter_sample_obstacle",

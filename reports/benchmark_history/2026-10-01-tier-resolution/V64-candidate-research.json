@@ -1,0 +1,107 @@
+{
+  "schema": 1,
+  "experiment": "V64 candidate",
+  "status": "bounded R1 failed/time limit; normal experiment pending; reviewfixes being verified",
+  "board": "bm_svf",
+  "tier": 1,
+  "evidence": {
+    "artifact": "build/tier-resolution-v60/frontier-256/scene-2",
+    "source": "window-0.json confirms net13notowned andretainedfrozen",
+    "track_net": "kicad-net-13",
+    "track_connection": 2,
+    "track_start_nm": [
+      55440000,
+      81915000
+    ],
+    "track_end_nm": [
+      55440000,
+      83540000
+    ],
+    "via_net": "kicad-net-14",
+    "via_connection": 2,
+    "via_site_nm": [
+      55590000,
+      82890000
+    ],
+    "layer": "F.Cu",
+    "center_distance_nm": 150000,
+    "required_distance_nm": 675000,
+    "deficit_nm": 525000,
+    "verified_source": "reconstructed-scene.jsonl layertransition and proof.jsonl atpitch1",
+    "note": "55.490002,82.790002 is attachedrunupendpoint, notvia site"
+  },
+  "hypothesis": "Reject via candidates intersecting immutable foreign retained fragments before access variable selection; permit normal alternative sites and do not test owned movable lane centrelines.",
+  "research": [
+    {
+      "source": "https://vlsicad.ucsd.edu/Publications/Journals/j136.pdf",
+      "technique": "TritonRoute-WXL accounts for wide via enclosures in wire pitch/resource supply and uses incremental DRC to drive repair",
+      "assumptions": "Manhattan IC cuts/enclosures differ from circular PCB vias; use true PCB copper/drill geometry and clearance",
+      "integration": "regionalvia selection/frozen copper context",
+      "complexity": "targeted viavssegmentchecks per regional candidate, keep boundedsearch",
+      "licence": "concept only, no source copied"
+    }
+  ],
+  "ranked_options": [
+    {
+      "rank": 1,
+      "change": "validate against unchanged frozenoutsidecopper",
+      "risk": "must correctly exclude ownedfragment geometry thatwillbereplaced"
+    },
+    {
+      "rank": 2,
+      "change": "validate selectedpackedlane geometry andvia atcompleteassignment leaf",
+      "risk": "exact geometry compilation expensive; mustnotrejectmovable coarsecenterlines"
+    },
+    {
+      "rank": 3,
+      "change": "penalize allcoarsefragment vsviacollisions",
+      "decision": "rejectdesign; legitimatepackingcanoffsetcentrelines"
+    }
+  ],
+  "expected_metric_change": "Scene2 frozen-track/via combination rejected before nativeassembly; exactnative violations preservedasauthority; less wastedphysicalassembly or saferselectedsites.",
+  "success_criterion": "Deterministicfixtureselectssafealternative andoldbinaryfails; matchedfrozencontext/currentfrontier reportscandidatechanges, noopensincrease; Tier0/externalDRC preserved.",
+  "regression_criterion": "Rejectionagainstownedmovablefragments, ignoringlayers/samenet, increasedopens, lower-tier regression, unrealisticruntimegrowth",
+  "baseline_source_snapshot": "build/tier-resolution-20261001-v63-source",
+  "source_hashes": {
+    "src/regional_router.cpp": "312310c3ba35bfaf06aa9d845e20063666087d2c81281ffce6881c827f5cb94c",
+    "include/flux/core/regional_router.hpp": "f48632ef482bc6b146064f316647de266156c1a4e8e251037b0c3f9f341ccc11",
+    "apps/flux-cli/main.cpp": "59bc1f76020238828c9dd3a15690a624969efa7caddc888aa258f83740c8cdea",
+    "tests/unit/core_tests.cpp": "1e5d8beaca1b786bcee9556517510eacee73e8d4270ac1a0759e823bbb059d1a",
+    "tools/replay_regional_bundle.cpp": "a7dfd99eddd943b8a990ed8b18ae91ccfa2f41f57be25ca5ea6257bf071f89bc"
+  },
+  "review": {
+    "geometric_gate": "independent read-only review confirmed frozen ownership matches builder; no owned-movable centreline constraint",
+    "identified_gap": "Early rejection lost blocker witness and could prevent scope expansion",
+    "correction": "Bounded owner-derived frozen scope witness survives partial/late rejection and merges with native diagnostics; retainallincident ownedfragments (notjustone)",
+    "pending": null,
+    "additional_corrections": [
+      "Complete incidentgroup beyond16witness cap andpartialselectedfragments",
+      "Separate nativecandidate witnesses from persistent accesssearch witnesses",
+      "Reviewfix initiallyintroduced missing lambda return/segfault, correctedexplicitvoid; revalidationpending"
+    ],
+    "result": "Independent followup read found no remaining actionable defect in ownership and nativewitness lifetime delta; tests subsequentlyfound missing-return UB, fixed and fullcorepassed"
+  },
+  "validation": {
+    "core_tests": "53/53",
+    "focused": "passeswith2incidentownersandearlyscopeexpansion",
+    "tier0": "qualified50paths, cleanexactcopperandexternalKiCad DRC",
+    "qualified_corpus_ctest": "passafterrenderer temp visibilityfix",
+    "non_frontier_ctest": {
+      "total": 141,
+      "passed": 134,
+      "known_failures": 7,
+      "new_failures": 0,
+      "log": "build/tier-resolution-20261001-v64/ctest-non-frontier.log"
+    },
+    "frozen_replay": "reports/benchmark_history/2026-10-01-tier-resolution/V64-frozen-replay.json",
+    "bounded_r1": {
+      "status": "timed_out",
+      "configured_seconds": 600,
+      "complete_physical_scene": null,
+      "prior_matched_control_seconds": 308.620776222,
+      "artifact": "build/tier-resolution-20261001-v64/bounded-tier1-r1/run-result.json",
+      "note": "No finalgeometry metric available; cannotcompare partialsnapshot tocompletedcontrol. Simultaneousfullnormalrun affects walltime contention; added scope work also observed."
+    },
+    "review_corrected_core": "53/53 passed after explicit lambda voidreturn fix"
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "date": "2026-10-01",
+  "revision": "reviewed-v67",
+  "binary_sha256": "01a391bd1b908fce384eddeca3dc33fba9c78cbfed70b5c30271c9a7ba06cb7a",
+  "command_parameters": {
+    "level": 1,
+    "telemetry": "diagnostic",
+    "max_router_iterations": 30,
+    "max_expansions": 50000
+  },
+  "boards": {
+    "pt2399_delay": {
+      "qualified": true,
+      "paths": 50,
+      "external_drc": "PASS"
+    },
+    "bm_svf": {
+      "qualified": false,
+      "routing_plan_complete": false,
+      "native_scene_evaluated": 1,
+      "native_scene_complete": 1,
+      "native_scene_conflicts": 439,
+      "native_scene_nonprovisional_conflicts": 387,
+      "straight_scene_evaluated": 1,
+      "straight_scene_open_connections": 0,
+      "straight_scene_drc_violations": 764,
+      "straight_scene_drc_categories": {
+        "hole_clearance": 62,
+        "hole_to_hole_clearance": 3,
+        "track_clearance": 542,
+        "track_edge_clearance": 5,
+        "track_pad_clearance": 4,
+        "track_via_clearance": 142,
+        "via_clearance": 4,
+        "via_edge_clearance": 2
+      },
+      "quantized_copper_oracle_opens": null,
+      "planned_via_transitions": 46,
+      "regional_physical_scope_retries": 1,
+      "checkpoint_objective": "aggregate_overflow",
+      "latest_telemetry_observations": {
+        "sampled_overflow": 0,
+        "corridor_overflow": 0,
+        "physical_overflow_nm": 0,
+        "clearance_shadow_conflicts": 210,
+        "regional_conflicts": 216,
+        "vias": 60,
+        "note": "Latest discarded regional state; not the final atomic CLI-selected physical metrics."
+      },
+      "final_atomic_cli_selected_metrics": {
+        "coarse_errors": 540,
+        "tracks": 1291,
+        "vias": 46,
+        "opens": 0
+      }
+    }
+  },
+  "runtime_seconds": 2510.65,
+  "global_runtime_seconds": 2499.885,
+  "max_rss_kb": 574552,
+  "comparison_v63_full_normal_control": {
+    "errors": 540,
+    "opens": 0,
+    "tracks": 1291,
+    "vias": 46,
+    "runtime_seconds": 2513.75,
+    "global_runtime_seconds": 2502.437,
+    "comparison": "No quality improvement versus matched full normal V63 control."
+  }
+}

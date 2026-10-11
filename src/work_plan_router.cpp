@@ -603,6 +603,10 @@ WorkPlanRouteCompileResult compile_flux_work_plan_routes(const Board& source,
     set_bool("bounded_residual_conflict_refinement",
              compiled.configuration.detailed.bounded_residual_conflict_refinement);
     set_bool("circular_arc_refinement", compiled.configuration.detailed.circular_arc_refinement);
+    compiled.configuration.planner.curved_tracks =
+        compiled.configuration.detailed.circular_arc_refinement;
+    compiled.configuration.detailed.restrict_straight_track_angles =
+        !compiled.configuration.planner.curved_tracks;
     set_bool("differential_pair_skew_tuning",
              compiled.configuration.detailed.differential_pair_skew_tuning);
     set_bool("differential_pair_skew_tuning_batch_assignment",

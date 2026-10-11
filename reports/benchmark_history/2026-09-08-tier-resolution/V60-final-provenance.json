@@ -1,0 +1,12 @@
+{
+  "git_revision": "94aa691ad89576d1c0ac07a5346020da21fc9d06",
+  "working_tree_dirty": true,
+  "files": {
+    "src/regional_router.cpp": "270f828586f3eeaa9e7fb075f1a04694ce2f5844cbec55b3e6150f56a1ec9b37",
+    "src/quantized_copper_oracle.cpp": "a8b68d75df7ee40004b5b8cb929f042d45f85c231a60ebe5eccc01bc13fcfc97",
+    "include/flux/core/routability_knowledge.hpp": "35381e77f1fd26b98892e7c9529911bd84bd66c698ee143f4593d5668c0231fa",
+    "tests/unit/core_tests.cpp": "aa83126fb92ea4b018f0ee90f7591debb75deb78190e6e8b24e11d2ea9f171bf",
+    "build/release/flux-cli": "bd023a2d6bc0048bbd9381620ecd09125c65636af2d901ebb6857ce60cb90c59",
+    "build/dev/flux-cli": "a31787adff25da99b305b3e35ce593a9be632042c5be77babbf30795f8d0e0a2"
+  }
+}

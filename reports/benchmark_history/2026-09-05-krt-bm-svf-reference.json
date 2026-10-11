@@ -1,0 +1,82 @@
+{
+  "schema": 1,
+  "date": "2026-09-05",
+  "board": "bm_svf",
+  "tier": 1,
+  "input_sha256": "308ce5513cb6b2b33820648a0062a54f548f6b3c13d856cdcd9b7c3ac8a20d2a",
+  "flux": {
+    "git_revision": "25e3b884be9b359d9c5bf0cc4fbb6cc836fd4f82",
+    "working_tree": "dirty; rip-up sequencing experiment plus pre-existing work",
+    "outcome": "timeout",
+    "timeout_seconds": 7200,
+    "last_telemetry_time_seconds": 7169.077517,
+    "pathfinder_iterations_completed": 30,
+    "reported_search_expansions": 9801533,
+    "route_ripup_events": 155,
+    "hydraulic_field_updates": 342,
+    "selected_all_net_checkpoint": {
+      "sampled_overflow": 19,
+      "corridor_overflow": 3,
+      "clearance_shadow_conflicts": 324
+    },
+    "final_stage": "second ordinary regional portfolio; assignment 56/410 started",
+    "committed_copper": false,
+    "telemetry_events": 8494,
+    "telemetry_bytes": 831964957,
+    "observed_rss_kib": 596264,
+    "artifacts": "build/tiers-check-20260905-ripup-sequencing-tier1"
+  },
+  "kicad_routing_tools": {
+    "git_revision": "ec2bf0e1021c0ed95c45b14664d02c56777a0974",
+    "version": "0.22.0",
+    "router_binary_sha256": "a2609c0f3d37ab886f643663327d03669c0ba374d4d2196752caa6cafd5442d3",
+    "configuration": {
+      "grid_step_mm": 0.1,
+      "routing_layers": ["F.Cu", "B.Cu"],
+      "track_width_mm": 0.2,
+      "clearance_mm": 0.2,
+      "via_diameter_mm": 0.7,
+      "via_drill_mm": 0.3,
+      "escalation": "off",
+      "fab_tier": "standard",
+      "strict_sizes": true,
+      "fix_drc_settings": false,
+      "ordering": "mps",
+      "route_trace": true
+    },
+    "outcome": "complete",
+    "wall_seconds": 7.30,
+    "max_rss_kib": 316020,
+    "nets_routed": 25,
+    "nets_failed": 0,
+    "pad_pairs_connected": 78,
+    "pad_pairs_total": 78,
+    "search_expansions": 699298,
+    "segments": 615,
+    "vias": 73,
+    "route_length_mm": 925.353,
+    "routing_layers": 2,
+    "rule_escalations": 0,
+    "route_events": 58,
+    "rip_events": 8,
+    "restore_events": 1,
+    "reconcile_events": 1,
+    "final_events": 1,
+    "trace_bytes": 79915,
+    "krt_internal_drc_violations": 0,
+    "krt_internal_same_net_crossing_warnings": 2,
+    "kicad_10": {
+      "unconnected_items": 0,
+      "routing_errors": 0,
+      "generated_warnings": {
+        "track_dangling": 1
+      },
+      "pre_existing_warnings": 67
+    },
+    "output_sha256": "197cc066ed5473266e313771a364278060f98a98e56f15e2cf8ad453de737e65",
+    "trace_sha256": "0770da245f56594fe1a40131010f0b20f3fc839ab2ce8b2c83800aa9f88734aa",
+    "summary_sha256": "9b54c8abdceecbb2b837ea98b2699bebb627f7e5491dfa7200fbd015d9883fa8",
+    "artifacts": "build/reference-benchmarks/krt-bm_svf-20260905-strict-traced"
+  },
+  "interpretation": "A strict two-layer physical route exists. Flux is blocked by search/representation/scheduling and failure-attribution behavior rather than intrinsic placement or layer infeasibility."
+}

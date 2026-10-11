@@ -1,0 +1,83 @@
+{
+  "date": "2026-10-08",
+  "experiment": "V78 resumable routing engine",
+  "revision": "94aa691ad89576d1c0ac07a5346020da21fc9d06",
+  "dirty_tree": true,
+  "source_sha256": {
+    "include/flux/core/routing_engine.hpp": "a4331ef242d00cb253bbfb24b00df237b00d7868899157623c5495fb2cf084cc",
+    "src/routing_engine.cpp": "bb290b9bd824cbbffc5d60b59d21ac2f3d60c79d136ea7026610680fe8b87e71",
+    "include/flux/core/routing_kernel.hpp": "46fa51d7e21ff556bfab870147f5cb15eca619f953edf9e4bf616dc3f1f1db83",
+    "src/routing_kernel.cpp": "7ee5d03e7679f92932be78b751a40567b0027c975eb80b4b6ff043f9714459fa",
+    "src/regional_router.cpp": "50e55de17f313246b30140ffd3fe722fce6ccf43434e5f6300586138f35fccf2",
+    "include/flux/core/regional_router.hpp": "766290b611518b5a358761e21b67c405039ae312b1e33fabb7687d45e28930b7",
+    "src/global_router.cpp": "e92e84a5eb8d13ef97086c2cd0b1d101c9e729d9316ab62b8ae468bc7d9e600f",
+    "src/detailed_router.cpp": "ac0e4f210e9cd3f1ea434093553be3b12c71501093cb74b640f30b3ad6aea872",
+    "src/navmesh_route.cpp": "c468adbcd4717e7ca08e81084417aaff38b270578fd5fb5ef4df32d3fd3f9d4e",
+    "src/routing_feedback.cpp": "7476a4ecd9d616b3af2e5b8ebaa223fd01eaef3abb23d9c47ce179d44541dbec",
+    "include/flux/core/routing_feedback.hpp": "e62eeb116151c79c2eb71bb4f5b5747719c05be1e75e4b8dd123365cc48bebf4",
+    "apps/flux-cli/main.cpp": "eec09503b2132743ee47d12b8b39293f2a933dc6dc835839cf8e2e6399b81b4f",
+    "CMakeLists.txt": "be5017b1e1a4d959f614c3cfb33319c5bf321c1b68e5d394fe2316870d5ca4e1",
+    "tests/CMakeLists.txt": "47463a4611588194ca44e08f2011830280165e99b64260124b5804ba0c07dd56",
+    "tests/unit/core_tests.cpp": "72f51a798e9bb7b905067c84bcdf89a49a003d8e65685f8879a11f636e7ebef4",
+    "tests/unit/routing_kernel_tests.cpp": "2d441092b6f15f74b4ffd85d114a21c899347b2adce2a3d1dad0bbfb5ea89720",
+    "design.md": "0fda1f7e6936ad081d8048a5f0f1658cfe682eac22fb3e93244e2a8ba274ffce",
+    "docs/router_research_log.md": "d9659beadbe26ebb645d9f19a352db4baff6b5a86739e53c30f11cd5e49d9890"
+  },
+  "core_tests": {
+    "passed": 64,
+    "total": 64,
+    "log": "build/routing-engine-20261008/all-core-final-verified.log"
+  },
+  "kernel_tests": "passed",
+  "tier0": {
+    "qualified": true,
+    "board": "pt2399_delay",
+    "external_kicad_drc_passed": true,
+    "added_tracks": 254,
+    "added_vias": 3,
+    "copper_violations": 0,
+    "duration_seconds": 2.070617257995764,
+    "result": "build/routing-engine-20261008/tier0-engine-final/run-result.json"
+  },
+  "tier1": {
+    "qualified": false,
+    "board": "bm_svf",
+    "routing_engine_outcome": "timed-out",
+    "routing_plan_complete": false,
+    "coarse_paths": 78,
+    "coarse_unrouted_nets": 0,
+    "deadline_ms": 120000,
+    "wall_seconds": 120.09,
+    "user_seconds": 101.25,
+    "maximum_rss_kb": 427180,
+    "exit_code": 3,
+    "result": "build/routing-engine-20261008/engine-deadline-final.json",
+    "timing_log": "build/routing-engine-20261008/engine-deadline-final.time.log",
+    "interpretation": "Coarse topology completed; physical routing did not complete before the engine deadline."
+  },
+  "baseline_binary_sha256": "022c18f76c5ff544365900b7be4f7c96a9641a1434ea8df772650b039d84835d",
+  "intermediate_regressions": [
+    "seed certification and exact coarse fallback omitted",
+    "conservative overflow blocked connected seed physical legalization",
+    "CLI incomplete preview overwrote internally legal detailed copper"
+  ],
+  "limits": [
+    "cooperative kernel boundaries, not hard real-time preemption",
+    "in-memory continuation only",
+    "confined erosion and XPBD require curved realization",
+    "external KiCad validation supplied by caller; internal acceptance is pending until acknowledged"
+  ],
+  "configuration": {
+    "policy": "adaptive split stages",
+    "default_slice_work": 256,
+    "default_slice_ms": 50,
+    "default_action_budget": 16,
+    "deadline": "caller-configurable; bounded pilot120000ms"
+  },
+  "binary_sha256": "b9905b1e4c783955fc58b59e445c1ee2a6c5e2d684707dd2eeb33ea0a95aacdf",
+  "harness_control": {
+    "log": "build/routing-engine-20261008/tier1-bounded.log",
+    "interpretation": "Harness process timeout without engine deadline; not engine deadline verification."
+  },
+  "independent_review": "No remaining material defects reported."
+}

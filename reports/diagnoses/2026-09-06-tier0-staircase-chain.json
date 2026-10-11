@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "authoritative": false,
+  "source_telemetry": "build/native-straight-seams-tier0/tier-0-pt2399_delay/telemetry/pt2399_delay-detail.jsonl",
+  "net": "kicad-net-4",
+  "layer": "F.Cu",
+  "width_nm": 250000,
+  "track_ids": [
+    "flux-route-kicad-net-4-0-track-0",
+    "flux-route-kicad-net-4-0-track-1",
+    "flux-route-kicad-net-4-0-track-2",
+    "flux-route-kicad-net-4-0-regional-native-track-3",
+    "flux-route-kicad-net-4-0-track-4",
+    "flux-route-kicad-net-4-0-track-5",
+    "flux-route-kicad-net-4-0-regional-native-track-6-branch-0"
+  ],
+  "points_nm": [
+    {"x": 27460000, "y": 41000000},
+    {"x": 28000000, "y": 41000000},
+    {"x": 28000000, "y": 41500000},
+    {"x": 28500000, "y": 41500000},
+    {"x": 30500000, "y": 43500000},
+    {"x": 30500000, "y": 44000000},
+    {"x": 31000000, "y": 44000000},
+    {"x": 31000000, "y": 47000000}
+  ]
+}

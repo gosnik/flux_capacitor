@@ -1,0 +1,34 @@
+{
+  "schema": 1,
+  "experiment": "exact-source-segment-attribution",
+  "git_revision": "25e3b884be9b359d9c5bf0cc4fbb6cc836fd4f82",
+  "worktree": "dirty; unrelated prior changes preserved",
+  "cli_sha256": "ff4f0e19f1abb1bc4e631df434a0adc2c332a4c7c94ec0eec4d76dba5c231909",
+  "micro_test": {
+    "name": "exact_copper_witnesses_preserve_branch_identity",
+    "result": "pass",
+    "before": {"distinct_conflict_edges": 1, "owned_fragments": 2},
+    "after": {"distinct_conflict_edges": 2, "owned_fragments": 3},
+    "checks": ["source_connection_identity", "coalesced_source_pairs", "collinear_edge_merging", "path_order_independence", "stale_index_rejected", "stale_geometry_rejected"],
+    "physical_route_legality": "not_the_purpose_of_this_test"
+  },
+  "focused_ctest": {
+    "passed": 44,
+    "failed": 0,
+    "duration_seconds": 104.90,
+    "core_duration_seconds": 94.55,
+    "includes": ["all_core_unit_tests", "routing_manifest_contract", "route_kicad_contracts", "detail_kicad_contracts", "KiCad_arc_DRC_fixture", "KiCad_multilayer_DRC_fixture"],
+    "log": "build/exact-branch-verification-20260906/LastTest.log"
+  },
+  "benchmark_history_python_tests": {"passed": 3, "failed": 0},
+  "all_non_corpus_ctest": {
+    "passed": 121,
+    "failed": 7,
+    "duration_seconds": 224.38,
+    "log": "build/exact-branch-verification-20260906/all-non-corpus-LastTest.log",
+    "preexisting_failures": ["flux_cli_direct_medial_route_demo", "flux_cli_incremental_route_demo", "flux_cli_strict_medial_detail_demo", "flux_cli_incremental_detail_demo", "flux_cli_optimize_demo", "flux_cli_optimize_demo_pareto", "flux_cli_group_optimize_demo"],
+    "differential_check": "All seven have identical exit codes and parsed JSON versus frozen a207a025 baseline after omitting only newly added mapping-count/source-pair fields.",
+    "expectations_relaxed": false
+  },
+  "tier_status": "See separate corpus histories; unit tests are not tier qualification."
+}

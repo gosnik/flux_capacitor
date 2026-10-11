@@ -1,0 +1,598 @@
+{
+  "artifacts": [
+    {
+      "bytes": 6637,
+      "path": "run-metadata.json",
+      "sha256": "b0b72ca3cd41118006187e74dea86d1c534d824fcef85147a27102e5cb8db727"
+    }
+  ],
+  "boards": [
+    {
+      "declared_status": "qualified",
+      "detailed": null,
+      "global": null,
+      "id": "pt2399_delay",
+      "inspection": {
+        "board_cutouts": 0,
+        "connectivity_open_nets": [
+          {
+            "connected_pad_groups": 3,
+            "id": "kicad-net-1",
+            "name": "Net-(Q1-S)",
+            "open_connections": 2,
+            "pad_count": 3
+          },
+          {
+            "connected_pad_groups": 4,
+            "id": "kicad-net-2",
+            "name": "Net-(U2-LPF1-IN)",
+            "open_connections": 3,
+            "pad_count": 4
+          },
+          {
+            "connected_pad_groups": 15,
+            "id": "kicad-net-3",
+            "name": "GND",
+            "open_connections": 14,
+            "pad_count": 15
+          },
+          {
+            "connected_pad_groups": 6,
+            "id": "kicad-net-4",
+            "name": "+5V",
+            "open_connections": 5,
+            "pad_count": 6
+          },
+          {
+            "connected_pad_groups": 2,
+            "id": "kicad-net-5",
+            "name": "Net-(U2-CC1)",
+            "open_connections": 1,
+            "pad_count": 2
+          },
+          {
+            "connected_pad_groups": 2,
+            "id": "kicad-net-6",
+            "name": "Net-(U2-CC0)",
+            "open_connections": 1,
+            "pad_count": 2
+          },
+          {
+            "connected_pad_groups": 2,
+            "id": "kicad-net-7",
+            "name": "Net-(U2-OP1-OUT)",
+            "open_connections": 1,
+            "pad_count": 2
+          },
+          {
+            "connected_pad_groups": 2,
+            "id": "kicad-net-8",
+            "name": "Net-(U2-OP1-IN)",
+            "open_connections": 1,
+            "pad_count": 2
+          },
+          {
+            "connected_pad_groups": 2,
+            "id": "kicad-net-9",
+            "name": "Net-(U2-OP2-IN)",
+            "open_connections": 1,
+            "pad_count": 2
+          },
+          {
+            "connected_pad_groups": 3,
+            "id": "kicad-net-10",
+            "name": "Net-(U2-OP2-OUT)",
+            "open_connections": 2,
+            "pad_count": 3
+          },
+          {
+            "connected_pad_groups": 3,
+            "id": "kicad-net-11",
+            "name": "Net-(U2-LPF1-OUT)",
+            "open_connections": 2,
+            "pad_count": 3
+          },
+          {
+            "connected_pad_groups": 2,
+            "id": "kicad-net-12",
+            "name": "Net-(J2-Pin_1)",
+            "open_connections": 1,
+            "pad_count": 2
+          },
+          {
+            "connected_pad_groups": 2,
+            "id": "kicad-net-13",
+            "name": "Net-(C8-Pad2)",
+            "open_connections": 1,
+            "pad_count": 2
+          },
+          {
+            "connected_pad_groups": 2,
+            "id": "kicad-net-14",
+            "name": "Net-(C9-Pad2)",
+            "open_connections": 1,
+            "pad_count": 2
+          },
+          {
+            "connected_pad_groups": 2,
+            "id": "kicad-net-15",
+            "name": "Net-(C9-Pad1)",
+            "open_connections": 1,
+            "pad_count": 2
+          },
+          {
+            "connected_pad_groups": 4,
+            "id": "kicad-net-16",
+            "name": "Net-(J1-Pin_1)",
+            "open_connections": 3,
+            "pad_count": 4
+          },
+          {
+            "connected_pad_groups": 5,
+            "id": "kicad-net-17",
+            "name": "+9V",
+            "open_connections": 4,
+            "pad_count": 5
+          },
+          {
+            "connected_pad_groups": 4,
+            "id": "kicad-net-19",
+            "name": "Net-(D2-A)",
+            "open_connections": 3,
+            "pad_count": 4
+          },
+          {
+            "connected_pad_groups": 2,
+            "id": "kicad-net-22",
+            "name": "Net-(Q2-C)",
+            "open_connections": 1,
+            "pad_count": 2
+          },
+          {
+            "connected_pad_groups": 3,
+            "id": "kicad-net-23",
+            "name": "Net-(U2-REF)",
+            "open_connections": 2,
+            "pad_count": 3
+          }
+        ],
+        "core_issue_counts": {},
+        "core_validation_errors": 0,
+        "differential_pairs": 0,
+        "footprints": 33,
+        "import_errors": 0,
+        "import_issue_counts": {
+          "circle_conservative_courtyard_proxy": 11
+        },
+        "import_warnings": 11,
+        "keepouts": 0,
+        "layers": 29,
+        "lossy": false,
+        "net_classes": 0,
+        "nets": 24,
+        "ok": true,
+        "open_connections": 50,
+        "physical_thickness_nm": 1600000,
+        "placement_groups": 0,
+        "placement_regions": 0,
+        "project_minimum_rules_applied": true,
+        "project_rules_fingerprint": "fnv1a64:4c25c0e39eb0cd54",
+        "relative_placement_constraints": 0,
+        "routing_buses": 0,
+        "source_revision": "kicad-20241229:pcbnew:e8578b52adc129c7",
+        "stackup_dielectrics": 0,
+        "stackup_layers": 0,
+        "strict": true,
+        "track_arcs": 0,
+        "tracks": 0,
+        "vias": 0,
+        "zone_fill_holes": 0,
+        "zone_fill_regions": 0,
+        "zones": 0,
+        "zones_requiring_refill": 0
+      },
+      "level": 0,
+      "qualification": "detailed_complete",
+      "qualified": null,
+      "reference_sha256": "0ffb5710e07ee6f65bb6951a9ca1ebf9d52bb701852b1e9f83696991043d7eb6",
+      "source_revision": "kicad-20241229:pcbnew:e8578b52adc129c7",
+      "source_sha256": "c48693b458eb28ae11f2ef099acf33ee9a797d87f430457c6961b41e2f2c4cab"
+    },
+    {
+      "declared_status": "unlocked",
+      "detailed": null,
+      "global": null,
+      "id": "bm_svf",
+      "inspection": {
+        "board_cutouts": 0,
+        "connectivity_open_nets": [
+          {
+            "connected_pad_groups": 16,
+            "id": "kicad-net-1",
+            "name": "GND",
+            "open_connections": 15,
+            "pad_count": 16
+          },
+          {
+            "connected_pad_groups": 4,
+            "id": "kicad-net-2",
+            "name": "Net-(C1-Pad2)",
+            "open_connections": 3,
+            "pad_count": 4
+          },
+          {
+            "connected_pad_groups": 3,
+            "id": "kicad-net-3",
+            "name": "Net-(U3A--)",
+            "open_connections": 2,
+            "pad_count": 3
+          },
+          {
+            "connected_pad_groups": 3,
+            "id": "kicad-net-4",
+            "name": "Net-(U4B--)",
+            "open_connections": 2,
+            "pad_count": 3
+          },
+          {
+            "connected_pad_groups": 5,
+            "id": "kicad-net-5",
+            "name": "Net-(C2-Pad2)",
+            "open_connections": 4,
+            "pad_count": 5
+          },
+          {
+            "connected_pad_groups": 3,
+            "id": "kicad-net-6",
+            "name": "Net-(INPUT1-Pin_3)",
+            "open_connections": 2,
+            "pad_count": 3
+          },
+          {
+            "connected_pad_groups": 3,
+            "id": "kicad-net-7",
+            "name": "V_IN",
+            "open_connections": 2,
+            "pad_count": 3
+          },
+          {
+            "connected_pad_groups": 3,
+            "id": "kicad-net-8",
+            "name": "V_CV",
+            "open_connections": 2,
+            "pad_count": 3
+          },
+          {
+            "connected_pad_groups": 3,
+            "id": "kicad-net-9",
+            "name": "V_HF",
+            "open_connections": 2,
+            "pad_count": 3
+          },
+          {
+            "connected_pad_groups": 3,
+            "id": "kicad-net-10",
+            "name": "V_LF",
+            "open_connections": 2,
+            "pad_count": 3
+          },
+          {
+            "connected_pad_groups": 2,
+            "id": "kicad-net-11",
+            "name": "V_BF",
+            "open_connections": 1,
+            "pad_count": 2
+          },
+          {
+            "connected_pad_groups": 13,
+            "id": "kicad-net-12",
+            "name": "V_SUPPLY",
+            "open_connections": 12,
+            "pad_count": 13
+          },
+          {
+            "connected_pad_groups": 5,
+            "id": "kicad-net-13",
+            "name": "Net-(U4A--)",
+            "open_connections": 4,
+            "pad_count": 5
+          },
+          {
+            "connected_pad_groups": 4,
+            "id": "kicad-net-14",
+            "name": "Net-(R4-Pad1)",
+            "open_connections": 3,
+            "pad_count": 4
+          },
+          {
+            "connected_pad_groups": 3,
+            "id": "kicad-net-15",
+            "name": "Net-(R12-Pad1)",
+            "open_connections": 2,
+            "pad_count": 3
+          },
+          {
+            "connected_pad_groups": 6,
+            "id": "kicad-net-16",
+            "name": "V_MID",
+            "open_connections": 5,
+            "pad_count": 6
+          },
+          {
+            "connected_pad_groups": 2,
+            "id": "kicad-net-17",
+            "name": "Net-(R11-Pad2)",
+            "open_connections": 1,
+            "pad_count": 2
+          },
+          {
+            "connected_pad_groups": 3,
+            "id": "kicad-net-18",
+            "name": "Net-(U3B--)",
+            "open_connections": 2,
+            "pad_count": 3
+          },
+          {
+            "connected_pad_groups": 3,
+            "id": "kicad-net-19",
+            "name": "Net-(U5A--)",
+            "open_connections": 2,
+            "pad_count": 3
+          },
+          {
+            "connected_pad_groups": 2,
+            "id": "kicad-net-20",
+            "name": "Net-(R14-Pad1)",
+            "open_connections": 1,
+            "pad_count": 2
+          },
+          {
+            "connected_pad_groups": 3,
+            "id": "kicad-net-21",
+            "name": "Net-(U5B-+)",
+            "open_connections": 2,
+            "pad_count": 3
+          },
+          {
+            "connected_pad_groups": 4,
+            "id": "kicad-net-22",
+            "name": "VACTROL_NEG",
+            "open_connections": 3,
+            "pad_count": 4
+          },
+          {
+            "connected_pad_groups": 2,
+            "id": "kicad-net-24",
+            "name": "Net-(U5A-+)",
+            "open_connections": 1,
+            "pad_count": 2
+          },
+          {
+            "connected_pad_groups": 3,
+            "id": "kicad-net-25",
+            "name": "VACTROL_POS",
+            "open_connections": 2,
+            "pad_count": 3
+          },
+          {
+            "connected_pad_groups": 2,
+            "id": "kicad-net-26",
+            "name": "Net-(R17-Pad2)",
+            "open_connections": 1,
+            "pad_count": 2
+          }
+        ],
+        "core_issue_counts": {
+          "missing_placement_envelope": 2
+        },
+        "core_validation_errors": 0,
+        "differential_pairs": 0,
+        "footprints": 34,
+        "import_errors": 0,
+        "import_issue_counts": {
+          "missing_courtyard": 2,
+          "non_copper_pad_ignored": 12
+        },
+        "import_warnings": 14,
+        "keepouts": 0,
+        "layers": 29,
+        "lossy": false,
+        "net_classes": 0,
+        "nets": 28,
+        "ok": true,
+        "open_connections": 78,
+        "physical_thickness_nm": 1600000,
+        "placement_groups": 0,
+        "placement_regions": 0,
+        "project_minimum_rules_applied": true,
+        "project_rules_fingerprint": "fnv1a64:5ed6e19f5535a891",
+        "relative_placement_constraints": 0,
+        "routing_buses": 0,
+        "source_revision": "kicad-20241229:pcbnew:61194dd059bfb26a",
+        "stackup_dielectrics": 1,
+        "stackup_layers": 9,
+        "strict": true,
+        "track_arcs": 0,
+        "tracks": 0,
+        "vias": 0,
+        "zone_fill_holes": 0,
+        "zone_fill_regions": 0,
+        "zones": 0,
+        "zones_requiring_refill": 0
+      },
+      "level": 1,
+      "qualification": "detailed_complete",
+      "qualified": null,
+      "reference_sha256": "52317a66f7442b3b260f07ff1b7c16dd94f99c088c61533b81698cbda6d4d77b",
+      "source_revision": "kicad-20241229:pcbnew:61194dd059bfb26a",
+      "source_sha256": "308ce5513cb6b2b33820648a0062a54f548f6b3c13d856cdcd9b7c3ac8a20d2a"
+    },
+    {
+      "declared_status": "locked",
+      "detailed": null,
+      "global": null,
+      "id": "zigbee_sensor",
+      "inspection": {
+        "board_cutouts": 0,
+        "connectivity_open_nets": [],
+        "core_issue_counts": {
+          "missing_placement_envelope": 3,
+          "placement_outside_board": 1,
+          "placement_overlap": 7
+        },
+        "core_validation_errors": 8,
+        "differential_pairs": 1,
+        "footprints": 25,
+        "import_errors": 0,
+        "import_issue_counts": {
+          "circle_conservative_courtyard_proxy": 7,
+          "missing_courtyard": 2
+        },
+        "import_warnings": 9,
+        "keepouts": 0,
+        "layers": 29,
+        "lossy": false,
+        "net_classes": 0,
+        "nets": 29,
+        "ok": true,
+        "open_connections": 0,
+        "physical_thickness_nm": 1600000,
+        "placement_groups": 0,
+        "placement_regions": 0,
+        "project_minimum_rules_applied": true,
+        "project_rules_fingerprint": "fnv1a64:fb5ae7e8a0a58d85",
+        "relative_placement_constraints": 0,
+        "routing_buses": 0,
+        "source_revision": "kicad-20241229:pcbnew:6ddc07c5b1106c6a",
+        "stackup_dielectrics": 0,
+        "stackup_layers": 0,
+        "strict": true,
+        "track_arcs": 0,
+        "tracks": 0,
+        "vias": 0,
+        "zone_fill_holes": 0,
+        "zone_fill_regions": 0,
+        "zones": 0,
+        "zones_requiring_refill": 0
+      },
+      "level": 2,
+      "qualification": "detailed_complete",
+      "qualified": null,
+      "reference_sha256": "2f7d5bb837efdc0e07f3b43518c3969b9febc449ec213bde0cede43d7d1b73e0",
+      "source_revision": "kicad-20241229:pcbnew:6ddc07c5b1106c6a",
+      "source_sha256": "ca97fd068e25318a0aeb650f72eec30a7c7ca8a30766d15e91b5f8c93a11c390"
+    },
+    {
+      "declared_status": "locked",
+      "detailed": null,
+      "global": null,
+      "id": "ch32v003_usb",
+      "inspection": {
+        "board_cutouts": 0,
+        "connectivity_open_nets": [],
+        "core_issue_counts": {
+          "missing_placement_envelope": 1,
+          "placement_outside_board": 1,
+          "placement_overlap": 2
+        },
+        "core_validation_errors": 3,
+        "differential_pairs": 1,
+        "footprints": 25,
+        "import_errors": 0,
+        "import_issue_counts": {
+          "missing_courtyard": 1,
+          "non_copper_pad_ignored": 4
+        },
+        "import_warnings": 5,
+        "keepouts": 0,
+        "layers": 18,
+        "lossy": false,
+        "net_classes": 0,
+        "nets": 33,
+        "ok": true,
+        "open_connections": 0,
+        "physical_thickness_nm": 1600000,
+        "placement_groups": 0,
+        "placement_regions": 0,
+        "project_minimum_rules_applied": true,
+        "project_rules_fingerprint": "fnv1a64:e6d8d7922c282031",
+        "relative_placement_constraints": 0,
+        "routing_buses": 0,
+        "source_revision": "kicad-20241229:pcbnew:89aa87f11502945b",
+        "stackup_dielectrics": 1,
+        "stackup_layers": 9,
+        "strict": true,
+        "track_arcs": 0,
+        "tracks": 0,
+        "vias": 0,
+        "zone_fill_holes": 0,
+        "zone_fill_regions": 0,
+        "zones": 0,
+        "zones_requiring_refill": 0
+      },
+      "level": 3,
+      "qualification": "detailed_complete",
+      "qualified": null,
+      "reference_sha256": "be5e7830488746e2506c484611c32d24872b11537a4700ed0e457b29d0078c17",
+      "source_revision": "kicad-20241229:pcbnew:89aa87f11502945b",
+      "source_sha256": "72d62b839467119b5d3addbe78c5ec27698fa79f2be1f11eef548949a7af6f05"
+    },
+    {
+      "declared_status": "locked",
+      "detailed": null,
+      "global": null,
+      "id": "usbgpib",
+      "inspection": {
+        "board_cutouts": 0,
+        "connectivity_open_nets": [],
+        "core_issue_counts": {
+          "placement_outside_board": 3,
+          "placement_overlap": 14
+        },
+        "core_validation_errors": 17,
+        "differential_pairs": 1,
+        "footprints": 19,
+        "import_errors": 0,
+        "import_issue_counts": {
+          "non_copper_pad_ignored": 16
+        },
+        "import_warnings": 16,
+        "keepouts": 0,
+        "layers": 20,
+        "lossy": false,
+        "net_classes": 0,
+        "nets": 40,
+        "ok": true,
+        "open_connections": 0,
+        "physical_thickness_nm": 1600000,
+        "placement_groups": 0,
+        "placement_regions": 0,
+        "project_minimum_rules_applied": true,
+        "project_rules_fingerprint": "fnv1a64:186addaeaf9843f9",
+        "relative_placement_constraints": 0,
+        "routing_buses": 0,
+        "source_revision": "kicad-20241229:pcbnew:ca4517c6cf92a33a",
+        "stackup_dielectrics": 0,
+        "stackup_layers": 0,
+        "strict": true,
+        "track_arcs": 0,
+        "tracks": 0,
+        "vias": 0,
+        "zone_fill_holes": 0,
+        "zone_fill_regions": 0,
+        "zones": 0,
+        "zones_requiring_refill": 0
+      },
+      "level": 4,
+      "qualification": "detailed_complete",
+      "qualified": null,
+      "reference_sha256": "0a9c40057ce6cecde503d87eb376f3932fd956040fafeeaa4acffe28c6016507",
+      "source_revision": "kicad-20241229:pcbnew:ca4517c6cf92a33a",
+      "source_sha256": "c4dcec9c91c54ea67b068ca1ec91ff227909e2e236a32b3a117073c3d7294c27"
+    }
+  ],
+  "diagnostic": "",
+  "schema": "flux_routing_baseline_result",
+  "schema_version": 1,
+  "status": "preflight_complete"
+}

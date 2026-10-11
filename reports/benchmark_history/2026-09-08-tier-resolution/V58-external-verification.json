@@ -1,0 +1,39 @@
+{
+  "authoritative": false,
+  "qualified": false,
+  "internal": {
+    "authoritative": false,
+    "snapshot_sequence": 1,
+    "paths": 78,
+    "detail_complete": false,
+    "tracks": 1004,
+    "arcs": 0,
+    "vias": 57,
+    "validation_errors": 0,
+    "opens": 0,
+    "drc_violations": 385,
+    "diagnostic": "materialized route violates represented copper rules",
+    "preview_written": true
+  },
+  "kicad_errors": 265,
+  "kicad_error_categories": {
+    "solder_mask_bridge": 9,
+    "hole_to_hole": 1,
+    "tracks_crossing": 56,
+    "shorting_items": 69,
+    "clearance": 130
+  },
+  "kicad_unconnected_items": 0,
+  "straight_angle_audit": {
+    "tracks": 1004,
+    "angles": {
+      "horizontal": 228,
+      "vertical": 264,
+      "diagonal_45": 512,
+      "other": 0
+    },
+    "arcs": 0,
+    "passed": true
+  },
+  "project_sha256": "04856904fe9070f7decd33b676d3f58e44676b6c930e65fa8a16f0ddd65d54db"
+}

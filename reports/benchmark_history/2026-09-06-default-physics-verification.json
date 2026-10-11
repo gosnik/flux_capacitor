@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "experiment": "default repeated physics and outside-blocker feedback",
+  "git_revision": "25e3b884be9b359d9c5bf0cc4fbb6cc836fd4f82",
+  "worktree": "dirty; pre-existing changes preserved",
+  "build_type": "Release",
+  "binary": "build/release/flux-cli",
+  "binary_sha256": "974f5509ed80b5c1fc05b3d31cb8920d33dd8629916f151a7f0a082f4dcbaf79",
+  "verification": {
+    "ctest_selection": "^flux_unit_tests$|arc_detour|arc_export|multilayer|flux_cli_(route_kicad|detail_kicad|usped_navmesh)",
+    "passed": 45,
+    "failed": 0,
+    "duration_seconds": 84.50,
+    "core_duration_seconds": 79.62,
+    "kicad_drc_fixture_checks": 2,
+    "focused_outside_blocker_test": "passed",
+    "python_compile": "passed",
+    "git_diff_check": "passed"
+  },
+  "notes": [
+    "The three-epoch synthetic test forces a regional window-size failure and verifies repeated physical consultation plus affected-net feedback; it does not assert actual XPBD displacement in that case.",
+    "Existing deformation tests separately verify physical rebound and legal native fitting.",
+    "An initial new assertion incorrectly expected fragment-specific diagnostic IDs, but the existing builder intentionally coalesces IDs. Corrected the assertion to verify failure kind, actual layer, deficit, relaxation and both nets. Final full selection passed.",
+    "Tier benchmark results are separate; fixture success is not tier qualification."
+  ]
+}

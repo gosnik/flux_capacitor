@@ -1,0 +1,140 @@
+--- a/tests/unit/core_tests.cpp
++++ b/tests/unit/core_tests.cpp
+@@ -5596,6 +5596,64 @@
+           "routability history must not collapse lane-order and corridor-change failures into "
+           "one actionless scalar pressure entry");
+ 
++  flux::RegionalRouteResult search_only_regional;
++  search_only_regional.windows.push_back(
++      {0U, {mm(40.0, 40.0), mm(41.0, 41.0)}, {LayerId{"F.Cu"}}, {}, {}, {}, {}, {},
++       {NetId{"net-1"}}});
++  flux::RegionalBundleAssignment search_only_assignment;
++  search_only_assignment.window_id = 0U;
++  search_only_assignment.stop_reason = flux::RegionalBundleStopReason::state_budget_exhausted;
++  search_only_assignment.packing_rejected_states = 73U;
++  search_only_assignment.access_assignment_exhaustions = 9U;
++  search_only_assignment.partial_access_blockers = {
++      {flux::RegionalAccessBlockerKind::via_pair, {}, {}, {}, 17U},
++      {flux::RegionalAccessBlockerKind::terminal_via, {}, {}, {}, 19U}};
++  search_only_regional.bundle_assignments.push_back(search_only_assignment);
++  const auto search_only_diagnoses = flux::diagnose_regional_routability(search_only_regional);
++  flux::RoutabilityKnowledge search_only_history;
++  flux::accumulate_routability_knowledge(search_only_history, search_only_diagnoses);
++  require(search_only_diagnoses.size() == 3U &&
++              std::all_of(search_only_diagnoses.begin(), search_only_diagnoses.end(),
++                          [](const auto& diagnosis) { return !diagnosis.contributes_to_history; }) &&
++              search_only_history.history.empty(),
++          "bounded packing and broad access-search observations must remain diagnostic evidence "
++          "without inventing physical routability history");
++  auto zero_rejected_regional = search_only_regional;
++  zero_rejected_regional.bundle_assignments.front().partial_access_blockers.clear();
++  zero_rejected_regional.bundle_assignments.front().packing_rejected_states = 0U;
++  const auto zero_rejected_diagnoses =
++      flux::diagnose_regional_routability(zero_rejected_regional);
++  auto no_fitting_regional = zero_rejected_regional;
++  no_fitting_regional.bundle_assignments.front().stop_reason =
++      flux::RegionalBundleStopReason::no_fitting_lane_order;
++  no_fitting_regional.bundle_assignments.front().packing_rejected_states = 997U;
++  const auto no_fitting_diagnoses = flux::diagnose_regional_routability(no_fitting_regional);
++  flux::RoutabilityKnowledge counter_history;
++  flux::accumulate_routability_knowledge(counter_history, zero_rejected_diagnoses);
++  flux::accumulate_routability_knowledge(counter_history, no_fitting_diagnoses);
++  require(zero_rejected_diagnoses.size() == 1U &&
++              zero_rejected_diagnoses.front().severity == 1U &&
++              !zero_rejected_diagnoses.front().contributes_to_history &&
++              no_fitting_diagnoses.size() == 1U &&
++              no_fitting_diagnoses.front().severity == 997U &&
++              !no_fitting_diagnoses.front().contributes_to_history &&
++              counter_history.history.empty(),
++          "zero or large rejected-state counters must remain telemetry severity, never physical history");
++  auto physical_regional = search_only_regional;
++  physical_regional.local_routability_diagnoses.push_back(
++      {flux::RoutabilityFailureKind::packing_capacity_exceeded,
++       flux::RoutabilityFailureStage::regional_discrete,
++       {"", LayerId{"F.Cu"}, {mm(40.0, 40.0), mm(41.0, 41.0)}, {NetId{"net-1"}}},
++       3U, Nanometres::from_mm(0.1), {}, {}, flux::RoutabilityRelaxation::change_corridor,
++       "exact regional copper overlap"});
++  const auto physical_diagnoses = flux::diagnose_regional_routability(physical_regional);
++  flux::RoutabilityKnowledge physical_history;
++  flux::accumulate_routability_knowledge(physical_history, physical_diagnoses);
++  require(std::any_of(physical_diagnoses.begin(), physical_diagnoses.end(),
++                      [](const auto& diagnosis) { return diagnosis.contributes_to_history; }) &&
++              physical_history.history.size() == 1U && physical_history.pressure() == 3U,
++          "localized physical regional evidence must continue to feed routability history");
++
+   Board conflict_chain;
+   conflict_chain.source_revision = "regional-conflict-chain";
+   conflict_chain.outline = rectangle(0.0, 0.0, 100.0, 40.0);
+--- a/src/routability_knowledge.cpp
++++ b/src/routability_knowledge.cpp
+@@ -456,16 +456,21 @@
+     }
+     for (const auto& blocker : assignment.partial_access_blockers) {
+       const auto via = blocker.kind == RegionalAccessBlockerKind::via_pair;
+-      builder.add(
+-          regional_diagnosis(*window,
+-                             via ? RoutabilityFailureKind::via_site_exhausted
+-                                 : RoutabilityFailureKind::layer_transition_conflict,
+-                             RoutabilityFailureStage::regional_discrete,
+-                             via ? RoutabilityRelaxation::change_via_site
+-                                 : RoutabilityRelaxation::change_layer_sequence,
+-                             blocker.observations,
+-                             via ? "joint access assignment exhausted compatible via pairs"
+-                                 : "terminal and via run-up choices are mutually incompatible"));
++      auto diagnosis = regional_diagnosis(
++          *window,
++          via ? RoutabilityFailureKind::via_site_exhausted
++              : RoutabilityFailureKind::layer_transition_conflict,
++          RoutabilityFailureStage::regional_discrete,
++          via ? RoutabilityRelaxation::change_via_site
++              : RoutabilityRelaxation::change_layer_sequence,
++          blocker.observations,
++          via ? "joint access assignment exhausted compatible via pairs"
++              : "terminal and via run-up choices are mutually incompatible");
++      // These are aggregate CSP observations, not localized copper/via conflicts. Keep their
++      // diagnostics for telemetry and affected-cone selection, but do not turn search breadth
++      // into a physical cost field.
++      diagnosis.contributes_to_history = false;
++      builder.add(std::move(diagnosis));
+     }
+     switch (assignment.stop_reason) {
+     case RegionalBundleStopReason::complete:
+@@ -476,26 +481,32 @@
+                                      RoutabilityRelaxation::change_corridor, 1U,
+                                      "no complete corridor topology exists for the window"));
+       break;
+-    case RegionalBundleStopReason::no_fitting_lane_order:
+-      builder.add(regional_diagnosis(
++    case RegionalBundleStopReason::no_fitting_lane_order: {
++      auto diagnosis = regional_diagnosis(
+           *window, RoutabilityFailureKind::packing_capacity_exceeded,
+           RoutabilityFailureStage::regional_discrete, RoutabilityRelaxation::change_lane_order,
+           std::max<std::uint64_t>(1U, assignment.packing_rejected_states),
+-          "no retained lane ordering fits every selected cross section"));
++          "no retained lane ordering fits every selected cross section");
++      diagnosis.contributes_to_history = false;
++      builder.add(std::move(diagnosis));
+       break;
++    }
+     case RegionalBundleStopReason::window_ineligible:
+       builder.add(regional_diagnosis(*window, RoutabilityFailureKind::topological_trap,
+                                      RoutabilityFailureStage::regional_discrete,
+                                      RoutabilityRelaxation::replan_global_topology, 1U,
+                                      "regional window violates its bounded decomposition policy"));
+       break;
+-    case RegionalBundleStopReason::state_budget_exhausted:
+-      builder.add(regional_diagnosis(
++    case RegionalBundleStopReason::state_budget_exhausted: {
++      auto diagnosis = regional_diagnosis(
+           *window, RoutabilityFailureKind::packing_capacity_exceeded,
+           RoutabilityFailureStage::regional_discrete, RoutabilityRelaxation::change_corridor,
+           std::max<std::uint64_t>(1U, assignment.packing_rejected_states),
+-          "bounded joint bundle/lane search exhausted before finding a complete state"));
++          "bounded joint bundle/lane search exhausted before finding a complete state");
++      diagnosis.contributes_to_history = false;
++      builder.add(std::move(diagnosis));
+       break;
++    }
+     case RegionalBundleStopReason::spline_realization_failed: {
+       // Straight transactions deliberately have no PH topology/shape/PNS certificates. Their
+       // exact scene and connectivity witnesses were added above; interpreting absent PH flags

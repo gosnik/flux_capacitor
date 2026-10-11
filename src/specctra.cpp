@@ -371,6 +371,10 @@ SpecctraDsnExportResult export_specctra_dsn(const Board& board,
     diagnostic(result, SpecctraSeverity::error, "unsupported_board_cutouts",
                "Specctra cutout boundary semantics are not enabled in this baseline");
   }
+  if (!board.track_beziers.empty()) {
+    diagnostic(result, SpecctraSeverity::error, "unsupported_track_beziers",
+               "Specctra export cannot represent authoritative cubic copper");
+  }
   if (!board.track_arcs.empty()) {
     diagnostic(result, SpecctraSeverity::error, "unsupported_track_arcs",
                "Specctra export does not flatten native track arcs");

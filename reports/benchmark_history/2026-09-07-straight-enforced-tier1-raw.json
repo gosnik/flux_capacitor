@@ -1,0 +1,34 @@
+{
+  "artifacts": [
+    {
+      "bytes": 5170,
+      "path": "run-metadata.json",
+      "sha256": "4bdb8b47e3decdeeeccdfe66fa3a8fea0829dfe92440f98d641613ac1434ef57"
+    },
+    {
+      "bytes": 3926,
+      "path": "tier-1-bm_svf/analysis/global/failed-route-previews.json",
+      "sha256": "4e219dcaea4661dc0c752a911aa0a6510ae0caab96e3af1889fb0e0ea0544d6a"
+    },
+    {
+      "bytes": 355902,
+      "path": "tier-1-bm_svf/analysis/global/near-00-window--1/copper-00-B_Cu.png",
+      "sha256": "4db77fbc152d58b92991c01573a1a08da0523524b8184a4488dc2221b7adf369"
+    },
+    {
+      "bytes": 380605,
+      "path": "tier-1-bm_svf/analysis/global/near-00-window--1/copper-01-F_Cu.png",
+      "sha256": "ea43d10668cff897e0fb055feb1f69c58a783ad6df19822ebbad6a57cd05089c"
+    },
+    {
+      "bytes": 86436474,
+      "path": "tier-1-bm_svf/telemetry/bm_svf-global.jsonl",
+      "sha256": "2510afc98692f9d593ec071d8dec9a87f413f0abc5e8ea294b1569af993d4e88"
+    }
+  ],
+  "boards": [],
+  "diagnostic": "Command '['/home/adam/qtbits/flux_capacitor/build/dev/flux-cli', 'route-kicad', '/home/adam/qtbits/flux_capacitor/tests/fixtures/routing-corpus/bm_svf.kicad_pcb', '--max-router-iterations', '30', '--max-expansions', '50000', '--max-static-seed-workers', '2', '--search-diversification', '--crossing-safe-diagonal-grid', '--direct-medial', '--grid-pitch-nm', '650000', '--xpbd-relaxation', '--xpbd-feedback', '--atomic-net-trees', '--hard-capacity-start-iteration', '4', '--max-hard-capacity-ripup-attempts-per-pass', '8', '--max-hard-capacity-ripup-nets-per-attempt', '8', '--max-hard-capacity-conflict-set-states-per-attempt', '256', '--terminal-escape-proximity-cost', '500', '--rollback-failed-hard-capacity-ripup', '--defer-hard-capacity-ripup-victims-to-pass-tail', '--protect-recovered-hard-capacity-ripup-nets', '--feedback-shadow-policy', 'enforced', '--telemetry-level', 'diagnostic', '--telemetry-record', '/home/adam/qtbits/flux_capacitor/build/straight-enforced-tier1/tier-1-bm_svf/telemetry/bm_svf-global.jsonl']' timed out after 600 seconds",
+  "schema": "flux_routing_baseline_result",
+  "schema_version": 1,
+  "status": "failed"
+}

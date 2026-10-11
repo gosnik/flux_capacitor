@@ -18,7 +18,11 @@ namespace flux {
 struct IntegratedOptimizerConfig {
   GlobalRouterConfig global_router;
   RegionalRouterConfig regional_router;
-  DetailedRouterConfig detailed_router;
+  DetailedRouterConfig detailed_router = [] {
+    DetailedRouterConfig config;
+    config.circular_arc_refinement = true;
+    return config;
+  }();
   GlobalPlacerConfig global_placer;
   Nanometres move_step{Nanometres::from_mm(5.0)};
   Nanometres routing_feedback_margin{Nanometres::from_mm(1.0)};
@@ -73,6 +77,10 @@ struct IntegratedOptimizerConfig {
   // intersecting rigid placement groups.
   bool enable_relative_component_moves{false};
   bool enable_incremental_routing{true};
+  // Fresh full-route evaluations use the same diagnosis-directed persistent routing session as
+  // direct KiCad routing. Incremental proposal screens remain cheap; shortlisted candidates earn
+  // bounded local/regional/global exact-feedback passes before placement acceptance.
+  std::size_t max_final_routability_feedback_passes{3U};
   // Continue improving route cost after the first fully connected, DRC-clean checkpoint.
   // Disabled by default so repair workflows retain their fast feasibility stop.
   bool optimize_routed_quality{false};
@@ -282,10 +290,8 @@ collect_integrated_routing_feedback(const GlobalRouteResult& route);
 // Bounded deterministic placement/routing optimization driven by actual global routing
 // and detailed copper checks. An optional global seed and all local repairs are proposals;
 // the source board is immutable and locked footprints never move.
-[[nodiscard]] IntegratedOptimizationResult
-optimize_integrated_placement_routing(const Board& source,
-                                      const IntegratedOptimizerConfig& config = {},
-                                      std::stop_token stop_token = {},
-                                      RouterTelemetrySink* telemetry = nullptr);
+[[nodiscard]] IntegratedOptimizationResult optimize_integrated_placement_routing(
+    const Board& source, const IntegratedOptimizerConfig& config = {},
+    std::stop_token stop_token = {}, RouterTelemetrySink* telemetry = nullptr);
 
 } // namespace flux

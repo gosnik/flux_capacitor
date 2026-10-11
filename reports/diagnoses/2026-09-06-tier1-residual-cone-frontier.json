@@ -1,0 +1,78 @@
+{
+  "schema": 1,
+  "board": "bm_svf",
+  "tier": 1,
+  "failing_stage": "residual-cone-discrete-allocation",
+  "classification": [
+    "search-failure",
+    "allocation-congestion-failure",
+    "layer-via-feasibility"
+  ],
+  "observed_generator_participant_nets_not_proven_minimal_core": [
+    "kicad-net-9",
+    "kicad-net-11",
+    "kicad-net-22",
+    "kicad-net-26"
+  ],
+  "relevant_layers": ["F.Cu", "B.Cu"],
+  "topologically_routed": true,
+  "geometrically_realized": false,
+  "alternative_route_exists": "unknown; no complete discrete state reached the physical solver",
+  "measurement_limits": "Portfolio seconds include alternative generation and screening, not only DFS. The old trace does not expose raw leaf counts, late rejection counts, cone bounds or a minimal unsatisfiable core.",
+  "supporting_metrics": {
+    "templates": 268,
+    "via_templates": 212,
+    "same_layer_detour_attempts": 8,
+    "same_layer_detours_generated": 0,
+    "bundle_search_states": 100000,
+    "complete_states": 0,
+    "portfolio_seconds": 178.031502,
+    "spline_candidates_evaluated": 0
+  },
+  "suspected_root_mechanism": "The primary bounded DFS enforces via identity and a loose channel envelope while it enumerates. Exact access, coupled-run, layer-continuity and lane constraints are applied only after complete leaves have been retained, allowing partial assignments already known to be inconsistent to consume the state budget.",
+  "candidate_approaches": [
+    {
+      "rank": 1,
+      "name": "forward checking over exact monotone access and run-layer constraints",
+      "scope": "small local change",
+      "expected_effect": "prune inconsistent partial bundles before they consume deeper states without removing any feasible complete assignment"
+    },
+    {
+      "rank": 2,
+      "name": "maintaining arc consistency for the reduced regional master",
+      "scope": "moderate CSP refactor",
+      "expected_effect": "remove unsupported values across every remaining fragment domain after each decision"
+    },
+    {
+      "rank": 3,
+      "name": "bounded SAT or CP-SAT residual-cone master",
+      "scope": "new exact regional backend",
+      "expected_effect": "solve or prove infeasible topology/layer/via choices atomically, but requires a larger integration and lane/access encodings"
+    },
+    {
+      "rank": 4,
+      "name": "raise the bundle-state limit",
+      "scope": "parameter-only",
+      "expected_effect": "more of the same product is explored with no evidence that the missing feasible region is nearby; rejected"
+    }
+  ],
+  "research": [
+    {
+      "source": "https://www.ijcai.org/Proceedings/79-1/Papers/004.pdf",
+      "finding": "Haralick and Elliott motivate fail-first ordering and forward checking to prevent inconsistent partial assignments from expanding into repeated tree search."
+    },
+    {
+      "source": "https://users.ece.cmu.edu/~rutenbar/pdf/rutenbar-satisfpga97.pdf",
+      "finding": "Exact routing feasibility can be expressed as interacting simultaneous resource assignments; late independent checks lose the benefit of shared constraints."
+    },
+    {
+      "source": "https://vlsicad.ucsd.edu/Publications/Journals/j133.pdf",
+      "finding": "TritonRoute integrates connectivity and design-rule constraints into detailed search and repair rather than treating post-route DRC counts as routability."
+    }
+  ],
+  "next_experiment": {
+    "change": "Add deterministic forward checking for pairwise access support and adjacent-run layer continuity to generate_consistent_bundle_choices, with diagnostic prune counters.",
+    "success": "Cone 0 produces at least one complete discrete candidate within 100000 states, or explores a materially larger distinct feasible prefix with lower late access/coupling rejection time.",
+    "regression": "Any Tier-0 copper hash, route count, open count or KiCad DRC result changes, or a synthetic feasible bundle is pruned."
+  }
+}

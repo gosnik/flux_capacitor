@@ -1,0 +1,53 @@
+{
+  "schema": "flux_benchmark_history",
+  "schema_version": 1,
+  "date": "2026-09-05T13:20:28+08:00",
+  "git_revision": "25e3b884be9b359d9c5bf0cc4fbb6cc836fd4f82",
+  "working_tree_modified": true,
+  "configuration": {
+    "tier": 0,
+    "max_router_iterations": 1,
+    "max_expansions": 50000,
+    "max_static_seed_workers": 2,
+    "max_spline_window_workers": 4,
+    "telemetry_level": "diagnostic"
+  },
+  "board": {
+    "id": "pt2399_delay",
+    "tier": 0,
+    "status": "failed",
+    "stop_reason": "iteration_limit",
+    "runtime_seconds": 562.86,
+    "routed_nets": 20,
+    "unrouted_nets": 0,
+    "open_connections": 0,
+    "sampled_overflow": 0,
+    "corridor_overflow": 0,
+    "clearance_shadow_conflicts": 16,
+    "regional_unresolved_windows": 2,
+    "regional_spline_window_tasks": 5,
+    "regional_spline_window_workers": 4,
+    "regional_spline_realization_seconds": 72.455399,
+    "ph_centerline_pairs": 36,
+    "ph_centerline_root_separation_proofs": 36,
+    "ph_centerline_ambiguous_pairs": 0,
+    "rational_offset_exact_pairs": 0,
+    "incremental_ph_segments_reused": 13,
+    "incremental_ph_segments_rebuilt": 62,
+    "quantized_copper_oracle_violations": 32,
+    "quantized_copper_oracle_diagnoses": 4,
+    "implicated_nets": [
+      "kicad-net-10",
+      "kicad-net-11",
+      "kicad-net-8"
+    ],
+    "failure_stage": "regional_topology_seed_realization",
+    "diagnostic": "Two crossing windows cannot construct a topology-and-shape-legal PH seed. Pair-clearance certification is not the active bottleneck."
+  },
+  "artifacts": {
+    "root": "build/tiers-check-20260905-ph-certificates-budgeted-tier0",
+    "telemetry": "tier-0-pt2399_delay/telemetry/pt2399_delay-global.jsonl",
+    "analysis": "tier-0-pt2399_delay/analysis/global",
+    "analysis_near_results": 3
+  }
+}

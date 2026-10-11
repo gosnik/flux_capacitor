@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "experiment": "V19: dense planar candidates with enforced physical conflicts",
+  "date": "2026-09-06",
+  "base_revision": "4e1c734",
+  "board": "pt2399_delay",
+  "tier": 0,
+  "binary": "build/dense-candidate-v19-bin/flux-cli",
+  "binary_sha256": "b846e32ff192cee1bad276d58feefc258d9ea97878d88a05df31787d1e8e2d42",
+  "artifact": "build/tier0-dense-candidate-v19-20260906",
+  "parameters": {"dense_candidate_grid": true, "grid_pitch_mm": 0.5, "feedback_shadow_policy": "enforced", "router_iterations": 1, "track_width_mm": 0.7, "clearance_mm": 0.2, "original_project_rules_loaded": true},
+  "verification": {
+    "core": {"passed": 36, "total": 36, "wall_seconds": 77.33},
+    "micro": "wide copper routes on dense samples; absent/advisory conflict enforcement is rejected; separate occupied lines with overlapping wide copper fail exact DRC",
+    "noncore_noncorpus_ctest": {"passed": 121, "total": 128, "wall_seconds": 121.36, "artifact": "build/release/build-project-minimum-ctest-stable.xml", "remaining_failures": "same seven previously recorded demo expectation failures"},
+    "invalidated_test_attempt": "The earlier build-project-minimum-ctest.xml run overlapped CLI relinking and contains 30 BAD_COMMAND launch failures; it is superseded by the stable rerun, not counted as code regressions.",
+    "replay_provenance": "schema-2 current-rule context replays; schema-1 context and copied project with a changed track floor are rejected"
+  },
+  "metrics": {"duration_seconds": 228.9674399520154, "paths": 50, "unrouted_nets": 0, "total_overflow": 40, "clearance_shadow_conflicts": 40, "regional_windows": 2, "complete_regional_assignments": 1, "regional_conflict_edges": 11, "quantized_tracks": 1083, "quantized_vias": 2, "quantized_opens": 0, "quantized_drc_violations": 149, "quantized_diagnoses": 12},
+  "control": {"grid_pitch_mm": 0.9, "duration_seconds": 322.2478840650001, "paths": 50, "unrouted_nets": 0, "total_overflow": 26, "clearance_shadow_conflicts": 25, "quantized_drc_violations": 50, "quantized_tracks": 586, "quantized_vias": 4, "quantized_diagnoses": 9},
+  "interpretation": "The dense candidate graph is safe behind the explicit enforcement prerequisite, but this single-iteration test does not support a physical routing improvement. Raw DRC counts also depend on segment decomposition; both overflows and coalesced diagnoses worsen, so the decision is not based solely on violation count.",
+  "decision": "Keep disabled. Use the lower-conflict 0.90 mm configuration for a bounded feedback-epoch experiment before adding more geometry heuristics.",
+  "final_kicad_drc": "not evaluated: no accepted final copper",
+  "tier_promoted": false
+}

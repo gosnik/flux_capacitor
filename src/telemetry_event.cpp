@@ -13,6 +13,44 @@
 #include <utility>
 
 namespace flux::telemetry {
+
+bool validate_hydraulic_field(const HydraulicField& field, std::string& error) {
+  if (field.width == 0U || field.height == 0U || field.stride == 0U || field.cell_pitch_nm == 0U) {
+    error = "hydraulic field dimensions, stride, and cell pitch must be positive";
+    return false;
+  }
+  if (field.width > std::numeric_limits<std::size_t>::max() / field.height) {
+    error = "hydraulic field cell count overflows";
+    return false;
+  }
+  const std::size_t cells = field.width * field.height;
+  const auto valid_values = [cells](const std::vector<std::uint16_t>& values) {
+    return values.empty() || values.size() == cells;
+  };
+  if (field.erosion.empty() || !valid_values(field.flow) || !valid_values(field.erosion) ||
+      !valid_values(field.heightmap) || !valid_values(field.free_space) ||
+      !valid_values(field.downstream_pressure) || !valid_values(field.success_prior)) {
+    error = "hydraulic field arrays must be empty or match width times height";
+    return false;
+  }
+  const auto max = std::numeric_limits<std::int64_t>::max();
+  const auto valid_extent = [&](std::int64_t origin, std::size_t cells_axis) {
+    if (field.stride > std::numeric_limits<std::uint64_t>::max() / field.cell_pitch_nm) return false;
+    const std::uint64_t step = field.stride * field.cell_pitch_nm;
+    if (step > static_cast<std::uint64_t>(max)) return false;
+    if (cells_axis > std::numeric_limits<std::uint64_t>::max() / step) return false;
+    // Include the far edge of the last drawn cell, not just its origin.
+    const std::uint64_t extent = cells_axis * step;
+    return extent <= static_cast<std::uint64_t>(max) &&
+           origin <= max - static_cast<std::int64_t>(extent);
+  };
+  if (!valid_extent(field.origin_x_nm, field.width) || !valid_extent(field.origin_y_nm, field.height)) {
+    error = "hydraulic field world extent overflows int64";
+    return false;
+  }
+  error.clear();
+  return true;
+}
 namespace {
 
 using boost::property_tree::ptree;
@@ -120,6 +158,19 @@ Route parse_route(const ptree& tree) {
       route.control_points.push_back(parse_point(item.second));
     }
   }
+  if (const auto cells = tree.get_child_optional("navmesh_cells")) {
+    for (const auto& item : *cells) {
+      Route::NavMeshCell cell;
+      if (const auto minimum = item.second.get_child_optional("minimum")) {
+        cell.minimum = parse_point(*minimum);
+      }
+      if (const auto maximum = item.second.get_child_optional("maximum")) {
+        cell.maximum = parse_point(*maximum);
+      }
+      cell.refinement_level = get_or<std::uint32_t>(item.second, "refinement_level");
+      route.navmesh_cells.push_back(std::move(cell));
+    }
+  }
   return route;
 }
 
@@ -217,6 +268,8 @@ HydraulicField parse_hydraulic_field(const ptree& tree) {
   parse_values("free_space", field.free_space);
   parse_values("downstream_pressure", field.downstream_pressure);
   parse_values("success_prior", field.success_prior);
+  std::string error;
+  if (!validate_hydraulic_field(field, error)) throw std::runtime_error(error);
   return field;
 }
 
@@ -373,6 +426,10 @@ IterationMetrics parse_metrics(const ptree& tree) {
   metrics.vias = get_or<std::size_t>(tree, "vias");
   metrics.rip_ups = get_or<std::size_t>(tree, "rip_ups");
   metrics.search_expansions = get_or<std::size_t>(tree, "search_expansions");
+  metrics.unresolved_packing_obligations =
+      get_or<std::size_t>(tree, "unresolved_packing_obligations");
+  metrics.packing_obligation_budget_exhausted =
+      get_or<bool>(tree, "packing_obligation_budget_exhausted");
   metrics.selected_checkpoint = get_or<std::uint64_t>(tree, "selected_checkpoint");
   metrics.best_checkpoint = get_or<std::uint64_t>(tree, "best_checkpoint");
   metrics.selected_is_best = get_or<bool>(tree, "selected_is_best");
@@ -383,7 +440,28 @@ Counters parse_counters(const ptree& tree) {
   return Counters{get_or<std::uint64_t>(tree, "produced"), get_or<std::uint64_t>(tree, "dropped"),
                   get_or<std::uint64_t>(tree, "coalesced"),
                   get_or<std::uint64_t>(tree, "serialized"),
-                  get_or<std::uint64_t>(tree, "snapshots")};
+                  get_or<std::uint64_t>(tree, "snapshots"),
+                  get_or<std::uint64_t>(tree, "transport_dropped")};
+}
+
+PhaseProgress parse_progress(const ptree& tree) {
+  return PhaseProgress{get_or<std::string>(tree, "phase"),
+                       get_or<std::uint64_t>(tree, "work_units"),
+                       get_or<std::uint64_t>(tree, "elapsed_us")};
+}
+
+ActiveRegion parse_active_region(const ptree& tree) {
+  ActiveRegion region;
+  region.id = get_or<std::string>(tree, "id");
+  region.label = get_or<std::string>(tree, "label");
+  region.minimum_x_nm = get_or<std::int64_t>(tree, "minimum_x_nm");
+  region.minimum_y_nm = get_or<std::int64_t>(tree, "minimum_y_nm");
+  region.maximum_x_nm = get_or<std::int64_t>(tree, "maximum_x_nm");
+  region.maximum_y_nm = get_or<std::int64_t>(tree, "maximum_y_nm");
+  region.layers = parse_ids(tree, "layers");
+  region.nets = parse_ids(tree, "nets");
+  region.active = get_or<bool>(tree, "active");
+  return region;
 }
 
 Event parse_event(const ptree& tree) {
@@ -397,6 +475,7 @@ Event parse_event(const ptree& tree) {
   if (event.schema != telemetry_schema_version) {
     throw std::runtime_error("unsupported telemetry schema " + std::to_string(event.schema));
   }
+  event.session_generation = get_or<std::uint64_t>(tree, "session_generation");
   event.sequence = get_or<std::uint64_t>(tree, "sequence");
   event.monotonic_time_us = get_or<std::uint64_t>(tree, "monotonic_time_us");
   event.level = level_from_string(get_or<std::string>(tree, "level", "normal"));
@@ -446,11 +525,11 @@ Event parse_event(const ptree& tree) {
 
   if (const auto metrics = tree.get_child_optional("metrics")) {
     event.metrics = parse_metrics(*metrics);
+    event.packing_metrics_only = get_or<bool>(tree, "packing_metrics_only", false);
   } else if (event.type == EventType::snapshot ||
              event.type == EventType::pathfinder_iteration_started ||
              event.type == EventType::pathfinder_iteration_completed ||
-             event.type == EventType::best_checkpoint_updated ||
-             event.type == EventType::routing_finished) {
+             event.type == EventType::best_checkpoint_updated) {
     event.metrics = parse_metrics(tree);
     event.metrics->vias = get_or<std::size_t>(tree, "via_count", event.metrics->vias);
     event.metrics->rip_ups = get_or<std::size_t>(tree, "ripup_count", event.metrics->rip_ups);
@@ -462,6 +541,15 @@ Event parse_event(const ptree& tree) {
         Counters{get_or<std::uint64_t>(tree, "produced"), get_or<std::uint64_t>(tree, "dropped"),
                  get_or<std::uint64_t>(tree, "coalesced"), get_or<std::uint64_t>(tree, "consumed"),
                  get_or<std::uint64_t>(tree, "snapshots")};
+  }
+  if (const auto progress = tree.get_child_optional("progress")) {
+    const PhaseProgress parsed = parse_progress(*progress);
+    if (!parsed.phase.empty()) {
+      event.progress = parsed;
+    }
+  }
+  if (const auto region = tree.get_child_optional("active_region")) {
+    event.active_region = parse_active_region(*region);
   }
   event.message = get_or<std::string>(tree, "message", get_or<std::string>(tree, "detail"));
   if (event.source_identity.empty() && event.type == EventType::routing_started) {
@@ -552,6 +640,18 @@ void write_route(std::ostringstream& out, const Route& route) {
       out << ',';
     }
     write_point(out, route.control_points[index]);
+  }
+  out << "],\"navmesh_cells\":[";
+  for (std::size_t index = 0; index < route.navmesh_cells.size(); ++index) {
+    if (index != 0U) {
+      out << ',';
+    }
+    const auto& cell = route.navmesh_cells[index];
+    out << "{\"minimum\":";
+    write_point(out, cell.minimum);
+    out << ",\"maximum\":";
+    write_point(out, cell.maximum);
+    out << ",\"refinement_level\":" << cell.refinement_level << '}';
   }
   out << "]}";
 }
@@ -791,15 +891,21 @@ void write_metrics(std::ostringstream& out, const IterationMetrics& metrics) {
       << ",\"route_cost\":" << metrics.route_cost << ",\"vias\":" << metrics.vias
       << ",\"rip_ups\":" << metrics.rip_ups
       << ",\"search_expansions\":" << metrics.search_expansions
+      << ",\"unresolved_packing_obligations\":" << metrics.unresolved_packing_obligations
+      << ",\"packing_obligation_budget_exhausted\":"
+      << (metrics.packing_obligation_budget_exhausted ? "true" : "false")
       << ",\"selected_checkpoint\":" << metrics.selected_checkpoint
       << ",\"best_checkpoint\":" << metrics.best_checkpoint
       << ",\"selected_is_best\":" << (metrics.selected_is_best ? "true" : "false") << '}';
 }
 
 std::string_view wire_kind_name(EventType type) {
-  static constexpr std::array names{std::string_view{"Snapshot"},
+  static constexpr std::array names{std::string_view{"SessionStarted"},
+                                    std::string_view{"Snapshot"},
                                     std::string_view{"RoutingStarted"},
                                     std::string_view{"RoutingFinished"},
+                                    std::string_view{"RoutingCompleted"},
+                                    std::string_view{"CopperGenerated"},
                                     std::string_view{"NetQueued"},
                                     std::string_view{"NetStarted"},
                                     std::string_view{"NetCompleted"},
@@ -847,9 +953,10 @@ double ResourceOccupancy::utilization() const {
   }
 
 FLUX_ENUM_STRINGS(Level, "normal", "diagnostic", "trace")
-FLUX_ENUM_STRINGS(EventType, "snapshot", "routing_started", "routing_finished", "net_queued",
-                  "net_started", "net_completed", "net_failed", "route_candidate_selected",
-                  "route_committed", "route_removed", "route_ripped_up", "via_candidate_generated",
+FLUX_ENUM_STRINGS(EventType, "session_started", "snapshot", "routing_started", "routing_finished",
+                  "routing_completed", "copper_generated", "net_queued", "net_started",
+                  "net_completed", "net_failed", "route_candidate_selected", "route_committed",
+                  "route_removed", "route_ripped_up", "via_candidate_generated",
                   "via_candidate_rejected", "via_assigned", "via_removed",
                   "pathfinder_iteration_started", "pathfinder_iteration_completed",
                   "conflict_added", "conflict_removed", "resource_occupancy_updated",
@@ -878,9 +985,12 @@ Level level_from_string(std::string_view value) {
 }
 
 EventType event_type_from_string(std::string_view value) {
-  static constexpr std::array names{std::string_view{"snapshot"},
+  static constexpr std::array names{std::string_view{"session_started"},
+                                    std::string_view{"snapshot"},
                                     std::string_view{"routing_started"},
                                     std::string_view{"routing_finished"},
+                                    std::string_view{"routing_completed"},
+                                    std::string_view{"copper_generated"},
                                     std::string_view{"net_queued"},
                                     std::string_view{"net_started"},
                                     std::string_view{"net_completed"},
@@ -911,9 +1021,12 @@ EventType event_type_from_string(std::string_view value) {
   if (result != EventType::unknown || value == "unknown") {
     return result;
   }
-  static constexpr std::array wire_names{std::string_view{"Snapshot"},
+  static constexpr std::array wire_names{std::string_view{"SessionStarted"},
+                                         std::string_view{"Snapshot"},
                                          std::string_view{"RoutingStarted"},
                                          std::string_view{"RoutingFinished"},
+                                         std::string_view{"RoutingCompleted"},
+                                         std::string_view{"CopperGenerated"},
                                          std::string_view{"NetQueued"},
                                          std::string_view{"NetStarted"},
                                          std::string_view{"NetCompleted"},
@@ -1023,6 +1136,9 @@ std::string encode_event(const Event& event) {
   if (event.type != EventType::snapshot) {
     write_string(out, "kind", wire_kind_name(event.type), first);
   }
+  if (event.session_generation != 0U) {
+    write_number(out, "session_generation", event.session_generation, first);
+  }
   write_number(out, "sequence", event.sequence, first);
   write_number(out, "monotonic_time_us", event.monotonic_time_us, first);
   write_string(out, "level", to_string(event.level), first);
@@ -1078,6 +1194,7 @@ std::string encode_event(const Event& event) {
     first = false;
     out << "\"metrics\":";
     write_metrics(out, *event.metrics);
+    if (event.packing_metrics_only) out << ",\"packing_metrics_only\":true";
   }
   if (event.counters) {
     if (!first) {
@@ -1087,13 +1204,135 @@ std::string encode_event(const Event& event) {
     const Counters& counters = *event.counters;
     out << "\"counters\":{\"produced\":" << counters.produced << ",\"dropped\":" << counters.dropped
         << ",\"coalesced\":" << counters.coalesced << ",\"serialized\":" << counters.serialized
-        << ",\"snapshots\":" << counters.snapshots << '}';
+        << ",\"snapshots\":" << counters.snapshots
+        << ",\"transport_dropped\":" << counters.transport_dropped << '}';
+  }
+  if (event.progress && !event.progress->phase.empty()) {
+    if (!first) {
+      out << ',';
+    }
+    first = false;
+    out << "\"progress\":{\"phase\":\"" << escape_json(event.progress->phase)
+        << "\",\"work_units\":" << event.progress->work_units << ",\"elapsed_us\":"
+        << event.progress->elapsed_us << '}';
+  }
+  if (event.active_region) {
+    const ActiveRegion& region = *event.active_region;
+    if (!first) out << ',';
+    first = false;
+    out << "\"active_region\":{\"id\":\"" << escape_json(region.id)
+        << "\",\"label\":\"" << escape_json(region.label) << "\",\"minimum_x_nm\":"
+        << region.minimum_x_nm << ",\"minimum_y_nm\":" << region.minimum_y_nm
+        << ",\"maximum_x_nm\":" << region.maximum_x_nm << ",\"maximum_y_nm\":"
+        << region.maximum_y_nm << ",\"layers\":";
+    write_ids(out, region.layers);
+    out << ",\"nets\":";
+    write_ids(out, region.nets);
+    out << ",\"active\":" << (region.active ? "true" : "false") << '}';
   }
   if (!event.message.empty()) {
     write_string(out, "message", event.message, first);
   }
   out << '}';
   return out.str();
+}
+
+std::size_t estimated_event_bytes(const Event& event) {
+  const auto string_bytes = [](const std::string& value) { return value.capacity(); };
+  const auto point_bytes = [](const Point& point) { return sizeof(Point) + point.layer.capacity(); };
+  std::size_t bytes = sizeof(Event) + string_bytes(event.source_identity) + string_bytes(event.message);
+  if (event.active_net) bytes += string_bytes(*event.active_net);
+  if (event.active_group) bytes += string_bytes(*event.active_group);
+  if (event.progress) bytes += sizeof(PhaseProgress) + string_bytes(event.progress->phase);
+  if (event.active_region) {
+    bytes += sizeof(ActiveRegion) + string_bytes(event.active_region->id) +
+             string_bytes(event.active_region->label) +
+             event.active_region->layers.capacity() * sizeof(std::string) +
+             event.active_region->nets.capacity() * sizeof(std::string);
+    for (const auto& layer : event.active_region->layers) bytes += string_bytes(layer);
+    for (const auto& net : event.active_region->nets) bytes += string_bytes(net);
+  }
+  bytes += event.routes.capacity() * sizeof(Route) + event.vias.capacity() * sizeof(Via) +
+           event.conflicts.capacity() * sizeof(Conflict) +
+           event.resources.capacity() * sizeof(ResourceOccupancy) +
+           event.hydraulic_fields.capacity() * sizeof(HydraulicField) +
+           event.priorities.capacity() * sizeof(Priority);
+  for (const Route& route : event.routes) {
+    bytes += sizeof(Route) + string_bytes(route.id) + string_bytes(route.net) +
+             string_bytes(route.family) + string_bytes(route.lifecycle);
+    bytes += route.points.capacity() * sizeof(Point) +
+             route.control_points.capacity() * sizeof(Point);
+    for (const Point& point : route.points) bytes += point.layer.capacity();
+    for (const Point& point : route.control_points) bytes += point.layer.capacity();
+    bytes += route.navmesh_cells.capacity() * sizeof(Route::NavMeshCell);
+    for (const auto& cell : route.navmesh_cells)
+      bytes += cell.minimum.layer.capacity() + cell.maximum.layer.capacity();
+  }
+  for (const Via& via : event.vias)
+    bytes += sizeof(Via) + string_bytes(via.id) + string_bytes(via.net) +
+             string_bytes(via.to_layer) + string_bytes(via.rejection_reason) + point_bytes(via.position);
+  for (const Conflict& conflict : event.conflicts) {
+    bytes += sizeof(Conflict) + string_bytes(conflict.id) + string_bytes(conflict.resource) +
+             string_bytes(conflict.group) + point_bytes(conflict.location);
+    bytes += conflict.nets.capacity() * sizeof(std::string);
+    for (const auto& net : conflict.nets) bytes += string_bytes(net);
+  }
+  for (const ResourceOccupancy& resource : event.resources) {
+    bytes += sizeof(ResourceOccupancy) + string_bytes(resource.id) + string_bytes(resource.layer) +
+             point_bytes(resource.start) + point_bytes(resource.end);
+    bytes += resource.nets.capacity() * sizeof(std::string);
+    for (const auto& net : resource.nets) bytes += string_bytes(net);
+  }
+  for (const HydraulicField& field : event.hydraulic_fields)
+    bytes += sizeof(HydraulicField) + string_bytes(field.id) + string_bytes(field.net) +
+             string_bytes(field.layer) + field.flow.capacity() * sizeof(std::uint16_t) +
+             field.erosion.capacity() * sizeof(std::uint16_t) + field.heightmap.capacity() * sizeof(std::uint16_t) +
+             field.free_space.capacity() * sizeof(std::uint16_t) +
+             field.downstream_pressure.capacity() * sizeof(std::uint16_t) +
+             field.success_prior.capacity() * sizeof(std::uint16_t);
+  for (const Priority& priority : event.priorities)
+    bytes += sizeof(Priority) + string_bytes(priority.net) + string_bytes(priority.group) +
+             string_bytes(priority.staged_class);
+  // A trace/history may be the sole owner of a shared source scene. Charge its deep geometry once
+  // per Event so queue and replay budgets cannot retain arbitrary board payloads through pointers.
+  bytes += event.source_boards.capacity() * sizeof(std::shared_ptr<const SourceBoard>);
+  for (const auto& board : event.source_boards) {
+    if (!board) continue;
+    bytes += sizeof(SourceBoard) + string_bytes(board->id) + string_bytes(board->revision) +
+             string_bytes(board->path) + board->layers.capacity() * sizeof(SourceLayer) +
+             board->nets.capacity() * sizeof(SourceNet) +
+             board->primitives.capacity() * sizeof(SourcePrimitive);
+    for (const auto& layer : board->layers)
+      bytes += string_bytes(layer.id) + string_bytes(layer.name) + string_bytes(layer.kind);
+    for (const auto& net : board->nets) bytes += string_bytes(net.id) + string_bytes(net.name);
+    for (const auto& primitive : board->primitives) {
+      bytes += string_bytes(primitive.id) + string_bytes(primitive.kind) +
+               string_bytes(primitive.parent) + string_bytes(primitive.reference) +
+               string_bytes(primitive.net) + string_bytes(primitive.shape) + string_bytes(primitive.side) +
+               primitive.layers.capacity() * sizeof(std::string) +
+               primitive.points.capacity() * sizeof(Point) +
+               primitive.holes.capacity() * sizeof(std::vector<Point>);
+      for (const auto& layer : primitive.layers) bytes += string_bytes(layer);
+      for (const auto& point : primitive.points) bytes += string_bytes(point.layer);
+      for (const auto& hole : primitive.holes) {
+        bytes += hole.capacity() * sizeof(Point);
+        for (const auto& point : hole) bytes += string_bytes(point.layer);
+      }
+    }
+    if (board->stackup) {
+      bytes += sizeof(SourceStackup) + string_bytes(board->stackup->copper_finish) +
+               string_bytes(board->stackup->edge_connector) +
+               board->stackup->layers.capacity() * sizeof(SourceStackupLayer);
+      for (const auto& layer : board->stackup->layers) {
+        bytes += string_bytes(layer.name) + string_bytes(layer.type) + string_bytes(layer.kind) +
+                 string_bytes(layer.board_layer) +
+                 layer.sublayers.capacity() * sizeof(SourceStackupSublayer);
+        for (const auto& sublayer : layer.sublayers)
+          bytes += string_bytes(sublayer.material) + string_bytes(sublayer.color);
+      }
+    }
+  }
+  return bytes;
 }
 
 } // namespace flux::telemetry

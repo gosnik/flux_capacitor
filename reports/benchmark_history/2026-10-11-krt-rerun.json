@@ -1,0 +1,67 @@
+{
+  "source_revision": "0db4b103f95a63995e8e2c2b2c8c0e3077a2388a",
+  "native_build_command": "python3 build_router.py --from-source",
+  "native_core": {
+    "path": "/tmp/flux-krt-via-reference/rust_router/grid_router.so",
+    "sha256": "7972dfc0bbec443d3533e6083be7f3c2963dfe68d1db7800a37de86b660209f9",
+    "preserved_path": "reports/validation/krt-tier1-20261011/grid_router.so"
+  },
+  "route_command": "python3 py_router/route.py /home/adam/qtbits/flux_capacitor/tests/fixtures/routing-corpus/bm_svf.kicad_pcb /home/adam/qtbits/flux_capacitor/reports/validation/krt-tier1-20261011/bm_svf-krt-routed.kicad_pcb --track-width 0.2 --clearance 0.2 --via-size 0.7 --via-drill 0.3 --escalation off --strict-sizes",
+  "route_exit": 0,
+  "routed_nets": 25,
+  "multipoint_pads_connected": 93,
+  "multipoint_pads_total": 93,
+  "pad_pairs_connected": 78,
+  "pad_pairs_total": 78,
+  "vias": 70,
+  "total_iterations": 724415,
+  "main_loop_time_s": 0.15,
+  "timing": {
+    "elapsed_s": 4.19,
+    "user_s": 5.66,
+    "system_s": 0.12,
+    "max_rss_kb": 312064
+  },
+  "internal_checks": {
+    "connected_exit": 0,
+    "drc_exit": 0
+  },
+  "kicad_drc_original_rules": {
+    "exit": 0,
+    "violations": 67,
+    "unconnected_items": 0,
+    "categories": {
+      "lib_footprint_issues": 34,
+      "text_height": 22,
+      "silk_over_copper": 11
+    }
+  },
+  "limitations": [
+    "KRT output project lowered copper-to-hole floor to 0.2 mm versus original 0.25 mm; original-rules DRC rerun showed same non-copper violations and no unconnected items, but this was not a same-rule reroute.",
+    "30 via-in-pad sites are undeclarable in the board file format."
+  ],
+  "final_segments": 352,
+  "planar_segment_length_mm": 848.7513540060808,
+  "working_directory": "/tmp/flux-krt-via-reference",
+  "input_sha256": {
+    ".kicad_pcb": "308ce5513cb6b2b33820648a0062a54f548f6b3c13d856cdcd9b7c3ac8a20d2a",
+    ".kicad_pro": "04856904fe9070f7decd33b676d3f58e44676b6c930e65fa8a16f0ddd65d54db"
+  },
+  "benchmark_scope": "Tier1 bm_svf external routing oracle; straight octilinear routing, not Flux strict-curved qualification",
+  "copper_length_scope": "sum of actual track-segment lengths; excludes via barrels and copper graphics",
+  "artifacts": {
+    "board": "reports/validation/krt-tier1-20261011/original-rules/bm_svf-krt-routed.kicad_pcb",
+    "original_rules_drc": "reports/validation/krt-tier1-20261011/original-rules/kicad-drc-original.json",
+    "copper_preview": "reports/validation/krt-tier1-20261011/copper"
+  },
+  "flux_import": {
+    "strict": true,
+    "lossy": false,
+    "project_minimum_rules_applied": true,
+    "core_validation_errors": 0,
+    "open_connections": 0,
+    "tracks": 352,
+    "vias": 70
+  },
+  "search_counter_scope": "KRT total_iterations counts popped queue entries including duplicate skips (rust_router/src/router.rs GridSearch::step); not identical to Flux expansions"
+}

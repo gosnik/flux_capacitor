@@ -1,0 +1,92 @@
+{
+  "schema": "flux_benchmark_comparison",
+  "date": "2026-10-08",
+  "benchmark": "Tier 1 V77 immutable binary",
+  "command": "python3 tests/python/verify_routing_corpus.py --flux-cli build/pipeline-physical-pass-20261008/experiment/flux-cli-immutable --corpus tests/fixtures/routing-corpus --level 1 --artifacts build/pipeline-physical-pass-20261008/tier1 --track-geometry straight --max-straight-portfolio-checks 24",
+  "v77": {
+    "run_result": "build/pipeline-physical-pass-20261008/tier1/run-result.json",
+    "qualified_boards": [
+      "pt2399_delay"
+    ],
+    "qualified_count": 1,
+    "assessed_count": 2,
+    "stdout": "build/pipeline-physical-pass-20261008/tier1.stdout",
+    "stderr": "build/pipeline-physical-pass-20261008/tier1.stderr",
+    "exit_status": "not captured in wrapper file; run-result status complete",
+    "timing_and_rss": "unavailable: wrapper stderr was empty",
+    "metrics": {
+      "pt2399_delay": {
+        "qualified": true,
+        "duration_seconds": 2.074951504000637,
+        "tracks": 243,
+        "vias": 5,
+        "copper_violations": 0,
+        "external_drc": "pass"
+      },
+      "bm_svf": {
+        "qualified": false,
+        "declared_status": "unlocked",
+        "open_connections": 78,
+        "unrouted": 0,
+        "overflow": 0,
+        "planning_seconds": 2260.7104860420004,
+        "selected_scene_open_connections": 0,
+        "selected_scene_drc_violations": 809,
+        "native_conflicts": 473,
+        "pipeline": {
+          "cumulative_regional_bundle_assignment_us": 2128514795,
+          "cumulative_regional_access_selection_us": 603626602,
+          "cumulative_regional_access_selection_invocations": 5000181,
+          "cumulative_regional_access_selection_cache_hits": 264327,
+          "regional_straight_scene_search_outcome": "budget_or_scope_unknown",
+          "regional_straight_scene_preview_checks": 12
+        },
+        "open_connections_context": "78 is the unaccepted output/benchmark status; selected illegal scene itself has 0 opens"
+      }
+    }
+  },
+  "v76": {
+    "run_result": "build/pipeline-single-pass-20261008/experiment-tier1/run-result.json",
+    "qualified_boards": [
+      "pt2399_delay"
+    ],
+    "qualified_count": 1,
+    "assessed_count": 2,
+    "metrics": {
+      "pt2399_delay": {
+        "qualified": true,
+        "duration_seconds": 2.1069704209949123,
+        "tracks": 243,
+        "vias": 5,
+        "copper_violations": 0,
+        "external_drc": "pass"
+      },
+      "bm_svf": {
+        "qualified": false,
+        "declared_status": "unlocked",
+        "open_connections": 78,
+        "unrouted": 0,
+        "overflow": 0,
+        "planning_seconds": 2312.4873234660045,
+        "selected_scene_open_connections": 0,
+        "selected_scene_drc_violations": 751,
+        "native_conflicts": 430,
+        "pipeline": {
+          "cumulative_regional_bundle_assignment_us": 2179939124,
+          "cumulative_regional_access_selection_us": 651623155,
+          "cumulative_regional_access_selection_invocations": 5241343
+        },
+        "open_connections_context": "78 is the unaccepted output/benchmark status; selected illegal scene itself has 0 opens"
+      }
+    }
+  },
+  "comparison": {
+    "qualification_delta": 0,
+    "pt2399_delay_duration_delta_seconds": -0.03201891642427578,
+    "pt2399_delay_tracks_delta": 0,
+    "pt2399_delay_vias_delta": 0,
+    "bm_svf_selected_scene_drc_delta": 58,
+    "bm_svf_planning_delta_seconds": -51.77683742400404,
+    "interpretation": "Qualification unchanged, physical quality regressed (751 to 809 selected-scene violations); slightly lower observed runtime is not causal proof in bundled concurrent runs. Cache avoided264327 access evaluations. Physical scheduling requires isolated refinement."
+  }
+}

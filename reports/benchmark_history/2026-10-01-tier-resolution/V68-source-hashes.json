@@ -1,0 +1,37 @@
+{
+  "version": "V68",
+  "experiment": "straight-portfolio-selection",
+  "status": "validation pending",
+  "quality_claim": false,
+  "comparison": {
+    "before": "build/tier-resolution-20261001-v68-before",
+    "after": "live working tree"
+  },
+  "files": [
+    {
+      "path": "src/regional_router.cpp",
+      "before": "abdb8512d9836da9a377249ebd21734bd7fe3e6a1cd139fbe34ce1200ef50193",
+      "after": "2e616919c5d38a77f84c43bcf117748da11736d4091c700c64b3c725eeb65284"
+    },
+    {
+      "path": "include/flux/core/regional_router.hpp",
+      "before": "d343e87c69ed6222086aa3c173d711fc67f27679a975654e64569e9ce29abe38",
+      "after": "8d7b4b388c99c348c15bf4c7c0d05350dab7dfbf54fa746c04c97072fca8eac8"
+    },
+    {
+      "path": "apps/flux-cli/main.cpp",
+      "before": "a5e1494d421821cc19fc89b5b14b81cb7f5de9a18ee3ac0951ea5db6c8c037e7",
+      "after": "ac061aef8cac4ac6855539440add28cd0fb68f0fd1c6d1c2b62b7cc05edc823a"
+    },
+    {
+      "path": "tests/unit/core_tests.cpp",
+      "before": "675859effc9ac0e06f5f97c32b0b7960b6a8e95f3ff5192cf4bf0612f86c3688",
+      "after": "50b94f9196eae116b475df4f39e6347622ad8ef4f02a3c81a1265aa4e6c4a6aa"
+    },
+    {
+      "path": "tests/python/verify_routing_corpus.py",
+      "before": "af6e55177479f123df4bfbdf497fed6e01f988d205bdb855e84172f42ec97181",
+      "after": "89aa0175c9c74442dc346d4ea06ff8241a02f39d7f08af7e72cc0ff30342dbdb"
+    }
+  ]
+}

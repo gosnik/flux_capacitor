@@ -1,0 +1,101 @@
+{
+  "status": "complete",
+  "focused_regression": {
+    "passed": 20,
+    "failed": 0,
+    "seconds": 107.29
+  },
+  "strict_release_cli": "pass",
+  "strict_viewer_cli": "pass",
+  "independent_review": "no remaining material defects",
+  "source_freeze_verified": true,
+  "tier0": {
+    "runner_exit": 1,
+    "qualified": false,
+    "comparison": "matches route-displace physical baseline",
+    "global_seconds": 113.46610662998864,
+    "detail_seconds": 328.39812861499377,
+    "open_connections": 0,
+    "copper_violations": 0,
+    "unrounded_non_junction_bends": 0,
+    "diagnostic_kicad_errors": 0,
+    "diagnostic_kicad_opens": 0,
+    "stop_reason": "incomplete_global_route"
+  },
+  "tier1": {
+    "runner_exit": 0,
+    "qualified": false,
+    "global_seconds": 385.8156551430002,
+    "satisfied_requests": 64,
+    "requests": 78,
+    "missing_requests": 14,
+    "physical_opens": 24,
+    "physical_unrouted_nets": 10,
+    "joint_checkpoint": {
+      "joint_avbd_invocations": 0,
+      "joint_budget_exhausted": 16,
+      "joint_exact_rejections": 2,
+      "joint_group_accepted": 0,
+      "joint_group_attempts": 2,
+      "joint_passage_candidates": 2,
+      "joint_pns_attempts": 0,
+      "joint_search_expansions": 280000,
+      "joint_xpbd_invocations": 0
+    },
+    "blocked_passages": [
+      {
+        "blocker_owners": [
+          14,
+          16,
+          21
+        ],
+        "clearance_deficit_nm": 450000,
+        "displacement_space_nm": 0,
+        "movement_cost_nm": 11729600.0,
+        "request_index": 67
+      },
+      {
+        "blocker_owners": [
+          13,
+          14,
+          16
+        ],
+        "clearance_deficit_nm": 450000,
+        "displacement_space_nm": 0,
+        "movement_cost_nm": 11896600.0,
+        "request_index": 69
+      }
+    ]
+  },
+  "diagnostic_budget_sweep": {
+    "caps": [
+      16384,
+      32768,
+      65536,
+      131072
+    ],
+    "requests": [
+      67,
+      69
+    ],
+    "particles": [
+      201,
+      164
+    ],
+    "default_result": "obstacle work budget exhausted before XPBD",
+    "larger_caps": {
+      "xpbd_iterations": 32,
+      "avbd_used": true,
+      "avbd_contacts": [
+        117,
+        241
+      ],
+      "request67": "deformation envelope exceeded",
+      "request69_exact_violations": 27,
+      "both_requests_seconds": 0.44
+    },
+    "scope": "adapter replay of supplied paths; parent PNS fallback not executed",
+    "decision": "retain production caps; no legal proposal demonstrated",
+    "log": "preflight-sweep.log"
+  }
+}

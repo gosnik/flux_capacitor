@@ -1,0 +1,163 @@
+{
+  "schema": 1,
+  "experiments": [
+    "V49",
+    "V50",
+    "V51",
+    "V52",
+    "V53",
+    "V54"
+  ],
+  "tier_frontier": 1,
+  "all_tiers_complete": false,
+  "status": "tier1_unresolved",
+  "v49": {
+    "baseline_exact_global_drc": {
+      "track_clearance": 436,
+      "track_via_clearance": 105,
+      "hole_clearance": 19
+    },
+    "core_tests": "46/46",
+    "python_tests": "9/9",
+    "tier0_qualified": true,
+    "tier1_first_assembly_failures": [
+      {
+        "elapsed_seconds": 213.299319,
+        "net": "kicad-net-22",
+        "connection": 0
+      },
+      {
+        "elapsed_seconds": 292.746699,
+        "net": "kicad-net-13",
+        "connection": 3
+      },
+      {
+        "elapsed_seconds": 365.693748,
+        "net": "kicad-net-21",
+        "connection": 1
+      }
+    ],
+    "first_exact_scene_elapsed_seconds": 482.712685,
+    "first_exact_scene_accepted": false,
+    "first_exact_scene_planned_via_transitions": 120,
+    "scope_retry_first_exact_scene_elapsed_seconds": 671.210134,
+    "scope_retry_first_exact_scene_accepted": false,
+    "tier1_duration_seconds": 877.5520959649984,
+    "tier1_qualified": false,
+    "retained_straight_fragments": 152,
+    "retained_failure_stage": "multilayer_path_assembly",
+    "retained_exact_scene_checks": 0
+  },
+  "v50": {
+    "core_tests": "47/47",
+    "tier0_qualified": true,
+    "microtests": [
+      "straight_regional_lanes_require_exact_copper_proof",
+      "straight_regional_layer_adapters_preserve_connectivity"
+    ],
+    "broad_regressions": "126/133; same seven recorded baseline CLI demo failures",
+    "tier1": "deliberately stopped for V52 after six rejected exact scenes; not a completed full-tier result",
+    "matched_source_allocation": {
+      "snapshot_sequence": 1112,
+      "fragments_matched": 490,
+      "drc_violations": 560,
+      "opens": 0,
+      "vias": 48
+    },
+    "matched_straight_scene": {
+      "drc_violations": 796,
+      "opens": 2,
+      "vias": 94,
+      "open_nets": [
+        "kicad-net-21",
+        "kicad-net-2"
+      ],
+      "failure": "lost tree attachment vertices during collinear fragment compression"
+    }
+  },
+  "v51": {
+    "scope_only_replay": {
+      "windows": 15,
+      "global_resources_replayed": false,
+      "before": {
+        "drc_violations": 953,
+        "opens": 1,
+        "planned_vias": 70
+      },
+      "after": {
+        "drc_violations": 892,
+        "opens": 0,
+        "planned_vias": 60
+      }
+    },
+    "decision": "Keep bounded exact fallback comparison; partial improvement, no tier qualification."
+  },
+  "v52": {
+    "tier0_qualified": true,
+    "junction_regression": "pass",
+    "provenance_regression": "pass after updating intentional retained-vertex counts",
+    "tier1": "completed, unqualified",
+    "core_tests": "48/48",
+    "first_scene": {
+      "paths": 78,
+      "tracks": 1061,
+      "vias": 70,
+      "drc_violations": 733,
+      "categories": {
+        "hole_clearance": 38,
+        "hole_to_hole_clearance": 2,
+        "track_clearance": 588,
+        "track_pad_clearance": 8,
+        "track_via_clearance": 97
+      },
+      "opens": 0,
+      "diagnoses": 227
+    },
+    "first_scope_retry": {
+      "elapsed_seconds": 434.020844,
+      "drc_violations": 725,
+      "opens": 0
+    },
+    "broad_regressions": "126/133, same seven known baseline failures",
+    "diagnostic_type_fix": "Straight exact witnesses retained; missing PH certificates are no longer mislabeled as failed PH/PNS.",
+    "completed_run": "V52-completed-tier1.json",
+    "duration_seconds": 1698.7358973750015
+  },
+  "v53": {
+    "decision": "Reject production integration; provisional count improvement failed final copper verification.",
+    "result": "V53-diagnostic-external-verification.json"
+  },
+  "v54": {
+    "hypothesis": "An unevaluated empty regional result is wrongly ranked as zero incomplete assignments.",
+    "before_regression": "reproduced failure",
+    "change": "Explicit regional_evaluated state precedes regional failure counts after topology gates; CLI exposes state.",
+    "verification": {
+      "core": "48/48",
+      "core_log": "build/tier-resolution-verification/v54-core.log",
+      "focused_before": "FAIL: deferred checkpoint displaced final physical assessment",
+      "focused_before_log": "build/tier-resolution-verification/v54-before-regression.log",
+      "broader_tests": "126/133; same seven known baseline demo failures",
+      "broader_log": "build/tier-resolution-verification/v54-ctest.log",
+      "tier0": {
+        "qualified": true,
+        "artifacts": "build/tier-resolution-v54-tier0",
+        "paths": 50,
+        "tracks": 243,
+        "arcs": 0,
+        "vias": 5,
+        "internal_opens": 0,
+        "kicad_errors": 0,
+        "kicad_unconnected": 0,
+        "ordinary_angle_audit_passed": true,
+        "board_sha256": "e628264d831f83efc7b03db874d6d01c47c01258aabcb2457f093025a10a44bf"
+      },
+      "release_cli_sha256": "455bf0737628a8dc15df3b184e3040a74c85155d10e6b583c9c0567ec296e0bd",
+      "tier1_limit": "Completed full bounded run is V52; V54 selection change verified by reproduced regression and Tier 0, not a relabeled full Tier-1 rerun.",
+      "debug_cli_rebuilt": true,
+      "debug_tier0_qualified": true,
+      "debug_tier0_artifacts": "build/tier-resolution-v54-dev-tier0",
+      "debug_cli_sha256": "7e0f8a56f9c5099d8440985b8afff7bc1c9e44b02f09e1b68bbae02580c4b1b9"
+    },
+    "decision": "Keep: the reproduced result-retention regression now passes; no acceptance rule relaxed."
+  }
+}

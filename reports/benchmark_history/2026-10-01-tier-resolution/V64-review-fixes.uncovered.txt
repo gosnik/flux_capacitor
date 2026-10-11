@@ -1,0 +1,7 @@
+V64 review-fixes patch scope
+
+Compared snapshots:
+- before: build/tier-resolution-20261001-v64-before-review-fixes
+- after: build/tier-resolution-20261001-v64-reviewed-source
+
+Five files are covered by V64-review-fixes.patch. source/routability_knowledge.cpp is explicitly uncovered because its baseline was not captured; no whole-working-tree diff was used.

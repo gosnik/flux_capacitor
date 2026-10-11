@@ -1,0 +1,27 @@
+{
+  "board": "bm_svf",
+  "iteration_budget": 30,
+  "controls": {
+    "max_regional_bundle_states": 1,
+    "max_straight_portfolio_checks": 0
+  },
+  "arms": {
+    "retries4": {
+      "status": "timeout",
+      "exit": 124,
+      "completed_epoch_oracle_errors": [674, 613, 499, 540],
+      "qualification": "none; no completed JSON result"
+    },
+    "retries29": {
+      "status": "complete",
+      "exit": 0,
+      "actual_global_iterations": 30,
+      "feedback_passes": 29,
+      "selected_coarse_oracle_drc_violations": 597,
+      "last_epoch_oracle_violations": 1014,
+      "selected_assembled_scene_evaluated": false,
+      "native_scene_conflicts": 0,
+      "qualification": "none; no final copper qualification"
+    }
+  }
+}

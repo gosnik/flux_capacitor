@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "date": "2026-09-06",
+  "board": "pt2399_delay",
+  "tier": 0,
+  "role": "independent topology existence oracle, not Flux qualification",
+  "router": "KiCadRoutingTools",
+  "revision": "ec2bf0e1021c0ed95c45b14664d02c56777a0974",
+  "artifact": "build/reference-benchmarks/krt-pt2399-20260906-070mm-strict",
+  "output_sha256": "0a12b54edd728a4ba537f1974caa4bcf0e2984c063b04557a4f5d6ddddf9d200",
+  "original_project_sha256": "ddbcc3d30ca8a4e88f38be0bb5a12f4f29f67048bd503d3e77b2e615196bab8a",
+  "parameters": {"track_width_mm": 0.7, "clearance_mm": 0.2, "via_diameter_mm": 0.6, "via_drill_mm": 0.3, "escalation": "off", "strict_sizes": true, "fix_drc_settings": false},
+  "metrics": {"routed_nets": 20, "unrouted_nets": 0, "connected_pad_pairs": 50, "required_pad_pairs": 50, "tracks": 148, "arcs": 0, "vias": 1, "track_length_mm": 399.1144586602283, "wall_time_seconds": 0.81, "user_cpu_seconds": 2.26, "system_cpu_seconds": 0.08, "peak_rss_kib": 236584, "reported_iterations": 37960},
+  "measured_dimensions": {"track_widths_mm": [0.7], "via_diameters_mm": [0.6], "via_drills_mm": [0.3]},
+  "external_drc": {"validator": "KiCad 9.0.8", "severity": "error", "rule_context": "byte-identical original project, staged and hashed by repaired Flux harness", "violations": 0, "unconnected_items": 0, "categories": {}, "report": "build/reference-benchmarks/krt-pt2399-20260906-070mm-strict/drc-original-rules.json"},
+  "caveats": [
+    "Reference output is straight octolinear copper, not the Flux curved-trace objective.",
+    "The reference router wrote a modified output project despite --no-fix-drc-settings, lowering its min_hole_clearance from 0.25 to 0.20 mm. That modified project was NOT used for validation; the unchanged source project passes independently.",
+    "The reference summary's internal total_time is not end-to-end runtime; the external time tool supplies 0.81 seconds.",
+    "No reference tracks or benchmark-specific coordinates were copied into Flux."
+  ],
+  "tier_promoted": false
+}

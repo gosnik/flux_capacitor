@@ -1,0 +1,163 @@
+[
+  {
+    "id": "ft2232h_jtag",
+    "mode": "prepared",
+    "command": [
+      "kicad-cli",
+      "pcb",
+      "drc",
+      "--format",
+      "json",
+      "--severity-error",
+      "--output",
+      "/home/adam/qtbits/flux_capacitor/reports/benchmark_history/2026-09-07-krt-tier-alternatives/ft2232h_jtag.prepared.drc.json",
+      "/home/adam/qtbits/flux_capacitor/tests/fixtures/routing-corpus/alternatives/ft2232h_jtag.kicad_pcb"
+    ],
+    "returncode": 0,
+    "seconds": 0.414,
+    "board_sha256": "882c35ac781cf8fc292dc025b8d22944077cc54002c6c73cf2613056f8b8b95b",
+    "project_sha256": "00edffa7cc27d9c31b57714ce3a5cdff5f68a89425071f2b353672767939f237",
+    "drc_sha256": "050082f3b58186e610d9d9a57ca6267fdddbd156fc9d451f34b9a63dc64aafb6",
+    "counts": {
+      "violations": {},
+      "unconnected_items": {
+        "unconnected_items": 117
+      },
+      "schematic_parity": {}
+    }
+  },
+  {
+    "id": "ft2232h_jtag",
+    "mode": "reference",
+    "command": [
+      "kicad-cli",
+      "pcb",
+      "drc",
+      "--format",
+      "json",
+      "--severity-error",
+      "--output",
+      "/home/adam/qtbits/flux_capacitor/reports/benchmark_history/2026-09-07-krt-tier-alternatives/ft2232h_jtag.reference.drc.json",
+      "/home/adam/qtbits/flux_capacitor/tests/fixtures/routing-corpus/alternatives/reference/ft2232h_jtag.kicad_pcb"
+    ],
+    "returncode": 0,
+    "seconds": 0.689,
+    "board_sha256": "6c7736712837b03b9855cea32d6652f6592398640fea86e4f390645cab43eb08",
+    "project_sha256": "00edffa7cc27d9c31b57714ce3a5cdff5f68a89425071f2b353672767939f237",
+    "drc_sha256": "a02afd5eab1c712be56a618e27f87c31cf3a0359d657b7752e55be1d42916e16",
+    "counts": {
+      "violations": {},
+      "unconnected_items": {},
+      "schematic_parity": {}
+    }
+  },
+  {
+    "id": "gb_nintendo_power",
+    "mode": "prepared",
+    "command": [
+      "kicad-cli",
+      "pcb",
+      "drc",
+      "--format",
+      "json",
+      "--severity-error",
+      "--output",
+      "/home/adam/qtbits/flux_capacitor/reports/benchmark_history/2026-09-07-krt-tier-alternatives/gb_nintendo_power.prepared.drc.json",
+      "/home/adam/qtbits/flux_capacitor/tests/fixtures/routing-corpus/alternatives/gb_nintendo_power.kicad_pcb"
+    ],
+    "returncode": 0,
+    "seconds": 0.187,
+    "board_sha256": "068464af04d5e63c87b70fbebbd155c35bc64411c2cee683f7c96a10d900eb7d",
+    "project_sha256": "701eb343408e933b989365af667b0771ff37ed1b41dac99d6c69d3926f78b403",
+    "drc_sha256": "1efe539398d028ed4ea7a86aa010755aa11c3d2167077966ca8b202b25e6acec",
+    "counts": {
+      "violations": {},
+      "unconnected_items": {
+        "unconnected_items": 148
+      },
+      "schematic_parity": {}
+    }
+  },
+  {
+    "id": "gb_nintendo_power",
+    "mode": "reference",
+    "command": [
+      "kicad-cli",
+      "pcb",
+      "drc",
+      "--format",
+      "json",
+      "--severity-error",
+      "--output",
+      "/home/adam/qtbits/flux_capacitor/reports/benchmark_history/2026-09-07-krt-tier-alternatives/gb_nintendo_power.reference.drc.json",
+      "/home/adam/qtbits/flux_capacitor/tests/fixtures/routing-corpus/alternatives/reference/gb_nintendo_power.kicad_pcb"
+    ],
+    "returncode": 0,
+    "seconds": 0.47,
+    "board_sha256": "b3baf4d5d5dbf651e8ef8dc8659fc260a25175f4746cf42ac666628ce5015994",
+    "project_sha256": "701eb343408e933b989365af667b0771ff37ed1b41dac99d6c69d3926f78b403",
+    "drc_sha256": "f963762dce8367cca23c0e47fe6f8ab1f03ccce1ce032d0adb46e750fd62154f",
+    "counts": {
+      "violations": {
+        "starved_thermal": 1,
+        "copper_edge_clearance": 2
+      },
+      "unconnected_items": {
+        "unconnected_items": 1
+      },
+      "schematic_parity": {}
+    }
+  },
+  {
+    "id": "nascom_eprom_80bus",
+    "mode": "prepared",
+    "command": [
+      "kicad-cli",
+      "pcb",
+      "drc",
+      "--format",
+      "json",
+      "--severity-error",
+      "--output",
+      "/home/adam/qtbits/flux_capacitor/reports/benchmark_history/2026-09-07-krt-tier-alternatives/nascom_eprom_80bus.prepared.drc.json",
+      "/home/adam/qtbits/flux_capacitor/tests/fixtures/routing-corpus/alternatives/nascom_eprom_80bus.kicad_pcb"
+    ],
+    "returncode": 0,
+    "seconds": 0.469,
+    "board_sha256": "9643c1614510fec42da90165ab3c9a99f4bbb2e7103db6b680659987370b8659",
+    "project_sha256": "11001c7d528621af1303081fd46ff1f0f15e7dc8b8b9a3b526ea735bcfe4b6fb",
+    "drc_sha256": "cc7914bbcbeb2182303ee9a4fcae6f59457d8cb459b2a1838646c515f29b0d2d",
+    "counts": {
+      "violations": {},
+      "unconnected_items": {
+        "unconnected_items": 415
+      },
+      "schematic_parity": {}
+    }
+  },
+  {
+    "id": "nascom_eprom_80bus",
+    "mode": "reference",
+    "command": [
+      "kicad-cli",
+      "pcb",
+      "drc",
+      "--format",
+      "json",
+      "--severity-error",
+      "--output",
+      "/home/adam/qtbits/flux_capacitor/reports/benchmark_history/2026-09-07-krt-tier-alternatives/nascom_eprom_80bus.reference.drc.json",
+      "/home/adam/qtbits/flux_capacitor/tests/fixtures/routing-corpus/alternatives/reference/nascom_eprom_80bus.kicad_pcb"
+    ],
+    "returncode": 0,
+    "seconds": 0.775,
+    "board_sha256": "cd0cddc88cb454fe9ef713507aec073158c9ec16751fcf2ca311cd2265b3fb68",
+    "project_sha256": "11001c7d528621af1303081fd46ff1f0f15e7dc8b8b9a3b526ea735bcfe4b6fb",
+    "drc_sha256": "d47a32d411b517fb57c801f6993144109438afe58b81bdeafc00b9e626f72f6e",
+    "counts": {
+      "violations": {},
+      "unconnected_items": {},
+      "schematic_parity": {}
+    }
+  }
+]

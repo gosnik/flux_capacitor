@@ -1,8 +1,10 @@
+#include "flux/core/bezier_copper.hpp"
 #include "flux/core/integrated_optimizer.hpp"
 #include "flux/core/regional_router.hpp"
 
 #include "flux/core/geometry.hpp"
 #include "flux/core/routing_compute.hpp"
+#include "flux/core/routing_feedback.hpp"
 #include "flux/core/routing_rules.hpp"
 #include "flux/core/validation.hpp"
 
@@ -238,6 +240,12 @@ make_placement_priority_context(const Board& source,
     result =
         saturating_add(result, geometry::circular_arc_length_nm(arc.start, arc.middle, arc.end));
   }
+  for (const auto& curve : board.track_beziers) {
+    const auto flattened = tessellate_track_bezier(curve);
+    if (!flattened.certified) return std::numeric_limits<std::uint64_t>::max();
+    for (const auto& piece : flattened.segments)
+      result = saturating_add(result, geometry::segment_length_nm(piece.start, piece.end));
+  }
   return result;
 }
 
@@ -315,14 +323,21 @@ evaluate_candidate(const Board& source, Board placement, const IntegratedOptimiz
     auto planner_config = RoutingPlannerConfig{};
     planner_config.global = config.global_router;
     planner_config.regional = config.regional_router;
+    planner_config.curved_tracks = config.detailed_router.circular_arc_refinement;
     result.routing_plan = plan_routes(result.placement, planner_config, stop_token, telemetry);
     result.global = result.routing_plan->coarse_global;
   } else {
+    auto incremental_global_config = config.global_router;
+    if (!config.detailed_router.circular_arc_refinement) {
+      incremental_global_config.use_navmesh_funnel_spline_seeds = false;
+      incremental_global_config.single_lane_direct_voronoi_resources = true;
+    }
     result.global = route_global_incremental(result.placement, *checkpoint, affected_nets,
-                                             config.global_router, stop_token, telemetry);
+                                             incremental_global_config, stop_token, telemetry);
     RoutingPlanResult incremental_plan;
     incremental_plan.coarse_global = result.global;
     auto regional_config = config.regional_router;
+    regional_config.enable_spline_realization = config.detailed_router.circular_arc_refinement;
     regional_config.treat_saved_zone_fills_as_refillable =
         config.global_router.treat_saved_zone_fills_as_refillable;
     incremental_plan.regional = analyze_regional_conflicts(result.placement, result.global,
@@ -375,14 +390,52 @@ evaluate_candidate(const Board& source, Board placement, const IntegratedOptimiz
   auto detailed_config = config.detailed_router;
   detailed_config.existing_routing = ExistingRoutingPolicy::replace_unlocked_for_routed_nets;
   result.detailed =
-      regional_handoff_ready ? materialize_detailed_route(result.placement, *result.routing_plan,
-                                                          detailed_config, stop_token)
-      : detailed_checkpoint == nullptr
+      detailed_checkpoint == nullptr
           ? materialize_detailed_route(result.placement, *result.routing_plan, detailed_config,
                                        stop_token)
+      : regional_handoff_ready
+          ? materialize_detailed_route_incremental(result.placement, *result.routing_plan,
+                                                   *detailed_checkpoint, detailed_config,
+                                                   stop_token)
           : materialize_detailed_route_incremental(
                 result.placement, result.global, *detailed_checkpoint, detailed_config, stop_token);
-  if (regional_handoff_ready && result.detailed.complete()) {
+  if (checkpoint == nullptr && result.routing_plan &&
+      config.max_final_routability_feedback_passes > 0U && !result.detailed.complete() &&
+      !result.detailed.provisional_zone_refill_candidate() &&
+      !result.detailed.routability_diagnoses.empty() && !stop_token.stop_requested()) {
+    RoutingPlannerConfig planner_config;
+    planner_config.global = config.global_router;
+    planner_config.regional = config.regional_router;
+    planner_config.curved_tracks = config.detailed_router.circular_arc_refinement;
+    auto feedback = refine_materialization_with_routability_feedback(
+        result.placement, result.placement, std::move(*result.routing_plan),
+        std::move(result.detailed), planner_config, detailed_config,
+        config.max_final_routability_feedback_passes, stop_token, telemetry);
+    result.routing_plan = std::move(feedback.routing);
+    result.global = result.routing_plan->coarse_global;
+    result.detailed = std::move(feedback.detailed);
+    result.score.global_route_failures = result.global.complete() ? 0U : 1U;
+    result.score.unrouted_nets = result.global.unrouted_nets.size();
+    result.score.failed_pin_escapes = result.global.failed_pin_escapes;
+    if (!result.global.hard_capacity_pass_summaries.empty()) {
+      result.score.best_hard_capacity_unrouted_nets =
+          std::min_element(result.global.hard_capacity_pass_summaries.begin(),
+                           result.global.hard_capacity_pass_summaries.end(),
+                           [](const auto& lhs, const auto& rhs) {
+                             return lhs.unrouted_nets.size() < rhs.unrouted_nets.size();
+                           })
+              ->unrouted_nets.size();
+    }
+    result.score.total_physical_overflow_nm = result.global.total_voronoi_overflow_nm;
+    result.score.peak_physical_overflow_nm = result.global.peak_voronoi_overflow_nm;
+    result.score.sampled_overflow = result.global.sampled_overflow;
+    result.score.corridor_overflow = result.global.corridor_overflow;
+    result.score.congested_physical_resources = result.global.congested_voronoi_resources;
+    result.score.global_overflow = result.global.total_overflow;
+    result.score.width_reduction_cost = result.global.total_width_reduction_cost;
+    result.score.route_cost = result.global.total_cost;
+  }
+  if (result.detailed.complete()) {
     result.score.global_route_failures = 0U;
     result.score.total_physical_overflow_nm = 0U;
     result.score.peak_physical_overflow_nm = 0U;
@@ -578,6 +631,16 @@ representative_hard_capacity_pass(const GlobalRouteResult& route);
                     static_cast<long double>(std::max(track.start.y, track.end.y).value()) +
                         radius};
     }
+  }
+  for (const auto& curve : board.track_beziers) {
+    if (curve.id != id) continue;
+    auto bounds = point_bounds(curve.start, static_cast<long double>(curve.width.value()) / 2.0L);
+    for (const auto p : {curve.control1, curve.control2, curve.end}) {
+      const auto b = point_bounds(p, static_cast<long double>(curve.width.value()) / 2.0L);
+      bounds.min_x = std::min(bounds.min_x, b.min_x); bounds.max_x = std::max(bounds.max_x, b.max_x);
+      bounds.min_y = std::min(bounds.min_y, b.min_y); bounds.max_y = std::max(bounds.max_y, b.max_y);
+    }
+    return bounds;
   }
   for (const auto& arc : board.track_arcs) {
     if (arc.id == id) {

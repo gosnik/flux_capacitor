@@ -15,7 +15,8 @@ constexpr float maximum_ui_scale = 3.0F;
 
 std::string trim(std::string value) {
   const auto first = value.find_first_not_of(" \t\r\n");
-  if (first == std::string::npos) return {};
+  if (first == std::string::npos)
+    return {};
   const auto last = value.find_last_not_of(" \t\r\n");
   return value.substr(first, last - first + 1U);
 }
@@ -39,8 +40,7 @@ bool parse_string(const std::string& value, std::string& result) {
   return static_cast<bool>(input);
 }
 
-template <typename Number>
-bool parse_number(const std::string& value, Number& result) {
+template <typename Number> bool parse_number(const std::string& value, Number& result) {
   std::istringstream input(value);
   input >> result;
   return static_cast<bool>(input) && input.peek() == std::char_traits<char>::eof();
@@ -67,8 +67,7 @@ std::filesystem::path standard_viewer_config_path() {
            "RouterTelemetryViewer" / "viewer.conf";
   }
 #else
-  if (const char* config = std::getenv("XDG_CONFIG_HOME");
-      config != nullptr && *config != '\0') {
+  if (const char* config = std::getenv("XDG_CONFIG_HOME"); config != nullptr && *config != '\0') {
     return std::filesystem::path{config} / "flux" / "router-telemetry-viewer" / "viewer.conf";
   }
   if (const char* home = std::getenv("HOME"); home != nullptr && *home != '\0') {
@@ -100,32 +99,41 @@ bool load_viewer_preferences(const std::filesystem::path& path, ViewerPreference
   std::string line;
   while (std::getline(input, line)) {
     const auto separator = line.find('=');
-    if (separator == std::string::npos || line.empty() || line.front() == '#') continue;
+    if (separator == std::string::npos || line.empty() || line.front() == '#')
+      continue;
     const auto key = trim(line.substr(0U, separator));
     const auto value = line.substr(separator + 1U);
     bool valid = true;
-    if (key == "ui_scale") valid = parse_number(value, preferences.ui_scale);
+    if (key == "ui_scale")
+      valid = parse_number(value, preferences.ui_scale);
     else if (key == "activity_panel_height")
       valid = parse_number(value, preferences.activity_panel_height);
-    else if (key == "replay_speed") valid = parse_number(value, preferences.replay_speed);
-    else if (key == "endpoint") valid = parse_string(value, preferences.endpoint);
-    else if (key == "telemetry_level") valid = parse_string(value, preferences.telemetry_level);
+    else if (key == "replay_speed")
+      valid = parse_number(value, preferences.replay_speed);
+    else if (key == "endpoint")
+      valid = parse_string(value, preferences.endpoint);
+    else if (key == "telemetry_level")
+      valid = parse_string(value, preferences.telemetry_level);
     else if (key == "telemetry_rate_hz")
       valid = parse_number(value, preferences.telemetry_rate_hz);
     else if (key == "trace_directory") {
       std::string decoded;
       valid = parse_string(value, decoded);
-      if (valid) preferences.trace_directory = decoded;
+      if (valid)
+        preferences.trace_directory = decoded;
     } else if (key == "record_directory") {
       std::string decoded;
       valid = parse_string(value, decoded);
-      if (valid) preferences.record_directory = decoded;
-    } else if (key == "overlay.layer") valid = parse_string(value, preferences.overlays.layer);
-#define FLUX_PARSE_OVERLAY(name)                                                                 \
-    else if (key == "overlay." #name) valid = parse_bool(value, preferences.overlays.name)
+      if (valid)
+        preferences.record_directory = decoded;
+    } else if (key == "overlay.layer")
+      valid = parse_string(value, preferences.overlays.layer);
+#define FLUX_PARSE_OVERLAY(name)                                                                   \
+  else if (key == "overlay." #name) valid = parse_bool(value, preferences.overlays.name)
     FLUX_PARSE_OVERLAY(source_board);
     FLUX_PARSE_OVERLAY(source_footprints);
     FLUX_PARSE_OVERLAY(source_copper);
+    FLUX_PARSE_OVERLAY(resulting_copper);
     FLUX_PARSE_OVERLAY(source_zones_keepouts);
     FLUX_PARSE_OVERLAY(committed_routes);
     FLUX_PARSE_OVERLAY(current_routes);
@@ -145,12 +153,14 @@ bool load_viewer_preferences(const std::filesystem::path& path, ViewerPreference
     FLUX_PARSE_OVERLAY(selected_vias);
     FLUX_PARSE_OVERLAY(contested_vias);
     FLUX_PARSE_OVERLAY(rejected_vias);
+    FLUX_PARSE_OVERLAY(active_region);
     FLUX_PARSE_OVERLAY(grid);
 #undef FLUX_PARSE_OVERLAY
     else {
       continue;
     }
-    if (!valid) ++invalid_values;
+    if (!valid)
+      ++invalid_values;
   }
   preferences.ui_scale = std::clamp(preferences.ui_scale, minimum_ui_scale, maximum_ui_scale);
   preferences.activity_panel_height =
@@ -201,6 +211,7 @@ bool save_viewer_preferences(const std::filesystem::path& path,
   FLUX_WRITE_OVERLAY(source_board);
   FLUX_WRITE_OVERLAY(source_footprints);
   FLUX_WRITE_OVERLAY(source_copper);
+  FLUX_WRITE_OVERLAY(resulting_copper);
   FLUX_WRITE_OVERLAY(source_zones_keepouts);
   FLUX_WRITE_OVERLAY(committed_routes);
   FLUX_WRITE_OVERLAY(current_routes);
@@ -220,6 +231,7 @@ bool save_viewer_preferences(const std::filesystem::path& path,
   FLUX_WRITE_OVERLAY(selected_vias);
   FLUX_WRITE_OVERLAY(contested_vias);
   FLUX_WRITE_OVERLAY(rejected_vias);
+  FLUX_WRITE_OVERLAY(active_region);
   FLUX_WRITE_OVERLAY(grid);
 #undef FLUX_WRITE_OVERLAY
   output.flush();
@@ -233,7 +245,8 @@ bool save_viewer_preferences(const std::filesystem::path& path,
     filesystem_error.clear();
     std::filesystem::copy_file(temporary, path, std::filesystem::copy_options::overwrite_existing,
                                filesystem_error);
-    if (!filesystem_error) std::filesystem::remove(temporary, filesystem_error);
+    if (!filesystem_error)
+      std::filesystem::remove(temporary, filesystem_error);
   }
   if (filesystem_error) {
     error = "could not publish viewer preferences: " + filesystem_error.message();

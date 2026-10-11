@@ -1,0 +1,53 @@
+{
+  "schema": "flux_benchmark_history",
+  "schema_version": 1,
+  "date": "2026-09-05T16:01:51+08:00",
+  "git_revision": "25e3b884be9b359d9c5bf0cc4fbb6cc836fd4f82",
+  "working_tree_modified": true,
+  "configuration": {
+    "tier": 0,
+    "max_router_iterations": 30,
+    "max_expansions": 50000,
+    "max_static_seed_workers": 2,
+    "telemetry_level": "diagnostic",
+    "curved_materialization": true
+  },
+  "board": {
+    "id": "pt2399_delay",
+    "tier": 0,
+    "status": "failed",
+    "stop_reason": "copper_violations",
+    "global_runtime_seconds": 184.838706188,
+    "detailed_runtime_seconds_approx": 535,
+    "routed_connections": 50,
+    "unrouted_nets": 0,
+    "sampled_overflow": 0,
+    "corridor_overflow": 0,
+    "clearance_shadow_conflicts": 15,
+    "static_seed_tree_attachment_nodes": 150,
+    "static_seed_attachment_reprojections_reverted": 9,
+    "open_connections": 0,
+    "open_nets": [],
+    "copper_violations": 26,
+    "copper_violation_counts": {
+      "track_clearance": 26
+    },
+    "conflicting_net_pairs": [
+      ["kicad-net-23", "kicad-net-4"],
+      ["kicad-net-17", "kicad-net-4"],
+      ["kicad-net-11", "kicad-net-8"],
+      ["kicad-net-2", "kicad-net-3"],
+      ["kicad-net-19", "kicad-net-3"]
+    ],
+    "failure_stage": "exact_regional_ph_transaction",
+    "diagnostic": "Static-tree connectivity is exact-clean; five attributed net-pair conflict families remain across six regional windows and the atomic regional transaction is correctly rejected."
+  },
+  "artifacts": {
+    "root": "build/tiers-check-20260905-tree-attachment-tier0",
+    "global_result": "tier-0-pt2399_delay/global-result.json",
+    "global_telemetry": "tier-0-pt2399_delay/telemetry/pt2399_delay-global.jsonl",
+    "detail_telemetry": "tier-0-pt2399_delay/telemetry/pt2399_delay-detail.jsonl",
+    "analysis": "tier-0-pt2399_delay/analysis/global",
+    "analysis_near_results": 5
+  }
+}

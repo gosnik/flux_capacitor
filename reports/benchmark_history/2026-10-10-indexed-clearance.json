@@ -1,0 +1,40 @@
+{
+  "schema": 1,
+  "date": "2026-10-10",
+  "experiment": "indexed physical pixels beneath terrain discovery",
+  "scope": "terrain-only run before packing/shadow follow-up",
+  "working_tree": "dirty; unrelated work preserved",
+  "validation_observed": {
+    "focused_suites": "8/8",
+    "core_tests": "65/65",
+    "integration_review": "no remaining material issue"
+  },
+  "baseline_report": "reports/benchmark_history/2026-10-10-history-sharing.json",
+  "runs": [
+    {
+      "tier": 0,
+      "board": "pt2399_delay",
+      "telemetry_level": "diagnostic",
+      "routing_timeout_seconds": 900,
+      "global_seconds": 27.297760646993993,
+      "detail_seconds": 422.36063180997735,
+      "complete": false,
+      "open_connections": 0,
+      "copper_violations": 0,
+      "added_tracks": 47,
+      "added_track_beziers": 199,
+      "added_vias": 3,
+      "unrounded_non_junction_bends": 7,
+      "routing_engine_outcome": "exhausted",
+      "indexed_map_builds": 20,
+      "indexed_map_reuses": 26,
+      "indexed_map_fallbacks": 0,
+      "indexed_map_cells_accumulated": 53989740,
+      "indexed_map_records_accumulated": 666540,
+      "indexed_map_references_accumulated": 17573,
+      "visual_inspection": "Both final copper layers viewed; same characteristic smooth routes and residual angular joints as previous result.",
+      "artifact_status": "Build-directory artifacts became unavailable after run and image inspection; cause not established. Results above were observed in tool output. Hashes/external DRC/RSS not recovered; do not claim preserved artifacts."
+    }
+  ],
+  "interpretation": "Same internal legality and existing strict curve failure as baseline. Single-run runtime improvement; not tier promotion. Fresh final validation required for user-requested shadow/packing follow-up."
+}

@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "experiment": "curvature-sized exact source-corridor fallback",
+  "git_revision": "25e3b884be9b359d9c5bf0cc4fbb6cc836fd4f82",
+  "worktree": "dirty; existing work preserved",
+  "build_type": "Release",
+  "cli_sha256": "a207a0253daff3a0e09a663b9b85f86c2cf6b4a94ca054bfbfa5b2822fd0129e",
+  "ctest": {"passed": 44, "failed": 0, "duration_seconds": 102.04, "core_seconds": 69.50, "kicad_drc_fixtures": 2},
+  "final_core_rerun": {"passed": 30, "failed": 0, "duration_seconds": 57.11},
+  "final_verification_with_obstacle_regression": {"selected_ctest_passed": 44, "failed": 0, "duration_seconds": 81.36, "core_cases": 30, "core_seconds": 58.63, "kicad_drc_fixtures": 2, "cli_sha256_unchanged": true},
+  "microtests": {
+    "shallow_native_adapter": "passes both old and new widths; coverage only",
+    "open_right_angle": "passes both old and new widths; coverage only",
+    "obstacle_right_angle": "central track keepout prevents shortcut; new width passes, old fallback call fails with two unrounded bends"
+  },
+  "diagnostic_replay": {
+    "chain": "reports/diagnoses/2026-09-06-tier0-staircase-chain.json",
+    "authority": "diagnostic, surrounding final recorded copper frozen; not the complete board optimization context",
+    "control": {"half_width_policy": "cell_pitch/8", "complete": false, "bends": 6, "opens": 0, "internal_copper_ok": true, "fallbacks": 2},
+    "experiment": {"half_width_policy": "max(cell_pitch/8,minimum_bend_radius), capped and exactly certified", "complete": true, "bends": 0, "opens": 0, "internal_copper_ok": true, "fallbacks": 2},
+    "interpretation": "measured staircase failure is reproduced with the old width and resolved with curvature room"
+  },
+  "tier_status": "Tier 0 passed normal N1 planning/N30 detail and external KiCad DRC; full history in 2026-09-06-curvature-corridor-tier0.json"
+}

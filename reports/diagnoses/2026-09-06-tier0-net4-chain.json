@@ -1,0 +1,5 @@
+{
+  "net": "kicad-net-4", "layer": "B.Cu", "width_nm": 700000,
+  "track_ids": ["flux-route-kicad-net-4-3-track-3", "flux-route-kicad-net-4-3-track-4", "flux-route-kicad-net-4-3-track-5", "flux-route-kicad-net-4-3-track-6", "flux-route-kicad-net-4-3-track-7", "flux-route-kicad-net-4-3-track-8", "flux-route-kicad-net-4-3-track-9"],
+  "points_nm": [{"x":47400000,"y":64500000}, {"x":42000000,"y":64500000}, {"x":42000000,"y":62700000}, {"x":41100000,"y":62700000}, {"x":41100000,"y":55500000}, {"x":39300000,"y":55500000}, {"x":39300000,"y":54600000}, {"x":32100000,"y":54600000}]
+}

@@ -1,0 +1,64 @@
+{
+  "schema": "flux_benchmark_experiment",
+  "schema_version": 1,
+  "date": "2026-09-04",
+  "git_revision": "25e3b88",
+  "working_tree_dirty": true,
+  "engine_version": "0.139.0",
+  "promoted_engine_version": "0.140.0",
+  "board_schema": 21,
+  "experiment": "discrete-only global feedback and homotopy-constrained PH realization",
+  "hypothesis": "Stopping intermediate regional probes before continuous realization will let BM-SVF consume global feedback breadth, while prepared corridor geometry and in-loop homotopy constraints will make final PH realization faster and topology-safe.",
+  "pre_change_tier_1": {
+    "board": "bm_svf",
+    "artifact_root": "build/tiers-check-20260904-134424",
+    "outcome": "timeout",
+    "timeout_seconds": 7200,
+    "coarse_paths": 25,
+    "regional_windows": 81,
+    "complete_bundles": 27,
+    "joint_repair_completed": 44,
+    "joint_repair_total": 83,
+    "spline_candidates": 164,
+    "spline_windows_recovered": 5,
+    "residual_cones": 16,
+    "global_feedback_epoch_reached": 2,
+    "intended_feedback_epochs": 5,
+    "telemetry_bytes": 548454832,
+    "analysis_pngs": 39,
+    "run_metadata_sha256": "ef427c302e4531ca10dae36bfc4bab964745b6d503a0843bbef8a6d25ca610b9",
+    "run_result_sha256": "64115214c702400da4bc6c346c05d045b587676dc314e8451268bb0f3a46118e"
+  },
+  "focused_verification": [
+    {
+      "test": "curved_ph_materialization_is_exact_and_drc_clean",
+      "outcome": "pass",
+      "elapsed_seconds": 14.10,
+      "preparation_only_failure_elapsed_seconds": 8.93,
+      "unprepared_failure_elapsed_seconds": 155.45,
+      "unprepared_residual_continuous_violations": 1801
+    },
+    {
+      "test": "constrained_ph_rebound_avoids_inter_sample_obstacle",
+      "outcome": "pass"
+    },
+    {
+      "test": "quintic_ph_geometry_preserves_invariants_and_exact_offsets",
+      "outcome": "pass"
+    },
+    {
+      "test": "obstacle_aware_diagonals_and_curves_remain_capacity_and_drc_gated",
+      "outcome": "pass",
+      "elapsed_seconds": 208.43,
+      "invariant": "every intermediate physical-feedback candidate disables spline realization and evaluates zero spline candidates"
+    }
+  ],
+  "tier_0": {
+    "status": "pending"
+  },
+  "tier_1": {
+    "status": "pending"
+  },
+  "decision": "keep pending board qualification",
+  "next_hypothesis": "The rebuilt BM-SVF run will reach more than one complete global feedback epoch before its two-hour budget expires."
+}

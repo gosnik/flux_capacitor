@@ -1,0 +1,15 @@
+{
+  "source": "build/tier-resolution-v52-tier1/portfolio-sweep/diagnostic-preview/candidate.kicad_pcb",
+  "before_internal_opens": 0,
+  "after_internal_opens": 9,
+  "kicad_unconnected_items": 9,
+  "geometry_changed": false,
+  "interpretation": "Correct import detects existing opens previously hidden by the wrong terminal positions; no track was moved or net omitted.",
+  "known_connected_reference": {
+    "source": "tests/fixtures/routing-corpus/reference/bm_svf.kicad_pcb",
+    "tracks": 389,
+    "vias": 55,
+    "before_internal_opens": 8,
+    "after_internal_opens": 0
+  }
+}

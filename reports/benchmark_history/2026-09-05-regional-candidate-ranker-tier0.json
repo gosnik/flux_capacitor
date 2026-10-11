@@ -1,0 +1,58 @@
+{
+  "schema": 1,
+  "date": "2026-09-05",
+  "git_revision": "25e3b884be9b359d9c5bf0cc4fbb6cc836fd4f82",
+  "working_tree": "dirty; advisory regional candidate ranker experiment plus pre-existing work",
+  "configuration": {
+    "runner": "tests/python/verify_routing_corpus.py",
+    "level": "qualified",
+    "ranker_model": null,
+    "training_data": null,
+    "max_static_seed_workers": 2,
+    "search_diversification": true
+  },
+  "board": {
+    "id": "pt2399_delay",
+    "tier": 0,
+    "outcome": "pass",
+    "global": {
+      "paths": 50,
+      "unrouted_nets": 0,
+      "sampled_overflow": 0,
+      "corridor_overflow": 0,
+      "clearance_shadow_overflow": 4,
+      "total_overflow": 4,
+      "routing_plan_complete": true,
+      "runtime_seconds": 148.456215526
+    },
+    "detailed": {
+      "complete": true,
+      "open_connections": 0,
+      "validation_errors": 0,
+      "copper_violations": 0,
+      "added_straight_tracks": 110,
+      "added_track_arcs": 59,
+      "added_vias": 2,
+      "route_length_nm": null,
+      "runtime_seconds": 368.01881707500013,
+      "diagnostic": "bounded regional quintic PH curve transaction completed connectivity and copper DRC"
+    },
+    "kicad_drc": {
+      "version": "9.0.8",
+      "error_violations": 0,
+      "unconnected_items": 0,
+      "passed": true
+    },
+    "peak_memory_bytes": null
+  },
+  "ranker": {
+    "requested": false,
+    "loaded": false,
+    "groups_scored": 0,
+    "candidates_scored": 0,
+    "candidates_reordered": 0,
+    "training_rows_written": 0,
+    "interpretation": "disabled-by-default regression baseline; no learned ordering participated"
+  },
+  "artifacts": "build/ranker-tier0-experiment"
+}

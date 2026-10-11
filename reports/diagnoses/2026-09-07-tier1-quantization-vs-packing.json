@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "date": "2026-09-07",
+  "board": "bm_svf",
+  "tier": 1,
+  "artifact": "build/tier1-run-aligned-v28-20260907",
+  "binary_sha256": "88d9984606ff1082c7405eea3d0086c06519818ef7a739273b20c60e1671f813",
+  "original_project_sha256": "04856904fe9070f7decd33b676d3f58e44676b6c930e65fa8a16f0ddd65d54db",
+  "outcome": "600-second planning timeout during regional repair; no accepted copper or final KiCad DRC",
+  "selected_snapshot_sequence": 587,
+  "selected_paths": 78,
+  "retained_portfolio_routes_excluded_from_replay": 388,
+  "selected_nets": 25,
+  "sampled_overflow": 17,
+  "corridor_overflow": 3,
+  "physical_overflow_nm": 4550676,
+  "shadow_conflicts": 311,
+  "first_reported_conflict": {"net": "kicad-net-4", "layer": "F.Cu", "location_nm": [50700000, 92600000], "deficit_nm": 51536, "category": "track_pad_clearance", "stage": "coarse-probe quantization", "raw_selected_path_pad_violations": 0},
+  "replay": [
+    {"pitch_nm": 100000, "materialized": 78, "tracks": 1286, "vias": 22, "malformed": 0, "opens": 0, "raw_drc": 930, "diagnoses": 261, "categories": {"track_clearance": 774, "track_edge_clearance": 65, "track_pad_clearance": 10, "track_via_clearance": 51, "hole_clearance": 28, "via_clearance": 2}},
+    {"pitch_nm": 10000, "materialized": 78, "tracks": 1288, "vias": 22, "malformed": 0, "opens": 0, "raw_drc": 853, "diagnoses": 224, "categories": {"track_clearance": 752, "track_via_clearance": 71, "hole_clearance": 28, "via_clearance": 2}},
+    {"pitch_nm": 1, "materialized": 78, "tracks": 1288, "vias": 22, "malformed": 0, "opens": 0, "raw_drc": 853, "diagnoses": 224, "categories": {"track_clearance": 752, "track_via_clearance": 71, "hole_clearance": 28, "via_clearance": 2}}
+  ],
+  "telemetry_caveat": "The original 64 physical ConflictAdded events were capped emissions, not the full raw DRC or coalesced graph count.",
+  "expanded_scope_at_seconds": 557.176642,
+  "expanded_scope_nets": [1, 10, 11, 12, 13, 14, 16, 24, 26, 5, 9],
+  "expanded_scope_complete_states": 0,
+  "earliest_failure": "Selected allocation has real inter-net and via packing collisions before PH, while coarse probe snapping also injects nonexistent static pad/edge failures.",
+  "alternative_exists": "A separately recorded legal original-project external-router result proves board feasibility, not feasibility of the current selected corridors.",
+  "next_experiment": "Match default physical probe to actual integer-nanometre copper; verify false-positive and false-negative rounding micro-cases, then benchmark. Preserve actual 853-collision evidence for subsequent conflict-directed topology work.",
+  "tier_pass": false
+}

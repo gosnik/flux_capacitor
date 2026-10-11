@@ -7,6 +7,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -90,6 +91,10 @@ void producer_records_decode_into_viewer_state() {
       {1'000'000, 1'000'000, flux::LayerId{"F.Cu"}}, {1'500'000, 2'000'000, flux::LayerId{"F.Cu"}},
       {1'900'000, 2'200'000, flux::LayerId{"F.Cu"}}, {2'100'000, 2'200'000, flux::LayerId{"F.Cu"}},
       {2'500'000, 2'000'000, flux::LayerId{"F.Cu"}}, {3'000'000, 1'000'000, flux::LayerId{"F.Cu"}}};
+  spline.navmesh_cells = {
+      {500'000, 500'000, 2'500'000, 2'500'000, flux::LayerId{"F.Cu"}, 0U},
+      {2'500'000, 500'000, 3'500'000, 1'500'000, flux::LayerId{"F.Cu"}, 1U},
+      {2'500'000, 1'500'000, 3'000'000, 2'000'000, flux::LayerId{"F.Cu"}, 2U}};
 
   flux::RouterTelemetryEvent hydraulic;
   hydraulic.kind = flux::RouterTelemetryEventKind::hydraulic_field_updated;
@@ -148,8 +153,10 @@ void producer_records_decode_into_viewer_state() {
           decoded.events[4].routes.front().topology_gate_count == 3U &&
           decoded.events[4].routes.front().topology_gate_sequence_legal &&
           decoded.events[4].routes.front().family == "rrt_connect" &&
-          decoded.events[4].routes.front().lifecycle == "retained_fallback",
-      "regional quintic PH curve controls and their directed topology certificate must cross the "
+          decoded.events[4].routes.front().lifecycle == "retained_fallback" &&
+          decoded.events[4].routes.front().navmesh_cells.size() == 3U &&
+          decoded.events[4].routes.front().navmesh_cells.back().refinement_level == 2U,
+      "regional PH controls, topology certificate, and adaptive NavMesh leaves must cross the "
       "producer/viewer telemetry boundary");
   require(
       decoded.events[5].type == flux::telemetry::EventType::hydraulic_field_updated &&
@@ -189,10 +196,143 @@ void producer_records_decode_into_viewer_state() {
 
   flux::telemetry::Event terminal_snapshot;
   terminal_snapshot.type = flux::telemetry::EventType::snapshot;
-  terminal_snapshot.message = "Routing finished";
+  terminal_snapshot.message = "Routing completed";
   state.apply(terminal_snapshot);
-  require(!state.routing_active() && state.status() == "Routing finished",
-          "only the terminal session snapshot may mark routing finished");
+  require(!state.routing_active() && state.status() == "Routing completed",
+          "an explicit terminal outcome snapshot must mark routing completed");
+}
+
+void live_sessions_append_without_resetting_history() {
+  flux::telemetry::LiveSessionTimeline sessions;
+  flux::telemetry::LiveStateHistory history;
+
+  const auto first_boundary = sessions.begin_session(1U);
+  require(first_boundary && first_boundary->type == flux::telemetry::EventType::session_started,
+          "the first live connection must publish a visible session boundary");
+  history.append(*first_boundary);
+
+  flux::telemetry::Event first;
+  first.type = flux::telemetry::EventType::route_candidate_selected;
+  first.sequence = 10U;
+  first.monotonic_time_us = 50U;
+  first.routes.push_back(flux::telemetry::Route{"session-one-route", "N1"});
+  const auto rebased_first = sessions.rebase(first);
+  history.append(rebased_first);
+
+  const auto second_boundary = sessions.begin_session(2U);
+  require(second_boundary && second_boundary->sequence > rebased_first.sequence &&
+              second_boundary->monotonic_time_us > rebased_first.monotonic_time_us,
+          "a process reconnect must advance the shared viewer clock");
+  history.append(*second_boundary);
+
+  flux::telemetry::Event second;
+  second.type = flux::telemetry::EventType::copper_generated;
+  second.sequence = 1U;
+  second.monotonic_time_us = 2U;
+  second.message = "Copper generated";
+  const auto rebased_second = sessions.rebase(second);
+  history.append(rebased_second);
+  require(rebased_second.session_generation == 2U &&
+              rebased_second.sequence > second_boundary->sequence &&
+              rebased_second.monotonic_time_us > second_boundary->monotonic_time_us &&
+              history.size() == 4U && history.state().activity().size() == 4U &&
+              history.state().routes().contains("session-one-route"),
+          "a reconnect must append rebased events without deleting the preceding session");
+
+  const auto encoded = flux::telemetry::encode_event(rebased_second);
+  const auto decoded = flux::telemetry::decode_events(encoded);
+  require(decoded && decoded.events.front().type == flux::telemetry::EventType::copper_generated &&
+              decoded.events.front().session_generation == 2U,
+          "session provenance and copper milestones must survive trace record/replay");
+
+  flux::telemetry::LiveState activity_state;
+  for (std::uint64_t index = 1U; index <= 600U; ++index) {
+    flux::telemetry::Event event;
+    event.type = flux::telemetry::EventType::search_summary;
+    event.sequence = index;
+    activity_state.apply(event);
+  }
+  require(activity_state.activity().size() == 600U,
+          "the activity view must not silently discard older live-session rows");
+}
+
+void new_board_identity_clears_board_specific_live_state() {
+  flux::telemetry::LiveState state;
+
+  flux::telemetry::Event first_start;
+  first_start.type = flux::telemetry::EventType::routing_started;
+  first_start.sequence = 1U;
+  first_start.source_identity = "board-a";
+  first_start.metrics = flux::telemetry::IterationMetrics{};
+  first_start.metrics->total_nets = 4U;
+  state.apply(first_start);
+
+  flux::telemetry::Event first_snapshot;
+  first_snapshot.type = flux::telemetry::EventType::snapshot;
+  first_snapshot.sequence = 2U;
+  first_snapshot.source_identity = "board-a";
+  first_snapshot.source_state_included = true;
+  first_snapshot.dynamic_state_included = true;
+  auto board_a = std::make_shared<flux::telemetry::SourceBoard>();
+  board_a->id = "source-board-a";
+  board_a->revision = "board-a";
+  first_snapshot.source_boards.push_back(board_a);
+  first_snapshot.routes.push_back(flux::telemetry::Route{"route-a", "net-a"});
+  first_snapshot.vias.push_back(flux::telemetry::Via{"via-a", "net-a"});
+  first_snapshot.conflicts.push_back(
+      flux::telemetry::Conflict{"conflict-a", flux::telemetry::ConflictKind::clearance_shadow});
+  first_snapshot.resources.push_back(
+      flux::telemetry::ResourceOccupancy{"resource-a", flux::telemetry::ResourceKind::corridor});
+  first_snapshot.hydraulic_fields.push_back(
+      flux::telemetry::HydraulicField{"field-a", "net-a", "F.Cu"});
+  first_snapshot.priorities.push_back(flux::telemetry::Priority{"net-a"});
+  first_snapshot.metrics = flux::telemetry::IterationMetrics{};
+  first_snapshot.metrics->iteration = 3U;
+  first_snapshot.counters = flux::telemetry::Counters{12U, 1U, 2U, 9U, 1U};
+  state.apply(first_snapshot);
+
+  flux::telemetry::Event same_board_stage;
+  same_board_stage.type = flux::telemetry::EventType::routing_started;
+  same_board_stage.sequence = 3U;
+  same_board_stage.source_identity = "board-a";
+  state.apply(same_board_stage);
+  require(state.routes().contains("route-a") && state.activity().size() == 3U,
+          "another routing stage for the same board must preserve overlays and activity");
+
+  flux::telemetry::Event second_start;
+  second_start.type = flux::telemetry::EventType::routing_started;
+  second_start.sequence = 4U;
+  second_start.source_identity = "board-b";
+  second_start.message = "Routing board B";
+  state.apply(second_start);
+
+  require(state.source_identity() == "board-b" && state.routing_active() &&
+              state.status() == "Routing board B" && state.sequence() == 4U,
+          "the new board's routing boundary must become the complete current status");
+  require(state.routes().empty() && state.vias().empty() && state.conflicts().empty() &&
+              state.resources().empty() && state.hydraulic_fields().empty() &&
+              state.priorities().empty() && state.source_boards().empty() &&
+              state.iteration_history().empty() && !state.metrics() &&
+              state.counters().produced == 0U && state.activity().size() == 1U &&
+              state.activity().front().type == flux::telemetry::EventType::routing_started,
+          "a new board must discard every board-specific scene, overlay, metric, and activity row");
+
+  flux::telemetry::LiveStateHistory replay_history;
+  replay_history.append(first_start);
+  replay_history.append(first_snapshot);
+  replay_history.append(same_board_stage);
+  replay_history.append(second_start);
+  require(replay_history.state().source_identity() == "board-b" &&
+              replay_history.state().routes().empty(),
+          "the replay tail must not combine geometry from separate boards");
+  replay_history.seek(3U);
+  require(replay_history.state().source_identity() == "board-a" &&
+              replay_history.state().routes().contains("route-a"),
+          "seeking before a board boundary must reconstruct the preceding board independently");
+  replay_history.seek(4U);
+  require(replay_history.state().source_identity() == "board-b" &&
+              replay_history.state().routes().empty(),
+          "seeking across a board boundary must clean the reconstructed state again");
 }
 
 void rich_overlay_events_round_trip_and_replay() {
@@ -215,12 +355,11 @@ void rich_overlay_events_round_trip_and_replay() {
   source_stackup.edge_connector = "none";
   source_stackup.layers.push_back(
       {"F.Cu", "copper", "copper", "F.Cu", {{35'000U, false, {}, {}, {}, {}}}});
-  source_stackup.layers.push_back(
-      {"dielectric 1",
-       "core",
-       "dielectric",
-       {},
-       {{1'530'000U, true, "FR4", 4'500'000'000U, 20'000'000U, {}}}});
+  source_stackup.layers.push_back({"dielectric 1",
+                                   "core",
+                                   "dielectric",
+                                   {},
+                                   {{1'530'000U, true, "FR4", 4'500'000'000U, 20'000'000U, {}}}});
   source_board->stackup = std::move(source_stackup);
   source_board->nets.push_back({"SIGNAL", "SIGNAL", 2});
   source_board->primitives.push_back(
@@ -267,6 +406,10 @@ void rich_overlay_events_round_trip_and_replay() {
       {1'000'000, 2'000'000, "F.Cu"}, {2'000'000, 3'000'000, "F.Cu"},
       {2'400'000, 3'200'000, "F.Cu"}, {2'600'000, 3'200'000, "F.Cu"},
       {3'000'000, 3'000'000, "F.Cu"}, {4'000'000, 2'000'000, "F.Cu"}};
+  snapshot.routes.back().navmesh_cells = {
+      {{500'000, 1'500'000, "F.Cu"}, {2'500'000, 3'500'000, "F.Cu"}, 0U},
+      {{2'500'000, 1'500'000, "F.Cu"}, {3'500'000, 2'500'000, "F.Cu"}, 1U},
+      {{3'500'000, 1'500'000, "F.Cu"}, {4'000'000, 2'000'000, "F.Cu"}, 2U}};
   snapshot.vias.push_back(flux::telemetry::Via{"via-signal-0",
                                                "SIGNAL",
                                                3,
@@ -330,41 +473,37 @@ void rich_overlay_events_round_trip_and_replay() {
       route->second.state == flux::telemetry::RouteState::ripped_up &&
           route->second.points.size() == 2U &&
           route->second.geometry == flux::telemetry::RouteGeometry::quintic_ph &&
-          route->second.control_points.size() == 6U,
-      "rip-up replay must preserve the removed path and quintic PH curve controls for its overlay");
+          route->second.control_points.size() == 6U &&
+          route->second.navmesh_cells.size() == 3U &&
+          route->second.navmesh_cells.back().refinement_level == 2U,
+      "rip-up replay must preserve the removed path, PH controls, and adaptive NavMesh leaves");
   require(replay.state().vias().at("via-signal-0").state == flux::telemetry::ViaState::contested,
           "contested via sites must remain replayable");
-  require(replay.state().source_boards().at("source-board:0")->primitives.back().kind == "pad" &&
-              replay.state().source_boards().at("source-board:0")->primitives.back().drill_nm ==
-                  500'000U &&
-              replay.state()
-                      .source_boards()
-                      .at("source-board:0")
-                      ->primitives.back()
-                      .drill_width_nm == 200'000U &&
-              replay.state()
-                      .source_boards()
-                      .at("source-board:0")
-                      ->primitives.back()
-                      .drill_height_nm == 500'000U &&
-              replay.state()
-                      .source_boards()
-                      .at("source-board:0")
-                      ->primitives.back()
-                      .drill_offset_x_nm == 100'000 &&
-              replay.state()
-                      .source_boards()
-                      .at("source-board:0")
-                      ->primitives.back()
-                      .drill_offset_y_nm == -50'000,
-          "replay must retain the immutable source scene while dynamic routes change");
+  require(
+      replay.state().source_boards().at("source-board:0")->primitives.back().kind == "pad" &&
+          replay.state().source_boards().at("source-board:0")->primitives.back().drill_nm ==
+              500'000U &&
+          replay.state().source_boards().at("source-board:0")->primitives.back().drill_width_nm ==
+              200'000U &&
+          replay.state().source_boards().at("source-board:0")->primitives.back().drill_height_nm ==
+              500'000U &&
+          replay.state()
+                  .source_boards()
+                  .at("source-board:0")
+                  ->primitives.back()
+                  .drill_offset_x_nm == 100'000 &&
+          replay.state()
+                  .source_boards()
+                  .at("source-board:0")
+                  ->primitives.back()
+                  .drill_offset_y_nm == -50'000,
+      "replay must retain the immutable source scene while dynamic routes change");
   const auto replayed_source = replay.state().source_boards().at("source-board:0");
   require(replayed_source->physical_thickness_nm == 1'600'000U && replayed_source->stackup &&
               replayed_source->stackup->copper_finish == "ENIG" &&
               replayed_source->stackup->layers.size() == 2U &&
-              replayed_source->stackup->layers.back()
-                      .sublayers.front()
-                      .relative_permittivity_ppb == 4'500'000'000U,
+              replayed_source->stackup->layers.back().sublayers.front().relative_permittivity_ppb ==
+                  4'500'000'000U,
           "source stackup and fixed-point material properties must survive live/replay JSON");
 
   flux::telemetry::LiveStateHistory overlay_history;
@@ -456,6 +595,146 @@ void trace_directories_load_chronologically_without_throwing() {
           "directory traces must retain chronological file order and rebase per-run clocks");
 }
 
+void oversized_trace_records_fail_without_replacing_the_current_replay() {
+  const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
+  const auto path = std::filesystem::temp_directory_path() /
+                    ("flux-telemetry-oversized-" + std::to_string(nonce) + ".jsonl");
+  struct Cleanup {
+    std::filesystem::path path;
+    ~Cleanup() {
+      std::error_code ignored;
+      std::filesystem::remove(path, ignored);
+    }
+  } cleanup{path};
+
+  flux::telemetry::Event retained;
+  retained.type = flux::telemetry::EventType::routing_started;
+  retained.source_identity = "retained-before-failed-load";
+  flux::telemetry::Trace trace;
+  std::string error;
+  require(trace.load_text(flux::telemetry::encode_event(retained), error),
+          "a valid replay must establish the state protected from a failed load");
+
+  std::string oversized_line(flux::telemetry::Trace::maximum_line_bytes + 1U, 'x');
+  {
+    std::ofstream output(path, std::ios::binary);
+    output << oversized_line << '\n';
+  }
+  require(!trace.load(path, error) && error.find("8 MiB line limit") != std::string::npos,
+          "an oversized JSONL record must be rejected with an actionable limit error");
+  require(trace.events().size() == 1U &&
+              trace.events().front().source_identity == "retained-before-failed-load",
+          "a failed bounded trace load must preserve the previously replayable trace");
+
+  flux::telemetry::Event large;
+  large.message.assign(2U * 1024U * 1024U, 'p');
+  require(flux::telemetry::estimated_event_bytes(large) > 2U * 1024U * 1024U,
+          "the shared budget estimate must account for substantial event payloads");
+}
+
+void live_state_rejects_oversized_geometry_atomically() {
+  flux::telemetry::LiveState state;
+  flux::telemetry::Event retained;
+  retained.type = flux::telemetry::EventType::route_committed;
+  retained.routes.push_back(flux::telemetry::Route{"retained-route", "NET"});
+  retained.routes.front().points = {{0, 0, "F.Cu"}, {1, 1, "F.Cu"}};
+  state.apply(retained);
+
+  flux::telemetry::Event oversized;
+  oversized.type = flux::telemetry::EventType::snapshot;
+  oversized.source_state_included = true;
+  auto board = std::make_shared<flux::telemetry::SourceBoard>();
+  board->id = "oversized-source";
+  flux::telemetry::SourcePrimitive primitive;
+  primitive.id = "oversized-primitive";
+  primitive.reference.assign(129U * 1024U * 1024U, 'x');
+  board->primitives.push_back(std::move(primitive));
+  oversized.source_boards.push_back(std::move(board));
+  require(flux::telemetry::estimated_event_bytes(oversized) > 128U * 1024U * 1024U,
+          "source-scene payloads must count toward shared trace/history/live queue budgets");
+  state.apply(oversized);
+
+  require(state.routes().contains("retained-route") && state.source_boards().empty() &&
+              state.dropped_oversized_geometry_updates() == 1U,
+          "an oversized source snapshot must leave the preceding live geometry intact");
+
+  flux::telemetry::Event region;
+  region.active_region = flux::telemetry::ActiveRegion{"region", "active", 0, 0, 1, 1,
+                                                        {"F.Cu"}, {"NET"}, true};
+  state.apply(region);
+  require(state.active_region() && state.active_region()->id == "region",
+          "the active-region overlay must be retained while active");
+  region.active_region->active = false;
+  state.apply(region);
+  require(!state.active_region(), "an inactive active-region update must clear the overlay");
+}
+
+void live_history_bounds_distinct_source_scene_bytes_and_metadata() {
+  flux::telemetry::LiveStateHistory history;
+  constexpr std::size_t scene_count = 50U;
+  constexpr std::size_t points_per_scene = 50'000U;
+  for (std::size_t index = 0U; index < scene_count; ++index) {
+    flux::telemetry::Event snapshot;
+    snapshot.type = flux::telemetry::EventType::snapshot;
+    snapshot.sequence = index + 1U;
+    snapshot.source_state_included = true;
+    auto board = std::make_shared<flux::telemetry::SourceBoard>();
+    board->id = "same-board-id";
+    flux::telemetry::SourcePrimitive primitive;
+    primitive.id = "dense-scene-" + std::to_string(index);
+    primitive.points.assign(points_per_scene, flux::telemetry::Point{0, 0, "F.Cu"});
+    board->primitives.push_back(std::move(primitive));
+    snapshot.source_boards.push_back(std::move(board));
+    history.append(snapshot);
+  }
+  require(history.dropped_events() > 0U && history.size() == scene_count &&
+              history.retained_bytes() <= 64U * 1024U * 1024U,
+          "distinct shared source scenes must trigger history byte eviction before its event count cap");
+  history.seek(history.retained_begin());
+  require(history.position() == history.retained_begin(),
+          "seeking the byte-trimmed history base must retain a valid reduced state");
+  history.seek(history.size());
+  require(history.position() == history.size() &&
+              history.state().source_boards().contains("same-board-id"),
+          "seeking the byte-trimmed history tail must retain the newest source scene");
+
+  flux::telemetry::LiveState state;
+  flux::telemetry::Event verbose;
+  verbose.message.assign(2U * 1024U * 1024U, 'm');
+  verbose.active_net = std::string(2U * 1024U * 1024U, 'n');
+  state.apply(verbose);
+  require(!state.activity().empty() && state.activity().back().message.size() <= 8U * 1024U &&
+              state.activity().back().net && state.activity().back().net->size() <= 1024U,
+          "large telemetry text must be bounded before entering retained LiveState metadata");
+}
+
+void malformed_hydraulic_fields_are_rejected_before_rendering() {
+  flux::telemetry::HydraulicField edge;
+  edge.width = edge.height = edge.stride = 1U;
+  edge.cell_pitch_nm = 1U;
+  edge.origin_x_nm = std::numeric_limits<std::int64_t>::max();
+  edge.flow = edge.erosion = {1U};
+  std::string edge_error;
+  require(!flux::telemetry::validate_hydraulic_field(edge, edge_error),
+          "the far edge of the last heatmap cell must not overflow world coordinates");
+  flux::telemetry::HydraulicField field;
+  field.id = "bad";
+  field.width = std::numeric_limits<std::size_t>::max();
+  field.height = 2U;
+  field.stride = 1U;
+  field.cell_pitch_nm = 1U;
+  field.erosion = {1U};
+  std::string error;
+  require(!flux::telemetry::validate_hydraulic_field(field, error) && !error.empty(),
+          "overflowing hydraulic dimensions must be rejected before viewer geometry is formed");
+  field.width = 2U;
+  field.height = 2U;
+  field.flow = {1U, 2U, 3U};
+  field.erosion = {1U, 2U, 3U, 4U};
+  require(!flux::telemetry::validate_hydraulic_field(field, error),
+          "mismatched hydraulic value arrays must be rejected before rendering");
+}
+
 void viewer_preferences_round_trip_and_clamp_unsafe_values() {
   const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
   const auto directory =
@@ -499,12 +778,144 @@ void viewer_preferences_round_trip_and_clamp_unsafe_values() {
           "UI scale must clamp to the supported 3x maximum");
 }
 
+void progress_round_trip_and_bounded_history_preserve_retained_seek() {
+  flux::telemetry::Event summary;
+  summary.type = flux::telemetry::EventType::search_summary;
+  summary.monotonic_time_us = 100U;
+  summary.progress = flux::telemetry::PhaseProgress{"regional / running", 17U, 42U};
+  summary.counters = flux::telemetry::Counters{20U, 1U, 0U, 19U, 2U, 3U};
+  const auto decoded = flux::telemetry::decode_events(flux::telemetry::encode_event(summary));
+  require(decoded && decoded.events.front().progress == summary.progress,
+          "typed phase work and elapsed time must round-trip without a fabricated percentage");
+  require(decoded.events.front().counters == summary.counters,
+          "transport drops must be visible without conflating producer queue drops");
+
+  flux::telemetry::LiveState state;
+  state.apply(decoded.events.front());
+  require(state.progress() == summary.progress,
+          "a search summary must retain its typed progress in the live state");
+  flux::telemetry::Event finished;
+  finished.type = flux::telemetry::EventType::routing_finished;
+  state.apply(finished);
+  require(!state.progress(), "routing completion must clear active phase progress");
+
+  flux::telemetry::Event geometry;
+  geometry.type = flux::telemetry::EventType::snapshot;
+  geometry.dynamic_state_included = true;
+  geometry.monotonic_time_us = 200U;
+  flux::telemetry::Route route;
+  route.id = "freshness-route";
+  route.points = {{0, 0, "F.Cu"}, {100, 0, "F.Cu"}};
+  geometry.routes.push_back(route);
+  state.apply(geometry);
+  geometry.monotonic_time_us = 300U;
+  state.apply(geometry);
+  require(state.last_geometry_time_us() == 200U,
+          "unchanged recovery snapshots must not imply new geometry work");
+  geometry.routes.clear();
+  geometry.monotonic_time_us = 400U;
+  state.apply(geometry);
+  require(state.last_geometry_time_us() == 400U,
+          "a snapshot removing all geometry must advance geometry freshness");
+
+  flux::telemetry::LiveStateHistory history;
+  for (std::size_t index = 0U; index < 4'120U; ++index) {
+    flux::telemetry::Event event;
+    event.type = flux::telemetry::EventType::search_summary;
+    event.sequence = index + 1U;
+    event.monotonic_time_us = index + 1U;
+    history.append(event);
+  }
+  require(history.dropped_events() != 0U && history.retained_begin() != 0U &&
+              history.size() == 4'120U,
+          "live history must report trimmed deltas while retaining monotonic positions");
+  history.seek(history.retained_begin());
+  require(history.position() == history.retained_begin(),
+          "seeking after trimming must reconstruct the retained base checkpoint");
+}
+
+void logged_search_diagnostics_are_numeric_bounded_and_scoped() {
+  flux::telemetry::LiveState state;
+  flux::telemetry::Event summary;
+  summary.type = flux::telemetry::EventType::search_summary;
+  summary.monotonic_time_us = 55U;
+  summary.active_group = "regional:7";
+  summary.message = "xpbd_error=0.125 malformed=nan text=hello bad=12foo ratio=4/9 accepted=4";
+  state.apply(summary);
+  require(state.logged_diagnostics().contains("regional:7.xpbd_error") &&
+              state.logged_diagnostics().contains("regional:7.accepted") &&
+              !state.logged_diagnostics().contains("regional:7.malformed") &&
+              !state.logged_diagnostics().contains("regional:7.text") &&
+              !state.logged_diagnostics().contains("regional:7.bad") &&
+              !state.logged_diagnostics().contains("regional:7.ratio"),
+          "only finite numeric key=value diagnostics from search summaries must be retained");
+  flux::telemetry::Event next;
+  next.type = flux::telemetry::EventType::search_summary;
+  next.monotonic_time_us = 56U;
+  next.progress = flux::telemetry::PhaseProgress{"regional / running", 1U, 2U};
+  next.message = "lanes=3";
+  state.apply(next);
+  require(state.logged_diagnostics().at("regional / running.lanes").updated_time_us == 56U,
+          "diagnostics without a group must retain their phase scope and source timestamp");
+}
+
+void active_region_round_trips_as_explicit_overlay_state() {
+  flux::telemetry::Event event;
+  event.type = flux::telemetry::EventType::search_summary;
+  event.active_region = flux::telemetry::ActiveRegion{"regional:window", "Joint reroute", -10,
+                                                       -20, 30, 40, {"F.Cu", "B.Cu"},
+                                                       {"N1", "N2"}, true};
+  const auto decoded = flux::telemetry::decode_events(flux::telemetry::encode_event(event));
+  require(decoded && decoded.events.front().active_region == event.active_region,
+          "active regional bounds, layers, nets, and label must round-trip as one optional payload");
+  event.active_region->active = false;
+  const auto cleared = flux::telemetry::decode_events(flux::telemetry::encode_event(event));
+  require(cleared && cleared.events.front().active_region &&
+              !cleared.events.front().active_region->active,
+          "an explicit inactive regional event must remain distinct from an absent update");
+}
+
 } // namespace
 
 int main() {
+  {
+    flux::telemetry::LiveState state;
+    flux::telemetry::Event base;
+    base.type = flux::telemetry::EventType::pathfinder_iteration_completed;
+    base.metrics.emplace(); base.metrics->iteration = 7; base.metrics->routed_nets = 19;
+    state.apply(base);
+    flux::RouterTelemetryEvent update;
+    update.kind = flux::RouterTelemetryEventKind::search_summary;
+    update.packing_obligations_update = true;
+    update.unresolved_packing_obligations = 3;
+    update.packing_obligation_budget_exhausted = true;
+    auto decoded = flux::telemetry::decode_events(flux::serialize_router_telemetry_event(update));
+    require(decoded && decoded.events.front().packing_metrics_only, "packing-only wire flag roundtrips");
+    state.apply(decoded.events.front());
+    require(state.metrics()->unresolved_packing_obligations == 3 &&
+                state.metrics()->packing_obligation_budget_exhausted &&
+                state.metrics()->routed_nets == 19 && state.iteration() == 7,
+            "packing progress preserves unrelated viewer metrics");
+    update.unresolved_packing_obligations = 0; update.packing_obligation_budget_exhausted = false;
+    decoded = flux::telemetry::decode_events(flux::serialize_router_telemetry_event(update));
+    state.apply(decoded.events.front());
+    require(state.metrics()->unresolved_packing_obligations == 0 &&
+                !state.metrics()->packing_obligation_budget_exhausted &&
+                state.metrics()->routed_nets == 19 && state.iteration_history().size() == 1,
+            "packing proof clears obligation metrics without resetting routing history");
+  }
   producer_records_decode_into_viewer_state();
   rich_overlay_events_round_trip_and_replay();
+  live_sessions_append_without_resetting_history();
+  new_board_identity_clears_board_specific_live_state();
   trace_directories_load_chronologically_without_throwing();
+  oversized_trace_records_fail_without_replacing_the_current_replay();
+  live_state_rejects_oversized_geometry_atomically();
+  live_history_bounds_distinct_source_scene_bytes_and_metadata();
+  malformed_hydraulic_fields_are_rejected_before_rendering();
+  progress_round_trip_and_bounded_history_preserve_retained_seek();
+  logged_search_diagnostics_are_numeric_bounded_and_scoped();
+  active_region_round_trips_as_explicit_overlay_state();
   viewer_preferences_round_trip_and_clamp_unsafe_values();
   return 0;
 }

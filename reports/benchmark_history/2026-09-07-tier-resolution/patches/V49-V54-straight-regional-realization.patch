@@ -1,0 +1,939 @@
+--- a/src/regional_router.cpp
++++ b/src/regional_router.cpp
+@@ -205,6 +205,15 @@
+ [[nodiscard]] std::vector<RegionalRouteFragment> make_fragments(const Board& board,
+                                                                 const GlobalRouteResult& global) {
+   std::vector<RegionalRouteFragment> result;
++  // A collinear vertex may be another connection's tree attachment. It is an electrical
++  // boundary, even though it contributes no bend to this path. Keep it as a fragment endpoint
++  // so a detour or layer excursion cannot move the trunk away from the attached branch.
++  std::set<std::tuple<NetId, LayerId, Point>> connection_endpoints;
++  for (const auto& path : global.paths) {
++    if (path.points.empty()) continue;
++    for (const auto& point : {path.points.front(), path.points.back()})
++      connection_endpoints.emplace(path.net, point.layer, point.position);
++  }
+   const auto collinear_forward = [](Point first, Point middle, Point last) {
+     const auto first_x = static_cast<long double>(middle.x.value() - first.x.value());
+     const auto first_y = static_cast<long double>(middle.y.value() - first.y.value());
+@@ -266,6 +275,7 @@
+             prior.id.run_index == run_index && prior.layer == first.layer &&
+             prior.end == first.position && prior.width == width &&
+             prior.explicit_width == explicit_width && prior.width_kind == width_kind &&
++            !connection_endpoints.contains({path.net, first.layer, first.position}) &&
+             collinear_forward(prior.start, prior.end, second.position)) {
+           prior.end = second.position;
+           prior.bounds =
+@@ -10127,8 +10137,9 @@
+     route.route_lifecycle = std::string(lifecycle);
+     route.route_width_nm =
+         static_cast<std::uint64_t>(std::max<std::int64_t>(0, realization.width.value()));
+-    route.route_geometry = RouterTelemetryRouteGeometry::quintic_ph;
+-    route.spline_degree = 5U;
++    route.route_geometry = realization.straight_realization
++        ? RouterTelemetryRouteGeometry::polyline : RouterTelemetryRouteGeometry::quintic_ph;
++    route.spline_degree = realization.straight_realization ? 0U : 5U;
+     route.topology_signature = realization.topology_signature;
+     route.topology_gate_count = realization.topology_gate_count;
+     route.topology_gate_sequence_legal = realization.topology_gate_sequence_legal;
+@@ -10144,8 +10155,9 @@
+     }
+     route.detail =
+         std::string(lifecycle) +
+-        " regional quintic PH curve tessellation; diagnostic planning geometry; "
+-        "candidate_rank=" +
++        (realization.straight_realization
++             ? " regional straight copper; diagnostic planning geometry; candidate_rank="
++             : " regional quintic PH curve tessellation; diagnostic planning geometry; candidate_rank=") +
+         std::to_string(assignment.spline_candidate_rank) +
+         ", topology_legal=" + std::string(realization.topology_legal ? "yes" : "no") +
+         ", endpoint_topology=" + std::string(realization.endpoint_topology_legal ? "yes" : "no") +
+@@ -14096,6 +14108,31 @@
+       }
+     }
+   }
++  // A fragment which switches onto the next source run's layer can leave an adapter
++  // B->F followed immediately by the original F->B transition at the same point. That is
++  // one continuous B run, not two physical vias. Remove only these zero-length return
++  // excursions from straight transactions. The complete connectivity/copper proof below
++  // remains mandatory: an intermediate-layer branch must still have a physical connection.
++  const bool straight_transaction = !result.native_realization_manifest.empty() &&
++      std::all_of(result.native_realization_manifest.begin(), result.native_realization_manifest.end(),
++                  [](const auto& route) { return route.straight_realization; });
++  if (straight_transaction) for (auto& path : result.spline_candidate_paths) {
++    for (std::size_t first = 0; first < path.points.size();) {
++      auto end = first + 1U;
++      while (end < path.points.size() && path.points[end].position == path.points[first].position) ++end;
++      if (end - first > 2U && path.points[first].layer == path.points[end - 1U].layer) {
++        path.points.erase(path.points.begin() + static_cast<std::ptrdiff_t>(first + 1U),
++                          path.points.begin() + static_cast<std::ptrdiff_t>(end));
++        path.segment_widths.erase(path.segment_widths.begin() + static_cast<std::ptrdiff_t>(first),
++                                  path.segment_widths.begin() + static_cast<std::ptrdiff_t>(end - 1U));
++        path.segment_width_kinds.erase(path.segment_width_kinds.begin() + static_cast<std::ptrdiff_t>(first),
++                                       path.segment_width_kinds.begin() + static_cast<std::ptrdiff_t>(end - 1U));
++        ++result.straight_collapsed_via_adapters;
++        end = first + 1U;
++      }
++      first = end;
++    }
++  }
+   const auto saturating_length_add = [](std::uint64_t total, std::uint64_t amount) {
+     return total > std::numeric_limits<std::uint64_t>::max() - amount
+                ? std::numeric_limits<std::uint64_t>::max()
+@@ -14916,6 +14953,300 @@
+   return true;
+ }
+ 
++static void realize_regional_straight_candidate_once(const Board& board, const GlobalRouteResult& global,
++                                         RegionalRouteResult& result, std::stop_token stop_token) {
++  result.spline_candidate_available = false;
++  result.native_realization_manifest_available = false;
++  result.native_realization_manifest.clear();
++  result.spline_candidate_paths.clear();
++  if (stop_token.stop_requested()) return;
++  for (auto& assignment : result.bundle_assignments) {
++    assignment.spline_realizations.clear();
++    if (!assignment.complete()) continue;
++    const auto window = std::find_if(result.windows.begin(), result.windows.end(),
++        [&](const auto& item) { return item.id == assignment.window_id; });
++    if (window == result.windows.end()) {
++      assignment.stop_reason = RegionalBundleStopReason::spline_realization_failed;
++      continue;
++    }
++    for (const auto template_id : assignment.selected_templates) {
++      if (stop_token.stop_requested()) return;
++      if (template_id >= assignment.templates.size()) {
++        assignment.stop_reason = RegionalBundleStopReason::spline_realization_failed;
++        break;
++      }
++      const auto& route_template = assignment.templates[template_id];
++      const auto fragment = std::find_if(result.fragments.begin(), result.fragments.end(),
++          [&](const auto& item) { return item.id == route_template.fragment; });
++      if (fragment == result.fragments.end()) {
++        assignment.stop_reason = RegionalBundleStopReason::spline_realization_failed;
++        break;
++      }
++      if (std::find(window->owned_fragments.begin(), window->owned_fragments.end(), fragment->id) ==
++          window->owned_fragments.end()) continue;
++      const auto selected_via =
++          [&](const std::optional<std::size_t>& source_choice) -> const RegionalViaChoice* {
++        if (!source_choice) {
++          return nullptr;
++        }
++        const auto source =
++            std::find_if(result.via_choices.begin(), result.via_choices.end(),
++                         [&](const auto& choice) { return choice.id == *source_choice; });
++        if (source == result.via_choices.end()) {
++          return nullptr;
++        }
++        for (const auto selected_choice : assignment.selected_via_choices) {
++          const auto candidate =
++              std::find_if(result.via_choices.begin(), result.via_choices.end(),
++                           [&](const auto& choice) { return choice.id == selected_choice; });
++          if (candidate != result.via_choices.end() && candidate->net == source->net &&
++              candidate->region_id == source->region_id && candidate->span == source->span) {
++            return &*candidate;
++          }
++        }
++        return &*source;
++      };
++      const auto* entry_via = selected_via(route_template.entry_via_choice);
++      const auto* exit_via = selected_via(route_template.exit_via_choice);
++      const auto selected_terminal =
++          [&](const std::optional<std::size_t>& choice_id) -> const RegionalTerminalChoice* {
++        if (!choice_id) {
++          return nullptr;
++        }
++        const auto found =
++            std::find_if(result.terminal_choices.begin(), result.terminal_choices.end(),
++                         [&](const auto& choice) { return choice.id == *choice_id; });
++        return found == result.terminal_choices.end() ? nullptr : &*found;
++      };
++      const auto* entry_terminal = selected_terminal(route_template.terminal_entry_choice);
++      const auto* exit_terminal = selected_terminal(route_template.terminal_exit_choice);
++      const auto entry_via_site =
++          entry_via == nullptr ? std::optional<Point>{} : std::optional<Point>{entry_via->site};
++      const auto exit_via_site =
++          exit_via == nullptr ? std::optional<Point>{} : std::optional<Point>{exit_via->site};
++      const auto route_start = entry_via_site && (!route_template.selected_global_topology ||
++                                                  !fragment->begins_at_terminal)
++                                   ? *entry_via_site
++                               : entry_terminal != nullptr ? entry_terminal->portal
++                                                           : fragment->start;
++      const auto route_end =
++          exit_via_site && (!route_template.selected_global_topology || !fragment->ends_at_terminal)
++              ? *exit_via_site
++          : exit_terminal != nullptr ? exit_terminal->portal
++                                     : fragment->end;
++      const auto selected_runup = [&](const RegionalViaChoice* via, bool entry) {
++        std::vector<Point> runup;
++        if (via == nullptr || via->selected_global_site) {
++          return runup;
++        }
++        const auto found = std::find_if(
++            via->attached_runups.begin(), via->attached_runups.end(), [&](const auto& candidate) {
++              return candidate.layer == fragment->layer && candidate.centerline.size() >= 2U &&
++                     geometry::point_segment_distance_nm(candidate.anchor, fragment->start,
++                                                         fragment->end) == 0.0L;
++            });
++        if (found == via->attached_runups.end()) {
++          return runup;
++        }
++        runup = found->centerline;
++        if (entry) {
++          std::reverse(runup.begin(), runup.end());
++        }
++        return runup;
++      };
++      const auto entry_runup = selected_runup(entry_via, true);
++      const auto exit_runup = selected_runup(exit_via, false);
++
++      std::vector<Point> seed;
++      const auto append = [&](Point point) {
++        if (seed.empty() || seed.back() != point) seed.push_back(point);
++      };
++      append(route_start);
++      for (const auto point : entry_runup) append(point);
++      // Alternate corridors own their topology. Source-topology templates instead consume the
++      // actual packed lane centers; otherwise assignment never changes the conflicting chord.
++      if (!route_template.selected_global_topology && route_template.topology_centerline.size() >= 2U) {
++        for (const auto point : route_template.topology_centerline) append(point);
++      } else {
++        std::vector<std::pair<long double, Point>> targets;
++        const auto dx = static_cast<long double>(fragment->end.x.value() - fragment->start.x.value());
++        const auto dy = static_cast<long double>(fragment->end.y.value() - fragment->start.y.value());
++        const auto denominator = dx * dx + dy * dy;
++        const auto parameter = [&](Point point) {
++          return denominator > 0.0L ?
++              ((point.x.value() - fragment->start.x.value()) * dx +
++               (point.y.value() - fragment->start.y.value()) * dy) / denominator : 0.0L;
++        };
++        const auto lower = entry_runup.empty() ? 0.0L : parameter(entry_runup.back());
++        const auto upper = exit_runup.empty() ? 1.0L : parameter(exit_runup.front());
++        const bool fixed_width = fragment->explicit_width &&
++            fragment->width_kind != GlobalRouteSegmentWidthKind::terminal_neck_down;
++        for (const auto& section : assignment.packed_cross_sections) {
++          if (fixed_width || !geometry::segments_intersect(fragment->start, fragment->end,
++                                                           section.first_wall, section.second_wall)) continue;
++          const auto sx = static_cast<long double>(section.second_wall.x.value() - section.first_wall.x.value());
++          const auto sy = static_cast<long double>(section.second_wall.y.value() - section.first_wall.y.value());
++          const auto length = std::hypotl(sx, sy);
++          if (!(length > 0.0L)) continue;
++          for (const auto& placement : section.placements) {
++            if (placement.fragment != fragment->id) continue;
++            const auto point = quantize_regional_spline({
++                (static_cast<long double>(section.first_wall.x.value()) + section.second_wall.x.value()) / 2.0L +
++                    sx * placement.center_offset_nm / length,
++                (static_cast<long double>(section.first_wall.y.value()) + section.second_wall.y.value()) / 2.0L +
++                    sy * placement.center_offset_nm / length});
++            const auto t = parameter(point);
++            if (t > lower && t < upper) targets.emplace_back(t, point);
++          }
++        }
++        std::sort(targets.begin(), targets.end());
++        for (const auto& [parameter_value, point] : targets) {
++          static_cast<void>(parameter_value);
++          append(point);
++        }
++      }
++      for (const auto point : exit_runup) append(point);
++      append(route_end);
++      RegionalSplineRealization route;
++      route.fragment = fragment->id;
++      route.replacement_end = fragment->end;
++      route.layer = route_template.routing_layer;
++      route.width = fragment->width;
++      route.width_kind = fragment->width_kind;
++      route.entry_via_site = entry_via_site;
++      route.exit_via_site = exit_via_site;
++      route.straight_realization = true;
++      // Integer octilinear doglegs preserve every endpoint, lane target and via access anchor.
++      // This first experiment uses a deterministic diagonal-first elbow. Exact scene checks,
++      // rather than the discrete packing certificate, decide whether that elbow is usable.
++      if (!seed.empty()) route.centerline.push_back(seed.front());
++      for (std::size_t i = 1; i < seed.size(); ++i) {
++        const auto first = route.centerline.back();
++        const auto last = seed[i];
++        const auto dx = last.x.value() - first.x.value();
++        const auto dy = last.y.value() - first.y.value();
++        if (dx != 0 && dy != 0 && std::abs(dx) != std::abs(dy)) {
++          const auto diagonal = std::min(std::abs(dx), std::abs(dy));
++          route.centerline.push_back({Nanometres{first.x.value() + (dx < 0 ? -diagonal : diagonal)},
++                                      Nanometres{first.y.value() + (dy < 0 ? -diagonal : diagonal)}});
++        }
++        if (route.centerline.back() != last) route.centerline.push_back(last);
++      }
++      for (std::size_t i = 1; i < route.centerline.size(); ++i)
++        route.native_pieces.push_back({SplineFittedPieceKind::segment,
++                                       route.centerline[i - 1U], {}, route.centerline[i]});
++      if (route.native_pieces.empty()) {
++        assignment.stop_reason = RegionalBundleStopReason::spline_realization_failed;
++        break;
++      }
++      assignment.spline_realizations.push_back(std::move(route));
++    }
++  }
++  build_regional_spline_candidate(board, global, result);
++  if (!result.native_realization_manifest_available) return;
++  // Native scene checks include owned copper, frozen continuations, static pads and real vias.
++  assess_regional_native_scene(board, result);
++  GlobalRouteResult candidate = global;
++  candidate.paths = result.spline_candidate_paths;
++  auto scene = board;
++  if (result.configured.treat_saved_zone_fills_as_refillable)
++    for (auto& zone : scene.zones) zone.fills.clear();
++  QuantizedCopperOracleConfig oracle_config;
++  oracle_config.grid_pitch = Nanometres{1};
++  ++result.linear_scaffold_checks;
++  const auto proof = probe_quantized_copper_feasibility(scene, candidate, oracle_config, stop_token);
++  result.straight_scene_drc_violations = proof.drc_violations;
++  result.straight_scene_open_connections = proof.open_connections;
++  result.straight_scene_drc_categories.clear();
++  for (const auto& [category, count] : proof.drc_violation_counts)
++    result.straight_scene_drc_categories.emplace(category, count);
++  if (!proof.all_paths_materialized || !proof.exact_copper_legal || proof.open_connections > 0U ||
++      stop_token.stop_requested() ||
++      result.native_scene_conflicts > 0U || !result.spline_candidate_available) {
++    ++result.linear_scaffold_rejections;
++    result.spline_candidate_available = false;
++    result.spline_candidate_diagnostic = "straight regional transaction rejected by exact copper proof: violations=" +
++        std::to_string(proof.drc_violations) + ", opens=" + std::to_string(proof.open_connections);
++    for (auto diagnosis : proof.diagnoses) {
++      if (result.local_routability_diagnoses.size() >= result.configured.max_local_routability_diagnoses) break;
++      diagnosis.resource.stable_id = "straight-scene:" + diagnosis.resource.stable_id;
++      result.local_routability_diagnoses.push_back(std::move(diagnosis));
++    }
++    return;
++  }
++  result.spline_candidate_diagnostic = "straight regional transaction passed exact copper proof";
++  for (auto& route : result.native_realization_manifest) {
++    route.native_copper_legal = true;
++    route.mutually_legal = true;
++    route.quantized_mutually_legal = true;
++  }
++  for (auto& assignment : result.bundle_assignments)
++    for (auto& route : assignment.spline_realizations) {
++      route.native_copper_legal = true;
++      route.mutually_legal = true;
++      route.quantized_mutually_legal = true;
++    }
++}
++
++void realize_regional_straight_candidate(const Board& board, const GlobalRouteResult& global,
++                                         RegionalRouteResult& result, std::stop_token stop_token) {
++  result.configured.enable_straight_realization = true;
++  result.configured.enable_spline_realization = false;
++  // The discrete objective can prefer many layer excursions whose copper is worse than the
++  // original topology. Keep the allocator's already packed source-topology fallback in the
++  // physical comparison; do not invent a new lane order or lower a clearance requirement.
++  auto fallback = result;
++  bool changed = false;
++  for (auto& assignment : fallback.bundle_assignments) {
++    if (!assignment.complete()) continue;
++    const RegionalBundleSelection* selected = nullptr;
++    const auto consider = [&](const auto& pool) {
++      for (const auto& selection : pool) {
++        if (selection.templates.empty() || !std::all_of(selection.templates.begin(), selection.templates.end(),
++              [&](const auto id) { return id < assignment.templates.size() &&
++                  assignment.templates[id].selected_global_topology; })) continue;
++        // A source-topology fallback retains the original physical via sites as well.
++        const bool original_vias = std::all_of(selection.via_choices.begin(), selection.via_choices.end(),
++            [&](const auto id) {
++              const auto via = std::find_if(fallback.via_choices.begin(), fallback.via_choices.end(),
++                                            [&](const auto& item) { return item.id == id; });
++              return via != fallback.via_choices.end() && via->selected_global_site;
++            });
++        if (original_vias && !selected) selected = &selection;
++      }
++    };
++    consider(assignment.spline_candidate_shortlist);
++    consider(assignment.spline_candidate_reserve);
++    if (!selected || (assignment.selected_templates == selected->templates &&
++                      assignment.selected_via_choices == selected->via_choices &&
++                      assignment.packed_cross_sections == selected->packed_cross_sections)) continue;
++    assignment.selected_templates = selected->templates;
++    assignment.selected_via_choices = selected->via_choices;
++    assignment.via_assignment_region_order = selected->via_assignment_region_order;
++    assignment.packed_cross_sections = selected->packed_cross_sections;
++    assignment.selected_via_alternative_switches = selected->via_alternative_switches;
++    assignment.selected_template_conflicts = selected->template_conflicts;
++    assignment.selected_residual_conflicts = selected->residual_conflicts;
++    changed = true;
++  }
++  realize_regional_straight_candidate_once(board, global, result, stop_token);
++  result.straight_scene_trials = stop_token.stop_requested() ? 0U : 1U;
++  if (!changed || result.spline_candidate_available || stop_token.stop_requested()) return;
++  realize_regional_straight_candidate_once(board, global, fallback, stop_token);
++  const auto objective = [](const auto& candidate) {
++    return std::tuple{candidate.spline_candidate_available ? 0U : 1U,
++                      candidate.linear_scaffold_checks > 0U ? 0U : 1U,
++                      candidate.straight_scene_open_connections,
++                      candidate.straight_scene_drc_violations,
++                      candidate.native_scene_conflicts};
++  };
++  if (!stop_token.stop_requested() && objective(fallback) < objective(result)) {
++    result = std::move(fallback);
++    result.straight_source_fallback_selected = true;
++  }
++  result.straight_scene_trials = 2U;
++}
++
+ void assess_regional_native_scene(const Board& source, RegionalRouteResult& regional) {
+   regional.native_scene_conflicts = 0U;
+   regional.native_scene_fixed_conflicts = 0U;
+@@ -15618,6 +15949,10 @@
+                     std::string(phase) + " regional spline realization completed: splines=" +
+                         std::to_string(spline_count(candidate)));
+       build_regional_spline_candidate(board, global, candidate);
++    } else if (config.enable_straight_realization) {
++      realize_regional_straight_candidate(board, global, candidate, stop_token);
++      emit_progress("regional-analysis:" + std::string(phase) + ":straight",
++                    "straight regional copper checked: " + candidate.spline_candidate_diagnostic);
+     }
+   };
+   const auto unresolved_objective = [](const RegionalRouteResult& candidate) {
+@@ -16318,6 +16653,7 @@
+   auto config = requested_config;
+   if (!config.curved_tracks) {
+     config.regional.enable_spline_realization = false;
++    config.regional.enable_straight_realization = true;
+     config.global.use_navmesh_funnel_spline_seeds = false;
+     config.global.single_lane_direct_voronoi_resources = true;
+   }
+@@ -16414,6 +16750,8 @@
+     // provisional shadow count can nevertheless leave fewer unsolved lane/via/spline windows.
+     // Preserve connectivity and topology as hard lexicographic gates, then retain that partial
+     // physical improvement for the next feedback pass before comparing coarse overflow.
++    // A deferred region has no assignments because it was never examined. Its empty failure
++    // count cannot outrank an evaluated physical checkpoint, even when that checkpoint fails.
+     const auto oracle_opens = [](const RoutingPlanResult& plan) {
+       return plan.quantized_copper_oracle.evaluated
+                  ? plan.quantized_copper_oracle.open_connections
+@@ -16427,6 +16765,7 @@
+     return std::tuple{lhs.complete() ? 0U : 1U,
+                       lhs.coarse_global.unrouted_nets.size(),
+                       coarse_topology_complete(lhs.coarse_global) ? 0U : 1U,
++                      lhs.regional_evaluated ? 0U : 1U,
+                       incomplete_assignments(lhs),
+                       oracle_opens(lhs),
+                       oracle_violations(lhs),
+@@ -16435,6 +16774,7 @@
+            std::tuple{rhs.complete() ? 0U : 1U,
+                       rhs.coarse_global.unrouted_nets.size(),
+                       coarse_topology_complete(rhs.coarse_global) ? 0U : 1U,
++                      rhs.regional_evaluated ? 0U : 1U,
+                       incomplete_assignments(rhs),
+                       oracle_opens(rhs),
+                       oracle_violations(rhs),
+@@ -16886,6 +17226,7 @@
+         // quantization to the final retained checkpoint so every global epoch can consume fresh
+         // physical evidence inside the caller's total budget.
+         regional_attempt_config.enable_spline_realization = false;
++        regional_attempt_config.enable_straight_realization = false;
+       }
+       // The global probe already turns sampled/corridor/physical pressure into negotiated
+       // history.  Do not spend the next several minutes rebuilding regional windows while the
+@@ -16909,6 +17250,7 @@
+                                           regional_attempt_config) &&
+           intermediate_regional_ready) {
+         feedback_candidate.regional_consulted = true;
++        regional_candidate.regional_evaluated = true;
+         regional_candidate.regional =
+             analyze_regional_conflicts(board, regional_candidate.coarse_global,
+                                        regional_attempt_config, stop_token, telemetry);
+@@ -16979,6 +17321,7 @@
+             regional_candidate.quantized_copper_oracle.diagnoses;
+         regional_candidate.regional = analyze_regional_conflicts(
+             board, regional_candidate.coarse_global, promotion_config, stop_token, telemetry);
++        regional_candidate.regional_evaluated = true;
+         regional_candidate.paths = regional_candidate.regional.spline_candidate_available
+                                        ? regional_candidate.regional.spline_candidate_paths
+                                        : regional_candidate.coarse_global.paths;
+--- a/include/flux/core/regional_router.hpp
++++ b/include/flux/core/regional_router.hpp
+@@ -160,6 +160,8 @@
+   // Direct regional callers may stop after the discrete portfolio. The planner disables
+   // realization in straight mode; every output mode still requires final physical copper DRC.
+   bool enable_spline_realization{true};
++  // Realize selected lanes as integer H/V/45 copper without PH interpolation.
++  bool enable_straight_realization{false};
+   // Materialize each final PH window candidate immediately as KiCad-native arcs/segments and
+   // use represented copper DRC as the mutual/static legality authority. Continuous PH envelopes
+   // remain topology/fairness guidance and a failure diagnostic, not a second copper model.
+@@ -611,6 +613,9 @@
+   bool rational_offset_evaluated{false};
+   bool rational_offset_intersection{false};
+ 
++  // Segment-only transactions carry no PH/continuous-envelope certificate.
++  bool straight_realization{false};
++
+   bool operator==(const RegionalSplineRealization&) const = default;
+ };
+ 
+@@ -885,6 +890,12 @@
+   std::size_t physical_scope_retries{0U};
+   std::size_t linear_scaffold_checks{0U};
+   std::size_t linear_scaffold_rejections{0U};
++  std::size_t straight_scene_trials{0U};
++  bool straight_source_fallback_selected{false};
++  std::size_t straight_collapsed_via_adapters{0U};
++  std::size_t straight_scene_drc_violations{0U};
++  std::size_t straight_scene_open_connections{0U};
++  std::map<std::string, std::size_t> straight_scene_drc_categories;
+   std::size_t native_scene_conflicts{0U};
+   std::size_t native_scene_fixed_conflicts{0U};
+   std::size_t native_arc_fit_failures{0U};
+@@ -1299,6 +1310,8 @@
+   std::size_t provisional_exact_promotions_succeeded{0U};
+   std::size_t discarded_portfolio_diagnoses{0U};
+   bool routability_feedback_budget_exhausted{false};
++  // An empty deferred assessment is unknown, not evidence of zero regional failures.
++  bool regional_evaluated{false};
+   RoutingPlanStopReason stop_reason{RoutingPlanStopReason::invalid_input};
+   std::string diagnostic;
+ 
+@@ -1353,6 +1366,10 @@
+ // via. Every represented conflict blocks handoff and supplies a repair obligation. Provisional
+ // tracks remain movable, but their movement must be resolved before this transaction is accepted.
+ void assess_regional_native_scene(const Board& board, RegionalRouteResult& regional);
++// Realizes the selected discrete assignment and accepts only an exact whole-scene copper proof.
++void realize_regional_straight_candidate(const Board& board, const GlobalRouteResult& global,
++                                         RegionalRouteResult& regional,
++                                         std::stop_token stop_token = {});
+ [[nodiscard]] bool validate_regional_native_ownership(const RegionalRouteResult& regional);
+ // Diagnostic scene only, never accepted copper. Excludes owned fragments, not entire nets.
+ // Unknown ownership fails closed; source is unchanged. Proposed vias are not included here.
+--- a/apps/flux-cli/main.cpp
++++ b/apps/flux-cli/main.cpp
+@@ -3118,6 +3118,23 @@
+                                   regional == nullptr ? 0U : regional->linear_scaffold_checks);
+   print_regional_diagnosis_metric("regional_linear_scaffold_rejections",
+                                   regional == nullptr ? 0U : regional->linear_scaffold_rejections);
++  print_regional_diagnosis_metric("regional_straight_scene_trials",
++                                  regional == nullptr ? 0U : regional->straight_scene_trials);
++  print_regional_diagnosis_metric("regional_straight_source_fallback_selected",
++                                  regional && regional->straight_source_fallback_selected ? 1U : 0U);
++  print_regional_diagnosis_metric("regional_straight_collapsed_via_adapters",
++                                  regional == nullptr ? 0U : regional->straight_collapsed_via_adapters);
++  print_regional_diagnosis_metric("regional_straight_scene_drc_violations",
++                                  regional == nullptr ? 0U : regional->straight_scene_drc_violations);
++  print_regional_diagnosis_metric("regional_straight_scene_open_connections",
++                                  regional == nullptr ? 0U : regional->straight_scene_open_connections);
++  std::cout << ",\n  \"regional_straight_scene_drc_categories\": {";
++  bool first_straight_category = true;
++  if (regional) for (const auto& [category, count] : regional->straight_scene_drc_categories) {
++    std::cout << (first_straight_category ? "" : ",") << json_quote(category) << ':' << count;
++    first_straight_category = false;
++  }
++  std::cout << '}';
+   print_regional_diagnosis_metric("regional_native_scene_fixed_conflicts",
+                                   regional == nullptr ? 0U : regional->native_scene_fixed_conflicts);
+   // Assembly can be withdrawn after a local repair. Keep last-scene evidence explicitly
+@@ -3475,6 +3492,12 @@
+     std::cout << "null";
+   } else {
+     std::cout << (routing_plan->complete() ? "true" : "false");
++  }
++  std::cout << ",\n  \"regional_evaluated\": ";
++  if (routing_plan == nullptr) {
++    std::cout << "null";
++  } else {
++    std::cout << (routing_plan->regional_evaluated ? "true" : "false");
+   }
+   std::cout << ",\n  \"regional_feedback_passes\": ";
+   if (routing_plan == nullptr) {
+--- a/tests/unit/core_tests.cpp
++++ b/tests/unit/core_tests.cpp
+@@ -328,6 +328,230 @@
+       }
+     }
+   }
++}
++
++void straight_regional_lanes_require_exact_copper_proof() {
++  auto board = two_pad_board();
++  board.footprints.clear();
++  board.nets = {{NetId{"a"}, "a", 0}, {NetId{"b"}, "b", 0}};
++  flux::GlobalRouteResult global;
++  flux::RegionalRouteResult regional;
++  flux::RegionalRoutingWindow window;
++  window.id = 0U;
++  flux::RegionalBundleAssignment assignment;
++  assignment.window_id = 0U;
++  assignment.stop_reason = flux::RegionalBundleStopReason::complete;
++  for (std::size_t i = 0; i < 2; ++i) {
++    flux::RegionalRouteFragment fragment;
++    fragment.id = {board.nets[i].id, i, 0U, 0U};
++    fragment.layer = LayerId{"F.Cu"};
++    fragment.start = mm(20, i == 0 ? 39.5 : 40.5);
++    fragment.end = mm(80, i == 0 ? 39.5 : 40.5);
++    fragment.width = Nanometres{250000};
++    fragment.clearance = Nanometres{200000};
++    regional.fragments.push_back(fragment);
++    window.fragments.push_back(fragment.id);
++    window.owned_fragments.push_back(fragment.id);
++    flux::RegionalRouteTemplate route_template;
++    route_template.id = i;
++    route_template.fragment = fragment.id;
++    route_template.routing_layer = fragment.layer;
++    assignment.templates.push_back(route_template);
++    assignment.selected_templates.push_back(i);
++    // Both abstract paths share the central copper. The chosen packed lanes must replace it.
++    flux::GlobalRoutePath path;
++    path.net = fragment.id.net;
++    path.connection_index = i;
++    path.points = {{fragment.start, fragment.layer}, {mm(35, 40), fragment.layer},
++                   {mm(65, 40), fragment.layer}, {fragment.end, fragment.layer}};
++    global.paths.push_back(path);
++  }
++  assignment.packed_cross_sections.push_back(flux::pack_regional_cross_section(
++      regional.fragments, window.fragments, LayerId{"F.Cu"}, mm(50, 38), mm(50, 42),
++      Nanometres{4000000}));
++  regional.windows = {window};
++  regional.bundle_assignments = {assignment};
++  const auto unresolved = regional;
++  flux::realize_regional_straight_candidate(board, global, regional);
++  require(regional.spline_candidate_available && regional.native_scene_conflicts == 0U &&
++              regional.linear_scaffold_checks == 1U && regional.linear_scaffold_rejections == 0U,
++          "packed straight lanes must replace colliding abstract copper: " + regional.spline_candidate_diagnostic);
++  require(regional.native_realization_manifest.size() == 2U,
++          "each owned connection needs an explicit segment transaction");
++  for (const auto& route : regional.native_realization_manifest) {
++    require(route.straight_realization && route.control_points.empty() &&
++                !route.continuous_envelope_evaluated && route.native_copper_legal,
++            "straight copper must not claim a PH certificate");
++    for (const auto& piece : route.native_pieces) {
++      const auto dx = std::abs(piece.end.x.value() - piece.start.x.value());
++      const auto dy = std::abs(piece.end.y.value() - piece.start.y.value());
++      require(piece.kind == flux::SplineFittedPieceKind::segment &&
++                  (dx == 0 || dy == 0 || dx == dy), "all generated pieces must have ordinary angles");
++    }
++  }
++  auto alternative = unresolved;
++  auto detour = alternative.bundle_assignments.front().templates.front();
++  detour.id = 2U;
++  detour.selected_global_topology = false;
++  detour.topology_centerline = {regional.fragments.front().start, mm(50, 81),
++                                regional.fragments.front().end};
++  alternative.bundle_assignments.front().templates.push_back(detour);
++  alternative.bundle_assignments.front().selected_templates = {2U, 1U};
++  flux::RegionalBundleSelection source_selection;
++  source_selection.templates = {0U, 1U};
++  source_selection.packed_cross_sections = unresolved.bundle_assignments.front().packed_cross_sections;
++  alternative.bundle_assignments.front().spline_candidate_shortlist = {source_selection};
++  flux::realize_regional_straight_candidate(board, global, alternative);
++  require(alternative.spline_candidate_available && alternative.straight_scene_trials == 2U &&
++              alternative.straight_source_fallback_selected,
++          "exact copper must recover the retained source-topology lane assignment when a detour fails");
++  auto blocked = unresolved;
++  board.tracks.push_back({ObjectId{"wall"}, NetId{"b"}, LayerId{"F.Cu"},
++                           mm(50, 38), mm(50, 42), Nanometres{250000}, true});
++  flux::realize_regional_straight_candidate(board, global, blocked);
++  require(!blocked.spline_candidate_available && blocked.native_scene_conflicts > 0U &&
++              blocked.linear_scaffold_rejections == 1U,
++          "a discrete fitting lane order must not accept a static copper collision");
++  const auto diagnoses = flux::diagnose_regional_routability(blocked);
++  require(!diagnoses.empty() && std::none_of(diagnoses.begin(), diagnoses.end(), [](const auto& diagnosis) {
++            return diagnosis.stage == flux::RoutabilityFailureStage::spline_realization ||
++                   diagnosis.stage == flux::RoutabilityFailureStage::local_pns;
++          }), "straight failures must retain exact copper evidence without inventing absent PH/PNS failures");
++  auto cancelled = unresolved;
++  std::stop_source stop;
++  stop.request_stop();
++  flux::realize_regional_straight_candidate(board, global, cancelled, stop.get_token());
++  require(!cancelled.spline_candidate_available, "cancelled straight realization must fail closed");
++}
++
++void straight_regional_layer_adapters_preserve_connectivity() {
++  auto board = two_pad_board();
++  board.footprints.back().pads.front().layers = {LayerId{"B.Cu"}};
++  const auto net = board.nets.front().id;
++  const LayerId front{"F.Cu"}, back{"B.Cu"};
++  flux::GlobalRouteResult global;
++  flux::GlobalRoutePath path;
++  path.net = net;
++  path.points = {{mm(20, 40), front}, {mm(40, 40), front},
++                 {mm(40, 40), back}, {mm(80, 40), back}};
++  global.paths = {path};
++  flux::RegionalRouteResult regional;
++  flux::RegionalRouteFragment fragment;
++  fragment.id = {net, 0U, 0U, 0U};
++  fragment.layer = front;
++  fragment.start = mm(20, 40);
++  fragment.end = mm(40, 40);
++  fragment.width = Nanometres{250000};
++  fragment.clearance = Nanometres{200000};
++  fragment.begins_at_terminal = true;
++  regional.fragments = {fragment};
++  flux::RegionalRoutingWindow window;
++  window.id = 0U;
++  window.fragments = {fragment.id};
++  window.owned_fragments = {fragment.id};
++  regional.windows = {window};
++  flux::RegionalViaChoice entry;
++  entry.id = 0U;
++  entry.region_id = 0U;
++  entry.net = net;
++  entry.site = mm(35, 40);
++  entry.span = {front, back};
++  entry.diameter = Nanometres{600000};
++  entry.drill = Nanometres{300000};
++  auto exit = entry;
++  exit.id = 1U;
++  exit.region_id = 1U;
++  exit.site = mm(40, 40);
++  exit.selected_global_site = true;
++  regional.via_choices = {entry, exit};
++  flux::RegionalRouteTemplate route_template;
++  route_template.fragment = fragment.id;
++  route_template.routing_layer = back;
++  route_template.selected_global_topology = false;
++  route_template.entry_via_choice = entry.id;
++  route_template.exit_via_choice = exit.id;
++  route_template.topology_centerline = {entry.site, exit.site};
++  flux::RegionalBundleAssignment assignment;
++  assignment.window_id = 0U;
++  assignment.templates = {route_template};
++  assignment.selected_templates = {0U};
++  assignment.selected_via_choices = {entry.id, exit.id};
++  assignment.stop_reason = flux::RegionalBundleStopReason::complete;
++  regional.bundle_assignments = {assignment};
++  const auto unresolved = regional;
++  flux::realize_regional_straight_candidate(board, global, regional);
++  require(regional.spline_candidate_available && regional.straight_collapsed_via_adapters == 1U &&
++              regional.planned_via_transitions == 1U && regional.straight_scene_open_connections == 0U,
++          "an alternate layer joining the source continuation must form one legal via: " +
++              regional.spline_candidate_diagnostic);
++  // A front-only branch at the removed return adapter still needs real copper. Eliminating a
++  // redundant geometric transition cannot authorize dropping that electrical obligation.
++  auto branch = board.footprints.front();
++  branch.id = ObjectId{"branch"};
++  branch.reference = "branch";
++  branch.position = mm(40, 40);
++  branch.pads.front().id = ObjectId{"branch-pad"};
++  board.footprints.push_back(branch);
++  auto disconnected = unresolved;
++  flux::realize_regional_straight_candidate(board, global, disconnected);
++  require(!disconnected.spline_candidate_available && disconnected.straight_scene_open_connections > 0U,
++          "removing an adapter must never silently disconnect an intermediate-layer branch");
++}
++
++void regional_fragment_compression_preserves_tree_junctions() {
++  auto board = two_pad_board();
++  auto third = board.footprints.front();
++  third.id = ObjectId{"branch"};
++  third.reference = "branch";
++  third.position = mm(50, 60);
++  third.pads.front().id = ObjectId{"branch-pad"};
++  board.footprints.push_back(third);
++  const auto net = board.nets.front().id;
++  const LayerId front{"F.Cu"};
++  flux::GlobalRouteResult global;
++  flux::GlobalRoutePath trunk;
++  trunk.net = net;
++  trunk.points = {{mm(20, 40), front}, {mm(50, 40), front}, {mm(80, 40), front}};
++  auto branch = trunk;
++  branch.connection_index = 1U;
++  branch.points = {{mm(50, 60), front}, {mm(50, 40), front}};
++  global.paths = {trunk, branch};
++  flux::RegionalRouterConfig config;
++  config.enable_spline_realization = false;
++  auto regional = flux::analyze_regional_conflicts(board, global, config);
++  std::vector<flux::RegionalRouteFragment> trunk_fragments;
++  for (const auto& fragment : regional.fragments)
++    if (fragment.id.connection_index == 0U) trunk_fragments.push_back(fragment);
++  require(trunk_fragments.size() == 2U && trunk_fragments[0].end == mm(50, 40) &&
++              trunk_fragments[1].start == mm(50, 40) &&
++              trunk_fragments[0].last_source_segment == 0U &&
++              trunk_fragments[1].first_source_segment == 1U,
++          "collinear compression must retain a same-net connection endpoint and source-edge identity");
++  flux::RegionalRoutingWindow window;
++  window.id = 0U;
++  flux::RegionalBundleAssignment assignment;
++  assignment.window_id = 0U;
++  assignment.stop_reason = flux::RegionalBundleStopReason::complete;
++  for (std::size_t i = 0; i < trunk_fragments.size(); ++i) {
++    const auto& fragment = trunk_fragments[i];
++    window.fragments.push_back(fragment.id);
++    window.owned_fragments.push_back(fragment.id);
++    flux::RegionalRouteTemplate route_template;
++    route_template.id = i;
++    route_template.fragment = fragment.id;
++    route_template.routing_layer = front;
++    assignment.templates.push_back(route_template);
++    assignment.selected_templates.push_back(i);
++    const auto x = i == 0U ? 35.0 : 65.0;
++    assignment.packed_cross_sections.push_back(flux::pack_regional_cross_section(
++        regional.fragments, {fragment.id}, front, mm(x, 39.6), mm(x, 41.6), Nanometres{2000000}));
++  }
++  regional.windows = {window};
++  regional.bundle_assignments = {assignment};
++  flux::realize_regional_straight_candidate(board, global, regional);
++  require(regional.spline_candidate_available && regional.straight_scene_open_connections == 0U,
++          "moving both sides of a tree trunk to new lanes must preserve the fixed branch contact: " +
++              regional.spline_candidate_diagnostic);
+ }
+ 
+ void regional_capacity_tracks_longitudinal_demand() {
+@@ -3417,9 +3641,10 @@
+     config.physical_conflict_witnesses = oracle.diagnoses;
+     const auto observed = flux::analyze_regional_conflicts(board, global, config);
+     require(observed.mapped_exact_copper_pairs == pair_count &&
+-                observed.unmapped_exact_copper_pairs == 0U && observed.conflict_edges.size() == 2U &&
+-                observed.windows.size() == 1U && observed.windows.front().owned_fragments.size() == 3U,
+-            "exact provenance must own both junction branches independent of sampling and path order");
++                observed.unmapped_exact_copper_pairs == 0U && observed.conflict_edges.size() == pair_count &&
++                observed.windows.size() == 1U &&
++                observed.windows.front().owned_fragments.size() == (split ? 4U : 3U),
++            "exact provenance must own both junction branches and retain an explicit shared vertex");
+     for (auto& d : config.physical_conflict_witnesses)
+       for (auto& pair : d.source_segment_pairs) pair.first.segment_index = 100U;
+     const auto stale_index = flux::analyze_regional_conflicts(board, global, config);
+@@ -4454,6 +4679,9 @@
+                           oracle_first_plan.feedback_probes.back().candidates.end(),
+                           [](const auto& candidate) { return candidate.regional_consulted; }),
+           "exact oracle failures must bypass intermediate regional work but not final realization");
++  require(oracle_first_plan.regional_evaluated &&
++              oracle_first_plan.regional.diagnostic.find("deferred") == std::string::npos,
++          "an unevaluated regional checkpoint must not displace the final physical assessment");
+   const auto broad_feedback_candidate = [&]() -> const flux::RoutingPlanFeedbackCandidate* {
+     for (const auto& probe : broad_feedback_plan.feedback_probes) {
+       const auto found =
+@@ -8742,6 +8970,9 @@
+        quantized_copper_oracle_exposes_physical_conflicts_and_via_chains},
+       {"physical_probe_preserves_native_coordinate_clearance",
+        physical_probe_preserves_native_coordinate_clearance},
++      {"regional_fragment_compression_preserves_tree_junctions", regional_fragment_compression_preserves_tree_junctions},
++      {"straight_regional_layer_adapters_preserve_connectivity", straight_regional_layer_adapters_preserve_connectivity},
++      {"straight_regional_lanes_require_exact_copper_proof", straight_regional_lanes_require_exact_copper_proof},
+       {"regional_capacity_tracks_longitudinal_demand",
+        regional_capacity_tracks_longitudinal_demand},
+       {"physical_checkpoint_ordering_is_feasibility_first_and_fail_closed",
+--- a/src/routability_knowledge.cpp
++++ b/src/routability_knowledge.cpp
+@@ -497,6 +497,13 @@
+           "bounded joint bundle/lane search exhausted before finding a complete state"));
+       break;
+     case RegionalBundleStopReason::spline_realization_failed: {
++      // Straight transactions deliberately have no PH topology/shape/PNS certificates. Their
++      // exact scene and connectivity witnesses were added above; interpreting absent PH flags
++      // as failed spline optimization would invent unrelated traps and poison routing history.
++      if ((regional.configured.enable_straight_realization &&
++           !regional.configured.enable_spline_realization) ||
++          std::any_of(assignment.spline_realizations.begin(), assignment.spline_realizations.end(),
++                      [](const auto& route) { return route.straight_realization; })) break;
+       const auto topology = static_cast<std::uint64_t>(std::count_if(
+           assignment.spline_realizations.begin(), assignment.spline_realizations.end(),
+           [](const auto& realization) { return !realization.topology_legal; }));
+--- a/tools/replay_quantized_copper.cpp
++++ b/tools/replay_quantized_copper.cpp
+@@ -1,6 +1,7 @@
+ // Compare probe-grid resolutions on one recorded selected allocation. Diagnostic only.
+ #include "flux/core/quantized_copper_oracle.hpp"
+ #include "flux/core/detailed_router.hpp"
++#include "flux/core/regional_router.hpp"
+ #include "flux/io/kicad_export.hpp"
+ #include "flux/core/routing_rules.hpp"
+ #include "flux/io/kicad_import.hpp"
+@@ -16,7 +17,7 @@
+   try {
+     if (argc != 4 && argc != 6)
+       throw std::runtime_error(
+-          "usage: flux-replay-quantized-copper BOARD TELEMETRY SNAPSHOT_SEQUENCE [NET_A NET_B | --detail-preview OUTPUT]");
++          "usage: flux-replay-quantized-copper BOARD TELEMETRY SNAPSHOT_SEQUENCE [NET_A NET_B | --detail-preview OUTPUT | --regional-straight MAX_STATES]");
+     const auto imported = flux::io::import_kicad_pcb_file(argv[1]);
+     if (!imported.strict())
+       throw std::runtime_error("source must import strictly under current sibling project rules");
+@@ -72,6 +73,58 @@
+     }
+     if (!found || global.paths.empty())
+       throw std::runtime_error("snapshot contains no active selected allocation");
++    if (argc == 6 && std::string_view{argv[4]} == "--regional-straight") {
++      std::size_t state_chars = 0U;
++      const auto states = std::stoull(argv[5], &state_chars);
++      if (state_chars != std::string{argv[5]}.size() || states == 0U || states > 4096U)
++        throw std::runtime_error("regional replay state budget must be 1..4096");
++      // The snapshot has selected geometry but not global capacity/corridor certificates.
++      // Rebuild scope solely from exact copper witnesses, with no implicit scope retries.
++      // This is a physical diagnostic experiment, never a replay of routing qualification.
++      flux::RegionalRouterConfig config;
++      config.enable_spline_realization = false;
++      config.enable_straight_realization = true;
++      config.enable_terminal_portal_templates = true;
++      config.frozen_copper_context = true;
++      config.max_physical_scope_retries = 0U;
++      config.max_bundle_search_states = states;
++      const auto before = flux::probe_quantized_copper_feasibility(board, global);
++      config.physical_conflict_witnesses = before.diagnoses;
++      const auto regional = flux::analyze_regional_conflicts(board, global, config);
++      boost::json::object categories;
++      for (const auto& [category, count] : regional.straight_scene_drc_categories)
++        categories[category] = count;
++      boost::json::array diagnoses;
++      for (const auto& d : regional.local_routability_diagnoses) {
++        if (!d.resource.stable_id.starts_with("native-scene:") &&
++            !d.resource.stable_id.starts_with("straight-scene:")) continue;
++        boost::json::array nets;
++        for (const auto& net : d.resource.nets) nets.emplace_back(net.value());
++        diagnoses.emplace_back(boost::json::object{
++            {"id", d.resource.stable_id}, {"layer", d.resource.layer.value()},
++            {"nets", std::move(nets)}, {"detail", d.detail},
++            {"bounds_nm", boost::json::array{d.resource.bounds.minimum.x.value(),
++                                             d.resource.bounds.minimum.y.value(),
++                                             d.resource.bounds.maximum.x.value(),
++                                             d.resource.bounds.maximum.y.value()}}});
++      }
++      std::cout << boost::json::serialize(boost::json::object{
++          {"authoritative", false}, {"source_revision", board.source_revision},
++          {"snapshot_sequence", sequence}, {"scope", "exact_copper_witnesses_only"},
++          {"max_states", states}, {"scope_retries", 0},
++          {"paths", global.paths.size()}, {"before_drc_violations", before.drc_violations},
++          {"before_opens", before.open_connections}, {"windows", regional.windows.size()},
++          {"collapsed_via_adapters", regional.straight_collapsed_via_adapters},
++          {"candidate_available", regional.spline_candidate_available},
++          {"native_manifest_available", regional.native_realization_manifest_available},
++          {"straight_scene_checks", regional.linear_scaffold_checks},
++          {"straight_scene_drc_violations", regional.straight_scene_drc_violations},
++          {"straight_scene_open_connections", regional.straight_scene_open_connections},
++          {"categories", std::move(categories)}, {"planned_vias", regional.planned_via_transitions},
++          {"diagnostic", regional.spline_candidate_diagnostic}, {"diagnoses", std::move(diagnoses)}})
++                << '\n';
++      return 0;
++    }
+     if (argc == 6 && std::string_view{argv[4]} == "--detail-preview") {
+       // Snapshot geometry omits allocation certificates. A private diagnostic copy may enter
+       // materialization, but this output cannot assert that the original routing plan passed.
+@@ -79,6 +132,7 @@
+       flux::DetailedRouterConfig config;
+       config.continuous_refinement = false;
+       config.circular_arc_refinement = false;
++      config.restrict_straight_track_angles = true;
+       config.bounded_residual_conflict_refinement = false;
+       const auto detailed = flux::materialize_detailed_route(board, global, config);
+       bool written = false;
+@@ -212,6 +266,11 @@
+                                  {"opens", result.open_connections},
+                                  {"diagnoses", result.diagnoses.size()},
+                                  {"elapsed_us", result.elapsed_us}};
++      boost::json::array open_nets;
++      for (const auto& diagnosis : result.diagnoses)
++        if (diagnosis.resource.stable_id.find("quantized-copper:open:") != std::string::npos)
++          for (const auto& net : diagnosis.resource.nets) open_nets.emplace_back(net.value());
++      output["open_net_ids"] = std::move(open_nets);
+       std::map<std::string, std::vector<const flux::RoutabilityDiagnosis*>> groups;
+       for (const auto& diagnosis : result.diagnoses) {
+         if (diagnosis.resource.nets.size() != 2U)
+--- a/tools/replay_quantized_copper.md
++++ b/tools/replay_quantized_copper.md
+@@ -39,3 +39,11 @@
+ tier. Source validation and strict export round-trip remain enforced, existing output
+ files are refused, and opens/internal DRC are reported even for a written preview.
+ Stage byte-identical sibling project/custom-rule files before external KiCad DRC.
++
++Append `--regional-straight MAX_STATES` (1..4096) to test straight regional
++realization on the selected snapshot, rebuilding scope from exact copper
++witnesses. This omits unavailable global resource/corridor certificates and
++disables automatic scope expansion, so its windows may differ from the original
++run. It prints scene DRC categories, opens, via counts and bounded physical
++witnesses; zero scene-check count means assembly never reached the oracle.
++It does not export copper or qualify a tier. Exit 0 means the diagnostic ran.

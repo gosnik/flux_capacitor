@@ -69,7 +69,7 @@ def _positive_int(value: str) -> int:
 
 def _change_counts(change_set: Mapping[str, Any]) -> dict[str, int]:
     counts: dict[str, int] = {}
-    for kind in ("tracks", "track_arcs", "vias"):
+    for kind in ("tracks", "track_arcs", "track_beziers", "vias"):
         changes = change_set.get(kind)
         if not isinstance(changes, list):
             raise WorkflowError(f"change set has no {kind} array")

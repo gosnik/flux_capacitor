@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "hypotheses": [
+    {
+      "hypothesis": "Direct medial edge reconstruction changes accepted chord endpoints and bypasses drill clearance",
+      "result": "rejected",
+      "evidence": [
+        "snapped endpoints equal convert_path output",
+        "every main/product A* directedge calls edge_blocked",
+        "segment_blockage includes transformed drill shape and hole clearance"
+      ],
+      "references": [
+        "src/global_router.cpp:6430",
+        "src/global_router.cpp:7495",
+        "src/global_router.cpp:2275",
+        "src/global_router.cpp:9825"
+      ],
+      "remaining_gap": "polygonal free-space domain omits drills, but exact pernet acceptance preserves invariant; omission alone does not justify a fix"
+    },
+    {
+      "hypothesis": "Planar capacious corridor exemption suppresses generated-via shadow collisions",
+      "result": "rejected",
+      "evidence": [
+        "exemption is guarded planar_edge with owner_edge",
+        "vias represented separately as terminal_or_via_node",
+        "via diameter used for node shadow clearance"
+      ],
+      "references": [
+        "src/global_router.cpp:10042",
+        "src/global_router.cpp:10065",
+        "src/global_router.cpp:10180"
+      ]
+    }
+  ],
+  "decision": "no algorithm change based on either unsupported mechanism"
+}

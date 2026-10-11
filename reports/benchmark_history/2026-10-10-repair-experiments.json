@@ -1,0 +1,167 @@
+{
+  "schema": 1,
+  "date": "2026-10-10",
+  "revision": "94aa691ad89576d1c0ac07a5346020da21fc9d06",
+  "working_tree": "dirty; validated source hashes recorded",
+  "experiment": "deadline-driven repair experiments and resident GPU terrain masks",
+  "baseline_report": "reports/benchmark_history/2026-10-10-incremental-feedback.json",
+  "status": "validated_implementation_no_tier_improvement",
+  "tier_order": [
+    "pt2399_delay",
+    "bm_svf"
+  ],
+  "telemetry_level": "diagnostic",
+  "runs": [
+    {
+      "tier": 0,
+      "board": "pt2399_delay",
+      "artifacts": "build/repair-experiments-admission-tier0-20261010/tier-0-pt2399_delay",
+      "outcome": "strict_curve_failure_unchanged_physical_copper",
+      "global_seconds": 33.35909321400686,
+      "detail_seconds": 529.2989917839877,
+      "peak_rss_kib": 1244312,
+      "opens": 0,
+      "internal_drc": 0,
+      "external_drc": 0,
+      "external_opens": 0,
+      "unrounded_joints": 7,
+      "tracks": 47,
+      "beziers": 199,
+      "vias": 3,
+      "scheduler": {
+        "routing_engine_experiment_active_us": 450651770,
+        "routing_engine_experiment_initial_explorations": 46,
+        "routing_engine_experiment_invalidated": 28,
+        "routing_engine_experiment_memory_evictions": 0,
+        "routing_engine_experiment_resumed": 24,
+        "routing_engine_experiment_retired": 16,
+        "routing_engine_experiment_started": 46,
+        "routing_engine_experiment_state_suppressions": 0,
+        "routing_engine_experiment_suspended": 54
+      },
+      "gpu_mask": {
+        "static_seed_height_evolution_gpu_mask_upload_reuses": 17,
+        "static_seed_height_evolution_gpu_mask_uploads": 29
+      },
+      "copper_image_sha256": {
+        "01-B_Cu.png": "37e124173068c2e4c85d9ce30cffbccff6bf798be05600f5e5db0b27611094a7",
+        "00-F_Cu.png": "2f4bf0aa0947b8aed99fba46b477745e1e32955570184d85991d9d4ff63020c2"
+      },
+      "interpretation": "Final copper images byte-identical to prior baseline; 43% slower detail. Pool admission fixed, but global state invalidation repeatedly discards local preparation."
+    },
+    {
+      "tier": 1,
+      "board": "bm_svf",
+      "artifacts": "build/repair-experiments-admission-tier1-20261010/tier-1-bm_svf",
+      "outcome": "timed_out_no_physical_improvement",
+      "global_seconds": 900.1664682860137,
+      "peak_rss_kib": 1278852,
+      "oracle": {
+        "configured_grid_pitch_nm": 1,
+        "diagnoses": 310,
+        "drc_violation_counts": {
+          "hole_clearance": 70,
+          "track_clearance": 544,
+          "track_via_clearance": 179,
+          "via_clearance": 6
+        },
+        "drc_violations": 799,
+        "elapsed_us": 157789,
+        "feasible": false,
+        "malformed_paths": 0,
+        "open_connections": 0,
+        "paths_examined": 78,
+        "paths_materialized": 78,
+        "reused_transitions": 2,
+        "tracks": 1329,
+        "unrouted_nets": 0,
+        "vias": 56
+      },
+      "regional_evaluated": false,
+      "external_drc": null,
+      "scheduler": {
+        "routing_engine_experiment_active_us": 894737620,
+        "routing_engine_experiment_initial_explorations": 60,
+        "routing_engine_experiment_invalidated": 53,
+        "routing_engine_experiment_memory_evictions": 0,
+        "routing_engine_experiment_resumed": 168,
+        "routing_engine_experiment_retired": 7,
+        "routing_engine_experiment_started": 61,
+        "routing_engine_experiment_state_suppressions": 0,
+        "routing_engine_experiment_suspended": 221
+      },
+      "gpu_mask": {
+        "static_seed_height_evolution_gpu_mask_upload_reuses": 18,
+        "static_seed_height_evolution_gpu_mask_uploads": 27
+      },
+      "retained_xpbd_windows": 0,
+      "retained_avbd_windows": 0,
+      "interpretation": "Reached more regional portfolio and curve work and resumed 168 times, but retained the same 799 violations. There were 53 state invalidations and no evaluated retained regional scene. No final detailed copper or external KiCad DRC. Preview remains provisional with crossings."
+    }
+  ],
+  "limitations": [
+    "Tier 0 physical copper unchanged and externally DRC-clean, but the same 7 unrounded joints fail strict curved qualification; detailed runtime 43% worse.",
+    "Tier 1 timed out at 900 seconds retaining 799 oracle violations; not routed.",
+    "Full context/history invalidation still discards regional preparation after rejected global retries.",
+    "GPU mask residency is exact and single-entry; cross-context buffer sharing deferred."
+  ],
+  "source_sha256": {
+    "src/routing_engine.cpp": "bfb98359d9866e43f31ba94962ba7afc400713c4b58091f32418550afbba3f55",
+    "src/routing_engine_policy.cpp": "996958bc7a60bcf8a8017c3864c95f028afef1e34c7c7432887981718e41aca7",
+    "src/regional_router.cpp": "4b71f5e479b9f2131d8a7d1594c1587d7124b30e97acc3fb65ec418c6b67be27",
+    "src/terrain_evolution_vulkan.cpp": "dbb8ae5751e7565e7bd3afed8f80138819507429101b0e089ec2307eabc6c4e6",
+    "include/flux/core/routing_engine.hpp": "4b3da3a7f9f5a7cc08b5927a53ad669825ebd93e3610487aa1bf72ba6992647b",
+    "tests/unit/routing_engine_experiment_tests.cpp": "c307f32dc822d6e8d69d5336efa032a94e7e8ac74ef13ccbc9386b9cef1065fe",
+    "tests/unit/terrain_evolution_gpu_tests.cpp": "465592fe0e72dbd8d8ec7275506a3f16f373853d2511e513db4c25dddc59403d"
+  },
+  "implementation": {
+    "credit_gating": false,
+    "quantum_ms": 500,
+    "default_per_experiment_active_cap_ms": 0,
+    "parked_continuations": 2,
+    "exact_context_capacity": 4096,
+    "exact_context_bytes": 67108864,
+    "dispatch_record_capacity": 4096,
+    "cooperative_linux_rss_eviction_bytes": 2147483648,
+    "gpu_residency": "single exact normalized terrain walkability mask; height feedback remains fresh",
+    "pool_admission": "At capacity, time-slice live experiments; exchange parked and active slots before pruning."
+  },
+  "review": "Independent review found no remaining critical continuation lifetime or scheduler defects; RSS eviction is conservative process-wide.",
+  "validation": {
+    "focused": {
+      "passed": 17,
+      "failed": 0,
+      "log": "build/repair-experiments-20261010/focused-admission.log"
+    },
+    "core": {
+      "passed": 65,
+      "failed": 0,
+      "log": "build/repair-experiments-20261010/core-admission.log"
+    },
+    "release_build": {
+      "passed": true,
+      "log": "build/repair-experiments-20261010/release-admission.log"
+    },
+    "viewer_build": {
+      "passed": true,
+      "log": "build/repair-experiments-20261010/viewer-admission.log"
+    },
+    "diff_check": "passed for changed implementation/test/documentation files"
+  },
+  "gpu_audit": {
+    "terrain": "exact resident walkability; fresh heights each invocation",
+    "xpbd": "exact immutable-input residency and persistent allocations",
+    "generic_compute": "persistent allocations; inputs uploaded each invocation",
+    "cross_context_sharing": "deferred pending explicit ownership and synchronization interface"
+  },
+  "diagnostic_runs": [
+    {
+      "board": "pt2399_delay",
+      "artifacts": "build/repair-experiments-tier0-20261010",
+      "outcome": "deliberately stopped after exposing admission starvation; not a completed benchmark",
+      "global_seconds": 31.420915208000224,
+      "mechanism": "Initial exploration admitted more live experiments than the parked pool could retain; FIFO eviction retired unfinished setup before resume.",
+      "correction": "When the pool is full, schedule existing live continuations before admitting another strategy."
+    }
+  ]
+}

@@ -1020,6 +1020,8 @@ WorkPlanExpansionResult expand_flux_work_plan(const Board& source, const FluxWor
   };
   classify(source.tracks, result.copper_authority.removable_tracks,
            result.copper_authority.immutable_tracks);
+  classify(source.track_beziers, result.copper_authority.removable_track_beziers,
+           result.copper_authority.immutable_track_beziers);
   classify(source.track_arcs, result.copper_authority.removable_track_arcs,
            result.copper_authority.immutable_track_arcs);
   classify(source.vias, result.copper_authority.removable_vias,

@@ -1,0 +1,99 @@
+{
+  "schema": 1,
+  "date": "2026-09-07",
+  "board": "bm_svf",
+  "tier": 1,
+  "failing_stage": "selected global allocation before detailed copper materialization",
+  "classification": [
+    "allocation/congestion",
+    "physical packing",
+    "via/layer"
+  ],
+  "smallest_implicated_nets": [
+    "kicad-net-1",
+    "kicad-net-16"
+  ],
+  "region_nm": [
+    49590000,
+    78340000,
+    50240000,
+    78990000
+  ],
+  "layers": [
+    "F.Cu"
+  ],
+  "corridors_resources": "Coincident selected segments; stable corridor IDs are not present in this replay.",
+  "witness": {
+    "first_connection": 6,
+    "first_segment": 4,
+    "second_connection": 3,
+    "second_segment": 5,
+    "both_start_nm": [
+      50240000,
+      78340000
+    ],
+    "both_end_nm": [
+      49590000,
+      78990000
+    ],
+    "required_centerline_separation_nm": 450000
+  },
+  "trace_back": {
+    "quantized_copper": "Same 733 errors at 10 um and 1 nm; coarse 100 um snapping adds false static reports.",
+    "continuous_geometry": "No spline realization in this straight experiment.",
+    "regional_routing": "Hundreds of alternatives generated after first coarse allocation, without completion in 600 s.",
+    "corridor_choice": "Two source paths physically share the same segment.",
+    "route_portfolio": "Selected global-route paths only; retained alternatives are excluded from replay.",
+    "global_allocation": "78 paths, 23 sampled overflow, one corridor overflow, 304 shadow conflicts."
+  },
+  "topologically_connected": true,
+  "geometrically_legal": false,
+  "alternative_exists": "Independent original-project KiCadRoutingTools oracle demonstrates board feasibility; does not certify these corridors.",
+  "dominant_internal_drc": {
+    "hole_clearance": 30,
+    "track_clearance": 632,
+    "track_via_clearance": 71
+  },
+  "internal_drc_reports": 733,
+  "coalesced_diagnoses": 202,
+  "opens": 0,
+  "malformed": 0,
+  "suspected_mechanism": "Compulsory regional portfolio enumeration starves negotiated rerouting of physical feedback; some direct resources also permit multiple lanes that straight copper cannot materialize.",
+  "kicad_final_drc": null,
+  "tier_pass": false,
+  "source": "build/straight-v1-tier1/tier-1-bm_svf/telemetry/bm_svf-global.jsonl",
+  "snapshot_sequence": 613,
+  "replay": "reports/diagnoses/2026-09-07-straight-tier1-copper-replay.jsonl",
+  "diagnostic_detailed_replay": {
+    "authoritative_for_tier": false,
+    "snapshot_sequence": 1191,
+    "internal": {
+      "authoritative": false,
+      "snapshot_sequence": 1191,
+      "paths": 78,
+      "detail_complete": false,
+      "tracks": 527,
+      "arcs": 0,
+      "vias": 47,
+      "validation_errors": 0,
+      "opens": 0,
+      "drc_violations": 201,
+      "diagnostic": "materialized route violates represented copper rules",
+      "preview_written": true
+    },
+    "kicad_drc": {
+      "error_reports": 193,
+      "categories": {
+        "solder_mask_bridge": 23,
+        "tracks_crossing": 61,
+        "shorting_items": 45,
+        "clearance": 64
+      },
+      "unconnected_items": 9,
+      "kicad_version": "9.0.8"
+    },
+    "artifact": "build/straight-detail-replay/bm_svf.kicad_pcb",
+    "artifact_sha256": "1e26eee25ee839c38d67e893cf4b2d7616667323759442fd9117969c32f326d1",
+    "source_project_sha256": "04856904fe9070f7decd33b676d3f58e44676b6c930e65fa8a16f0ddd65d54db"
+  }
+}

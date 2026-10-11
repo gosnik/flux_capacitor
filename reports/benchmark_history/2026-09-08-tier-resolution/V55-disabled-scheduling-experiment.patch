@@ -1,0 +1,237 @@
+--- a/src/regional_router.cpp
++++ b/src/regional_router.cpp
+@@ -16912,6 +16912,8 @@
+     RoutingPlanFeedbackProbe feedback_probe;
+     feedback_probe.pass = pass;
+     const bool final_epoch = pass == config.max_routability_feedback_retries;
++    const bool early_straight_epoch = config.early_straight_feedback && !config.curved_tracks &&
++                                     pass == 0U && !final_epoch;
+     const bool full_strength_epoch = config.full_strength_first_pass;
+     const auto epoch_iterations = [&] {
+       if (!config.interleave_routability_feedback || feedback_epoch_count == 1U) {
+@@ -17116,7 +17118,7 @@
+     std::vector<std::pair<GlobalRouteResult, bool>> regional_inputs;
+     const bool fresh_feedback_checkpoint_first =
+         config.regional.prioritize_frozen_scope_expansion && pass > 0U && !final_epoch;
+-    const auto regional_portfolio_limit = fresh_feedback_checkpoint_first ? 1U :
++    const auto regional_portfolio_limit = (fresh_feedback_checkpoint_first || early_straight_epoch) ? 1U :
+         full_strength_epoch ? config.retained_global_portfolios : config.intermediate_regional_portfolios;
+     if (fresh_feedback_checkpoint_first) {
+       // Learn from the newly negotiated topology now. Historical fallbacks remain retained and
+@@ -17152,7 +17154,7 @@
+     retained_global_portfolios_evaluated += regional_inputs.size();
+     const bool intermediate_regional_probe =
+         config.interleave_routability_feedback && !final_epoch &&
+-        (!full_strength_epoch || !config.curved_tracks);
++        (!full_strength_epoch || !config.curved_tracks) && !early_straight_epoch;
+     feedback_probe.intermediate_regional_probe = intermediate_regional_probe;
+     if (intermediate_regional_probe) {
+       ++intermediate_regional_probes;
+@@ -17199,7 +17201,7 @@
+       // Exact observations belong to this portfolio, not a previous epoch's paths.
+       regional_attempt_config.physical_conflict_witnesses =
+           regional_candidate.quantized_copper_oracle.diagnoses;
+-      if (intermediate_regional_probe) {
++      if (intermediate_regional_probe || early_straight_epoch) {
+         regional_attempt_config.max_bundle_search_states =
+             std::min(regional_attempt_config.max_bundle_search_states,
+                      config.intermediate_regional_bundle_states);
+@@ -17226,7 +17228,10 @@
+         // quantization to the final retained checkpoint so every global epoch can consume fresh
+         // physical evidence inside the caller's total budget.
+         regional_attempt_config.enable_spline_realization = false;
+-        regional_attempt_config.enable_straight_realization = false;
++        regional_attempt_config.enable_straight_realization = early_straight_epoch;
++        // Learn from one scene before spending the rest of the global budget. Scope expansion
++        // remains a final-epoch operation; this probe cannot recursively consume that budget.
++        if (early_straight_epoch) regional_attempt_config.max_physical_scope_retries = 0U;
+       }
+       // The global probe already turns sampled/corridor/physical pressure into negotiated
+       // history.  Do not spend the next several minutes rebuilding regional windows while the
+@@ -17296,6 +17301,10 @@
+           diagnose_regional_routability(regional_candidate.regional, config.routability_probe);
+       feedback_candidate.regional_spline_realization_enabled =
+           regional_attempt_config.enable_spline_realization;
++      feedback_candidate.regional_straight_realization_enabled =
++          regional_attempt_config.enable_straight_realization;
++      feedback_candidate.regional_straight_scene_trials =
++          regional_candidate.regional.straight_scene_trials;
+ 
+       // A cheap discrete probe answers only whether a plausible regional assignment exists.  It
+       // must not terminate the outer loop before the selected topology has survived the actual
+--- a/include/flux/core/regional_router.hpp
++++ b/include/flux/core/regional_router.hpp
+@@ -1215,6 +1215,9 @@
+   bool full_strength_first_pass{true};
+   // Curved realization is opt-in; ordinary routing retains straight copper sections.
+   bool curved_tracks{false};
++  // Experiment: one bounded physical straight transaction before global retries. Disabled
++  // until the extra geometric witnesses demonstrate a benchmark improvement.
++  bool early_straight_feedback{false};
+ 
+   bool operator==(const RoutingPlannerConfig&) const = default;
+ };
+@@ -1241,6 +1244,8 @@
+   bool coarse_topology_complete{false};
+   bool regional_consulted{false};
+   bool regional_spline_realization_enabled{false};
++  bool regional_straight_realization_enabled{false};
++  std::size_t regional_straight_scene_trials{0U};
+   // A discrete-only regional probe may establish a plausible lane/escape/layer/via assignment,
+   // but it is not authoritative physical completion.  The planner immediately promotes such a
+   // state through the ordinary PH/copper-aware regional transaction before it can terminate an
+--- a/apps/flux-cli/main.cpp
++++ b/apps/flux-cli/main.cpp
+@@ -3598,6 +3598,10 @@
+                   << ",\"regional_consulted\":" << (candidate.regional_consulted ? "true" : "false")
+                   << ",\"regional_spline_realization_enabled\":"
+                   << (candidate.regional_spline_realization_enabled ? "true" : "false")
++                  << ",\"regional_straight_realization_enabled\":"
++                  << (candidate.regional_straight_realization_enabled ? "true" : "false")
++                  << ",\"regional_straight_scene_trials\":"
++                  << candidate.regional_straight_scene_trials
+                   << ",\"provisional_plan_complete\":"
+                   << (candidate.provisional_plan_complete ? "true" : "false")
+                   << ",\"exact_promotion_attempted\":"
+@@ -6958,6 +6962,7 @@
+   std::optional<std::size_t> physical_feedback_retries;
+   std::optional<bool> feedback_shadows_advisory;
+   bool oracle_first_feedback{false};
++  bool early_straight_feedback{false};
+   bool full_strength_first_pass{false};
+   bool no_full_strength_first_pass{false};
+   bool frozen_copper_context{false};
+@@ -7096,6 +7101,9 @@
+     } else if (argument == "--no-full-strength-first-pass") {
+       if (result.full_strength_first_pass || result.no_full_strength_first_pass) return std::nullopt;
+       result.no_full_strength_first_pass = true;
++    } else if (argument == "--early-straight-feedback") {
++      if (result.early_straight_feedback) return std::nullopt;
++      result.early_straight_feedback = true;
+     } else if (argument == "--oracle-first-feedback") {
+       if (result.oracle_first_feedback) return std::nullopt;
+       result.oracle_first_feedback = true;
+@@ -8005,7 +8013,7 @@
+ [[nodiscard]] bool autoroute_tail_is_supported(const KicadCommandTail& tail) {
+   return tail.output.has_value() && !tail.placement_envelope_constraints &&
+          !tail.physical_feedback_retries && !tail.feedback_shadows_advisory &&
+-         !tail.oracle_first_feedback && !tail.full_strength_first_pass && !tail.no_full_strength_first_pass && !tail.frozen_copper_context &&
++         !tail.oracle_first_feedback && !tail.early_straight_feedback && !tail.full_strength_first_pass && !tail.no_full_strength_first_pass && !tail.frozen_copper_context &&
+          !tail.expand_frozen_copper_scope && !tail.prioritize_frozen_scope_expansion &&
+          !tail.local_channel_occupancy && !tail.shared_channel_copper && !tail.centerline_channel_cuts &&
+          !tail.max_regional_bundle_states &&
+@@ -8592,7 +8600,7 @@
+                "[--feedback-shadow-policy enforced|advisory] [--oracle-first-feedback | --full-strength-first-pass | --no-full-strength-first-pass] "
+                "[--frozen-copper-context] [--expand-frozen-copper-scope] [--prioritize-frozen-scope-expansion] "
+                "[--local-channel-occupancy] [--shared-channel-copper] [--centerline-channel-cuts] "
+-               "[--max-regional-bundle-states N] [--curved-tracks] "
++               "[--max-regional-bundle-states N] [--early-straight-feedback] [--curved-tracks] "
+                "[--max-static-seed-workers N] "
+                "[--no-telemetry] [--telemetry-listen ADDRESS:PORT] "
+                "[--telemetry-rate HZ] [--telemetry-level normal|diagnostic|trace] "
+@@ -9623,6 +9631,7 @@
+     }
+     planner_config.clearance_shadows_advisory = tail->feedback_shadows_advisory;
+     planner_config.oracle_first_feedback = tail->oracle_first_feedback;
++    planner_config.early_straight_feedback = tail->early_straight_feedback;
+     planner_config.full_strength_first_pass = !tail->no_full_strength_first_pass &&
+         !tail->oracle_first_feedback && tail->xpbd_relaxation && tail->xpbd_feedback;
+     flux::RoutingPlanResult routing_plan;
+@@ -9721,6 +9730,7 @@
+     }
+     planner_config.clearance_shadows_advisory = tail->feedback_shadows_advisory;
+     planner_config.oracle_first_feedback = tail->oracle_first_feedback;
++    planner_config.early_straight_feedback = tail->early_straight_feedback;
+     planner_config.full_strength_first_pass = !tail->no_full_strength_first_pass &&
+         !tail->oracle_first_feedback && tail->xpbd_relaxation && tail->xpbd_feedback;
+     flux::DetailedRouterConfig detailed_config;
+--- a/tests/unit/core_tests.cpp
++++ b/tests/unit/core_tests.cpp
+@@ -4287,6 +4287,59 @@
+   }
+ }
+ 
++void early_straight_physics_reaches_the_next_global_epoch() {
++  Board board;
++  board.source_revision = "early-straight-feedback-crossing";
++  board.outline = rectangle(0.0, 0.0, 30.0, 30.0);
++  board.layers = {{LayerId{"F.Cu"}, "F.Cu", LayerKind::copper, 0}};
++  board.nets = {{NetId{"a"}, "A", 2}, {NetId{"b"}, "B", 1}};
++  const auto terminal = [](std::string id, NetId net, Point position) {
++    Footprint footprint;
++    footprint.id = ObjectId{id};
++    footprint.reference = id;
++    footprint.position = position;
++    footprint.courtyard = local_rectangle(0.4, 0.4);
++    footprint.pads = {{ObjectId{id + "-pad"}, std::move(net), Point{}, {LayerId{"F.Cu"}}}};
++    return footprint;
++  };
++  board.footprints = {terminal("A1", NetId{"a"}, mm(10.0, 10.0)),
++                      terminal("A2", NetId{"a"}, mm(20.0, 20.0)),
++                      terminal("B1", NetId{"b"}, mm(20.0, 10.0)),
++                      terminal("B2", NetId{"b"}, mm(10.0, 20.0))};
++  flux::RoutingPlannerConfig config;
++  config.full_strength_first_pass = false;
++  config.global.grid_pitch = Nanometres::from_mm(10.0);
++  config.global.max_iterations = 2U;
++  config.global.max_pin_escape_grid_radius = 0U;
++  config.global.max_pin_access_nodes_per_terminal = 1U;
++  config.global.use_free_space_corridors = false;
++  config.global.allow_crossing_safe_diagonal_grid_edges = true;
++  config.global.present_congestion_cost = 0U;
++  config.global.history_congestion_cost = 0U;
++  config.max_routability_feedback_retries = 1U;
++  config.regional.max_bundle_search_states = 32U;
++  config.regional.max_physical_scope_retries = 0U;
++  const auto deferred = flux::plan_routes(board, config);
++  require(deferred.feedback_probes.size() == 2U &&
++              std::none_of(deferred.feedback_probes.front().candidates.begin(),
++                           deferred.feedback_probes.front().candidates.end(),
++                           [](const auto& candidate) { return candidate.regional_consulted; }),
++          "control must defer straight copper beyond the first global epoch");
++  config.early_straight_feedback = true;
++  const auto early = flux::plan_routes(board, config);
++  require(!early.complete() && early.feedback_probes.size() == 2U &&
++              early.cumulative_global_iterations == 2U,
++          "early physical failure must preserve the caller's global retry budget");
++  const auto& first = early.feedback_probes.front();
++  require(first.candidates.size() == 1U && first.candidates.front().regional_consulted &&
++              first.candidates.front().regional_straight_realization_enabled &&
++              !first.candidates.front().regional_spline_realization_enabled &&
++              first.candidates.front().regional_diagnoses > 0U &&
++              first.history_pressure_after_regional > first.history_pressure_after_global &&
++              early.feedback_probes[1].history_pressure_before == first.history_pressure_after_regional,
++          "one bounded straight physical assessment must feed its diagnosis into the next epoch");
++}
++
+ void obstacle_aware_diagonals_and_curves_remain_capacity_and_drc_gated() {
+   Board crossing;
+   crossing.source_revision = "crossing-safe-diagonal-risk-fixture";
+@@ -8951,6 +9004,8 @@
+ 
+ int main(int argc, char** argv) {
+   const std::vector<TestCase> tests{
++      {"early_straight_physics_reaches_the_next_global_epoch",
++       early_straight_physics_reaches_the_next_global_epoch},
+       {"units_remain_exact_and_saturating", units_remain_exact_and_saturating},
+       {"multisource_terminal_membership_preserves_access_preference_order",
+        multisource_terminal_membership_preserves_access_preference_order},
+--- a/tests/python/verify_routing_corpus.py
++++ b/tests/python/verify_routing_corpus.py
+@@ -681,6 +681,7 @@
+     parser.add_argument("--physical-feedback-retries", type=int)
+     parser.add_argument("--feedback-shadow-policy", choices=("enforced", "advisory"))
+     parser.add_argument("--oracle-first-feedback", action="store_true")
++    parser.add_argument("--early-straight-feedback", action="store_true")
+     parser.add_argument("--sampled-control", action="store_true",
+                         help="diagnostic sampled-graph control; removes medial topology flags but keeps dimensions and DRC rules")
+     parser.add_argument("--strict-medial-control", action="store_true",
+@@ -840,6 +841,8 @@
+         experiment_args += ["--physical-feedback-retries", str(args.physical_feedback_retries)]
+     if args.feedback_shadow_policy is not None:
+         experiment_args += ["--feedback-shadow-policy", args.feedback_shadow_policy]
++    if args.early_straight_feedback:
++        experiment_args += ["--early-straight-feedback"]
+     if args.oracle_first_feedback:
+         experiment_args += ["--oracle-first-feedback"]
+     if args.full_strength_first_pass:

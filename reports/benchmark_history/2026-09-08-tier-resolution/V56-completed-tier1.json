@@ -1,0 +1,150 @@
+{
+  "schema": 1,
+  "experiment": "V56",
+  "board": "bm_svf",
+  "tier": 1,
+  "completed": true,
+  "qualified": false,
+  "duration_seconds": 1591.0870507219952,
+  "artifact_directory": "build/tier-resolution-v56-tier1",
+  "run_metadata": "build/tier-resolution-v56-tier1/run-metadata.json",
+  "parameters": {
+    "max_regional_bundle_states": 256,
+    "planning_timeout_seconds": 1800,
+    "curved_tracks": false
+  },
+  "selected_result": {
+    "paths": 78,
+    "unrouted_nets": 0,
+    "total_overflow": 0,
+    "sampled_overflow": 0,
+    "corridor_overflow": 0,
+    "clearance_shadow_overflow": 247,
+    "regional_windows": 47,
+    "regional_complete_bundle_assignments": 45,
+    "regional_exhausted_bundle_assignments": 1,
+    "regional_no_fitting_lane_bundle_assignments": 1,
+    "regional_spline_realizations": 157,
+    "regional_evaluated": true,
+    "regional_linear_scaffold_checks": 0,
+    "regional_native_scene_manifest_available": false,
+    "regional_physical_scope_retries": 0,
+    "routing_plan_complete": false,
+    "cumulative_global_iterations": 13,
+    "topologically_routed_nets": 25,
+    "coarse_copper_oracle": {
+      "configured_grid_pitch_nm": 1,
+      "drc_violation_counts": {
+        "hole_clearance": 54,
+        "track_clearance": 384,
+        "track_via_clearance": 167,
+        "via_clearance": 8
+      },
+      "drc_violations": 613,
+      "elapsed_us": 140293,
+      "feasible": false,
+      "malformed_paths": 0,
+      "open_connections": 0,
+      "paths_examined": 78,
+      "paths_materialized": 78,
+      "reused_transitions": 0,
+      "tracks": 1320,
+      "unrouted_nets": 0,
+      "vias": 57
+    },
+    "regional_exact_scene_evaluated": false,
+    "regional_exact_drc_reports": null,
+    "regional_exact_opens": null
+  },
+  "regional_attempts": [
+    {
+      "sequence": 3856,
+      "elapsed_seconds": 88.427977,
+      "exact_scene_evaluated": true,
+      "drc_reports": 707,
+      "opens": 0,
+      "diagnostic": "straight regional copper checked: straight regional transaction rejected by exact copper proof: violations=707, opens=0"
+    },
+    {
+      "sequence": 6335,
+      "elapsed_seconds": 184.381166,
+      "exact_scene_evaluated": true,
+      "drc_reports": 791,
+      "opens": 0,
+      "diagnostic": "straight regional copper checked: straight regional transaction rejected by exact copper proof: violations=791, opens=0"
+    },
+    {
+      "sequence": 8868,
+      "elapsed_seconds": 287.093998,
+      "exact_scene_evaluated": true,
+      "drc_reports": 808,
+      "opens": 0,
+      "diagnostic": "straight regional copper checked: straight regional transaction rejected by exact copper proof: violations=808, opens=0"
+    },
+    {
+      "sequence": 11267,
+      "elapsed_seconds": 469.644542,
+      "exact_scene_evaluated": true,
+      "drc_reports": 729,
+      "opens": 0,
+      "diagnostic": "straight regional copper checked: straight regional transaction rejected by exact copper proof: violations=729, opens=0"
+    },
+    {
+      "sequence": 13635,
+      "elapsed_seconds": 675.538178,
+      "exact_scene_evaluated": true,
+      "drc_reports": 786,
+      "opens": 0,
+      "diagnostic": "straight regional copper checked: straight regional transaction rejected by exact copper proof: violations=786, opens=0"
+    },
+    {
+      "sequence": 16062,
+      "elapsed_seconds": 886.41596,
+      "exact_scene_evaluated": true,
+      "drc_reports": 798,
+      "opens": 0,
+      "diagnostic": "straight regional copper checked: straight regional transaction rejected by exact copper proof: violations=798, opens=0"
+    },
+    {
+      "sequence": 18529,
+      "elapsed_seconds": 993.167975,
+      "exact_scene_evaluated": false,
+      "drc_reports": null,
+      "opens": null,
+      "diagnostic": "straight regional copper checked: "
+    },
+    {
+      "sequence": 20781,
+      "elapsed_seconds": 1129.509616,
+      "exact_scene_evaluated": true,
+      "drc_reports": 1245,
+      "opens": 0,
+      "diagnostic": "straight regional copper checked: straight regional transaction rejected by exact copper proof: violations=1245, opens=0"
+    },
+    {
+      "sequence": 23275,
+      "elapsed_seconds": 1358.896114,
+      "exact_scene_evaluated": true,
+      "drc_reports": 1472,
+      "opens": 0,
+      "diagnostic": "straight regional copper checked: straight regional transaction rejected by exact copper proof: violations=1472, opens=0"
+    },
+    {
+      "sequence": 25841,
+      "elapsed_seconds": 1590.659794,
+      "exact_scene_evaluated": true,
+      "drc_reports": 1439,
+      "opens": 0,
+      "diagnostic": "straight regional copper checked: straight regional transaction rejected by exact copper proof: violations=1439, opens=0"
+    }
+  ],
+  "limitation": "Final selection retained 45/47 complete discrete windows; two failed windows prevented a whole-scene proof. Raw zero regional DRC/open counters therefore mean unexamined, not legal. Nine other assembled scenes were exactly checked and rejected.",
+  "best_checked_scene": {
+    "sequence": 3856,
+    "elapsed_seconds": 88.427977,
+    "exact_scene_evaluated": true,
+    "drc_reports": 707,
+    "opens": 0,
+    "diagnostic": "straight regional copper checked: straight regional transaction rejected by exact copper proof: violations=707, opens=0"
+  }
+}

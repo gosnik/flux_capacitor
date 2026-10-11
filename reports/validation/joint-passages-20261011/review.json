@@ -1,0 +1,14 @@
+{
+  "status": "reviewed",
+  "remaining_material_findings": [],
+  "resolved": [
+    "obstacle edge-times-segment work cap before XPBD",
+    "source and survivor copper immutability",
+    "per-pad connected partition preservation",
+    "final cancellation before commit",
+    "combined relaxation and PNS movement envelope",
+    "contact-budget multiplication overflow",
+    "nonfatal AVBD refinement status"
+  ],
+  "scope": "bounded planar nominal-width generated owners; exact final KiCad qualification remains separate"
+}

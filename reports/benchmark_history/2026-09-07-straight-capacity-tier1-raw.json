@@ -1,0 +1,34 @@
+{
+  "artifacts": [
+    {
+      "bytes": 5062,
+      "path": "run-metadata.json",
+      "sha256": "0665660bc4ae7fe752670223af6f55981b55e5166c1736b96e9e95c5c7ced0a7"
+    },
+    {
+      "bytes": 3926,
+      "path": "tier-1-bm_svf/analysis/global/failed-route-previews.json",
+      "sha256": "ed04b8d1e32bbefbfc0d68ec8f481ee7a9ef7099a7e75ea7ed251a9131446095"
+    },
+    {
+      "bytes": 331543,
+      "path": "tier-1-bm_svf/analysis/global/near-00-window--1/copper-00-B_Cu.png",
+      "sha256": "27a00677a13d6a7ec3099f9732f8d5bb4935157c18da0d394c07945d7cddb42e"
+    },
+    {
+      "bytes": 325502,
+      "path": "tier-1-bm_svf/analysis/global/near-00-window--1/copper-01-F_Cu.png",
+      "sha256": "61c850ad2fde62d1e1842c8c5ec3ee00a6375b3d03099bb1120fa719e2137969"
+    },
+    {
+      "bytes": 41256921,
+      "path": "tier-1-bm_svf/telemetry/bm_svf-global.jsonl",
+      "sha256": "6eeef3997f8445fad809c3b947ae8ee428e3ea0d6273a00983057377ac6932da"
+    }
+  ],
+  "boards": [],
+  "diagnostic": "Command '['/home/adam/qtbits/flux_capacitor/build/dev/flux-cli', 'route-kicad', '/home/adam/qtbits/flux_capacitor/tests/fixtures/routing-corpus/bm_svf.kicad_pcb', '--max-router-iterations', '30', '--max-expansions', '50000', '--max-static-seed-workers', '2', '--search-diversification', '--crossing-safe-diagonal-grid', '--direct-medial', '--grid-pitch-nm', '650000', '--xpbd-relaxation', '--xpbd-feedback', '--atomic-net-trees', '--hard-capacity-start-iteration', '4', '--max-hard-capacity-ripup-attempts-per-pass', '8', '--max-hard-capacity-ripup-nets-per-attempt', '8', '--max-hard-capacity-conflict-set-states-per-attempt', '256', '--terminal-escape-proximity-cost', '500', '--rollback-failed-hard-capacity-ripup', '--defer-hard-capacity-ripup-victims-to-pass-tail', '--protect-recovered-hard-capacity-ripup-nets', '--telemetry-level', 'diagnostic', '--telemetry-record', '/home/adam/qtbits/flux_capacitor/build/straight-capacity-tier1/tier-1-bm_svf/telemetry/bm_svf-global.jsonl']' timed out after 600 seconds",
+  "schema": "flux_routing_baseline_result",
+  "schema_version": 1,
+  "status": "failed"
+}

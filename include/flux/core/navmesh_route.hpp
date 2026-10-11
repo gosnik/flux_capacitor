@@ -4,11 +4,14 @@
 #include "flux/core/free_space_skeleton.hpp"
 #include "flux/core/geometry.hpp"
 #include "flux/core/hydraulic_path.hpp"
+#include "flux/core/board_terrain_guidance.hpp"
+#include "flux/core/usped.hpp"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <utility>
@@ -37,8 +40,10 @@ struct NavMeshConfig {
   // minimum pitch derives from the configured refinement depth;
   // maximum_refinement_depth remains the absolute bound.
   bool adaptive_clearance_refinement{true};
-  std::size_t maximum_refinement_depth{1U};
+  std::size_t maximum_refinement_depth{2U};
   Nanometres minimum_refined_cell_pitch{Nanometres{0}};
+  UspedConfig usped{};
+  bool operator==(const NavMeshConfig&) const = default;
 };
 
 // Bounded deterministic bidirectional RRT-Connect over the prepared NavMesh cell graph.  The
@@ -63,6 +68,9 @@ struct NavMeshHydraulicTerrainDeposit {
   bool directional{false};
   std::uint32_t pressure{0U};
   std::uint32_t success_prior{0U};
+  // Optional capsule radius for directional advisory deposits. Zero preserves the historical
+  // one-discovery-cell band used by routability-history deposits.
+  Nanometres radius{Nanometres{0}};
 
   bool operator==(const NavMeshHydraulicTerrainDeposit&) const = default;
 };
@@ -72,9 +80,18 @@ struct NavMeshHydraulicConfig {
   std::size_t opened_guard_rings{1U};
   std::size_t discovery_resolution_multiplier{2U};
   std::size_t maximum_discovery_cells{1'000'000U};
+  // Conflict-cone callers may require visibility pulling to retain every pressure-barrier side
+  // selected by the river. This affects proposal topology only; pressure never changes the
+  // polygon-derived walkability or certifies copper.
+  bool preserve_pressure_barrier_sides{false};
   // Already filtered to this net/layer by the caller. Deposits are advisory and cannot alter the
   // polygon-derived walkable mask.
   std::vector<NavMeshHydraulicTerrainDeposit> downstream_feedback;
+  // A prepared board/layer field is sampled only after this call has constructed its exact
+  // net-specific polygon raster. It contributes bounded soft pressure and never changes that
+  // raster's walkability or clearance.
+  std::shared_ptr<const BoardTerrainGuidance> board_terrain_guidance;
+  LayerId board_terrain_layer;
 };
 
 struct NavMeshPortal {
@@ -236,9 +253,39 @@ struct PreparedNavMeshDomain {
   std::size_t rejected_leaf_cells{0U};
   std::size_t maximum_realized_refinement_depth{0U};
   bool cell_budget_exhausted{false};
+  UspedConfig usped;
+  UspedField usped_field;
+  std::size_t usped_refined_parents{0U};
+  std::string usped_diagnostic;
   std::string diagnostic;
 
   [[nodiscard]] bool ok() const { return diagnostic.empty() && !cells.empty(); }
+};
+
+// Session-owned immutable geometry cache. Exact keys avoid hash collisions and stale certificates.
+// Dynamic occupancy, route histories and selected alternatives are deliberately never cached.
+class NavMeshPreparationCache {
+public:
+  struct Stats {
+    std::size_t hits{0}, misses{0}, evictions{0}, retained_cells{0};
+  };
+  explicit NavMeshPreparationCache(std::size_t maximum_cells = 500'000U,
+                                   std::size_t maximum_entries = 32U)
+      : maximum_cells_(maximum_cells), maximum_entries_(maximum_entries) {}
+  [[nodiscard]] std::shared_ptr<const PreparedNavMeshDomain>
+  prepare(const OffsetFreeSpaceRegion& region, const NavMeshConfig& config);
+  [[nodiscard]] Stats stats() const;
+
+private:
+  struct Entry {
+    OffsetFreeSpaceRegion region;
+    NavMeshConfig config;
+    std::shared_ptr<const PreparedNavMeshDomain> domain;
+  };
+  std::size_t maximum_cells_, maximum_entries_;
+  mutable std::mutex mutex_;
+  std::vector<Entry> entries_;
+  Stats stats_;
 };
 
 struct PreparedNavMeshPointQuery {
@@ -269,6 +316,7 @@ struct NavMeshRouteResult {
   std::size_t search_expansions{0};
   std::size_t flood_fill_cells_visited{0};
   std::size_t adaptive_refined_parent_cells{0U};
+  std::size_t usped_refined_parents{0U};
   std::size_t adaptive_refined_leaf_cells{0U};
   std::size_t adaptive_rejected_leaf_cells{0U};
   std::size_t adaptive_maximum_refinement_depth{0U};
@@ -294,7 +342,7 @@ struct NavMeshRouteResult {
   std::uint32_t hydraulic_maximum_success_prior{0};
   std::vector<std::uint16_t> hydraulic_flow_field;
   std::vector<std::uint16_t> hydraulic_erosion_field;
-  // Complete reusable heightmap and free-space coverage. Height is zero at the destination
+  // Reusable advisory heightmap and free-space coverage. In droplet mode height is zero at the destination
   // valley and rises away from it; erosion lowers high-flow riverbeds. Free-space coverage keeps
   // pads, vias, keepouts, and board-exterior cells out of the terrain.
   std::vector<std::uint16_t> hydraulic_heightmap;
@@ -306,11 +354,32 @@ struct NavMeshRouteResult {
   bool gpu_wavefront_cpu_fallback{false};
   bool used_rrt_connect{false};
   bool used_hydraulic_erosion{false};
+  bool used_height_evolution{false};
+  bool height_evolution_invoked{false};
+  bool height_evolution_gpu_invoked{false};
+  std::size_t height_evolution_gpu_dispatches{0U};
+  std::size_t height_evolution_gpu_mask_uploads{0U};
+  std::size_t height_evolution_gpu_mask_upload_reuses{0U};
+  std::size_t height_evolution_gpu_mask_cross_pipeline_reuses{0U};
+  std::uint64_t height_evolution_field_us{0U};
+  std::uint64_t height_evolution_extraction_us{0U};
+  std::size_t height_evolution_iterations{0U};
+  std::size_t height_evolution_expanded_nodes{0U};
+  std::size_t height_evolution_changed_cells{0U};
+  std::size_t indexed_clearance_map_builds{0U};
+  std::size_t indexed_clearance_map_reuses{0U};
+  std::size_t indexed_clearance_map_cells{0U};
+  std::size_t indexed_clearance_map_records{0U};
+  std::size_t indexed_clearance_map_references{0U};
+  std::size_t indexed_clearance_map_fallbacks{0U};
   bool used_hydraulic_gpu{false};
   bool hydraulic_gpu_clearance_cache_hit{false};
   std::size_t hydraulic_gpu_batch_size{0U};
   std::size_t hydraulic_gpu_buffer_reuses{0U};
   std::size_t hydraulic_gpu_buffer_growths{0U};
+  std::size_t hydraulic_gpu_mask_uploads{0U};
+  std::size_t hydraulic_gpu_mask_upload_reuses{0U};
+  std::size_t hydraulic_gpu_mask_cross_pipeline_reuses{0U};
   bool hydraulic_cpu_fallback{false};
   bool cell_budget_exhausted{false};
   bool search_budget_exhausted{false};
@@ -338,11 +407,15 @@ derive_navmesh_topology_signature(const NavMeshRouteResult& route);
 [[nodiscard]] NavMeshTopologySignature
 make_navmesh_topology_signature(std::vector<NavMeshTopologyGate> gates);
 
-// Validates a quantized polyline against the directed gate sequence.  The polyline is expected to
-// be a spline tessellation or an exact proposed centreline; it is not a DRC substitute.
+// Validates a quantized polyline against the directed gate sequence. The polyline is expected to
+// be a spline tessellation or an exact proposed centreline; it is not a DRC substitute. A caller
+// which has independently certified containment in the selected guard-cell union may allow a
+// directed subsequence: smooth geometry then need not replay raster-only portals, but every gate
+// it does cross must retain direction, uniqueness, and order.
 [[nodiscard]] NavMeshTopologyCheck
 validate_navmesh_topology_signature(const NavMeshTopologySignature& signature,
-                                    const std::vector<Point>& polyline);
+                                    const std::vector<Point>& polyline,
+                                    bool allow_missing_gates = false);
 
 [[nodiscard]] PreparedNavMeshDomain prepare_navmesh_domain(const OffsetFreeSpaceRegion& region,
                                                            const NavMeshConfig& config = {});
@@ -370,7 +443,7 @@ prepare_validated_navmesh_domain(const OffsetFreeSpaceRegion& region,
 [[nodiscard]] NavMeshRouteResult route_prepared_navmesh_hydraulic(
     const PreparedNavMeshDomain& domain, Point start, Point goal,
     const NavMeshConfig& navmesh_config = {},
-    const NavMeshHydraulicConfig& hydraulic_config = {});
+    const NavMeshHydraulicConfig& hydraulic_config = {}, std::stop_token stop_token = {});
 
 // Runs a bounded reverse multi-source flood over the immutable cell maze, then reconstructs one
 // deterministic start-to-goal corridor by following decreasing integer distance labels. This is

@@ -1,0 +1,131 @@
+{
+  "board": "bm_svf",
+  "tier": 1,
+  "qualified": false,
+  "failing_stage": "assemblednative/straightcopper",
+  "topology_complete": true,
+  "open_connections": 0,
+  "native_categories": {
+    "hole_clearance": 48,
+    "track_edge_clearance": 3,
+    "track_clearance": 267,
+    "track_via_clearance": 117,
+    "track_pad_clearance": 4
+  },
+  "native_top_pairs": [
+    {
+      "nets": [
+        "kicad-net-14",
+        "kicad-net-7"
+      ],
+      "conflicts": 28
+    },
+    {
+      "nets": [
+        "kicad-net-1",
+        "kicad-net-13"
+      ],
+      "conflicts": 27
+    },
+    {
+      "nets": [
+        "kicad-net-12",
+        "kicad-net-5"
+      ],
+      "conflicts": 26
+    },
+    {
+      "nets": [
+        "kicad-net-11",
+        "kicad-net-5"
+      ],
+      "conflicts": 26
+    },
+    {
+      "nets": [
+        "kicad-net-16",
+        "kicad-net-4"
+      ],
+      "conflicts": 26
+    },
+    {
+      "nets": [
+        "kicad-net-25",
+        "kicad-net-26"
+      ],
+      "conflicts": 23
+    },
+    {
+      "nets": [
+        "kicad-net-13",
+        "kicad-net-5"
+      ],
+      "conflicts": 21
+    },
+    {
+      "nets": [
+        "kicad-net-24",
+        "kicad-net-7"
+      ],
+      "conflicts": 18
+    },
+    {
+      "nets": [
+        "kicad-net-1",
+        "kicad-net-16"
+      ],
+      "conflicts": 15
+    },
+    {
+      "nets": [
+        "kicad-net-12",
+        "kicad-net-22"
+      ],
+      "conflicts": 15
+    }
+  ],
+  "straight_categories": {
+    "hole_clearance": 62,
+    "hole_to_hole_clearance": 3,
+    "track_clearance": 542,
+    "track_edge_clearance": 5,
+    "track_pad_clearance": 4,
+    "track_via_clearance": 142,
+    "via_clearance": 4,
+    "via_edge_clearance": 2
+  },
+  "selected_scope_attempts": [
+    {
+      "incomplete_assignments": 35,
+      "native_complete": true,
+      "native_evaluated": true,
+      "opens": 0,
+      "physical_errors": 822,
+      "retry": 0,
+      "selected": false,
+      "straight_evaluated": true
+    },
+    {
+      "incomplete_assignments": 33,
+      "native_complete": true,
+      "native_evaluated": true,
+      "opens": 0,
+      "physical_errors": 764,
+      "retry": 1,
+      "selected": true,
+      "straight_evaluated": true
+    },
+    {
+      "incomplete_assignments": 33,
+      "native_complete": true,
+      "native_evaluated": true,
+      "opens": 0,
+      "physical_errors": 974,
+      "retry": 2,
+      "selected": false,
+      "straight_evaluated": true
+    }
+  ],
+  "note": "native fixed count means nonprovisional; it includes mutually native copper, not necessarily immutable source obstacles",
+  "artifact": "build/tier-resolution-20261001-v63/tier1-normal/run-result.json"
+}

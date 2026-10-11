@@ -1,0 +1,103 @@
+{
+  "experiment": "V60",
+  "board": "synthetic two-net via-only collision",
+  "tier_context": 1,
+  "stage": "exact DRC diagnosis to regional conflict extraction",
+  "failure": "Oracle reports track_via_clearance and via_clearance as via_site_exhausted. Regional extraction accepts only packing_capacity_exceeded and quantization_clearance, silently dropping both diagnoses and claiming no regional physical conflicts.",
+  "before": {
+    "exact_via_diagnoses": 2,
+    "regional_source_witnesses": 0,
+    "regional_windows": 0
+  },
+  "hypothesis": "Admit exact via_site_exhausted diagnoses through the existing bounded owner/layer/region attribution. This will construct repair scope or retain an explicit unmapped failure.",
+  "change": "One additional supported failure kind; no rules or success gates changed.",
+  "test": "Synthetic two-net via collision has no track-track collision. Check scope exists and diagnoses are counted; wrong-layer attribution remains unmapped.",
+  "research": [
+    {
+      "url": "https://openroad.readthedocs.io/en/latest/main/src/drt/README.html",
+      "relevance": "Pin/via access and DRC search/repair are necessary distinct stages. This experiment repairs a missing feedback edge, rather than introducing a new routing algorithm."
+    }
+  ],
+  "decision": "Keep the exact via failure/owner feedback correction; V59 candidate generator remains reverted.",
+  "baseline_artifacts": "build/tier-resolution-v60/baseline",
+  "refinement": "Preserve each generated via's original attached planar source edges. Use the track layer for track/via conflicts and an enumeration-independent common attached layer for via/via conflicts. Attach exact owner pairs to diagnoses so regional attribution does not guess from an overlap box.",
+  "synthetic_after": {
+    "diagnoses": 2,
+    "exact_owner_pairs": 2,
+    "mapped_pairs": 2,
+    "unmapped_pairs": 0,
+    "checks": [
+      "path enumeration invariance",
+      "unavailable-layer failures remain unmapped"
+    ],
+    "result": "pass"
+  },
+  "category_only_limitation": "Accepting the failure kind alone mapped1 and left1 unresolved; exact branch ownership resolves both in the synthetic case.",
+  "discarded_dependency": "V59 generator removed before final standalone builds and runs.",
+  "status": "complete, retained correction; Tier1 remains unqualified",
+  "verification": {
+    "release_core": "51/51",
+    "broader": "127/134, same seven baseline demo failures",
+    "debug_micro": "pass",
+    "red_control": "Final test linked to pre-experiment regional object fails at the intended discarded-via diagnosis assertion",
+    "release_tier0": "qualified",
+    "debug_tier0": "qualified",
+    "ordinary_angles_tier0": {
+      "horizontal": 135,
+      "vertical": 104,
+      "diagonal_45": 4,
+      "other": 0,
+      "arcs": 0
+    },
+    "diff_check": "pass"
+  },
+  "standalone_comparison": {
+    "iterations": 2,
+    "physical_feedback_retries": 0,
+    "bundle_states": 32,
+    "before": {
+      "duration_seconds": 422.3041971160055,
+      "unmapped_pairs": 100,
+      "complete_assignments": 18,
+      "windows": 19,
+      "coarse_drc": 491,
+      "coarse_opens": 0,
+      "qualified": false
+    },
+    "after": {
+      "duration_seconds": 161.58697779600334,
+      "unmapped_pairs": 0,
+      "complete_assignments": 19,
+      "windows": 20,
+      "coarse_drc": 491,
+      "coarse_opens": 0,
+      "qualified": false
+    },
+    "interpretation": "Exact via ownership eliminates attribution loss, without changing this coarse allocation. Both selected regional scenes remain unchecked because one assignment exhausts its search budget. Runtime overlaps other work and is not a controlled speed claim."
+  },
+  "focused_patch": "V60-exact-via-owner-feedback.patch",
+  "benchmark_history": "V59-V60-benchmarks.json",
+  "diagnostic_kicad": "V60-diagnostic-external-verification.json",
+  "frontier_256": {
+    "status": "timeout",
+    "timeout_seconds": 600,
+    "scene_attempts": [
+      {
+        "seconds": 157.089952,
+        "evaluated": true,
+        "drc_violations": 817,
+        "opens": 0
+      },
+      {
+        "seconds": 375.970938,
+        "evaluated": true,
+        "drc_violations": 812,
+        "opens": 0
+      }
+    ],
+    "qualified": false,
+    "external_errors": 241,
+    "external_unconnected": 0,
+    "ordinary_angle_audit_passed": false
+  }
+}

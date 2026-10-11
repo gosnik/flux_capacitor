@@ -1,0 +1,36 @@
+flowchart TB
+  subgraph CPU["CPU physical geometry and deterministic ownership"]
+    BOARD["Prepared static domain boundaries"] --> PIX["0.05 mm logical index; sparse rich cell records"]
+    PIX --> REC["Record: distance, conservative cell bound, flags, nearest primitive, overlap span"]
+    REC -. references .-> BVH["Immutable exact primitive pool and BVH"]
+    LIVE["Dynamic route owners: net, layer, endpoints, radius, source resource"] --> OWN["Immutable owner BVH per occupancy snapshot"]
+    OWN --> QUERY["Layer-aware expanded-envelope candidate query"]
+    QUERY --> EXACT["Exact segment distance and resolved pairwise net clearance"]
+    RULES["Owner net membership and applicable pairwise rules"] --> EXACT
+    EXACT --> CLASS{"Physical interpretation"}
+    CLASS -->|Incompatible allocated envelopes| CONFLICT["Attributed shadow conflict"]
+    CLASS -->|Shared corridor with estimated capacity| PENDING["Packing unresolved; no false legality claim"]
+    PENDING --> PROOF["Regional lane and continuous-copper proof"]
+    PROOF -->|Complete legal scene| RESOLVE["Discharge obligations"]
+    PROOF -->|Measured infeasibility| CONFLICT
+    RIP["Lay or rip up copper"] --> INV["Invalidate affected owner snapshot and certificates"]
+    INV --> OWN
+    BVH --> FIELD["Physical walkability and boundary-distance fields"]
+  end
+  subgraph GPU["Optional bounded GPU acceleration and resident reusable buffers"]
+    MASK["Shared immutable walkability-mask lease"] --> HEIGHT["Height evolution and flow kernels"]
+    MASK --> HYD["Hydraulic / routing compute consumers"]
+    SCREEN["Conservative intersection screening batches"]
+    XPBD["GPU XPBD when available; CPU fallback"]
+  end
+  FIELD --> MASK
+  PRESS["Mutable history, pressure and success preferences"] --> HEIGHT
+  HEIGHT --> PORT["Route discovery and alternatives"]
+  SCREEN --> CHECK["Exact CPU checks for survivors"]
+  XPBD --> AVBD["Optional CPU AVBD refinement after successful XPBD; retain only improvement"]
+  CHECK --> PROOF
+  AVBD --> PROOF
+  BUDGET["One shared CPU worker budget; bounded GPU batches"] -. bounds .-> QUERY
+  BUDGET -. bounds .-> PROOF
+  BUDGET -. bounds .-> SCREEN
+  BUDGET -. bounds .-> XPBD

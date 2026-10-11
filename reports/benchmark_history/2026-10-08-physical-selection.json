@@ -1,0 +1,213 @@
+{
+  "schema": 1,
+  "date": "2026-10-08",
+  "experiment": "V69 coupled straight portfolio selection",
+  "status": "completed; Tier1 remains unqualified",
+  "hypothesis": "One-window greedy physical selection cannot cross a local minimum where two retained alternatives must move together. Discrete conflict ranking can also spend all physical checks on one window.",
+  "changes": [
+    "Rank movable windows by current assembled copper diagnoses before discrete pressure.",
+    "Explore single-window alternatives breadth first.",
+    "Reserve part of the shared exact-check budget for conflict-linked two-window transactions, preserving rejected single alternatives.",
+    "Accept only complete assembled native/quantized improvements without increased opens."
+  ],
+  "defaults": "Existing opt-in max_straight_portfolio_checks remains 0 pending board evidence.",
+  "micro_test": "Two crossing nets: each sole retained change is non-improving; simultaneous changes yield zero conflicts and opens.",
+  "research": [
+    {
+      "source": "https://ojs.aaai.org/index.php/AAAI/article/view/21266",
+      "technique": "MAPF-LNS2 conflict-directed subset replanning",
+      "assumptions": "Neighborhood repair principle only; static PCB copper and via rules differ from time-dependent MAPF. No completeness guarantee."
+    }
+  ],
+  "baseline_source_hashes": {
+    "main.cpp": "ac061aef8cac4ac6855539440add28cd0fb68f0fd1c6d1c2b62b7cc05edc823a",
+    "regional_router.cpp": "2e616919c5d38a77f84c43bcf117748da11736d4091c700c64b3c725eeb65284",
+    "core_tests.cpp": "50b94f9196eae116b475df4f39e6347622ad8ef4f02a3c81a1265aa4e6c4a6aa",
+    "libflux_telemetry.a": "768709753219e2a25ca5fe8e52a6760e1feb59da71cb94dd93fec36542b724b4",
+    "libflux_core.a": "da227ee30b1eadc79be2691aefc8d659fc7d1f5f78e9d6d38d26b5b5749b10dd",
+    "regional_router.hpp": "8d7b4b388c99c348c15bf4c7c0d05350dab7dfbf54fa746c04c97072fca8eac8"
+  },
+  "source_preservation": "build/physical-selection-20261008/source-before",
+  "benchmarks": {
+    "candidate_tier0": {
+      "qualified": true,
+      "external_drc": "PASS",
+      "paths": 50,
+      "artifact": "build/physical-selection-20261008/candidate-final/tier0/run-result.json",
+      "portfolio_checks_config": 0
+    },
+    "baseline_tier1": {
+      "artifact": "build/physical-selection-20261008/baseline/tier1-retry/run-result.json",
+      "executable_sha256": "d9163b36f5cfbe2af34fc4734093603f149c3d607c1c351f352bdb6bbe0b465c",
+      "qualified": false,
+      "probe_exit_code": 0,
+      "external_drc": "not run; no qualified detailed output",
+      "global_duration_seconds": 2601.714467687001,
+      "process_wall_seconds": 2604.32,
+      "max_rss_kb": 557708,
+      "coarse_oracle": {
+        "configured_grid_pitch_nm": 1,
+        "diagnoses": 176,
+        "drc_violation_counts": {
+          "hole_clearance": 29,
+          "track_clearance": 386,
+          "track_via_clearance": 123,
+          "via_clearance": 2
+        },
+        "drc_violations": 540,
+        "elapsed_us": 124277,
+        "feasible": false,
+        "malformed_paths": 0,
+        "open_connections": 0,
+        "paths_examined": 78,
+        "paths_materialized": 78,
+        "reused_transitions": 0,
+        "tracks": 1291,
+        "unrouted_nets": 0,
+        "vias": 46
+      },
+      "metrics": {
+        "paths": 78,
+        "unrouted_nets": 0,
+        "total_overflow": 0,
+        "routing_plan_complete": false,
+        "regional_straight_scene_drc_violations": 752,
+        "regional_straight_scene_drc_categories": {
+          "hole_clearance": 61,
+          "hole_to_hole_clearance": 3,
+          "track_clearance": 528,
+          "track_edge_clearance": 5,
+          "track_pad_clearance": 4,
+          "track_via_clearance": 145,
+          "via_clearance": 4,
+          "via_edge_clearance": 2
+        },
+        "regional_straight_scene_open_connections": 0,
+        "regional_straight_scene_trials": 26,
+        "regional_straight_scene_portfolio_checks": 24,
+        "regional_straight_scene_portfolio_improvements": 2,
+        "regional_native_scene_conflicts": 432,
+        "regional_planned_via_transitions": 72,
+        "regional_bundle_search_states": 794574
+      }
+    },
+    "candidate_tier1": {
+      "artifact": "build/physical-selection-20261008/candidate-final/tier1/run-result.json",
+      "executable_sha256": "076431192c424cc1d82507c54d8dbe50ca5e184c91bb6a9393368e6992e44cdf",
+      "qualified": false,
+      "external_drc": "not run; no qualified detailed output",
+      "global_duration_seconds": 2568.130246124001,
+      "coarse_oracle": {
+        "configured_grid_pitch_nm": 1,
+        "diagnoses": 176,
+        "drc_violation_counts": {
+          "hole_clearance": 29,
+          "track_clearance": 386,
+          "track_via_clearance": 123,
+          "via_clearance": 2
+        },
+        "drc_violations": 540,
+        "elapsed_us": 122950,
+        "feasible": false,
+        "malformed_paths": 0,
+        "open_connections": 0,
+        "paths_examined": 78,
+        "paths_materialized": 78,
+        "reused_transitions": 0,
+        "tracks": 1291,
+        "unrouted_nets": 0,
+        "vias": 46
+      },
+      "metrics": {
+        "paths": 78,
+        "unrouted_nets": 0,
+        "total_overflow": 0,
+        "routing_plan_complete": false,
+        "regional_straight_scene_drc_violations": 751,
+        "regional_straight_scene_drc_categories": {
+          "hole_clearance": 60,
+          "hole_to_hole_clearance": 2,
+          "track_clearance": 536,
+          "track_edge_clearance": 5,
+          "track_pad_clearance": 4,
+          "track_via_clearance": 138,
+          "via_clearance": 4,
+          "via_edge_clearance": 2
+        },
+        "regional_straight_scene_open_connections": 0,
+        "regional_straight_scene_trials": 26,
+        "regional_straight_scene_portfolio_checks": 24,
+        "regional_straight_scene_portfolio_improvements": 2,
+        "regional_native_scene_conflicts": 434,
+        "regional_planned_via_transitions": 68,
+        "regional_bundle_search_states": 794559,
+        "regional_straight_scene_joint_portfolio_checks": 12
+      },
+      "scope_attempts": [
+        {
+          "incomplete_assignments": 35,
+          "native_complete": true,
+          "native_evaluated": true,
+          "opens": 0,
+          "physical_errors": 793,
+          "retry": 0,
+          "selected": false,
+          "straight_evaluated": true
+        },
+        {
+          "incomplete_assignments": 33,
+          "native_complete": true,
+          "native_evaluated": true,
+          "opens": 0,
+          "physical_errors": 751,
+          "retry": 1,
+          "selected": true,
+          "straight_evaluated": true
+        },
+        {
+          "incomplete_assignments": 33,
+          "native_complete": true,
+          "native_evaluated": true,
+          "opens": 0,
+          "physical_errors": 861,
+          "retry": 2,
+          "selected": false,
+          "straight_evaluated": true
+        }
+      ]
+    }
+  },
+  "decision": "Keep bounded capability opt-in for proven two-window repair; move frontier investigation upstream.",
+  "verification": {
+    "core_before_redundant_cleanup_removal": "54/54 passed; final rebuild pending",
+    "red_proof": {
+      "old_selector_current_ABI": "FAIL paired retained moves must find legal copper when neither single move improves it",
+      "remove_extra_diagnosis_cleanup": "PASS; existing assembly helper already clears both scene prefixes"
+    },
+    "artifacts": "build/physical-selection-20261008/red-proof",
+    "final_core": "54/54 passed",
+    "additional_ctest": "12/12 channel occupancy, CLI configuration, telemetry tests passed"
+  },
+  "independent_review": {
+    "result": "no material correctness, ownership, or cancellation issues",
+    "limitation": "Bounded retained active shortlist only; after improvement, old incumbent is not an additional selectable pair dimension. No completeness guarantee."
+  },
+  "rejected_hypotheses": [
+    {
+      "hypothesis": "Straight-scene diagnoses persist after accepted repaired copper",
+      "result": "Disproven: build_regional_spline_candidate already clears native-scene and straight-scene diagnoses. Redundant erase block removed; extra assertion retained as positive protocol coverage."
+    }
+  ],
+  "final_source_hashes": {
+    "src/regional_router.cpp": "e2593f2a6f9101b79f71ad9fd0d3a452809690ed42fbaa2958fc8f8cd03da048",
+    "include/flux/core/regional_router.hpp": "1955fdc2ccc8338af4d9b15beaedc9d8d80f80ad364d8fa090e44ab48263a5ce",
+    "tests/unit/core_tests.cpp": "aaf1781c659b8c81af0128d61ba061e6dfdd44ab30d21e4f62d14252656f96ee",
+    "apps/flux-cli/main.cpp": "6319d428d59180c2485e7ac2c92a0492a44d3c69c576d94f261e70de2faff78d"
+  },
+  "source_control": {
+    "revision": "94aa691ad89576d1c0ac07a5346020da21fc9d06",
+    "working_tree_dirty_before_experiment": true,
+    "scope": "Only saved-before to current implementation.patch captures this experiment; do not attribute the pre-existing working tree changes to V69."
+  },
+  "interpretation": "Microcase strongly supports coupled search; frontier benefit negligible (752 to 751 errors), native conflicts worsen432to434, planned via transitions fall72to68. Coarse oracle unchanged540. Do not promote or enable by default."
+}

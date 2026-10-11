@@ -1,0 +1,17 @@
+{
+  "experiment": "frozen-scope-feedback-final-verification",
+  "git_revision": "25e3b884be9b359d9c5bf0cc4fbb6cc836fd4f82",
+  "dirty_worktree": true,
+  "benchmark_binary_sha256": "ea3adf3e0232223757d1d1220eb5d997065cecfdc4ab230dd0d3c8f8cf89d936",
+  "final_binary_sha256": "6b30e95efcbc6060922dcb996f60c40aa749b51793a01169204c1d1f131f598b",
+  "post_benchmark_change": "export last native-scene diagnoses, materialized object provenance, and retained manifest availability; no search or acceptance changes",
+  "ctest_command": "ctest --test-dir build/dev -R '^flux_unit_tests$|arc_detour|arc_export|multilayer' --output-on-failure",
+  "tests_passed": 10, "tests_failed": 0,
+  "total_seconds": 171.65, "core_seconds": 144.95,
+  "kicad_drc_fixture_checks_passed": 2,
+  "python_compile": "passed",
+  "invalid_timeout_rejection": "passed",
+  "git_diff_check": "passed",
+  "corpus_final_drc": "not_evaluated",
+  "tier_promoted": false
+}

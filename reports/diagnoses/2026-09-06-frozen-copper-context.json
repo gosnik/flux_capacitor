@@ -1,0 +1,31 @@
+{
+  "board": "pt2399_delay", "tier": 0,
+  "configuration": {"iterations": 6, "feedback_retries": 0, "shadows": "enforced", "full_strength_first_pass": true},
+  "baseline_artifacts": "build/full-strength-first-epoch-diagnosis",
+  "runtime_seconds": 518.569988916,
+  "failing_stage": "full native scene after locally legal candidate selection",
+  "implicated_nets": ["kicad-net-23", "kicad-net-4"],
+  "window": 3, "layers": ["F.Cu"],
+  "conflict_bounds_mm": [29.5, 43.0, 30.5, 44.0],
+  "suspected_outside_crossing_mm": [31.38, 43.5],
+  "selected_templates": [5, 9],
+  "classification": "geometric; outside-window context omitted during local candidate validation",
+  "alternative_route": "B.Cu two-via templates exist; full-scene feasibility unproven",
+  "metrics": {"paths": 50, "unrouted_nets": 0, "native_scene_conflicts": 39, "native_scene_fixed_conflicts": 6, "local_native_copper_violations": 0, "local_native_legal_checks": 6},
+  "drc": {"status": "not_evaluated", "categories": null},
+  "experiment": "opt-in frozen unowned global-fragment context",
+  "hypothesis_status": "local acceptance gap supported; routing improvement not established",
+  "after": {
+    "artifacts": "build/frozen-copper-context-tier0",
+    "runtime_seconds": 431.65584574600507,
+    "paths": 50, "unrouted_nets": 0,
+    "candidate_evaluations": 21, "legal_candidates": 3,
+    "local_native_violation_reports": 87,
+    "physical_scope_retries": 0,
+    "assembly": "withheld; zero conflict counter is not a legality result",
+    "drc": "not_evaluated",
+    "tier_pass": false
+  },
+  "decision": "retain as opt-in diagnostic experiment, disabled by default",
+  "next_hypothesis": "outside-fragment conflict identities are lost before scope expansion"
+}

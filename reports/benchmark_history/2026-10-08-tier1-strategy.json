@@ -1,0 +1,1137 @@
+{
+  "status": "analysis_and_proposed_experiments_not_implemented",
+  "date": "2026-10-08",
+  "board": "bm_svf",
+  "tier": 1,
+  "baseline": "V73",
+  "evidence": {
+    "limitations": [
+      "Native diagnoses are final-scene pair observations, not a minimal conflict set or a proof each pair is independently causal.",
+      "Five-mm bins are reporting aggregates, not router regions or connected geometry.",
+      "A window failure value of \"none\" means no enumerated stop reason; it does not mean the window completed. All V73 unresolved windows failed spline acceptance.",
+      "Generated/retained candidate counters are aggregate and cannot identify candidate-to-window causality.",
+      "No nonzero regional timing breakdown is emitted by this run."
+    ],
+    "schema": "tier1-strategy-v1",
+    "sources": {
+      "v71_run_result": "build/negotiated-physical-feedback-20261008/tier1/run-result.json",
+      "v73_final_run_result": "build/corrected-history-control-20261008/tier1/run-result.json",
+      "v73_global_result": "build/corrected-history-control-20261008/tier1/tier-1-bm_svf/global-result.json"
+    },
+    "v71_checkpoint_context_not_v73_evidence": {
+      "final_selected_physical_scope_attempts": [
+        {
+          "incomplete_assignments": 31,
+          "native_complete": true,
+          "native_evaluated": true,
+          "opens": 0,
+          "physical_errors": 794,
+          "retry": 0,
+          "selected": false,
+          "straight_evaluated": true
+        },
+        {
+          "incomplete_assignments": 29,
+          "native_complete": true,
+          "native_evaluated": true,
+          "opens": 0,
+          "physical_errors": 776,
+          "retry": 1,
+          "selected": false,
+          "straight_evaluated": true
+        },
+        {
+          "incomplete_assignments": 28,
+          "native_complete": true,
+          "native_evaluated": true,
+          "opens": 0,
+          "physical_errors": 710,
+          "retry": 2,
+          "selected": true,
+          "straight_evaluated": true
+        }
+      ],
+      "final_selected_straight_scene_drc_violations": 710,
+      "final_selected_straight_scene_evaluated": 1,
+      "global_duration_seconds": 2508.5273635569974,
+      "intermediate_regional_probes": 3,
+      "note": "These are V71 final-run fields. The result exposes only a count for intermediate probes, so it does not prove that an early checkpoint assembled/evaluated a native scene."
+    },
+    "v73_final": {
+      "final_exact_oracle": {
+        "configured_grid_pitch_nm": 1,
+        "diagnoses": 176,
+        "drc_violation_counts": {
+          "hole_clearance": 29,
+          "track_clearance": 386,
+          "track_via_clearance": 123,
+          "via_clearance": 2
+        },
+        "drc_violations": 540,
+        "elapsed_us": 124259,
+        "feasible": false,
+        "malformed_paths": 0,
+        "open_connections": 0,
+        "paths_examined": 78,
+        "paths_materialized": 78,
+        "reused_transitions": 0,
+        "tracks": 1291,
+        "unrouted_nets": 0,
+        "vias": 46
+      },
+      "global_duration_seconds": 2520.7647303740014,
+      "native_scene": {
+        "categories": [
+          {
+            "count": 264,
+            "key": "track_clearance"
+          },
+          {
+            "count": 115,
+            "key": "track_via_clearance"
+          },
+          {
+            "count": 48,
+            "key": "hole_clearance"
+          },
+          {
+            "count": 4,
+            "key": "track_pad_clearance"
+          },
+          {
+            "count": 3,
+            "key": "track_edge_clearance"
+          }
+        ],
+        "complete": 1,
+        "conflicts": 434,
+        "connected_components": {
+          "count": 1,
+          "net_sets": [
+            [
+              "kicad-net-1",
+              "kicad-net-10",
+              "kicad-net-11",
+              "kicad-net-12",
+              "kicad-net-13",
+              "kicad-net-14",
+              "kicad-net-16",
+              "kicad-net-17",
+              "kicad-net-20",
+              "kicad-net-21",
+              "kicad-net-22",
+              "kicad-net-24",
+              "kicad-net-25",
+              "kicad-net-26",
+              "kicad-net-3",
+              "kicad-net-4",
+              "kicad-net-5",
+              "kicad-net-7",
+              "kicad-net-8",
+              "kicad-net-9"
+            ]
+          ]
+        },
+        "diagnosis_count": 434,
+        "evaluated": 1,
+        "fixed_conflicts": 384,
+        "mapped_exact_copper_pairs": 449,
+        "source_exact_copper_witnesses": 415,
+        "top_5mm_midpoint_bins": [
+          {
+            "categories": [
+              {
+                "count": 15,
+                "key": "track_clearance"
+              },
+              {
+                "count": 3,
+                "key": "hole_clearance"
+              },
+              {
+                "count": 3,
+                "key": "track_via_clearance"
+              }
+            ],
+            "count": 21,
+            "layer": "F.Cu",
+            "max_clearance_deficit_nm": 397455,
+            "pair": "kicad-net-13|kicad-net-5",
+            "x_bin_nm": 55000000,
+            "y_bin_nm": 80000000
+          },
+          {
+            "categories": [
+              {
+                "count": 12,
+                "key": "track_via_clearance"
+              },
+              {
+                "count": 6,
+                "key": "hole_clearance"
+              }
+            ],
+            "count": 18,
+            "layer": "B.Cu",
+            "max_clearance_deficit_nm": 440381,
+            "pair": "kicad-net-25|kicad-net-26",
+            "x_bin_nm": 65000000,
+            "y_bin_nm": 60000000
+          },
+          {
+            "categories": [
+              {
+                "count": 7,
+                "key": "track_via_clearance"
+              },
+              {
+                "count": 6,
+                "key": "track_clearance"
+              },
+              {
+                "count": 2,
+                "key": "hole_clearance"
+              }
+            ],
+            "count": 15,
+            "layer": "B.Cu",
+            "max_clearance_deficit_nm": 450000,
+            "pair": "kicad-net-12|kicad-net-22",
+            "x_bin_nm": 55000000,
+            "y_bin_nm": 65000000
+          },
+          {
+            "categories": [
+              {
+                "count": 8,
+                "key": "track_clearance"
+              },
+              {
+                "count": 3,
+                "key": "hole_clearance"
+              },
+              {
+                "count": 3,
+                "key": "track_via_clearance"
+              }
+            ],
+            "count": 14,
+            "layer": "F.Cu",
+            "max_clearance_deficit_nm": 290901,
+            "pair": "kicad-net-12|kicad-net-5",
+            "x_bin_nm": 55000000,
+            "y_bin_nm": 85000000
+          },
+          {
+            "categories": [
+              {
+                "count": 11,
+                "key": "track_clearance"
+              },
+              {
+                "count": 2,
+                "key": "track_via_clearance"
+              },
+              {
+                "count": 1,
+                "key": "hole_clearance"
+              }
+            ],
+            "count": 14,
+            "layer": "F.Cu",
+            "max_clearance_deficit_nm": 450000,
+            "pair": "kicad-net-14|kicad-net-7",
+            "x_bin_nm": 45000000,
+            "y_bin_nm": 75000000
+          },
+          {
+            "categories": [
+              {
+                "count": 12,
+                "key": "track_clearance"
+              }
+            ],
+            "count": 12,
+            "layer": "F.Cu",
+            "max_clearance_deficit_nm": 450000,
+            "pair": "kicad-net-11|kicad-net-5",
+            "x_bin_nm": 55000000,
+            "y_bin_nm": 90000000
+          },
+          {
+            "categories": [
+              {
+                "count": 7,
+                "key": "track_clearance"
+              },
+              {
+                "count": 4,
+                "key": "track_via_clearance"
+              },
+              {
+                "count": 1,
+                "key": "hole_clearance"
+              }
+            ],
+            "count": 12,
+            "layer": "B.Cu",
+            "max_clearance_deficit_nm": 450000,
+            "pair": "kicad-net-1|kicad-net-13",
+            "x_bin_nm": 50000000,
+            "y_bin_nm": 80000000
+          },
+          {
+            "categories": [
+              {
+                "count": 11,
+                "key": "track_clearance"
+              }
+            ],
+            "count": 11,
+            "layer": "F.Cu",
+            "max_clearance_deficit_nm": 450000,
+            "pair": "kicad-net-11|kicad-net-9",
+            "x_bin_nm": 65000000,
+            "y_bin_nm": 65000000
+          },
+          {
+            "categories": [
+              {
+                "count": 9,
+                "key": "track_clearance"
+              },
+              {
+                "count": 2,
+                "key": "track_via_clearance"
+              }
+            ],
+            "count": 11,
+            "layer": "B.Cu",
+            "max_clearance_deficit_nm": 450000,
+            "pair": "kicad-net-16|kicad-net-4",
+            "x_bin_nm": 45000000,
+            "y_bin_nm": 80000000
+          },
+          {
+            "categories": [
+              {
+                "count": 11,
+                "key": "track_clearance"
+              }
+            ],
+            "count": 11,
+            "layer": "F.Cu",
+            "max_clearance_deficit_nm": 450000,
+            "pair": "kicad-net-21|kicad-net-26",
+            "x_bin_nm": 65000000,
+            "y_bin_nm": 55000000
+          },
+          {
+            "categories": [
+              {
+                "count": 10,
+                "key": "track_clearance"
+              }
+            ],
+            "count": 10,
+            "layer": "F.Cu",
+            "max_clearance_deficit_nm": 450000,
+            "pair": "kicad-net-12|kicad-net-5",
+            "x_bin_nm": 55000000,
+            "y_bin_nm": 75000000
+          },
+          {
+            "categories": [
+              {
+                "count": 6,
+                "key": "track_clearance"
+              },
+              {
+                "count": 2,
+                "key": "hole_clearance"
+              },
+              {
+                "count": 2,
+                "key": "track_via_clearance"
+              }
+            ],
+            "count": 10,
+            "layer": "B.Cu",
+            "max_clearance_deficit_nm": 509099,
+            "pair": "kicad-net-1|kicad-net-13",
+            "x_bin_nm": 65000000,
+            "y_bin_nm": 85000000
+          }
+        ],
+        "top_pairs": [
+          {
+            "categories": [
+              {
+                "count": 21,
+                "key": "track_clearance"
+              },
+              {
+                "count": 4,
+                "key": "track_via_clearance"
+              },
+              {
+                "count": 3,
+                "key": "hole_clearance"
+              }
+            ],
+            "count": 28,
+            "layers": [
+              {
+                "count": 17,
+                "key": "F.Cu"
+              },
+              {
+                "count": 11,
+                "key": "B.Cu"
+              }
+            ],
+            "max_clearance_deficit_nm": 450001,
+            "pair": "kicad-net-14|kicad-net-7"
+          },
+          {
+            "categories": [
+              {
+                "count": 13,
+                "key": "track_clearance"
+              },
+              {
+                "count": 9,
+                "key": "track_via_clearance"
+              },
+              {
+                "count": 5,
+                "key": "hole_clearance"
+              }
+            ],
+            "count": 27,
+            "layers": [
+              {
+                "count": 27,
+                "key": "B.Cu"
+              }
+            ],
+            "max_clearance_deficit_nm": 509099,
+            "pair": "kicad-net-1|kicad-net-13"
+          },
+          {
+            "categories": [
+              {
+                "count": 21,
+                "key": "track_clearance"
+              },
+              {
+                "count": 3,
+                "key": "track_via_clearance"
+              },
+              {
+                "count": 2,
+                "key": "hole_clearance"
+              }
+            ],
+            "count": 26,
+            "layers": [
+              {
+                "count": 26,
+                "key": "F.Cu"
+              }
+            ],
+            "max_clearance_deficit_nm": 675000,
+            "pair": "kicad-net-11|kicad-net-5"
+          },
+          {
+            "categories": [
+              {
+                "count": 18,
+                "key": "track_clearance"
+              },
+              {
+                "count": 5,
+                "key": "track_via_clearance"
+              },
+              {
+                "count": 3,
+                "key": "hole_clearance"
+              }
+            ],
+            "count": 26,
+            "layers": [
+              {
+                "count": 26,
+                "key": "F.Cu"
+              }
+            ],
+            "max_clearance_deficit_nm": 450000,
+            "pair": "kicad-net-12|kicad-net-5"
+          },
+          {
+            "categories": [
+              {
+                "count": 21,
+                "key": "track_clearance"
+              },
+              {
+                "count": 5,
+                "key": "track_via_clearance"
+              }
+            ],
+            "count": 26,
+            "layers": [
+              {
+                "count": 23,
+                "key": "B.Cu"
+              },
+              {
+                "count": 3,
+                "key": "F.Cu"
+              }
+            ],
+            "max_clearance_deficit_nm": 450000,
+            "pair": "kicad-net-16|kicad-net-4"
+          },
+          {
+            "categories": [
+              {
+                "count": 14,
+                "key": "track_via_clearance"
+              },
+              {
+                "count": 6,
+                "key": "hole_clearance"
+              },
+              {
+                "count": 3,
+                "key": "track_clearance"
+              }
+            ],
+            "count": 23,
+            "layers": [
+              {
+                "count": 23,
+                "key": "B.Cu"
+              }
+            ],
+            "max_clearance_deficit_nm": 440381,
+            "pair": "kicad-net-25|kicad-net-26"
+          },
+          {
+            "categories": [
+              {
+                "count": 15,
+                "key": "track_clearance"
+              },
+              {
+                "count": 3,
+                "key": "hole_clearance"
+              },
+              {
+                "count": 3,
+                "key": "track_via_clearance"
+              }
+            ],
+            "count": 21,
+            "layers": [
+              {
+                "count": 21,
+                "key": "F.Cu"
+              }
+            ],
+            "max_clearance_deficit_nm": 397455,
+            "pair": "kicad-net-13|kicad-net-5"
+          },
+          {
+            "categories": [
+              {
+                "count": 13,
+                "key": "track_clearance"
+              },
+              {
+                "count": 4,
+                "key": "track_via_clearance"
+              },
+              {
+                "count": 1,
+                "key": "hole_clearance"
+              }
+            ],
+            "count": 18,
+            "layers": [
+              {
+                "count": 17,
+                "key": "F.Cu"
+              },
+              {
+                "count": 1,
+                "key": "B.Cu"
+              }
+            ],
+            "max_clearance_deficit_nm": 625000,
+            "pair": "kicad-net-24|kicad-net-7"
+          },
+          {
+            "categories": [
+              {
+                "count": 7,
+                "key": "track_via_clearance"
+              },
+              {
+                "count": 6,
+                "key": "track_clearance"
+              },
+              {
+                "count": 2,
+                "key": "hole_clearance"
+              }
+            ],
+            "count": 15,
+            "layers": [
+              {
+                "count": 15,
+                "key": "B.Cu"
+              }
+            ],
+            "max_clearance_deficit_nm": 450000,
+            "pair": "kicad-net-12|kicad-net-22"
+          },
+          {
+            "categories": [
+              {
+                "count": 13,
+                "key": "track_clearance"
+              }
+            ],
+            "count": 13,
+            "layers": [
+              {
+                "count": 13,
+                "key": "F.Cu"
+              }
+            ],
+            "max_clearance_deficit_nm": 450000,
+            "pair": "kicad-net-11|kicad-net-9"
+          },
+          {
+            "categories": [
+              {
+                "count": 6,
+                "key": "track_via_clearance"
+              },
+              {
+                "count": 4,
+                "key": "track_clearance"
+              },
+              {
+                "count": 2,
+                "key": "hole_clearance"
+              }
+            ],
+            "count": 12,
+            "layers": [
+              {
+                "count": 12,
+                "key": "B.Cu"
+              }
+            ],
+            "max_clearance_deficit_nm": 450000,
+            "pair": "kicad-net-1|kicad-net-16"
+          },
+          {
+            "categories": [
+              {
+                "count": 12,
+                "key": "track_clearance"
+              }
+            ],
+            "count": 12,
+            "layers": [
+              {
+                "count": 12,
+                "key": "F.Cu"
+              }
+            ],
+            "max_clearance_deficit_nm": 450000,
+            "pair": "kicad-net-5|kicad-net-9"
+          },
+          {
+            "categories": [
+              {
+                "count": 11,
+                "key": "track_clearance"
+              }
+            ],
+            "count": 11,
+            "layers": [
+              {
+                "count": 11,
+                "key": "F.Cu"
+              }
+            ],
+            "max_clearance_deficit_nm": 450000,
+            "pair": "kicad-net-21|kicad-net-26"
+          },
+          {
+            "categories": [
+              {
+                "count": 6,
+                "key": "track_clearance"
+              },
+              {
+                "count": 2,
+                "key": "hole_clearance"
+              },
+              {
+                "count": 2,
+                "key": "track_via_clearance"
+              }
+            ],
+            "count": 10,
+            "layers": [
+              {
+                "count": 10,
+                "key": "F.Cu"
+              }
+            ],
+            "max_clearance_deficit_nm": 450000,
+            "pair": "kicad-net-10|kicad-net-9"
+          },
+          {
+            "categories": [
+              {
+                "count": 5,
+                "key": "track_via_clearance"
+              },
+              {
+                "count": 3,
+                "key": "hole_clearance"
+              },
+              {
+                "count": 2,
+                "key": "track_clearance"
+              }
+            ],
+            "count": 10,
+            "layers": [
+              {
+                "count": 10,
+                "key": "F.Cu"
+              }
+            ],
+            "max_clearance_deficit_nm": 450000,
+            "pair": "kicad-net-1|kicad-net-10"
+          }
+        ],
+        "unique_pairs": 53
+      },
+      "regional_windows": {
+        "failure_counts": [
+          {
+            "count": 33,
+            "key": "none"
+          }
+        ],
+        "summary": {
+          "regional_access_assignment_exhaustions": 0,
+          "regional_access_assignment_states": 4369985,
+          "regional_bundle_search_states": 794559,
+          "regional_complete_bundle_assignments": 0,
+          "regional_eligible_windows": 33,
+          "regional_exhausted_bundle_assignments": 0,
+          "regional_failed_spline_bundle_assignments": 33,
+          "regional_ineligible_bundle_assignments": 0,
+          "regional_joint_repair_windows_attempted": 33,
+          "regional_joint_repair_windows_completed": 30,
+          "regional_joint_repair_windows_with_expanded_portfolio": 30,
+          "regional_joint_spline_active_candidates_retained": 264,
+          "regional_joint_spline_candidates_evaluated": 0,
+          "regional_joint_spline_candidates_generated": 384499,
+          "regional_joint_spline_candidates_legal": 0,
+          "regional_joint_spline_fallback_candidates_dropped": 375582,
+          "regional_joint_spline_fallback_candidates_remaining": 7821,
+          "regional_joint_spline_fallback_candidates_retained": 7821,
+          "regional_joint_spline_fallback_windows_recovered": 0,
+          "regional_joint_spline_windows_recovered": 0,
+          "regional_missing_corridor_bundle_assignments": 0,
+          "regional_no_fitting_lane_bundle_assignments": 0,
+          "regional_packing_rejected_bundle_states": 0,
+          "regional_partial_access_assignment_exhaustions": 0,
+          "regional_partial_access_assignment_states": 4413939,
+          "regional_spline_continuous_budget_exhaustions": 0,
+          "regional_spline_offset_node_budget_exhaustions": 0,
+          "regional_spline_realizations": 213,
+          "regional_windows": 33
+        },
+        "top_by_conflicts": [
+          {
+            "access_assignment_states": 837484,
+            "bundle_states": 100000,
+            "conflicts": 22,
+            "failure": "none",
+            "fragments": 19,
+            "id": 1,
+            "nets": [
+              "kicad-net-1",
+              "kicad-net-12",
+              "kicad-net-17",
+              "kicad-net-8",
+              "kicad-net-9"
+            ],
+            "packing_rejected": 0,
+            "partial_access_assignment_states": 841581,
+            "partial_access_pruned": 75,
+            "spline_mutual_rejected": 19,
+            "spline_quantized_rejected": 19,
+            "spline_realizations": 19,
+            "spline_topology_rejected": 19
+          },
+          {
+            "access_assignment_states": 167976,
+            "bundle_states": 81686,
+            "conflicts": 22,
+            "failure": "none",
+            "fragments": 16,
+            "id": 4,
+            "nets": [
+              "kicad-net-1",
+              "kicad-net-13",
+              "kicad-net-14",
+              "kicad-net-24",
+              "kicad-net-7"
+            ],
+            "packing_rejected": 0,
+            "partial_access_assignment_states": 178411,
+            "partial_access_pruned": 1040,
+            "spline_mutual_rejected": 16,
+            "spline_quantized_rejected": 16,
+            "spline_realizations": 16,
+            "spline_topology_rejected": 16
+          },
+          {
+            "access_assignment_states": 278430,
+            "bundle_states": 46991,
+            "conflicts": 20,
+            "failure": "none",
+            "fragments": 17,
+            "id": 0,
+            "nets": [
+              "kicad-net-11",
+              "kicad-net-12",
+              "kicad-net-5",
+              "kicad-net-9"
+            ],
+            "packing_rejected": 0,
+            "partial_access_assignment_states": 279986,
+            "partial_access_pruned": 22,
+            "spline_mutual_rejected": 17,
+            "spline_quantized_rejected": 17,
+            "spline_realizations": 17,
+            "spline_topology_rejected": 17
+          },
+          {
+            "access_assignment_states": 985163,
+            "bundle_states": 100000,
+            "conflicts": 19,
+            "failure": "none",
+            "fragments": 17,
+            "id": 2,
+            "nets": [
+              "kicad-net-1",
+              "kicad-net-11",
+              "kicad-net-12",
+              "kicad-net-13",
+              "kicad-net-22",
+              "kicad-net-25",
+              "kicad-net-8"
+            ],
+            "packing_rejected": 0,
+            "partial_access_assignment_states": 988914,
+            "partial_access_pruned": 18,
+            "spline_mutual_rejected": 17,
+            "spline_quantized_rejected": 17,
+            "spline_realizations": 17,
+            "spline_topology_rejected": 17
+          },
+          {
+            "access_assignment_states": 409904,
+            "bundle_states": 100000,
+            "conflicts": 17,
+            "failure": "none",
+            "fragments": 15,
+            "id": 5,
+            "nets": [
+              "kicad-net-10",
+              "kicad-net-11",
+              "kicad-net-9"
+            ],
+            "packing_rejected": 0,
+            "partial_access_assignment_states": 413362,
+            "partial_access_pruned": 62,
+            "spline_mutual_rejected": 15,
+            "spline_quantized_rejected": 15,
+            "spline_realizations": 15,
+            "spline_topology_rejected": 15
+          },
+          {
+            "access_assignment_states": 789505,
+            "bundle_states": 100000,
+            "conflicts": 16,
+            "failure": "none",
+            "fragments": 14,
+            "id": 3,
+            "nets": [
+              "kicad-net-1",
+              "kicad-net-13",
+              "kicad-net-16",
+              "kicad-net-4"
+            ],
+            "packing_rejected": 0,
+            "partial_access_assignment_states": 793463,
+            "partial_access_pruned": 152,
+            "spline_mutual_rejected": 14,
+            "spline_quantized_rejected": 14,
+            "spline_realizations": 14,
+            "spline_topology_rejected": 14
+          },
+          {
+            "access_assignment_states": 288610,
+            "bundle_states": 100000,
+            "conflicts": 15,
+            "failure": "none",
+            "fragments": 15,
+            "id": 6,
+            "nets": [
+              "kicad-net-11",
+              "kicad-net-12",
+              "kicad-net-17",
+              "kicad-net-5",
+              "kicad-net-9"
+            ],
+            "packing_rejected": 0,
+            "partial_access_assignment_states": 291895,
+            "partial_access_pruned": 85,
+            "spline_mutual_rejected": 15,
+            "spline_quantized_rejected": 15,
+            "spline_realizations": 15,
+            "spline_topology_rejected": 15
+          },
+          {
+            "access_assignment_states": 5832,
+            "bundle_states": 1119,
+            "conflicts": 10,
+            "failure": "none",
+            "fragments": 8,
+            "id": 8,
+            "nets": [
+              "kicad-net-22",
+              "kicad-net-25",
+              "kicad-net-26"
+            ],
+            "packing_rejected": 0,
+            "partial_access_assignment_states": 6300,
+            "partial_access_pruned": 1,
+            "spline_mutual_rejected": 8,
+            "spline_quantized_rejected": 8,
+            "spline_realizations": 8,
+            "spline_topology_rejected": 8
+          },
+          {
+            "access_assignment_states": 80648,
+            "bundle_states": 25118,
+            "conflicts": 9,
+            "failure": "none",
+            "fragments": 7,
+            "id": 7,
+            "nets": [
+              "kicad-net-14",
+              "kicad-net-4",
+              "kicad-net-7"
+            ],
+            "packing_rejected": 0,
+            "partial_access_assignment_states": 82882,
+            "partial_access_pruned": 155,
+            "spline_mutual_rejected": 7,
+            "spline_quantized_rejected": 7,
+            "spline_realizations": 7,
+            "spline_topology_rejected": 7
+          },
+          {
+            "access_assignment_states": 93016,
+            "bundle_states": 16166,
+            "conflicts": 8,
+            "failure": "none",
+            "fragments": 7,
+            "id": 11,
+            "nets": [
+              "kicad-net-12",
+              "kicad-net-21",
+              "kicad-net-26"
+            ],
+            "packing_rejected": 0,
+            "partial_access_assignment_states": 95169,
+            "partial_access_pruned": 385,
+            "spline_mutual_rejected": 7,
+            "spline_quantized_rejected": 7,
+            "spline_realizations": 7,
+            "spline_topology_rejected": 7
+          },
+          {
+            "access_assignment_states": 365496,
+            "bundle_states": 100000,
+            "conflicts": 7,
+            "failure": "none",
+            "fragments": 8,
+            "id": 9,
+            "nets": [
+              "kicad-net-1",
+              "kicad-net-16",
+              "kicad-net-24",
+              "kicad-net-7"
+            ],
+            "packing_rejected": 0,
+            "partial_access_assignment_states": 367382,
+            "partial_access_pruned": 28,
+            "spline_mutual_rejected": 8,
+            "spline_quantized_rejected": 8,
+            "spline_realizations": 8,
+            "spline_topology_rejected": 8
+          },
+          {
+            "access_assignment_states": 548,
+            "bundle_states": 284,
+            "conflicts": 5,
+            "failure": "none",
+            "fragments": 5,
+            "id": 10,
+            "nets": [
+              "kicad-net-1",
+              "kicad-net-20",
+              "kicad-net-26"
+            ],
+            "packing_rejected": 0,
+            "partial_access_assignment_states": 959,
+            "partial_access_pruned": 34,
+            "spline_mutual_rejected": 5,
+            "spline_quantized_rejected": 5,
+            "spline_realizations": 5,
+            "spline_topology_rejected": 5
+          }
+        ],
+        "unresolved_count": 33
+      },
+      "selected_physical_scope_attempts": [
+        {
+          "incomplete_assignments": 35,
+          "native_complete": true,
+          "native_evaluated": true,
+          "opens": 0,
+          "physical_errors": 793,
+          "retry": 0,
+          "selected": false,
+          "straight_evaluated": true
+        },
+        {
+          "incomplete_assignments": 33,
+          "native_complete": true,
+          "native_evaluated": true,
+          "opens": 0,
+          "physical_errors": 751,
+          "retry": 1,
+          "selected": true,
+          "straight_evaluated": true
+        },
+        {
+          "incomplete_assignments": 33,
+          "native_complete": true,
+          "native_evaluated": true,
+          "opens": 0,
+          "physical_errors": 861,
+          "retry": 2,
+          "selected": false,
+          "straight_evaluated": true
+        }
+      ],
+      "timing": {
+        "global_duration_seconds": 2520.7647303740014,
+        "note": "Result publishes zero for all regional *_us timers; it cannot apportion the 2520.8 s run among regional sub-stages.",
+        "quantized_copper_oracle_elapsed_us": 124259,
+        "regional_stage_timers_all_zero_or_missing": true
+      }
+    }
+  },
+  "diagnosis": {
+    "connectivity": "78 connections, zero global overflow and opens; physical qualification fails",
+    "assembled_violations": 751,
+    "native_conflicts": 434,
+    "native_unique_pairs": 53,
+    "native_connected_nets": 20,
+    "feedback_timing": "First assembled regional assessment occurs in terminal epoch; selected exact diagnoses have no subsequent global allocation opportunity. Coarse copper feedback already exists.",
+    "geometry_contract": "Adjacent-channel lane precedence exists; section packing does not certify swept copper through bends, transitions and via runups.",
+    "search_scope": "Existing bounded single/pair portfolio moves cannot generally express larger coordinated changes or create missing geometric alternatives.",
+    "cautions": [
+      "Native and quantized counts overlap and must not be added.",
+      "540 coarse versus 751 assembled violations is not a causal conversion delta.",
+      "Final unresolved windows are not evidence of discrete infeasibility.",
+      "Early consultation V72 did not evaluate assembled copper and is not a test of early exact regional feedback."
+    ]
+  },
+  "ranked_experiments": [
+    {
+      "rank": 1,
+      "name": "Replayable physical witnesses",
+      "change": "Capture exact shape-to-fragment/template/window/global-choice provenance, scene identity, rules and frozen boundary; export minimal replay fixtures.",
+      "success": "Reproduce the same localized collision and opens from the saved scene; attribute both owners unambiguously."
+    },
+    {
+      "rank": 2,
+      "name": "Reserve upstream retry after actual assembled assessment",
+      "change": "On a negotiated penultimate checkpoint, evaluate actual selected regional copper, then spend a reserved existing global epoch on its localized evidence; finish with a fresh assembled assessment. Keep total global budget fixed.",
+      "success": "Telemetry proves exact regional diagnoses reach a later global call; unchanged Tier0 qualification; measured physical improvement without opens.",
+      "guard": "Never mix rejected topologies histories; unknown or unassessed outcomes must not become physical pressure."
+    },
+    {
+      "rank": 3,
+      "name": "Geometry-aware lane-chain candidates",
+      "change": "Extend existing lane precedence with bend, transition and via-runup alternatives; validate quantized copper against static and frozen geometry before accepting compatibility.",
+      "success": "Shifted parallel-lane and via-blockage microcases achieve zero errors and opens under mirrored/rotated and width variants."
+    },
+    {
+      "rank": 4,
+      "name": "Bounded joint conflict repair",
+      "change": "Use physically realized candidates and lazy incompatibility constraints for small spatial neighbourhoods; allow coordinated three-plus moves, reserve promotion and witness-driven candidate regeneration.",
+      "success": "Solve cyclic-swap microcase inaccessible to single/pair monotonic moves; full-scene legality check prevents boundary regressions.",
+      "guard": "20-net connected graph is not one exact-solver neighbourhood; expand only when a boundary blocker is witnessed."
+    },
+    {
+      "rank": 5,
+      "name": "Search and candidate efficiency",
+      "change": "Compare dynamic remaining-domain/constraint-degree ordering and propagation with current ordering on a captured budget trap; generate diverse physical candidates lazily and cache compatibility.",
+      "success": "Higher physically evaluated candidate yield under same state/time budget; report unknown separately from finite-domain infeasible."
+    }
+  ],
+  "validation": [
+    "No new benchmark was run for this analysis; reuse completed immutable V73 evidence.",
+    "For implementation: deterministic mechanism microtests, existing core/auxiliary tests, all Tier0 and Tier1 using unchanged manifest and rules.",
+    "Promote only with zero opens and all required external KiCad DRC checks passing."
+  ],
+  "research": [
+    {
+      "url": "https://github.com/cuhk-eda/cu-gr",
+      "relevance": "Detailed-routability-driven global routing; adopt physical feedback principle, not IC assumptions."
+    },
+    {
+      "url": "https://openroad.readthedocs.io/en/latest/main/src/drt/README.html",
+      "relevance": "Track assignment and detailed search/repair are separate responsibilities."
+    },
+    {
+      "url": "https://ojs.aaai.org/index.php/AAAI/article/view/21266",
+      "relevance": "Conflict-focused subset replanning; adapt neighbourhood selection without MAPF completeness claims."
+    },
+    {
+      "url": "https://developers.google.com/optimization/cp/cp_solver",
+      "relevance": "Distinguish budget-limited UNKNOWN from proven finite-model INFEASIBLE."
+    }
+  ]
+}

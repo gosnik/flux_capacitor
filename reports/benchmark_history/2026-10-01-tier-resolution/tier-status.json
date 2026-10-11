@@ -1,0 +1,56 @@
+{
+  "schema": 1,
+  "date": "2026-10-01",
+  "frontier": 1,
+  "tiers": [
+    {
+      "tier": 0,
+      "board": "pt2399_delay",
+      "import_preflight": "passed",
+      "routing_outcome": "qualified",
+      "qualification": "clean final KiCad DRC"
+    },
+    {
+      "tier": 1,
+      "board": "bm_svf",
+      "import_preflight": "passed",
+      "routing_outcome": "normal V63 unqualified: 764 assessed straightcopper violations, zero opens; normal V64 pending",
+      "qualification": null
+    },
+    {
+      "tier": 2,
+      "board": "ft2232h_jtag",
+      "import_preflight": "passed",
+      "routing_outcome": "not routed; locked behind frontier",
+      "qualification": null
+    },
+    {
+      "tier": 3,
+      "board": "gb_nintendo_power",
+      "import_preflight": "passed",
+      "routing_outcome": "not routed; locked behind frontier",
+      "qualification": null
+    },
+    {
+      "tier": 4,
+      "board": "nascom_eprom_80bus",
+      "import_preflight": "passed",
+      "routing_outcome": "not routed; locked behind frontier",
+      "qualification": null
+    }
+  ],
+  "baseline_runs": [
+    "build/tier-resolution-20261001-baseline-tier0",
+    "build/tier-resolution-20261001-baseline-tier1",
+    "build/tier-resolution-20261001-bounded-before"
+  ],
+  "experimental_runs": [
+    "build/tier-resolution-20261001-v61",
+    "build/tier-resolution-20261001-v63",
+    "build/tier-resolution-20261001-v64/bounded-tier1-n2-r0",
+    "build/tier-resolution-20261001-v64/bounded-tier1-r1",
+    "build/tier-resolution-20261001-v64/tier1-normal"
+  ],
+  "higher_tier_policy": "No promotion based on import/topology; preserve lower tier qualification",
+  "completed_normal_frontier_summary": "reports/benchmark_history/2026-10-01-tier-resolution/normal-V63-summary.json"
+}

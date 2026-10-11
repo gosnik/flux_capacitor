@@ -1,6 +1,8 @@
+#include "flux/core/routing_kernel.hpp"
 #include "flux/core/detailed_router.hpp"
 
 #include "flux/core/board_free_space.hpp"
+#include "flux/core/cpu_worker_budget.hpp"
 #include "flux/core/copper_geometry.hpp"
 #include "flux/core/free_space_offset.hpp"
 #include "flux/core/geometry.hpp"
@@ -130,6 +132,12 @@ simplify_width_aware_points(const WidthAwarePath& input, std::size_t& removed_po
 
 [[nodiscard]] std::int64_t direction(std::int64_t value) {
   return value < 0 ? -1 : value > 0 ? 1 : 0;
+}
+
+[[nodiscard]] bool ordinary_track_angle(Point first, Point last) {
+  const auto dx = magnitude(last.x.value() - first.x.value());
+  const auto dy = magnitude(last.y.value() - first.y.value());
+  return dx == 0 || dy == 0 || dx == dy;
 }
 
 [[nodiscard]] std::vector<GlobalRoutePoint>
@@ -441,6 +449,9 @@ refine_path_continuously(const Board& board, const NetId& net, Nanometres track_
   for (const auto& arc : board.track_arcs) {
     result.insert(arc.id.value());
   }
+  for (const auto& bezier : board.track_beziers) {
+    result.insert(bezier.id.value());
+  }
   for (const auto& via : board.vias) {
     result.insert(via.id.value());
   }
@@ -509,6 +520,11 @@ void remove_unlocked_routing(Board& board, const std::set<NetId>& routed_nets,
     return !arc.locked && routed_nets.contains(arc.net);
   });
   result.removed_track_arcs = old_arc_count - board.track_arcs.size();
+  const auto old_bezier_count = board.track_beziers.size();
+  std::erase_if(board.track_beziers, [&routed_nets](const auto& bezier) {
+    return !bezier.locked && routed_nets.contains(bezier.net);
+  });
+  result.removed_track_beziers = old_bezier_count - board.track_beziers.size();
   const auto old_via_count = board.vias.size();
   std::erase_if(board.vias, [&routed_nets](const auto& via) {
     return !via.locked && routed_nets.contains(via.net);
@@ -1902,6 +1918,7 @@ struct SplineRun {
   Nanometres width;
   std::vector<Point> points;
   std::vector<std::string> original_track_ids;
+  bool topology_locked{false};
 };
 
 struct PendingSplineRun {
@@ -1911,13 +1928,14 @@ struct PendingSplineRun {
 };
 
 [[nodiscard]] std::size_t split_tracks_at_exact_same_net_branches(Board& board,
-                                                                  std::set<std::string>& used_ids) {
+                                                                  std::set<std::string>& used_ids,
+                                                                  const std::set<std::string>& protected_ids) {
   const auto source_tracks = board.tracks;
   std::vector<TrackSegment> split_tracks;
   split_tracks.reserve(source_tracks.size());
   std::size_t inserted_pieces = 0U;
   for (const auto& carrier : source_tracks) {
-    if (carrier.locked || carrier.start == carrier.end) {
+    if (carrier.locked || protected_ids.contains(carrier.id.value()) || carrier.start == carrier.end) {
       split_tracks.push_back(carrier);
       continue;
     }
@@ -1925,30 +1943,54 @@ struct PendingSplineRun {
     const auto dy = static_cast<long double>(carrier.end.y.value() - carrier.start.y.value());
     const auto length_squared = dx * dx + dy * dy;
     std::vector<std::pair<long double, Point>> contacts;
+    const auto append_exact_contact = [&](Point contact) {
+      const auto parameter =
+          (static_cast<long double>(contact.x.value() - carrier.start.x.value()) * dx +
+           static_cast<long double>(contact.y.value() - carrier.start.y.value()) * dy) /
+          length_squared;
+      if (!(parameter > 0.0L && parameter < 1.0L))
+        return;
+      const auto projected = Point{
+          Nanometres{static_cast<std::int64_t>(
+              std::llround(static_cast<long double>(carrier.start.x.value()) + parameter * dx))},
+          Nanometres{static_cast<std::int64_t>(
+              std::llround(static_cast<long double>(carrier.start.y.value()) + parameter * dy))}};
+      if (geometry::point_distance_nm(contact, projected) <= 1.0L &&
+          projected != carrier.start && projected != carrier.end) {
+        contacts.emplace_back(parameter, projected);
+      }
+    };
     for (const auto& branch : source_tracks) {
       if (branch.id == carrier.id || branch.net != carrier.net || branch.layer != carrier.layer ||
           branch.start == branch.end) {
         continue;
       }
       for (const auto endpoint : {branch.start, branch.end}) {
-        const auto parameter =
-            (static_cast<long double>(endpoint.x.value() - carrier.start.x.value()) * dx +
-             static_cast<long double>(endpoint.y.value() - carrier.start.y.value()) * dy) /
-            length_squared;
-        if (!(parameter > 0.0L && parameter < 1.0L))
-          continue;
-        const auto projected = Point{
-            Nanometres{static_cast<std::int64_t>(
-                std::llround(static_cast<long double>(carrier.start.x.value()) + parameter * dx))},
-            Nanometres{static_cast<std::int64_t>(
-                std::llround(static_cast<long double>(carrier.start.y.value()) + parameter * dy))}};
         // This structural split is for an imported unsplit centreline T, not for general
         // same-net copper proximity. Wider overlap remains governed by connectivity and exact
         // transaction checks; promoting it to a junction here would fragment nearby routes.
-        if (geometry::point_distance_nm(endpoint, projected) <= 1.0L &&
-            projected != carrier.start && projected != carrier.end) {
-          contacts.emplace_back(parameter, projected);
+        append_exact_contact(endpoint);
+      }
+    }
+    // A pad/via centre lying in the interior of a route is also a topological attachment, even
+    // when no second track endpoint lands at exactly that coordinate.  In particular, a
+    // multi-terminal tree may deliberately pass through a through-hole pad and connect another
+    // branch anywhere inside the pad's copper.  Preserve the exact centre as a chain boundary so
+    // PH rounding cannot bow the carrier away and silently open the net.
+    for (const auto& via : board.vias) {
+      if (via.net == carrier.net &&
+          std::find(via.layers.begin(), via.layers.end(), carrier.layer) != via.layers.end()) {
+        append_exact_contact(via.position);
+      }
+    }
+    for (const auto& footprint : board.footprints) {
+      for (const auto& pad : footprint.pads) {
+        if (pad.net != carrier.net ||
+            std::find(pad.layers.begin(), pad.layers.end(), carrier.layer) == pad.layers.end()) {
+          continue;
         }
+        append_exact_contact(geometry::transform_point(
+            pad.local_position, footprint.position, footprint.rotation, footprint.side));
       }
     }
     std::sort(contacts.begin(), contacts.end(), [](const auto& lhs, const auto& rhs) {
@@ -1988,15 +2030,23 @@ struct PendingSplineRun {
 // offset domain: every side and diagonal of every rectangle is checked against that domain.
 [[nodiscard]] std::optional<NavMeshRouteResult>
 make_source_polyline_corridor(const OffsetFreeSpaceRegion& region, const SplineRun& run,
-                              Nanometres cell_pitch, Nanometres maximum_half_width) {
+                              Nanometres cell_pitch, Nanometres maximum_half_width,
+                              Nanometres preferred_half_width = Nanometres{0}) {
   if (run.points.size() < 2U || cell_pitch.value() <= 0)
     return std::nullopt;
   FreeSpaceDomain domain;
   domain.outline = region.area;
   domain.cutouts = region.holes;
+  // The offset region is immutable for this complete source run. Validate it once before the
+  // potentially thousands of rectangle-width probes below; each probe still uses the same exact
+  // chord-in-free-space and clearance predicates.
+  if (!validate_free_space_chord_domain(domain))
+    return std::nullopt;
   const auto sample_spacing = std::max<std::int64_t>(1, cell_pitch.value() / 4);
   const auto initial_half_width = std::max<std::int64_t>(
-      1, std::min(maximum_half_width.value(), std::max<std::int64_t>(1, cell_pitch.value() / 8)));
+      1, std::min(maximum_half_width.value(),
+                  std::max({std::int64_t{1}, cell_pitch.value() / 8,
+                            preferred_half_width.value()})));
 
   NavMeshRouteResult result;
   result.start = run.points.front();
@@ -2004,28 +2054,69 @@ make_source_polyline_corridor(const OffsetFreeSpaceRegion& region, const SplineR
   result.centerline.push_back(run.points.front());
   result.cell_pitch = cell_pitch;
   auto append_certified_cell = [&](Point first, Point second) {
+    const std::array<std::int64_t, 4U> source_bounds{
+        std::min(first.x.value(), second.x.value()),
+        std::max(first.x.value(), second.x.value()),
+        std::min(first.y.value(), second.y.value()),
+        std::max(first.y.value(), second.y.value())};
+    const auto corners_for = [](const auto& bounds) {
+      return std::array<Point, 4U>{
+          Point{Nanometres{bounds[0]}, Nanometres{bounds[2]}},
+          Point{Nanometres{bounds[1]}, Nanometres{bounds[2]}},
+          Point{Nanometres{bounds[1]}, Nanometres{bounds[3]}},
+          Point{Nanometres{bounds[0]}, Nanometres{bounds[3]}}};
+    };
+    const auto certified = [&](const auto& bounds) {
+      const auto [minimum_x, maximum_x, minimum_y, maximum_y] = bounds;
+      const bool encloses_hole_vertex = std::any_of(
+          region.holes.begin(), region.holes.end(), [&](const auto& hole) {
+            return std::any_of(hole.vertices.begin(), hole.vertices.end(), [&](Point point) {
+              return point.x.value() >= minimum_x && point.x.value() <= maximum_x &&
+                     point.y.value() >= minimum_y && point.y.value() <= maximum_y;
+            });
+          });
+      if (encloses_hole_vertex)
+        return false;
+      const auto corners = corners_for(bounds);
+      const std::vector<std::pair<Point, Point>> certificates{
+          {corners[0], corners[1]}, {corners[1], corners[2]},
+          {corners[2], corners[3]}, {corners[3], corners[0]},
+          {corners[0], corners[2]}, {corners[1], corners[3]}};
+      const auto assessed = assess_validated_free_space_chords(domain, certificates);
+      return std::all_of(assessed.begin(), assessed.end(),
+                         [](const auto& clearance) { return clearance.has_value(); });
+    };
     auto half_width = initial_half_width;
     while (half_width >= 1) {
-      const auto minimum_x = std::min(first.x.value(), second.x.value()) - half_width;
-      const auto maximum_x = std::max(first.x.value(), second.x.value()) + half_width;
-      const auto minimum_y = std::min(first.y.value(), second.y.value()) - half_width;
-      const auto maximum_y = std::max(first.y.value(), second.y.value()) + half_width;
-      const std::array<Point, 4U> corners{Point{Nanometres{minimum_x}, Nanometres{minimum_y}},
-                                          Point{Nanometres{maximum_x}, Nanometres{minimum_y}},
-                                          Point{Nanometres{maximum_x}, Nanometres{maximum_y}},
-                                          Point{Nanometres{minimum_x}, Nanometres{maximum_y}}};
-      const std::array<std::pair<Point, Point>, 6U> certificates{
-          std::pair{corners[0], corners[1]}, std::pair{corners[1], corners[2]},
-          std::pair{corners[2], corners[3]}, std::pair{corners[3], corners[0]},
-          std::pair{corners[0], corners[2]}, std::pair{corners[1], corners[3]}};
-      if (std::all_of(certificates.begin(), certificates.end(), [&](const auto& chord) {
-            return assess_free_space_chord(domain, chord.first, chord.second).has_value();
-          })) {
+      std::array<std::int64_t, 4U> bounds{
+          source_bounds[0] - half_width, source_bounds[1] + half_width,
+          source_bounds[2] - half_width, source_bounds[3] + half_width};
+      // Boundary chords alone cannot detect a hole wholly enclosed by this rectangle.
+      // Reject such cells as well; together with the exact boundary tests below this
+      // certifies the whole cell, including when curvature requests a wider guard.
+      if (certified(bounds)) {
+        // A wall on one side must not erase free room on the other three sides.
+        // Grow a known-safe cell monotonically; every accepted rectangle receives
+        // the same whole-cell certificate, with a bounded number of probes per side.
+        for (std::size_t side = 0U; side < bounds.size() && half_width < initial_half_width;
+             ++side) {
+          const auto direction = side % 2U == 0U ? -1 : 1;
+          auto extra = initial_half_width - half_width;
+          for (std::size_t probe = 0U; probe < 8U && extra > 0; ++probe, extra /= 2) {
+            auto expanded = bounds;
+            expanded[side] += direction * extra;
+            if (certified(expanded)) {
+              bounds = expanded;
+              break;
+            }
+          }
+        }
+        const auto corners = corners_for(bounds);
         const auto id = result.cells.size();
         result.cells.push_back(
             NavMeshCell{id, corners,
-                        Point{Nanometres{minimum_x + (maximum_x - minimum_x) / 2},
-                              Nanometres{minimum_y + (maximum_y - minimum_y) / 2}},
+                        Point{Nanometres{bounds[0] + (bounds[1] - bounds[0]) / 2},
+                              Nanometres{bounds[2] + (bounds[3] - bounds[2]) / 2}},
                         0U});
         result.topology_guard_cells.push_back(id);
         return true;
@@ -2071,6 +2162,62 @@ make_source_polyline_corridor(const OffsetFreeSpaceRegion& region, const SplineR
   result.topology_signature = make_navmesh_topology_signature({});
   result.diagnostic.clear();
   return result;
+}
+
+void augment_terminal_planning_chord_corridor(const OffsetFreeSpaceRegion& region,
+                                              const SplineRun& original,
+                                              const std::vector<Point>& planning_points,
+                                              Nanometres cell_pitch,
+                                              Nanometres maximum_half_width,
+                                              NavMeshRouteResult& navigation) {
+  if (planning_points == original.points || original.points.size() < 3U ||
+      planning_points.size() < 2U) {
+    return;
+  }
+  const auto append_chord = [&](Point first, Point second) {
+    const SplineRun chord{original.layer, original.width, {first, second}, {}};
+    const auto certified =
+        make_source_polyline_corridor(region, chord, cell_pitch, maximum_half_width);
+    if (!certified)
+      return;
+    const auto offset = navigation.cells.size();
+    for (auto cell : certified->cells) {
+      cell.id += offset;
+      navigation.cells.push_back(std::move(cell));
+    }
+    navigation.topology_guard_cells.reserve(navigation.topology_guard_cells.size() +
+                                            certified->topology_guard_cells.size());
+    for (const auto cell : certified->topology_guard_cells)
+      navigation.topology_guard_cells.push_back(offset + cell);
+  };
+  if (planning_points.front() == original.points.front() && original.points.size() >= 3U &&
+      planning_points[1U] == original.points[2U]) {
+    append_chord(planning_points.front(), planning_points[1U]);
+  }
+  if (planning_points.back() == original.points.back() && original.points.size() >= 3U &&
+      planning_points[planning_points.size() - 2U] == original.points[original.points.size() - 3U]) {
+    append_chord(planning_points[planning_points.size() - 2U], planning_points.back());
+  }
+}
+
+void augment_with_certified_planning_route(const OffsetFreeSpaceRegion& region,
+                                           const SplineRun& planning_run,
+                                           Nanometres certificate_pitch,
+                                           Nanometres maximum_half_width,
+                                           NavMeshRouteResult& navigation) {
+  const auto certified = make_source_polyline_corridor(region, planning_run, certificate_pitch,
+                                                        maximum_half_width);
+  if (!certified)
+    return;
+  const auto offset = navigation.cells.size();
+  for (auto cell : certified->cells) {
+    cell.id += offset;
+    navigation.cells.push_back(std::move(cell));
+  }
+  navigation.topology_guard_cells.reserve(navigation.topology_guard_cells.size() +
+                                          certified->topology_guard_cells.size());
+  for (const auto cell : certified->topology_guard_cells)
+    navigation.topology_guard_cells.push_back(offset + cell);
 }
 
 struct CopperEndpointIncidence {
@@ -2134,6 +2281,14 @@ using CopperEndpointMap = std::map<CopperEndpointKey, std::vector<CopperEndpoint
     incidences[{arc.net, arc.layer, arc.start}].push_back(CopperEndpointIncidence{});
     incidences[{arc.net, arc.layer, arc.end}].push_back(CopperEndpointIncidence{});
   }
+  for (const auto& bezier : board.track_beziers) {
+    if (bezier.start == bezier.end)
+      continue;
+    incidences[{bezier.net, bezier.layer, bezier.start}].push_back(
+        CopperEndpointIncidence{false, bezier.control1 - bezier.start});
+    incidences[{bezier.net, bezier.layer, bezier.end}].push_back(
+        CopperEndpointIncidence{false, bezier.control2 - bezier.end});
+  }
   // The PH chain collector treats pad and via centres as electrical attachment boundaries so a
   // continuous replacement cannot bypass a terminal or layer transition. Mirror that physical
   // topology in the final bend audit. Two straight pieces meeting at such a point are not an
@@ -2157,35 +2312,59 @@ using CopperEndpointMap = std::map<CopperEndpointKey, std::vector<CopperEndpoint
   return incidences;
 }
 
-[[nodiscard]] std::size_t count_unrounded_non_junction_bends(const Board& board) {
+struct UnroundedBendCounts {
+  std::size_t straight_track{0U};
+  std::size_t curve_tangent{0U};
+
+  [[nodiscard]] std::size_t total() const noexcept { return straight_track + curve_tangent; }
+};
+
+[[nodiscard]] UnroundedBendCounts count_unrounded_non_junction_bends(const Board& board) {
   const auto incidences = copper_endpoint_incidences(board);
 
-  std::size_t bends = 0U;
+  UnroundedBendCounts bends;
   for (const auto& [key, at_endpoint] : incidences) {
     const auto& [net, layer, point] = key;
     // A true branch is permitted to retain an angular junction. Every degree-two change of
     // direction between straight primitives is unfinished spline geometry, irrespective of its
     // angle. Collinear subdivision is harmless and does not count as a bend.
-    if (at_endpoint.size() != 2U || !at_endpoint[0].straight_track ||
-        !at_endpoint[1].straight_track) {
+    if (at_endpoint.size() != 2U ||
+        (at_endpoint[0].direction.x.value() == 0 && at_endpoint[0].direction.y.value() == 0) ||
+        (at_endpoint[1].direction.x.value() == 0 && at_endpoint[1].direction.y.value() == 0)) {
       continue;
     }
     // KiCad connectivity is copper-area based: a branch endpoint may touch the middle of either
     // incident segment without sharing the exact centreline coordinate. Such a physical T remains
     // a junction and is the one permitted angular case; do not mislabel it as unfinished PH
     // geometry merely because the imported primitives were not split at the contact coordinate.
-    if (has_additional_same_net_track_contact(board, net, layer, point, at_endpoint))
+    if (at_endpoint[0].straight_track && at_endpoint[1].straight_track &&
+        has_additional_same_net_track_contact(board, net, layer, point, at_endpoint))
       continue;
-    const auto cross = static_cast<long double>(at_endpoint[0].direction.x.value()) *
-                           static_cast<long double>(at_endpoint[1].direction.y.value()) -
-                       static_cast<long double>(at_endpoint[0].direction.y.value()) *
-                           static_cast<long double>(at_endpoint[1].direction.x.value());
-    bends += cross == 0.0L ? 0U : 1U;
+    const auto ax = static_cast<long double>(at_endpoint[0].direction.x.value());
+    const auto ay = static_cast<long double>(at_endpoint[0].direction.y.value());
+    const auto bx = static_cast<long double>(at_endpoint[1].direction.x.value());
+    const auto by = static_cast<long double>(at_endpoint[1].direction.y.value());
+    const auto cross = ax * by - ay * bx;
+    const auto product = std::hypotl(ax, ay) * std::hypotl(bx, by);
+    const auto angular_error = product > 0.0L ? std::abs(cross) / product : 1.0L;
+    const auto dot = ax * bx + ay * by;
+    const auto has_curve_tangent = !at_endpoint[0].straight_track || !at_endpoint[1].straight_track;
+    const auto smooth = has_curve_tangent ? (dot < 0.0L && angular_error <= 0.035L)
+                                          : (cross == 0.0L);
+    if (!smooth) {
+      if (at_endpoint[0].straight_track && at_endpoint[1].straight_track)
+        ++bends.straight_track;
+      else
+        ++bends.curve_tangent;
+    }
   }
   return bends;
 }
 
-[[nodiscard]] std::vector<PendingSplineRun> collect_unrounded_spline_chains(const Board& board) {
+[[nodiscard]] std::vector<PendingSplineRun>
+collect_unrounded_spline_chains(const Board& board,
+                                const std::set<std::string>& protected_track_ids = {},
+                                const std::set<std::string>& topology_locked_track_ids = {}) {
   using EndpointKey = std::tuple<NetId, LayerId, Point>;
   struct EndpointNode {
     std::size_t total_incidences{0U};
@@ -2200,7 +2379,7 @@ using CopperEndpointMap = std::map<CopperEndpointKey, std::vector<CopperEndpoint
     for (const auto point : {track.start, track.end}) {
       auto& node = nodes[{track.net, track.layer, point}];
       ++node.total_incidences;
-      if (!track.locked) {
+      if (!track.locked && !protected_track_ids.contains(track.id.value())) {
         node.eligible_tracks.push_back(index);
       }
     }
@@ -2211,6 +2390,11 @@ using CopperEndpointMap = std::map<CopperEndpointKey, std::vector<CopperEndpoint
     }
     ++nodes[{arc.net, arc.layer, arc.start}].total_incidences;
     ++nodes[{arc.net, arc.layer, arc.end}].total_incidences;
+  }
+  for (const auto& curve : board.track_beziers) {
+    if (curve.start == curve.end) continue;
+    ++nodes[{curve.net, curve.layer, curve.start}].total_incidences;
+    ++nodes[{curve.net, curve.layer, curve.end}].total_incidences;
   }
   // Pads and vias are electrical attachment boundaries even when exactly two straight tracks meet
   // at their centre. Treating that point as an ordinary degree-two continuation lets a smoothed
@@ -2251,7 +2435,8 @@ using CopperEndpointMap = std::map<CopperEndpointKey, std::vector<CopperEndpoint
   std::size_t serial = 0U;
   const auto append_chain = [&](std::size_t first, Point start,
                                 std::vector<PendingSplineRun>& output) {
-    if (first >= board.tracks.size() || visited[first] != 0U || board.tracks[first].locked) {
+    if (first >= board.tracks.size() || visited[first] != 0U || board.tracks[first].locked ||
+        protected_track_ids.contains(board.tracks[first].id.value())) {
       return;
     }
     const auto& first_track = board.tracks[first];
@@ -2288,6 +2473,11 @@ using CopperEndpointMap = std::map<CopperEndpointKey, std::vector<CopperEndpoint
                  static_cast<long double>(first_y) * second_x;
         });
     if (has_bend) {
+      run.topology_locked = !run.original_track_ids.empty() &&
+          std::all_of(run.original_track_ids.begin(), run.original_track_ids.end(),
+                      [&topology_locked_track_ids](const std::string& id) {
+                        return topology_locked_track_ids.contains(id);
+                      });
       output.push_back(PendingSplineRun{
           first_track.net, "flux-board-spline-" + std::to_string(serial++), std::move(run)});
     }
@@ -2312,6 +2502,255 @@ using CopperEndpointMap = std::map<CopperEndpointKey, std::vector<CopperEndpoint
     }
   }
   return result;
+}
+
+[[nodiscard]] std::optional<TrackArc>
+make_circular_fillet(Point previous, Point corner, Point next, Nanometres maximum_radius) {
+  const auto first_x = static_cast<long double>(previous.x.value() - corner.x.value());
+  const auto first_y = static_cast<long double>(previous.y.value() - corner.y.value());
+  const auto second_x = static_cast<long double>(next.x.value() - corner.x.value());
+  const auto second_y = static_cast<long double>(next.y.value() - corner.y.value());
+  const auto first_length = std::hypot(first_x, first_y);
+  const auto second_length = std::hypot(second_x, second_y);
+  const auto determinant = first_x * second_y - first_y * second_x;
+  if (first_length <= 1.0L || second_length <= 1.0L || determinant == 0.0L)
+    return std::nullopt;
+  const auto first_unit_x = first_x / first_length;
+  const auto first_unit_y = first_y / first_length;
+  const auto second_unit_x = second_x / second_length;
+  const auto second_unit_y = second_y / second_length;
+  const auto cosine =
+      std::clamp(first_unit_x * second_unit_x + first_unit_y * second_unit_y, -1.0L, 1.0L);
+  const auto half_angle = std::acos(cosine) / 2.0L;
+  const auto tangent = std::tan(half_angle);
+  const auto sine = std::sin(half_angle);
+  if (tangent <= 1.0e-12L || sine <= 1.0e-12L)
+    return std::nullopt;
+  const auto requested_radius = static_cast<long double>(maximum_radius.value());
+  auto trim = requested_radius / tangent;
+  trim = std::min({trim, first_length * 0.45L, second_length * 0.45L});
+  const auto radius = trim * tangent;
+  if (trim <= 1.0L || radius <= 1.0L)
+    return std::nullopt;
+  const auto bisector_x = first_unit_x + second_unit_x;
+  const auto bisector_y = first_unit_y + second_unit_y;
+  const auto bisector_length = std::hypot(bisector_x, bisector_y);
+  if (bisector_length <= 1.0e-12L)
+    return std::nullopt;
+  const auto corner_x = static_cast<long double>(corner.x.value());
+  const auto corner_y = static_cast<long double>(corner.y.value());
+  const auto center_distance = radius / sine;
+  const auto center_x = corner_x + bisector_x / bisector_length * center_distance;
+  const auto center_y = corner_y + bisector_y / bisector_length * center_distance;
+  const auto quantize = [](long double x, long double y) {
+    return Point{Nanometres{static_cast<std::int64_t>(std::llround(x))},
+                 Nanometres{static_cast<std::int64_t>(std::llround(y))}};
+  };
+  const auto arc_start = quantize(corner_x + first_unit_x * trim, corner_y + first_unit_y * trim);
+  const auto arc_end = quantize(corner_x + second_unit_x * trim, corner_y + second_unit_y * trim);
+  const auto toward_corner_x = corner_x - center_x;
+  const auto toward_corner_y = corner_y - center_y;
+  const auto toward_corner_length = std::hypot(toward_corner_x, toward_corner_y);
+  const auto arc_middle = quantize(center_x + toward_corner_x / toward_corner_length * radius,
+                                   center_y + toward_corner_y / toward_corner_length * radius);
+  const auto arc = geometry::circular_arc_parameters(arc_start, arc_middle, arc_end);
+  if (!arc)
+    return std::nullopt;
+  const auto join_is_smooth = [](long double ax, long double ay, long double bx, long double by) {
+    const auto product = std::hypot(ax, ay) * std::hypot(bx, by);
+    return product > 0.0L && ax * bx + ay * by > 0.0L &&
+           std::abs(ax * by - ay * bx) / product <= 0.035L;
+  };
+  const auto sweep_sign = arc->sweep_radians > 0.0L ? 1.0L : -1.0L;
+  const auto arc_tangent = [&](Point point) {
+    return std::pair{-sweep_sign * (static_cast<long double>(point.y.value()) - arc->center_y_nm),
+                     sweep_sign * (static_cast<long double>(point.x.value()) - arc->center_x_nm)};
+  };
+  const auto [start_tx, start_ty] = arc_tangent(arc_start);
+  const auto [end_tx, end_ty] = arc_tangent(arc_end);
+  const auto incoming_x = static_cast<long double>(arc_start.x.value() - previous.x.value());
+  const auto incoming_y = static_cast<long double>(arc_start.y.value() - previous.y.value());
+  const auto outgoing_x = static_cast<long double>(next.x.value() - arc_end.x.value());
+  const auto outgoing_y = static_cast<long double>(next.y.value() - arc_end.y.value());
+  // Quantization is authoritative copper geometry. Reject an arc whose quantized endpoint
+  // tangents no longer meet the final audit's 0.035 angular-error tolerance.
+  if (!join_is_smooth(incoming_x, incoming_y, start_tx, start_ty) ||
+      !join_is_smooth(end_tx, end_ty, outgoing_x, outgoing_y))
+    return std::nullopt;
+  return TrackArc{ObjectId{}, NetId{}, LayerId{}, arc_start, arc_middle, arc_end, Nanometres{}, false};
+}
+
+// Repairs only the degree-two straight chains that survived PH realization. It deliberately uses
+// the original exact board transaction: each candidate is independently validated and rejected
+// unless it preserves connectivity and introduces no copper violation involving changed copper.
+[[nodiscard]] bool repair_residual_straight_bends(
+    Board& board, std::set<std::string>& used_ids, DetailedRouteResult& result,
+    const DetailedRouterConfig& config, const std::set<std::string>& protected_track_ids,
+    std::stop_token stop_token) {
+  if (!config.residual_bend_repair || config.max_residual_bend_repair_runs == 0U ||
+      config.max_residual_bend_repair_corners == 0U)
+    return true;
+  // `scaffold_track_ids` suppresses the primary PH refit so certified scaffold centerlines stay
+  // intact. This exact local trim retains both incident route endpoints and is separately
+  // certified, so it may consider those mutable generated tracks. Source/native protection is
+  // still supplied through protected_track_ids and TrackSegment::locked.
+  const auto runs = collect_unrounded_spline_chains(board, protected_track_ids);
+  const auto per_net_connectivity_regressed = [](const ConnectivityReport& before,
+                                                  const ConnectivityReport& after) {
+    for (const auto& prior : before.nets) {
+      const auto current = std::find_if(after.nets.begin(), after.nets.end(), [&](const auto& net) {
+        return net.net == prior.net;
+      });
+      if (current == after.nets.end() || current->open_connections > prior.open_connections)
+        return true;
+    }
+    return false;
+  };
+  const auto audited_straight_bend = [](const Board& current, const NetId& net,
+                                   const LayerId& layer, Point point) {
+    const auto incidences = copper_endpoint_incidences(current);
+    const auto found = incidences.find({net, layer, point});
+    if (found == incidences.end() || found->second.size() != 2U ||
+        !found->second[0].straight_track || !found->second[1].straight_track ||
+        (found->second[0].direction.x.value() == 0 &&
+         found->second[0].direction.y.value() == 0) ||
+        (found->second[1].direction.x.value() == 0 &&
+         found->second[1].direction.y.value() == 0) ||
+        has_additional_same_net_track_contact(current, net, layer, point, found->second))
+      return false;
+    const auto ax = static_cast<long double>(found->second[0].direction.x.value());
+    const auto ay = static_cast<long double>(found->second[0].direction.y.value());
+    const auto bx = static_cast<long double>(found->second[1].direction.x.value());
+    const auto by = static_cast<long double>(found->second[1].direction.y.value());
+    return ax * by != ay * bx;
+  };
+  const auto run_count = std::min(config.max_residual_bend_repair_runs, runs.size());
+  std::size_t corners_examined = 0U;
+  for (std::size_t run_index = 0U; run_index < run_count; ++run_index) {
+    routing_kernel_checkpoint();
+    if (stop_token.stop_requested())
+      return false;
+    const auto& pending = runs[run_index];
+    const auto& run = pending.run;
+    // A floating closed component has no deterministic seam predecessor, so keep its audited
+    // seam for the final audit. A closed run rooted at an audit-exempt pad/via junction can still
+    // repair every interior corner without moving that physical attachment.
+    const bool closed = run.points.size() >= 2U && run.points.front() == run.points.back();
+    if (run.topology_locked || run.points.size() < 3U ||
+        (closed && audited_straight_bend(board, pending.net, run.layer, run.points.front())) ||
+        run.original_track_ids.size() + 1U != run.points.size())
+      continue;
+    for (std::size_t corner = 1U; corner + 1U < run.points.size(); ++corner) {
+      if (corners_examined >= config.max_residual_bend_repair_corners)
+        return true;
+      ++corners_examined;
+      routing_kernel_checkpoint();
+      if (stop_token.stop_requested())
+        return false;
+      if (result.fitted_circular_arcs >= config.max_circular_arcs ||
+          result.attempted_circular_arc_candidates >= config.max_circular_arc_candidate_checks) {
+        result.circular_arc_candidate_budget_exhausted =
+            result.attempted_circular_arc_candidates >= config.max_circular_arc_candidate_checks;
+        return true;
+      }
+      const auto incoming = std::find_if(board.tracks.begin(), board.tracks.end(), [&](const auto& track) {
+        return track.id.value() == run.original_track_ids[corner - 1U];
+      });
+      const auto outgoing = std::find_if(board.tracks.begin(), board.tracks.end(), [&](const auto& track) {
+        return track.id.value() == run.original_track_ids[corner];
+      });
+      if (incoming == board.tracks.end() || outgoing == board.tracks.end() || incoming->locked ||
+          outgoing->locked || incoming->net != pending.net || outgoing->net != pending.net ||
+          incoming->layer != run.layer || outgoing->layer != run.layer || incoming->width != run.width ||
+          outgoing->width != run.width ||
+          (incoming->start != run.points[corner] && incoming->end != run.points[corner]) ||
+          (outgoing->start != run.points[corner] && outgoing->end != run.points[corner]))
+        continue;
+      if (!audited_straight_bend(board, pending.net, run.layer, run.points[corner]))
+        continue;
+      ++result.residual_bend_repair_attempted;
+      ++result.attempted_circular_arc_corners;
+      const auto incoming_index = static_cast<std::size_t>(incoming - board.tracks.begin());
+      const auto outgoing_index = static_cast<std::size_t>(outgoing - board.tracks.begin());
+      const auto original_incoming = board.tracks[incoming_index];
+      const auto original_outgoing = board.tracks[outgoing_index];
+      Board connectivity_before = board;
+      if (config.defer_saved_zone_fill_clearance_to_refill)
+        for (auto& zone : connectivity_before.zones) zone.fills.clear();
+      const auto before_connectivity = analyze_connectivity(connectivity_before);
+      bool accepted = false;
+      std::optional<std::tuple<Point, Point, Point>> previous_geometry;
+      auto radius = config.maximum_circular_arc_radius;
+      for (std::size_t backtrack = 0U; backtrack <= config.circular_arc_backtracking_steps;
+           ++backtrack, radius = Nanometres{radius.value() / 2}) {
+        routing_kernel_checkpoint();
+        if (stop_token.stop_requested())
+          return false;
+        if (radius.value() <= 1 || result.attempted_circular_arc_candidates >=
+                                       config.max_circular_arc_candidate_checks)
+          break;
+        auto arc = make_circular_fillet(run.points[corner - 1U], run.points[corner],
+                                        run.points[corner + 1U], radius);
+        if (!arc)
+          break;
+        const auto geometry = std::tuple{arc->start, arc->middle, arc->end};
+        if (previous_geometry && *previous_geometry == geometry)
+          continue;
+        previous_geometry = geometry;
+        ++result.attempted_circular_arc_candidates;
+        arc->id = unique_id(pending.base + "-residual-arc-" + std::to_string(corner), used_ids);
+        arc->net = pending.net;
+        arc->layer = run.layer;
+        arc->width = run.width;
+        auto& mutable_incoming = board.tracks[incoming_index];
+        auto& mutable_outgoing = board.tracks[outgoing_index];
+        if (mutable_incoming.end == run.points[corner])
+          mutable_incoming.end = arc->start;
+        else
+          mutable_incoming.start = arc->start;
+        if (mutable_outgoing.start == run.points[corner])
+          mutable_outgoing.start = arc->end;
+        else
+          mutable_outgoing.end = arc->end;
+        board.track_arcs.push_back(*arc);
+        Board probe = board;
+        if (config.defer_saved_zone_fill_clearance_to_refill)
+          for (auto& zone : probe.zones) zone.fills.clear();
+        const auto validation = validate_board(probe);
+        const auto copper = check_copper_rules(probe);
+        const std::array changed_ids{arc->id.value(), mutable_incoming.id.value(), mutable_outgoing.id.value()};
+        const auto changed_copper_violation = std::any_of(copper.violations.begin(), copper.violations.end(),
+            [&changed_ids](const auto& violation) {
+              if (violation.kind == CopperViolationKind::differential_pair_skew) return false;
+              return std::any_of(changed_ids.begin(), changed_ids.end(), [&](const auto& id) {
+                return std::find(violation.object_ids.begin(), violation.object_ids.end(), id) !=
+                       violation.object_ids.end();
+              });
+            });
+        const auto after_connectivity = analyze_connectivity(probe);
+        const bool connectivity_regressed =
+            per_net_connectivity_regressed(before_connectivity, after_connectivity);
+        if (validation.ok() && !changed_copper_violation && !connectivity_regressed) {
+          accepted = true;
+          ++result.residual_bend_repair_accepted;
+          ++result.added_track_arcs;
+          ++result.fitted_circular_arcs;
+          if (backtrack > 0U) ++result.radius_reduced_circular_arcs;
+          used_ids.insert(arc->id.value());
+          break;
+        }
+        board.track_arcs.pop_back();
+        board.tracks[incoming_index] = original_incoming;
+        board.tracks[outgoing_index] = original_outgoing;
+        ++result.rejected_circular_arc_candidates;
+      }
+      if (!accepted) {
+        ++result.residual_bend_repair_rejected;
+        ++result.withheld_circular_arc_corners;
+      }
+    }
+  }
+  return true;
 }
 
 [[nodiscard]] bool navmesh_chord_stays_in_selected_corridor(const NavMeshRouteResult& navigation,
@@ -2554,6 +2993,16 @@ make_topology_tight_detailed_spline(const std::vector<Point>& points, Nanometres
   if (arc != board.track_arcs.end()) {
     return arc->middle;
   }
+  const auto curve = std::find_if(board.track_beziers.begin(), board.track_beziers.end(),
+                                  [&](const auto& item) { return item.id.value() == id; });
+  if (curve != board.track_beziers.end()) {
+    const auto midpoint = [](Nanometres a, Nanometres b, Nanometres c, Nanometres d) {
+      return Nanometres{static_cast<std::int64_t>(std::llround(
+          (static_cast<long double>(a.value()) + 3.0L * b.value() + 3.0L * c.value() + d.value()) / 8.0L))};
+    };
+    return Point{midpoint(curve->start.x, curve->control1.x, curve->control2.x, curve->end.x),
+                 midpoint(curve->start.y, curve->control1.y, curve->control2.y, curve->end.y)};
+  }
   const auto via = std::find_if(board.vias.begin(), board.vias.end(),
                                 [&](const auto& item) { return item.id.value() == id; });
   if (via != board.vias.end()) {
@@ -2576,6 +3025,7 @@ struct SplineProbe {
   std::map<std::string, long double> parameter_by_id;
   std::size_t tracks{0};
   std::size_t arcs{0};
+  std::size_t beziers{0};
 };
 
 [[nodiscard]] std::optional<SplineProbe>
@@ -2601,6 +3051,11 @@ materialize_spline_probe(const Board& source, const SplineRun& run,
       result.board.track_arcs.push_back(
           TrackArc{id, NetId{}, run.layer, piece.start, piece.middle, piece.end, run.width, false});
       ++result.arcs;
+    } else if (piece.kind == SplineFittedPieceKind::cubic_bezier) {
+      result.board.track_beziers.push_back(TrackBezier{
+          id, NetId{}, run.layer, piece.start, piece.control1, piece.control2, piece.end,
+          run.width, false});
+      ++result.beziers;
     } else {
       result.board.tracks.push_back(
           TrackSegment{id, NetId{}, run.layer, piece.start, piece.end, run.width, false});
@@ -2622,6 +3077,10 @@ void assign_spline_net(SplineProbe& probe, const NetId& net) {
       arc.net = net;
     }
   }
+  for (auto& bezier : probe.board.track_beziers) {
+    if (ids.contains(bezier.id.value()))
+      bezier.net = net;
+  }
 }
 
 [[nodiscard]] const CopperViolation*
@@ -2641,6 +3100,68 @@ first_spline_collision(const CopperDrcReport& report,
     }
     return nullptr;
   }();
+}
+
+[[nodiscard]] bool is_pad_attachment(const Board& board, const NetId& net, const LayerId& layer,
+                                     Point point) {
+  return std::any_of(board.footprints.begin(), board.footprints.end(), [&](const auto& footprint) {
+    return std::any_of(footprint.pads.begin(), footprint.pads.end(), [&](const auto& pad) {
+      if (pad.net != net ||
+          std::find(pad.layers.begin(), pad.layers.end(), layer) == pad.layers.end()) {
+        return false;
+      }
+      return geometry::transform_point(pad.local_position, footprint.position, footprint.rotation,
+                                       footprint.side) == point;
+    });
+  });
+}
+
+// A sub-cell pad run-up is terminal-access planning evidence, not a mandatory copper tangent.
+// Retain the physical pad endpoint but remove the adjacent interpolation point when the direct
+// chord is independently legal in the clearance-offset domain and closes a zero-winding loop
+// around every obstacle. The complete quantized curve remains subject to connectivity and DRC.
+[[nodiscard]] std::vector<Point> remove_legal_terminal_planning_stubs(
+    const Board& board, const NetId& net, const LayerId& layer,
+    const OffsetFreeSpaceRegion& region, const std::vector<Point>& source,
+    Nanometres maximum_stub_length) {
+  if (source.size() < 3U || maximum_stub_length.value() <= 0)
+    return source;
+
+  FreeSpaceDomain domain;
+  domain.outline = region.area;
+  domain.cutouts = region.holes;
+  auto result = source;
+  const auto same_homotopy = [&](const std::vector<Point>& candidate) {
+    for (const auto& hole : region.holes) {
+      const auto witness = polygon_interior_representative(hole);
+      if (!witness || closed_route_winding_difference(result, candidate, *witness) != 0)
+        return false;
+    }
+    return true;
+  };
+  const auto try_remove = [&](bool at_start) {
+    if (result.size() < 3U)
+      return;
+    const auto endpoint = at_start ? result.front() : result.back();
+    if (!is_pad_attachment(board, net, layer, endpoint))
+      return;
+    const auto adjacent = at_start ? result[1U] : result[result.size() - 2U];
+    if (geometry::segment_length_nm(endpoint, adjacent) >
+        static_cast<long double>(maximum_stub_length.value())) {
+      return;
+    }
+    const auto chord_other = at_start ? result[2U] : result[result.size() - 3U];
+    if (!assess_free_space_chord(domain, endpoint, chord_other))
+      return;
+    auto candidate = result;
+    candidate.erase(candidate.begin() +
+                    static_cast<std::ptrdiff_t>(at_start ? 1U : candidate.size() - 2U));
+    if (same_homotopy(candidate))
+      result = std::move(candidate);
+  };
+  try_remove(true);
+  try_remove(false);
+  return result;
 }
 
 [[nodiscard]] bool refine_spline_run(Board& board, const Board& navigation_board, const NetId& net,
@@ -2697,12 +3218,21 @@ first_spline_collision(const CopperDrcReport& report,
   std::optional<NavMeshRouteResult> navigation;
   std::optional<PreparedNavMeshDomain> prepared_navigation;
   const OffsetFreeSpaceRegion* selected_region = nullptr;
+  auto selected_planning_points = run.points;
   for (const auto& region : navigation_regions) {
+    auto planning_run = run;
+    // Only the clearance-offset domain proves the replacement copper envelope. The zero-offset
+    // certificate fallback retains the original terminal run-up and relies on final DRC as before.
+    if (navigation_regions_are_offset && !run.topology_locked) {
+      planning_run.points = remove_legal_terminal_planning_stubs(
+          navigation_board, net, run.layer, region, run.points,
+          Nanometres{std::max<std::int64_t>(1, config.spline_navmesh_cell_pitch.value() / 2)});
+    }
     const NavMeshConfig navmesh_config{
         config.spline_navmesh_cell_pitch,
         config.max_spline_navmesh_cells_per_run,
         config.max_spline_navmesh_search_expansions_per_run,
-        run.points,
+        planning_run.points,
         Nanometres{config.spline_control_corridor.value() +
                    config.spline_navmesh_cell_pitch.value()},
         static_cast<std::size_t>(
@@ -2715,8 +3245,15 @@ first_spline_collision(const CopperDrcReport& report,
         2U,
         Nanometres{0}};
     auto prepared = prepare_navmesh_domain(region, navmesh_config);
-    auto routed =
-        route_prepared_navmesh(prepared, run.points.front(), run.points.back(), navmesh_config);
+    // Certified scaffolds use the NavMesh only as a local clearance guard.  Re-searching between
+    // their endpoints could replace the selected route class, so retain the source corridor.
+    const auto source_corridor = run.topology_locked
+        ? make_source_polyline_corridor(region, planning_run, config.spline_navmesh_cell_pitch,
+                                        config.spline_control_corridor,
+                                        config.spline_minimum_bend_radius)
+        : std::optional<NavMeshRouteResult>{};
+    auto routed = source_corridor ? *source_corridor
+        : route_prepared_navmesh(prepared, run.points.front(), run.points.back(), navmesh_config);
     result.spline_navmesh_refined_parents += routed.adaptive_refined_parent_cells;
     result.spline_navmesh_refined_leaves += routed.adaptive_refined_leaf_cells;
     result.spline_navmesh_rejected_leaves += routed.adaptive_rejected_leaf_cells;
@@ -2725,16 +3262,34 @@ first_spline_collision(const CopperDrcReport& report,
         routed.gpu_wavefront_cpu_fallback ? 1U : 0U;
     result.spline_navmesh_last_diagnostic = routed.diagnostic;
     if (routed.ok()) {
+      if (!run.topology_locked && planning_run.points != run.points) {
+        // Merge, rather than replace, the ordinary broad NavMesh corridor. A certificate pitch
+        // eight times the search pitch yields an initial half-width equal to the search pitch,
+        // which gives a default-radius PH bend room to leave the source centreline; every cell is
+        // nevertheless independently reduced until all sides and diagonals lie in offset space.
+        augment_with_certified_planning_route(
+            region, planning_run,
+            Nanometres{config.spline_navmesh_cell_pitch.value() * static_cast<std::int64_t>(8)},
+            config.spline_control_corridor, routed);
+      }
+      if (!run.topology_locked) {
+        augment_terminal_planning_chord_corridor(
+            region, run, planning_run.points, config.spline_navmesh_cell_pitch,
+            config.spline_control_corridor, routed);
+      }
       navigation = std::move(routed);
       prepared_navigation = std::move(prepared);
       selected_region = &region;
+      selected_planning_points = std::move(planning_run.points);
       break;
     }
     if (const auto source_corridor = make_source_polyline_corridor(
-            region, run, config.spline_navmesh_cell_pitch, config.spline_control_corridor)) {
+            region, planning_run, config.spline_navmesh_cell_pitch,
+            config.spline_control_corridor, config.spline_minimum_bend_radius)) {
       navigation = std::move(*source_corridor);
       prepared_navigation = std::move(prepared);
       selected_region = &region;
+      selected_planning_points = std::move(planning_run.points);
       ++result.spline_navmesh_certificate_fallbacks;
       result.spline_navmesh_last_diagnostic =
           "coarse NavMesh failed; retained exact source-polyline corridor certificate";
@@ -2755,9 +3310,26 @@ first_spline_collision(const CopperDrcReport& report,
   }
   ++result.spline_navmesh_topology_signatures;
   result.spline_navmesh_topology_gates += navigation->topology_signature.gates.size();
-  auto spline_points = string_pull_detailed_spline_seed(
-      *navigation,
-      Nanometres{std::max<std::int64_t>(1, config.spline_navmesh_cell_pitch.value() / 4)});
+  auto spline_points = run.topology_locked
+      ? run.points
+      : string_pull_detailed_spline_seed(
+            *navigation,
+            Nanometres{std::max<std::int64_t>(1, config.spline_navmesh_cell_pitch.value() / 4)});
+  // String pulling can synthesize a different sub-cell portal point at the pad, so matching only
+  // the source stub identity is insufficient. Reapply the exact rule to the actual interpolation
+  // sequence and extend the selected guard only around any newly accepted terminal chord.
+  const SplineRun pulled_run{run.layer, run.width, spline_points, {}};
+  auto corrected_spline_points = run.topology_locked
+      ? spline_points
+      : remove_legal_terminal_planning_stubs(
+            navigation_board, net, run.layer, *selected_region, spline_points,
+            Nanometres{std::max<std::int64_t>(1, config.spline_navmesh_cell_pitch.value() / 2)});
+  if (corrected_spline_points != spline_points) {
+    augment_terminal_planning_chord_corridor(
+        *selected_region, pulled_run, corrected_spline_points, config.spline_navmesh_cell_pitch,
+        config.spline_control_corridor, *navigation);
+    spline_points = std::move(corrected_spline_points);
+  }
   if (spline_points.size() == 2U) {
     spline_points.insert(
         spline_points.begin() + 1,
@@ -2781,6 +3353,32 @@ first_spline_collision(const CopperDrcReport& report,
   if (topology_corridor.empty() || !set_quintic_ph_corridor(*spline, topology_corridor)) {
     return false;
   }
+  const auto quantize = [](SplineVector point) {
+    return Point{Nanometres{static_cast<std::int64_t>(std::llround(point.x))},
+                 Nanometres{static_cast<std::int64_t>(std::llround(point.y))}};
+  };
+  const auto clearance_evaluator = [&](SplineVector position) {
+    const auto point = quantize(position);
+    const auto query = query_prepared_navmesh_point(*prepared_navigation, point);
+    const auto distance = query.boundary_distance_nm;
+    const auto probe = std::max<std::int64_t>(1, config.spline_navmesh_cell_pitch.value() / 100);
+    const auto dx = query_prepared_navmesh_point(
+                        *prepared_navigation, Point{Nanometres{point.x.value() + probe}, point.y})
+                        .boundary_distance_nm -
+                    query_prepared_navmesh_point(
+                        *prepared_navigation, Point{Nanometres{point.x.value() - probe}, point.y})
+                        .boundary_distance_nm;
+    const auto dy = query_prepared_navmesh_point(
+                        *prepared_navigation, Point{point.x, Nanometres{point.y.value() + probe}})
+                        .boundary_distance_nm -
+                    query_prepared_navmesh_point(
+                        *prepared_navigation, Point{point.x, Nanometres{point.y.value() - probe}})
+                        .boundary_distance_nm;
+    const auto length = std::hypot(dx, dy);
+    return SplineClearanceProbe{
+        query.inside ? distance : -distance,
+        length > 0.0L ? SplineVector{dx / length, dy / length} : SplineVector{}, query.inside};
+  };
   // The exact offset free-space query remains the physical authority. The selected guard-cell
   // union is additionally retained as a continuous topology corridor so an initially overshooting
   // PH branch can be pulled back into its route class instead of being rejected before the
@@ -2789,7 +3387,7 @@ first_spline_collision(const CopperDrcReport& report,
     SplineContinuousEnvelopeConfig corridor_certificate_config;
     corridor_certificate_config.corridor_certifies_clearance = true;
     const auto corridor_certificate = certify_quintic_ph_continuous_envelope(
-        *spline, Nanometres{0}, {}, corridor_certificate_config);
+        *spline, Nanometres{0}, clearance_evaluator, corridor_certificate_config);
     result.spline_continuous_hulls_checked += corridor_certificate.hulls_checked;
     if (!corridor_certificate.legal) {
       ++result.spline_navmesh_topology_rejections;
@@ -2826,28 +3424,52 @@ first_spline_collision(const CopperDrcReport& report,
   shape_config.minimum_bend_radius = config.spline_minimum_bend_radius;
   SplineContinuousEnvelopeConfig seed_envelope_config;
   seed_envelope_config.corridor_certifies_clearance = true;
-  using SeedScore = std::tuple<std::size_t, std::size_t, std::size_t, long double>;
+  const auto route_class_preserved = [&](const QuinticPHRoute& candidate) {
+    const auto samples = adaptive_tessellate_quintic_ph(
+        candidate, config.spline_tessellation_tolerance, config.spline_max_tessellation_depth,
+        config.max_spline_samples_per_run);
+    if (samples.size() < 2U || samples.size() >= config.max_spline_samples_per_run)
+      return false;
+    std::vector<Point> polyline;
+    polyline.reserve(samples.size());
+    for (const auto& sample : samples) {
+      const auto point = quantize(sample.position);
+      if (polyline.empty() || polyline.back() != point)
+        polyline.push_back(point);
+    }
+    std::string diagnostic;
+    return detailed_spline_preserves_route_class(
+        *navigation, *selected_region, polyline,
+        Nanometres{std::max<std::int64_t>(1, config.spline_navmesh_cell_pitch.value() /
+                                                 static_cast<std::int64_t>(4))},
+        true, diagnostic);
+  };
+  // Topology is not repairable by the local trajectory optimizer and therefore ranks first.
+  // Among topology-valid starts, minimize the complete hard-defect count and prefer a
+  // shape-regular branch over one that already contains a loop/inflection. Clearance-envelope
+  // defects remain eligible because elastic optimization can move them within the selected
+  // corridor.
+  using SeedScore = std::tuple<std::size_t, std::size_t, std::size_t, std::size_t, long double>;
   auto best_seed = *spline;
   SeedScore best_seed_score{
       std::numeric_limits<std::size_t>::max(), std::numeric_limits<std::size_t>::max(),
-      std::numeric_limits<std::size_t>::max(), std::numeric_limits<long double>::infinity()};
+      std::numeric_limits<std::size_t>::max(), std::numeric_limits<std::size_t>::max(),
+      std::numeric_limits<long double>::infinity()};
   std::optional<SeedScore> raw_seed_score;
   auto consider_seed = [&](std::optional<QuinticPHRoute> candidate, bool raw) {
     if (!candidate || !set_quintic_ph_corridor(*candidate, topology_corridor))
       return;
     ++result.spline_seed_candidates;
     const auto shape = certify_quintic_ph_shape(*candidate, shape_config);
-    const auto envelope =
-        certify_quintic_ph_continuous_envelope(*candidate, Nanometres{0}, {}, seed_envelope_config);
+    const auto envelope = certify_quintic_ph_continuous_envelope(
+        *candidate, Nanometres{0}, clearance_evaluator, seed_envelope_config);
+    const auto topology_legal = route_class_preserved(*candidate);
     long double length = 0.0L;
     for (const auto& segment : candidate->segments)
       length += quintic_ph_arc_length(segment);
-    // Corridor feasibility is the first seed criterion. A topology-tight start may have a sharp
-    // but locally repairable bend; a visually smoother PH branch whose convex hull already leaves
-    // the selected guard is much less likely to recover without changing homotopy.
-    const SeedScore score{envelope.violations(), shape.violations(),
-                          shape.violations() + envelope.violations(), length};
-    if (shape.legal && envelope.legal)
+    const SeedScore score{topology_legal ? 0U : 1U, shape.violations() + envelope.violations(),
+                          shape.violations(), envelope.violations(), length};
+    if (topology_legal && shape.legal && envelope.legal)
       ++result.spline_seed_exact_legal;
     if (raw)
       raw_seed_score = score;
@@ -2856,6 +3478,7 @@ first_spline_collision(const CopperDrcReport& report,
       best_seed = std::move(*candidate);
     }
   };
+  const auto initial_legal_seeds = result.spline_seed_exact_legal;
   consider_seed(spline, true);
   const auto seed_probe_spacing = Nanometres{std::max<std::int64_t>(
       1, config.spline_navmesh_cell_pitch.value() / static_cast<std::int64_t>(4))};
@@ -2865,53 +3488,49 @@ first_spline_collision(const CopperDrcReport& report,
     if (relaxed != spline_points)
       consider_seed(make_quintic_ph_route(relaxed), false);
   }
+  // The NavMesh funnel is preferred for topology discovery, but it is not the only legal
+  // interpolation parameterization. Retain source-copper-derived starts as bounded fallback
+  // columns. This is especially important at pad entries where a very short final run-up beside a
+  // much longer corridor span can condition the funnel's Hermite derivatives badly even though a
+  // regular corner-rounded PH chain exists in the same route class.
+  consider_seed(make_quintic_ph_route(selected_planning_points), false);
   for (const auto factor : {1, 2, 4}) {
     const auto guard = Nanometres{
         std::min(config.spline_control_corridor.value(),
                  config.spline_navmesh_cell_pitch.value() * static_cast<std::int64_t>(factor))};
     consider_seed(make_topology_tight_detailed_spline(spline_points, guard), false);
+    consider_seed(make_corner_rounded_quintic_ph_route(selected_planning_points, guard), false);
   }
   for (const auto divisor : {2, 3, 4, 6, 8, 12, 16, 32}) {
     consider_seed(make_topology_tight_detailed_spline(
                       spline_points, Nanometres{std::max<std::int64_t>(
                                          1, config.spline_navmesh_cell_pitch.value() / divisor)}),
                   false);
+    consider_seed(make_corner_rounded_quintic_ph_route(
+                      selected_planning_points,
+                      Nanometres{std::max<std::int64_t>(
+                          1, config.spline_navmesh_cell_pitch.value() / divisor)}),
+                  false);
+  }
+  if (result.spline_seed_exact_legal == initial_legal_seeds) {
+    // A corner's shoulder bisectors can bow an otherwise straight intervening run
+    // across a nearby boundary. Try exact Hermite run directions before asking
+    // position-only optimization to undo that seed-construction defect.
+    const auto candidates_before = result.spline_seed_candidates;
+    for (const auto factor : {1, 2, 4, 8}) {
+      const auto guard = Nanometres{std::min(
+          config.spline_control_corridor.value(),
+          config.spline_navmesh_cell_pitch.value() * static_cast<std::int64_t>(factor))};
+      consider_seed(make_run_aligned_quintic_ph_route(selected_planning_points, guard), false);
+      consider_seed(make_run_aligned_quintic_ph_route(spline_points, guard), false);
+    }
+    result.spline_run_aligned_seed_candidates += result.spline_seed_candidates - candidates_before;
+    result.spline_run_aligned_seed_exact_legal += result.spline_seed_exact_legal - initial_legal_seeds;
   }
   if (raw_seed_score && best_seed_score < *raw_seed_score)
     ++result.spline_seed_portfolio_improvements;
   *spline = std::move(best_seed);
   ++result.attempted_quintic_ph_runs;
-  const auto quantize = [](SplineVector point) {
-    return Point{Nanometres{static_cast<std::int64_t>(std::llround(point.x))},
-                 Nanometres{static_cast<std::int64_t>(std::llround(point.y))}};
-  };
-  const auto clearance_evaluator = [&](SplineVector position) {
-    const auto point = quantize(position);
-    const auto query = query_prepared_navmesh_point(*prepared_navigation, point);
-    const auto distance = query.boundary_distance_nm;
-    const auto probe = std::max<std::int64_t>(1, config.spline_navmesh_cell_pitch.value() / 100);
-    const auto dx = query_prepared_navmesh_point(
-                        *prepared_navigation, Point{Nanometres{point.x.value() + probe}, point.y})
-                        .boundary_distance_nm -
-                    query_prepared_navmesh_point(
-                        *prepared_navigation, Point{Nanometres{point.x.value() - probe}, point.y})
-                        .boundary_distance_nm;
-    const auto dy = query_prepared_navmesh_point(
-                        *prepared_navigation, Point{point.x, Nanometres{point.y.value() + probe}})
-                        .boundary_distance_nm -
-                    query_prepared_navmesh_point(
-                        *prepared_navigation, Point{point.x, Nanometres{point.y.value() - probe}})
-                        .boundary_distance_nm;
-    const auto length = std::hypot(dx, dy);
-    return SplineClearanceProbe{
-        query.inside ? distance : -distance,
-        length > 0.0L ? SplineVector{dx / length, dy / length} : SplineVector{},
-        // The detailed NavMesh itself is restricted to the allocated polyline's topology tube.
-        // Continuous accepted iterates remain in represented free space; that legal homotopy,
-        // together with corridor-anchored controls, preserves obstacle side without treating an
-        // arbitrary cell boundary as a physical obstacle.
-        query.inside};
-  };
   SplineTrajectoryOptimizationConfig trajectory_config;
   // Every retained NavMesh cell has already exact-checked all four sides and both diagonals at
   // center_clearance. The PH envelope checker additionally proves each subdivided Bezier hull is
@@ -2943,12 +3562,39 @@ first_spline_collision(const CopperDrcReport& report,
                                             spline_points[spline_points.size() - 2U].x.value()),
                    static_cast<long double>(spline_points.back().y.value() -
                                             spline_points[spline_points.size() - 2U].y.value())};
+  const auto route_constraint = route_class_preserved;
+  // Post-polish may remove or replace interpolation stations.  It is otherwise an intentionally
+  // cheap G1 operation, but a station layout that cannot be promoted to the requested native G2
+  // realization is not useful here.  Test that one bounded post-polish result before accepting
+  // it; keep the expensive curvature solve out of the optimizer's ordinary candidate loop.
+  if (config.prefer_g2_ph_splines) {
+    trajectory_config.postpolish_route_constraint = [&](const QuinticPHRoute& candidate) {
+      if (candidate.segments.size() <= 1U || candidate.curvature_continuous)
+        return true;
+      auto fair = candidate;
+      if (!enforce_quintic_ph_continuity(
+              fair, PHJoinContinuity::curvature, 1.0e-10L,
+              std::min<std::size_t>(24U, config.max_spline_trajectory_iterations), stop_token))
+        return false;
+      auto fair_shape = trajectory_config.shape;
+      fair_shape.minimum_bend_radius = trajectory_config.minimum_bend_radius;
+      SplineContinuousEnvelopeConfig fair_envelope_config;
+      fair_envelope_config.corridor_certifies_clearance = true;
+      return certify_quintic_ph_continuous_envelope(
+                 fair, Nanometres{0}, clearance_evaluator, fair_envelope_config)
+                 .legal &&
+             certify_quintic_ph_shape(fair, fair_shape).legal && route_constraint(fair);
+    };
+  }
   ++result.spline_trajectory_attempts;
   const auto spline_before_optimization = *spline;
-  const auto optimized =
-      optimize_quintic_ph_trajectory(*spline, trajectory_config, clearance_evaluator);
+  const auto optimized = optimize_quintic_ph_trajectory(*spline, trajectory_config,
+                                                        clearance_evaluator, route_constraint);
   result.spline_trajectory_control_moves += optimized.accepted_control_moves;
   result.spline_trajectory_candidate_checks += optimized.candidate_checks;
+  result.spline_paired_obstacle_support_recoveries += optimized.paired_obstacle_support_recoveries;
+  result.spline_paired_obstacle_supports_inserted += optimized.paired_obstacle_supports_inserted;
+  result.spline_paired_obstacle_support_attempts += optimized.paired_obstacle_support_attempts;
   result.spline_multistart_attempts += optimized.multistart_attempts;
   result.spline_multistart_recoveries += optimized.multistart_recoveries;
   result.spline_gpu_precondition_attempts += optimized.gpu_precondition_attempted ? 1U : 0U;
@@ -2983,7 +3629,59 @@ first_spline_collision(const CopperDrcReport& report,
       optimized.final_continuous_violations > 0U ? 1U : 0U;
   result.spline_continuous_budget_exhaustions += optimized.continuous_budget_exhausted ? 1U : 0U;
   if (!optimized.accepted) {
+    result.spline_last_materialization_diagnostic =
+        "trajectory rejected: sampled_clearance=" +
+        std::to_string(optimized.final_sampled_clearance_violations) +
+        ";continuous_corridor=" +
+        std::to_string(optimized.final_continuous_corridor_violations) +
+        ";continuous_clearance=" +
+        std::to_string(optimized.final_continuous_clearance_violations);
     return false;
+  }
+  // The optimizer works in the cheaper tangent-continuous PH space. Promote only its selected
+  // result to a fair curvature-continuous chain, once, immediately before native arc fitting.
+  // This keeps G2 construction out of the candidate inner loop. A promotion must retain the same
+  // exact guard containment, shape and homotopy; otherwise the legal G1 result remains intact.
+  std::optional<QuinticPHRoute> unpromoted_spline;
+  if (config.prefer_g2_ph_splines && spline->segments.size() > 1U &&
+      !spline->curvature_continuous &&
+      config.max_spline_candidate_checks - std::min(config.max_spline_candidate_checks,
+          result.attempted_circular_arc_candidates) > 1U) {
+    ++result.spline_g2_promotion_attempts;
+    const auto promotion_started = std::chrono::steady_clock::now();
+    auto fair = *spline;
+    auto promoted = enforce_quintic_ph_continuity(
+        fair, PHJoinContinuity::curvature, 1.0e-10L,
+        std::min<std::size_t>(24U, config.max_spline_trajectory_iterations), stop_token);
+    // The G1 optimizer can improve length by perturbing a derivative layout beyond the bounded
+    // scalar-G2 promoter's basin.  Keep its checkpoint and make one upstream retry rather than
+    // relaxing curvature tolerance or discarding the route's smooth realization altogether.
+    // Both alternatives preserve interpolation stations; the same hard guards below decide
+    // which one may reach native copper fitting.
+    if (!promoted && !stop_token.stop_requested()) {
+      fair = spline_before_optimization;
+      promoted = enforce_quintic_ph_continuity(
+          fair, PHJoinContinuity::curvature, 1.0e-10L,
+          std::min<std::size_t>(24U, config.max_spline_trajectory_iterations), stop_token);
+    }
+    auto fair_shape = trajectory_config.shape;
+    fair_shape.minimum_bend_radius = trajectory_config.minimum_bend_radius;
+    SplineContinuousEnvelopeConfig fair_envelope_config;
+    fair_envelope_config.corridor_certifies_clearance = true;
+    const auto fair_envelope =
+        promoted ? certify_quintic_ph_continuous_envelope(
+                       fair, Nanometres{0}, clearance_evaluator, fair_envelope_config)
+                 : SplineContinuousEnvelopeCertificate{};
+    if (promoted && fair_envelope.legal && certify_quintic_ph_shape(fair, fair_shape).legal &&
+        route_class_preserved(fair)) {
+      unpromoted_spline = *spline;
+      *spline = std::move(fair);
+    } else {
+      ++result.spline_g2_fallbacks;
+    }
+    result.spline_g2_promotion_microseconds += static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - promotion_started).count());
   }
   const auto optimized_topology_samples = adaptive_tessellate_quintic_ph(
       *spline, config.spline_tessellation_tolerance, config.spline_max_tessellation_depth,
@@ -2992,7 +3690,11 @@ first_spline_collision(const CopperDrcReport& report,
     // Optimization may not change the selected homotopy. Retain the pre-optimization seed only if
     // it independently passes the same continuous route-class check; a shape-valid PH branch is
     // not automatically topology-valid merely because it came from funnel interpolation nodes.
-    *spline = spline_before_optimization;
+    *spline = unpromoted_spline ? *unpromoted_spline : spline_before_optimization;
+    if (unpromoted_spline) {
+      unpromoted_spline.reset();
+      ++result.spline_g2_fallbacks;
+    }
     auto fallback_shape = trajectory_config.shape;
     fallback_shape.minimum_bend_radius = trajectory_config.minimum_bend_radius;
     const auto fallback_samples = adaptive_tessellate_quintic_ph(
@@ -3005,211 +3707,238 @@ first_spline_collision(const CopperDrcReport& report,
   } else {
     ++result.spline_trajectory_accepted;
   }
-  Board corridor_board = board;
-  const auto baseline_connectivity = analyze_connectivity(board);
-  std::size_t pending_pns_shoves = 0U;
-  std::size_t pending_pns_tracks = 0U;
-  std::size_t pending_pns_vias = 0U;
-  std::size_t pending_pns_doglegs = 0U;
-  for (std::size_t iteration = 0U; iteration <= config.max_spline_shove_iterations; ++iteration) {
-    if (stop_token.stop_requested()) {
-      return false;
-    }
-    if (result.attempted_circular_arc_candidates >= config.max_spline_candidate_checks) {
-      result.spline_candidate_budget_exhausted = true;
-      result.circular_arc_candidate_budget_exhausted = true;
-      return false;
-    }
-    const auto samples = adaptive_tessellate_quintic_ph(
-        *spline, config.spline_tessellation_tolerance, config.spline_max_tessellation_depth,
-        config.max_spline_samples_per_run);
-    result.adaptive_spline_tessellation_samples += samples.size();
-    if (samples.size() < 2U || samples.size() >= config.max_spline_samples_per_run) {
-      return false;
-    }
-    if (!topology_preserved(samples)) {
-      return false;
-    }
-    const auto pieces = fit_spline_samples_to_lines_and_arcs(
-        samples, config.spline_arc_fit_tolerance, config.max_spline_arc_samples,
-        config.max_spline_fitted_pieces_per_run);
-    const auto arc_count =
-        static_cast<std::size_t>(std::count_if(pieces.begin(), pieces.end(), [](const auto& piece) {
-          return piece.kind == SplineFittedPieceKind::circular_arc;
-        }));
-    // A rubber-band solution may legitimately pull a staircase completely straight. That is a
-    // successful whole-run PH realization even though its exact KiCad decomposition needs no arc.
-    if (pieces.empty() ||
-        arc_count > config.max_circular_arcs -
-                        std::min(config.max_circular_arcs, result.fitted_circular_arcs)) {
-      return false;
-    }
-    ++result.attempted_circular_arc_candidates;
-    auto probe = materialize_spline_probe(corridor_board, run, pieces, base, iteration, used_ids);
-    if (!probe) {
-      return false;
-    }
-    assign_spline_net(*probe, net);
-    Board checked = probe->board;
-    if (config.defer_saved_zone_fill_clearance_to_refill) {
-      for (auto& zone : checked.zones) {
-        zone.fills.clear();
+  bool promotion_pending = unpromoted_spline.has_value();
+  const auto materialize_selected_spline = [&]() -> bool {
+    Board corridor_board = board;
+    const auto baseline_connectivity = analyze_connectivity(board);
+    std::size_t pending_pns_shoves = 0U;
+    std::size_t pending_pns_tracks = 0U;
+    std::size_t pending_pns_vias = 0U;
+    std::size_t pending_pns_doglegs = 0U;
+    for (std::size_t iteration = 0U; iteration <= config.max_spline_shove_iterations; ++iteration) {
+      routing_kernel_checkpoint();
+      if (stop_token.stop_requested()) {
+        return false;
       }
-    }
-    const auto validation = validate_board(checked);
-    const auto copper = check_copper_rules(checked);
-    const auto* collision = first_spline_collision(copper, probe->generated_ids);
-    if (validation.ok() && collision == nullptr) {
-      const std::set<std::string> original_ids(run.original_track_ids.begin(),
-                                               run.original_track_ids.end());
-      std::erase_if(probe->board.tracks,
-                    [&](const auto& track) { return original_ids.contains(track.id.value()); });
-      Board final_checked = probe->board;
+      if (result.attempted_circular_arc_candidates >= config.max_spline_candidate_checks) {
+        result.spline_candidate_budget_exhausted = true;
+        result.circular_arc_candidate_budget_exhausted = true;
+        return false;
+      }
+      const auto samples = adaptive_tessellate_quintic_ph(
+          *spline, config.spline_tessellation_tolerance, config.spline_max_tessellation_depth,
+          config.max_spline_samples_per_run);
+      result.adaptive_spline_tessellation_samples += samples.size();
+      if (samples.size() < 2U || samples.size() >= config.max_spline_samples_per_run) {
+        return false;
+      }
+      if (!topology_preserved(samples)) {
+        return false;
+      }
+      const NativeSplineFitConfig fit_policy{
+          config.spline_tessellation_tolerance, config.spline_arc_fit_tolerance,
+          config.spline_max_tessellation_depth, config.max_spline_samples_per_run,
+          config.max_spline_arc_samples,        config.max_spline_fitted_pieces_per_run,
+          config.spline_max_join_angle_radians};
+      const auto pieces = fit_quintic_ph_to_cubic_copper(*spline, fit_policy, stop_token);
+      // A rubber-band solution may legitimately pull a staircase completely straight. That is a
+      // successful whole-run PH realization even though its exact KiCad decomposition needs no arc.
+      if (pieces.empty()) {
+        return false;
+      }
+      ++result.attempted_circular_arc_candidates;
+      auto probe = materialize_spline_probe(corridor_board, run, pieces, base, iteration, used_ids);
+      if (!probe) {
+        return false;
+      }
+      assign_spline_net(*probe, net);
+      Board checked = probe->board;
       if (config.defer_saved_zone_fill_clearance_to_refill) {
-        for (auto& zone : final_checked.zones) {
+        for (auto& zone : checked.zones) {
           zone.fills.clear();
         }
       }
-      const auto final_validation = validate_board(final_checked);
-      const auto final_copper = check_copper_rules(final_checked);
-      const auto final_connectivity = analyze_connectivity(final_checked);
-      const auto* final_collision = first_spline_collision(final_copper, probe->generated_ids);
-      const auto connectivity_regressed =
-          final_connectivity.open_connections > baseline_connectivity.open_connections ||
-          final_connectivity.unrouted_nets > baseline_connectivity.unrouted_nets;
-      if (!final_validation.ok() || final_collision != nullptr || connectivity_regressed) {
-        if (!final_validation.ok()) {
-          ++result.spline_final_validation_rejections;
-          result.spline_last_materialization_diagnostic =
-              "quantized PH replacement failed canonical board validation";
-        } else if (final_collision != nullptr) {
-          ++result.spline_final_copper_rejections;
-          result.spline_last_materialization_diagnostic =
-              final_collision->code + ": quantized PH replacement failed copper DRC";
-        } else {
-          ++result.spline_final_connectivity_rejections;
-          result.spline_last_materialization_diagnostic =
-              "quantized PH replacement regressed exact connectivity";
+      const auto validation = validate_board(checked);
+      const auto copper = check_copper_rules(checked);
+      const auto* collision = first_spline_collision(copper, probe->generated_ids);
+      if (validation.ok() && collision == nullptr) {
+        const std::set<std::string> original_ids(run.original_track_ids.begin(),
+                                                 run.original_track_ids.end());
+        std::erase_if(probe->board.tracks,
+                      [&](const auto& track) { return original_ids.contains(track.id.value()); });
+        Board final_checked = probe->board;
+        if (config.defer_saved_zone_fill_clearance_to_refill) {
+          for (auto& zone : final_checked.zones) {
+            zone.fills.clear();
+          }
         }
-        ++result.rejected_circular_arc_candidates;
+        const auto final_validation = validate_board(final_checked);
+        const auto final_copper = check_copper_rules(final_checked);
+        const auto final_connectivity = analyze_connectivity(final_checked);
+        const auto* final_collision = first_spline_collision(final_copper, probe->generated_ids);
+        const auto connectivity_regressed =
+            final_connectivity.open_connections > baseline_connectivity.open_connections ||
+            final_connectivity.unrouted_nets > baseline_connectivity.unrouted_nets;
+        if (!final_validation.ok() || final_collision != nullptr || connectivity_regressed) {
+          if (!final_validation.ok()) {
+            ++result.spline_final_validation_rejections;
+            result.spline_last_materialization_diagnostic =
+                "quantized PH replacement failed canonical board validation";
+          } else if (final_collision != nullptr) {
+            ++result.spline_final_copper_rejections;
+            result.spline_last_materialization_diagnostic =
+                final_collision->code + ": quantized PH replacement failed copper DRC";
+          } else {
+            ++result.spline_final_connectivity_rejections;
+            result.spline_last_materialization_diagnostic =
+                "quantized PH replacement regressed exact connectivity";
+          }
+          ++result.rejected_circular_arc_candidates;
+          return false;
+        }
+        // Commit the exact-checked replacement transaction, not the probe board.  The probe still
+        // contains the superseded source segments so it can be validated as an additive candidate;
+        // retaining it here would leave duplicate same-net bends for later local curve passes.
+        board = std::move(final_checked);
+        result.added_tracks -= std::min(result.added_tracks, run.original_track_ids.size());
+        result.added_tracks += probe->tracks;
+        result.added_track_arcs += probe->arcs;
+        result.fitted_circular_arcs += probe->arcs;
+        result.added_track_beziers += probe->beziers;
+        result.fitted_cubic_beziers += probe->beziers;
+        result.spline_fitted_track_segments += probe->tracks;
+        ++result.fitted_quintic_ph_runs;
+        result.spline_last_materialization_diagnostic = "quantized PH replacement committed";
+        result.accepted_pns_shoves += pending_pns_shoves;
+        result.pns_moved_tracks += pending_pns_tracks;
+        result.pns_moved_vias += pending_pns_vias;
+        result.pns_added_dogleg_tracks += pending_pns_doglegs;
+        return true;
+      }
+      ++result.rejected_circular_arc_candidates;
+      ++result.spline_collision_envelopes;
+      if (promotion_pending || collision == nullptr) {
         return false;
       }
-      // Commit the exact-checked replacement transaction, not the probe board.  The probe still
-      // contains the superseded source segments so it can be validated as an additive candidate;
-      // retaining it here would leave duplicate same-net bends for later local curve passes.
-      board = std::move(final_checked);
-      result.added_tracks -= std::min(result.added_tracks, run.original_track_ids.size());
-      result.added_tracks += probe->tracks;
-      result.added_track_arcs += probe->arcs;
-      result.fitted_circular_arcs += probe->arcs;
-      result.spline_fitted_track_segments += probe->tracks;
-      ++result.fitted_quintic_ph_runs;
-      result.spline_last_materialization_diagnostic = "quantized PH replacement committed";
-      result.accepted_pns_shoves += pending_pns_shoves;
-      result.pns_moved_tracks += pending_pns_tracks;
-      result.pns_moved_vias += pending_pns_vias;
-      result.pns_added_dogleg_tracks += pending_pns_doglegs;
-      return true;
-    }
-    ++result.rejected_circular_arc_candidates;
-    ++result.spline_collision_envelopes;
-    if (collision == nullptr) {
-      return false;
-    }
-    const auto generated =
-        std::find_if(collision->object_ids.begin(), collision->object_ids.end(),
-                     [&](const auto& id) { return probe->parameter_by_id.contains(id); });
-    if (generated == collision->object_ids.end()) {
-      return false;
-    }
-    const auto parameter = probe->parameter_by_id.at(*generated);
-    const auto position = evaluate_quintic_ph(*spline, parameter);
-    const auto before = evaluate_quintic_ph(*spline, std::max(0.0L, parameter - 1.0e-4L));
-    const auto after = evaluate_quintic_ph(*spline, std::min(1.0L, parameter + 1.0e-4L));
-    SplineVector normal{-(after.y - before.y), after.x - before.x};
-    std::vector<std::string> obstacles;
-    for (const auto& id : collision->object_ids) {
-      if (!probe->parameter_by_id.contains(id)) {
-        obstacles.push_back(id);
+      const auto generated =
+          std::find_if(collision->object_ids.begin(), collision->object_ids.end(),
+                       [&](const auto& id) { return probe->parameter_by_id.contains(id); });
+      if (generated == collision->object_ids.end()) {
+        return false;
       }
-    }
-    const auto collision_point =
-        Point{Nanometres{static_cast<std::int64_t>(std::llround(position.x))},
-              Nanometres{static_cast<std::int64_t>(std::llround(position.y))}};
-    for (const auto& id : obstacles) {
-      if (const auto reference = obstacle_reference_point(corridor_board, id, collision_point)) {
-        const auto away_x = position.x - static_cast<long double>(reference->x.value());
-        const auto away_y = position.y - static_cast<long double>(reference->y.value());
-        if (std::hypot(away_x, away_y) > 1.0L) {
-          normal = {away_x, away_y};
-          break;
+      const auto parameter = probe->parameter_by_id.at(*generated);
+      const auto position = evaluate_quintic_ph(*spline, parameter);
+      const auto before = evaluate_quintic_ph(*spline, std::max(0.0L, parameter - 1.0e-4L));
+      const auto after = evaluate_quintic_ph(*spline, std::min(1.0L, parameter + 1.0e-4L));
+      SplineVector normal{-(after.y - before.y), after.x - before.x};
+      std::vector<std::string> obstacles;
+      for (const auto& id : collision->object_ids) {
+        if (!probe->parameter_by_id.contains(id)) {
+          obstacles.push_back(id);
         }
       }
-    }
-    const auto deficit =
-        std::max(config.spline_shove_step.value(),
-                 static_cast<std::int64_t>(std::ceil(std::max(
-                     0.0L, static_cast<long double>(collision->required_clearance.value()) -
-                               collision->actual_distance_nm + 2.0L))));
-    ++result.pns_shove_attempts;
-    const PnsShoveConfig pns_config{config.max_pns_propagation_depth,
-                                    config.max_pns_candidate_checks, config.spline_shove_step,
-                                    config.maximum_pns_displacement};
-    const PnsShoveRequest request{probe->generated_ids, obstacles, run.original_track_ids,
-                                  collision_point,      -normal.x, -normal.y,
-                                  Nanometres{deficit},  {}};
-    auto pns = pns_push_and_shove(probe->board, request, pns_config);
-    result.pns_shove_candidates += pns.candidate_checks;
-    result.pns_candidate_budget_exhausted =
-        result.pns_candidate_budget_exhausted || pns.budget_exhausted;
-    if (pns.accepted()) {
-      const std::set<std::string> generated_ids(probe->generated_ids.begin(),
-                                                probe->generated_ids.end());
-      std::erase_if(pns.candidate->tracks,
-                    [&](const auto& track) { return generated_ids.contains(track.id.value()); });
-      std::erase_if(pns.candidate->track_arcs,
-                    [&](const auto& arc) { return generated_ids.contains(arc.id.value()); });
-      corridor_board = std::move(*pns.candidate);
-      for (const auto& track : corridor_board.tracks) {
-        used_ids.insert(track.id.value());
+      const auto collision_point =
+          Point{Nanometres{static_cast<std::int64_t>(std::llround(position.x))},
+                Nanometres{static_cast<std::int64_t>(std::llround(position.y))}};
+      for (const auto& id : obstacles) {
+        if (const auto reference = obstacle_reference_point(corridor_board, id, collision_point)) {
+          const auto away_x = position.x - static_cast<long double>(reference->x.value());
+          const auto away_y = position.y - static_cast<long double>(reference->y.value());
+          if (std::hypot(away_x, away_y) > 1.0L) {
+            normal = {away_x, away_y};
+            break;
+          }
+        }
       }
-      for (const auto& arc : corridor_board.track_arcs) {
-        used_ids.insert(arc.id.value());
+      const auto deficit =
+          std::max(config.spline_shove_step.value(),
+                   static_cast<std::int64_t>(std::ceil(std::max(
+                       0.0L, static_cast<long double>(collision->required_clearance.value()) -
+                                 collision->actual_distance_nm + 2.0L))));
+      ++result.pns_shove_attempts;
+      const PnsShoveConfig pns_config{config.max_pns_propagation_depth,
+                                      config.max_pns_candidate_checks, config.spline_shove_step,
+                                      config.maximum_pns_displacement};
+      const PnsShoveRequest request{probe->generated_ids, obstacles, run.original_track_ids,
+                                    collision_point,      -normal.x, -normal.y,
+                                    Nanometres{deficit},  {}};
+      auto pns = pns_push_and_shove(probe->board, request, pns_config);
+      result.pns_shove_candidates += pns.candidate_checks;
+      result.pns_candidate_budget_exhausted =
+          result.pns_candidate_budget_exhausted || pns.budget_exhausted;
+      if (pns.accepted()) {
+        const std::set<std::string> generated_ids(probe->generated_ids.begin(),
+                                                  probe->generated_ids.end());
+        std::erase_if(pns.candidate->tracks,
+                      [&](const auto& track) { return generated_ids.contains(track.id.value()); });
+        std::erase_if(pns.candidate->track_arcs,
+                      [&](const auto& arc) { return generated_ids.contains(arc.id.value()); });
+        std::erase_if(pns.candidate->track_beziers,
+                      [&](const auto& curve) { return generated_ids.contains(curve.id.value()); });
+        corridor_board = std::move(*pns.candidate);
+        for (const auto& track : corridor_board.tracks) {
+          used_ids.insert(track.id.value());
+        }
+        for (const auto& arc : corridor_board.track_arcs) {
+          used_ids.insert(arc.id.value());
+        }
+        for (const auto& curve : corridor_board.track_beziers) used_ids.insert(curve.id.value());
+        for (const auto& via : corridor_board.vias) {
+          used_ids.insert(via.id.value());
+        }
+        ++pending_pns_shoves;
+        pending_pns_tracks += pns.moved_tracks;
+        pending_pns_vias += pns.moved_vias;
+        pending_pns_doglegs += pns.added_dogleg_tracks;
+        const auto refitted =
+            optimize_quintic_ph_trajectory(*spline, trajectory_config, clearance_evaluator);
+        result.spline_trajectory_control_moves += refitted.accepted_control_moves;
+        result.spline_trajectory_candidate_checks += refitted.candidate_checks;
+        result.spline_paired_obstacle_support_recoveries += refitted.paired_obstacle_support_recoveries;
+        result.spline_paired_obstacle_supports_inserted += refitted.paired_obstacle_supports_inserted;
+        result.spline_paired_obstacle_support_attempts += refitted.paired_obstacle_support_attempts;
+        if (!refitted.accepted) {
+          return false;
+        }
+        ++result.spline_refits;
+        continue;
       }
-      for (const auto& via : corridor_board.vias) {
-        used_ids.insert(via.id.value());
+      const auto refitted = deform_quintic_ph_elastic_at(
+          *spline, parameter, normal, Nanometres{deficit}, trajectory_config, clearance_evaluator);
+      if (!refitted.accepted || refitted.elastic_predeformed_controls == 0U) {
+        return false;
       }
-      ++pending_pns_shoves;
-      pending_pns_tracks += pns.moved_tracks;
-      pending_pns_vias += pns.moved_vias;
-      pending_pns_doglegs += pns.added_dogleg_tracks;
-      const auto refitted =
-          optimize_quintic_ph_trajectory(*spline, trajectory_config, clearance_evaluator);
+      const auto shoved_topology_samples = adaptive_tessellate_quintic_ph(
+          *spline, config.spline_tessellation_tolerance, config.spline_max_tessellation_depth,
+          config.max_spline_samples_per_run);
+      if (!topology_preserved(shoved_topology_samples)) {
+        return false;
+      }
+      result.spline_control_point_shoves += refitted.elastic_predeformed_controls;
       result.spline_trajectory_control_moves += refitted.accepted_control_moves;
       result.spline_trajectory_candidate_checks += refitted.candidate_checks;
-      if (!refitted.accepted) {
-        return false;
-      }
+      result.spline_paired_obstacle_support_recoveries += refitted.paired_obstacle_support_recoveries;
+      result.spline_paired_obstacle_supports_inserted += refitted.paired_obstacle_supports_inserted;
+      result.spline_paired_obstacle_support_attempts += refitted.paired_obstacle_support_attempts;
       ++result.spline_refits;
-      continue;
     }
-    const auto refitted = deform_quintic_ph_elastic_at(
-        *spline, parameter, normal, Nanometres{deficit}, trajectory_config, clearance_evaluator);
-    if (!refitted.accepted || refitted.elastic_predeformed_controls == 0U) {
-      return false;
-    }
-    const auto shoved_topology_samples = adaptive_tessellate_quintic_ph(
-        *spline, config.spline_tessellation_tolerance, config.spline_max_tessellation_depth,
-        config.max_spline_samples_per_run);
-    if (!topology_preserved(shoved_topology_samples)) {
-      return false;
-    }
-    result.spline_control_point_shoves += refitted.elastic_predeformed_controls;
-    result.spline_trajectory_control_moves += refitted.accepted_control_moves;
-    result.spline_trajectory_candidate_checks += refitted.candidate_checks;
-    ++result.spline_refits;
+    return false;
+  };
+  if (materialize_selected_spline()) {
+    if (unpromoted_spline)
+      ++result.spline_g2_promotions;
+    return true;
   }
-  return false;
+  if (!unpromoted_spline)
+    return false;
+  ++result.spline_g2_fallbacks;
+  if (stop_token.stop_requested())
+    return false;
+  // A promotion earns acceptance only after its quantized copper commits. Retry the original
+  // optimized G1 geometry against a fresh local transaction on fitting/DRC/shove failure.
+  *spline = std::move(*unpromoted_spline);
+  promotion_pending = false;
+  return materialize_selected_spline();
 }
 
 template <typename CopperObject> struct CopperObjectDelta {
@@ -3222,6 +3951,7 @@ template <typename CopperObject> struct CopperObjectDelta {
 struct SplineRouteCopperDelta {
   CopperObjectDelta<TrackSegment> tracks;
   CopperObjectDelta<TrackArc> arcs;
+  CopperObjectDelta<TrackBezier> beziers;
   CopperObjectDelta<Via> vias;
 };
 
@@ -3256,6 +3986,7 @@ make_copper_object_delta(const std::vector<CopperObject>& before,
                                                              const Board& after) {
   return {make_copper_object_delta(before.tracks, after.tracks),
           make_copper_object_delta(before.track_arcs, after.track_arcs),
+          make_copper_object_delta(before.track_beziers, after.track_beziers),
           make_copper_object_delta(before.vias, after.vias)};
 }
 
@@ -3289,18 +4020,21 @@ template <typename CopperObject>
   // state because callers publish only the complete returned candidate.
   return apply_copper_object_delta(board.tracks, delta.tracks) &&
          apply_copper_object_delta(board.track_arcs, delta.arcs) &&
+         apply_copper_object_delta(board.track_beziers, delta.beziers) &&
          apply_copper_object_delta(board.vias, delta.vias);
 }
 
 [[nodiscard]] std::vector<std::string>
 spline_route_delta_touched_ids(const SplineRouteCopperDelta& delta) {
   std::vector<std::string> result;
-  result.reserve(delta.tracks.upserts.size() + delta.arcs.upserts.size() +
+  result.reserve(delta.tracks.upserts.size() + delta.arcs.upserts.size() + delta.beziers.upserts.size() +
                  delta.vias.upserts.size());
   for (const auto& track : delta.tracks.upserts)
     result.push_back(track.id.value());
   for (const auto& arc : delta.arcs.upserts)
     result.push_back(arc.id.value());
+  for (const auto& bezier : delta.beziers.upserts)
+    result.push_back(bezier.id.value());
   for (const auto& via : delta.vias.upserts)
     result.push_back(via.id.value());
   return result;
@@ -3312,6 +4046,15 @@ void accumulate_spline_route_attempt_metrics(DetailedRouteResult& target,
   FLUX_ACCUMULATE_SPLINE_METRIC(attempted_circular_arc_candidates);
   FLUX_ACCUMULATE_SPLINE_METRIC(rejected_circular_arc_candidates);
   FLUX_ACCUMULATE_SPLINE_METRIC(attempted_quintic_ph_runs);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_g2_promotion_attempts);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_g2_promotions);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_g2_fallbacks);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_g2_promotion_microseconds);
+  FLUX_ACCUMULATE_SPLINE_METRIC(regional_native_spline_runs_materialized);
+  FLUX_ACCUMULATE_SPLINE_METRIC(regional_native_track_segments_materialized);
+  FLUX_ACCUMULATE_SPLINE_METRIC(regional_native_track_arcs_materialized);
+  FLUX_ACCUMULATE_SPLINE_METRIC(regional_native_track_beziers_materialized);
+  FLUX_ACCUMULATE_SPLINE_METRIC(fitted_cubic_beziers);
   FLUX_ACCUMULATE_SPLINE_METRIC(adaptive_spline_tessellation_samples);
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_collision_envelopes);
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_control_point_shoves);
@@ -3330,10 +4073,15 @@ void accumulate_spline_route_attempt_metrics(DetailedRouteResult& target,
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_funnel_points);
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_seed_candidates);
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_seed_exact_legal);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_run_aligned_seed_candidates);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_run_aligned_seed_exact_legal);
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_seed_portfolio_improvements);
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_trajectory_attempts);
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_trajectory_accepted);
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_trajectory_control_moves);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_paired_obstacle_support_attempts);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_paired_obstacle_supports_inserted);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_paired_obstacle_support_recoveries);
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_trajectory_candidate_checks);
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_multistart_attempts);
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_multistart_recoveries);
@@ -3404,7 +4152,10 @@ void accumulate_committed_spline_route_metrics(DetailedRouteResult& target,
                                     bool use_pull_tight, bool use_continuous_refinement,
                                     bool use_circular_arc_refinement, std::stop_token stop_token,
                                     const std::vector<GlobalRoutePoint>* topology_locked_points,
-                                    std::vector<PendingSplineRun>* pending_spline_runs) {
+                                    std::vector<PendingSplineRun>* pending_spline_runs,
+                                    const std::vector<RegionalSplineRealization>* regional_splines,
+                                    std::set<std::string>* protected_native_track_ids,
+                                    std::set<std::string>* scaffold_track_ids) {
   if ((!path.segment_widths.empty() && path.segment_widths.size() + 1U != path.points.size()) ||
       path.segment_width_kinds.size() != path.segment_widths.size() ||
       std::any_of(path.segment_widths.begin(), path.segment_widths.end(),
@@ -3422,13 +4173,143 @@ void accumulate_committed_spline_route_metrics(DetailedRouteResult& target,
                       explicit_width_segments == 0U)) {
     return false;
   }
-  if (width_aware && topology_locked_points != nullptr) {
-    return false;
+  struct NativeRunMatch {
+    std::size_t first_point{0U};
+    std::size_t last_point{0U};
+    const RegionalSplineRealization* realization{nullptr};
+    bool reversed{false};
+  };
+  std::vector<NativeRunMatch> native_matches;
+  if (regional_splines != nullptr) {
+    for (const auto& realization : *regional_splines) {
+      if (realization.fragment.net != path.net ||
+          realization.fragment.connection_index != path.connection_index) {
+        continue;
+      }
+      if (!realization.native_copper_legal || realization.centerline.size() < 2U ||
+          realization.native_pieces.empty() || realization.width.value() <= 0 ||
+          realization.native_fit_policy.fit_tolerance > config.spline_arc_fit_tolerance ||
+          realization.native_fit_policy.tessellation_tolerance > config.spline_tessellation_tolerance ||
+          realization.native_pieces.size() > config.max_spline_fitted_pieces_per_run ||
+          native_spline_max_join_angle(realization.native_pieces) > config.spline_max_join_angle_radians) {
+        return false;
+      }
+      std::optional<NativeRunMatch> match;
+      for (std::size_t first = 0U;
+           !match && first + realization.centerline.size() <= path.points.size(); ++first) {
+        const auto matches = [&](bool reversed) {
+          for (std::size_t offset = 0U; offset < realization.centerline.size(); ++offset) {
+            const auto spline_index =
+                reversed ? realization.centerline.size() - 1U - offset : offset;
+            if (path.points[first + offset].layer != realization.layer ||
+                path.points[first + offset].position != realization.centerline[spline_index]) {
+              return false;
+            }
+          }
+          return true;
+        };
+        if (matches(false)) {
+          match = NativeRunMatch{first, first + realization.centerline.size() - 1U, &realization,
+                                 false};
+        } else if (matches(true)) {
+          match =
+              NativeRunMatch{first, first + realization.centerline.size() - 1U, &realization, true};
+        }
+      }
+      if (!match) {
+        return false;
+      }
+      for (std::size_t edge = match->first_point; edge < match->last_point; ++edge) {
+        const auto width = edge < path.segment_widths.size() && path.segment_widths[edge].value() > 0
+                               ? path.segment_widths[edge] : track_width;
+        const auto kind = edge < path.segment_width_kinds.size() ? path.segment_width_kinds[edge]
+                                                               : GlobalRouteSegmentWidthKind::nominal;
+        if (realization.width != width || realization.width_kind != kind) return false;
+      }
+      native_matches.push_back(*match);
+    }
+    std::sort(native_matches.begin(), native_matches.end(), [](const auto& lhs, const auto& rhs) {
+      return std::tie(lhs.first_point, lhs.last_point) < std::tie(rhs.first_point, rhs.last_point);
+    });
+    if (std::adjacent_find(native_matches.begin(), native_matches.end(),
+                           [](const auto& lhs, const auto& rhs) {
+                             return lhs.last_point > rhs.first_point;
+                           }) != native_matches.end()) {
+      return false;
+    }
   }
   std::vector<GlobalRoutePoint> points;
   std::vector<Nanometres> segment_widths;
   std::size_t width_aware_removed_points = 0U;
-  if (width_aware) {
+  if (!native_matches.empty() && !width_aware && topology_locked_points == nullptr) {
+    // Preserve each certified native interval byte-for-byte, but do not freeze the rest of a
+    // potentially long connection into its raster staircase. Process the open intervals on both
+    // sides with the ordinary pull-tight/continuous path and remap the protected native ranges
+    // into that result. This is still a single realization of every regional PH curve.
+    const auto source_matches = native_matches;
+    native_matches.clear();
+    const auto append_open_interval = [&](std::size_t first, std::size_t last) {
+      if (first > last || last >= path.points.size()) {
+        return false;
+      }
+      const auto first_offset = static_cast<std::ptrdiff_t>(first);
+      const auto last_offset = static_cast<std::ptrdiff_t>(last + 1U);
+      std::vector<GlobalRoutePoint> interval(path.points.begin() + first_offset,
+                                             path.points.begin() + last_offset);
+      interval = use_pull_tight ? pull_tight_45_degrees(interval, result.pulled_tight_corners)
+                                : simplify_path(interval);
+      if (use_continuous_refinement && interval.size() >= 2U) {
+        std::size_t iterations = 0U;
+        interval = refine_path_continuously(board, path.net, track_width, interval, config, result,
+                                            iterations, nullptr);
+        result.continuous_refinement_iterations =
+            std::max(result.continuous_refinement_iterations, iterations);
+      }
+      for (const auto& point : interval) {
+        if (points.empty() || points.back() != point) {
+          points.push_back(point);
+        }
+      }
+      return !interval.empty();
+    };
+    std::size_t cursor = 0U;
+    for (const auto& match : source_matches) {
+      if (!append_open_interval(cursor, match.first_point) || points.empty() ||
+          points.back() != path.points[match.first_point]) {
+        return false;
+      }
+      NativeRunMatch remapped{points.size() - 1U, 0U, match.realization, match.reversed};
+      for (std::size_t source_point = match.first_point + 1U; source_point <= match.last_point;
+           ++source_point) {
+        points.push_back(path.points[source_point]);
+      }
+      remapped.last_point = points.size() - 1U;
+      native_matches.push_back(remapped);
+      cursor = match.last_point;
+    }
+    if (!append_open_interval(cursor, path.points.size() - 1U)) {
+      return false;
+    }
+  } else if (!native_matches.empty()) {
+    // Width-policy and topology-locked paths keep their complete selected point sequence. Their
+    // existing specialized transformations cannot yet move only the open intervals around an
+    // immutable native curve.
+    points = path.points;
+    segment_widths = path.segment_widths;
+  } else if (topology_locked_points != nullptr) {
+    // A certified scaffold is an exact handoff contract.  Do not simplify a collinear escape
+    // stub away: its first/last directions and repeated-position layer transitions are selected
+    // topology.  Explicit widths remain aligned with this unmodified point sequence.
+    points = *topology_locked_points;
+    if (width_aware) {
+      segment_widths.reserve(path.segment_widths.size());
+      for (const auto selected : path.segment_widths) {
+        const auto width = selected.value() > 0 ? selected : track_width;
+        if (width.value() <= 0) return false;
+        segment_widths.push_back(width);
+      }
+    }
+  } else if (width_aware) {
     const auto simplified =
         simplify_width_aware_path(path, track_width, width_aware_removed_points);
     if (!simplified) {
@@ -3453,11 +4334,10 @@ void accumulate_committed_spline_route_metrics(DetailedRouteResult& target,
       }
     }
   } else {
-    points = topology_locked_points != nullptr ? simplify_path(*topology_locked_points)
-             : use_pull_tight ? pull_tight_45_degrees(path.points, result.pulled_tight_corners)
-                              : simplify_path(path.points);
+    points = use_pull_tight ? pull_tight_45_degrees(path.points, result.pulled_tight_corners)
+                             : simplify_path(path.points);
   }
-  if (use_continuous_refinement && topology_locked_points == nullptr) {
+  if (use_continuous_refinement && topology_locked_points == nullptr && native_matches.empty()) {
     std::size_t iterations = 0;
     const auto refined_before = result.continuously_refined_points;
     points = refine_path_continuously(board, path.net, track_width, points, config, result,
@@ -3477,14 +4357,90 @@ void accumulate_committed_spline_route_metrics(DetailedRouteResult& target,
   }
   const auto base = "flux-route-" + path.net.value() + "-" + std::to_string(path.connection_index);
   std::size_t track_index = 0;
+  std::size_t native_arc_index = 0;
   std::size_t via_index = 0;
   std::map<std::size_t, std::size_t> planar_track_by_edge;
   for (std::size_t i = 0; i + 1U < points.size();) {
+    routing_kernel_checkpoint();
     if (stop_token.stop_requested()) {
       return false;
     }
     const auto& current = points[i];
     const auto& next = points[i + 1U];
+    const auto native = std::find_if(native_matches.begin(), native_matches.end(),
+                                     [i](const auto& match) { return match.first_point == i; });
+    if (native != native_matches.end()) {
+      const auto& realization = *native->realization;
+      const auto expected_start = current.position;
+      const auto expected_end = points[native->last_point].position;
+      const auto& first_piece =
+          native->reversed ? realization.native_pieces.back() : realization.native_pieces.front();
+      const auto& last_piece =
+          native->reversed ? realization.native_pieces.front() : realization.native_pieces.back();
+      const auto materialized_start = native->reversed ? first_piece.end : first_piece.start;
+      const auto materialized_end = native->reversed ? last_piece.start : last_piece.end;
+      if (materialized_start != expected_start || materialized_end != expected_end) {
+        return false;
+      }
+      const auto arcs = static_cast<std::size_t>(std::count_if(
+          realization.native_pieces.begin(), realization.native_pieces.end(),
+          [](const auto& piece) { return piece.kind == SplineFittedPieceKind::circular_arc; }));
+      if (arcs > config.max_circular_arcs - std::min(config.max_circular_arcs, result.fitted_circular_arcs)) {
+        result.circular_arc_candidate_budget_exhausted = true;
+        return false;
+      }
+      for (std::size_t piece = 0U; piece < realization.native_pieces.size(); ++piece) {
+        const auto& current_piece = realization.native_pieces[piece];
+        if (current_piece.start == current_piece.end ||
+            (piece > 0U && realization.native_pieces[piece - 1U].end != current_piece.start))
+          return false;
+      }
+      for (std::size_t piece_index = 0U; piece_index < realization.native_pieces.size();
+           ++piece_index) {
+        const auto source_index =
+            native->reversed ? realization.native_pieces.size() - 1U - piece_index : piece_index;
+        const auto& piece = realization.native_pieces[source_index];
+        const auto start = native->reversed ? piece.end : piece.start;
+        const auto end = native->reversed ? piece.start : piece.end;
+        if (piece.kind == SplineFittedPieceKind::cubic_bezier) {
+          const auto id = unique_id(base + "-regional-native-bezier-" + std::to_string(track_index++), used_ids);
+          const auto control1 = native->reversed ? piece.control2 : piece.control1;
+          const auto control2 = native->reversed ? piece.control1 : piece.control2;
+          board.track_beziers.push_back(TrackBezier{id, path.net, realization.layer, start,
+                                                    control1, control2, end, realization.width,
+                                                    false});
+          if (protected_native_track_ids != nullptr) protected_native_track_ids->insert(id.value());
+          ++result.added_track_beziers;
+          ++result.fitted_cubic_beziers;
+          ++result.regional_native_track_beziers_materialized;
+        } else if (piece.kind == SplineFittedPieceKind::circular_arc) {
+          const auto id = unique_id(base + "-regional-native-arc-" + std::to_string(native_arc_index++), used_ids);
+          board.track_arcs.push_back(TrackArc{
+              id,
+              path.net, realization.layer, start, piece.middle, end, realization.width, false});
+          if (protected_native_track_ids != nullptr) protected_native_track_ids->insert(id.value());
+          ++result.added_track_arcs;
+          ++result.fitted_circular_arcs;
+          ++result.regional_native_track_arcs_materialized;
+        } else {
+          const auto id =
+              unique_id(base + "-regional-native-track-" + std::to_string(track_index++), used_ids);
+          board.tracks.push_back(
+              TrackSegment{id, path.net, realization.layer, start, end, realization.width, false});
+          // Native line adapters are legal copper, but they are not necessarily finished
+          // curves: two adapters, or an adapter and an ordinary path, may form a bend.
+          // Let the board-complete degree-two PH transaction realize those seams. Native
+          // arcs remain immutable above; all replacements still pass exact merge checks.
+          ++result.added_tracks;
+          ++result.spline_fitted_track_segments;
+          ++result.regional_native_track_segments_materialized;
+        }
+      }
+      ++result.fitted_quintic_ph_runs;
+      ++result.regional_native_spline_runs_materialized;
+      i = native->last_point;
+      continue;
+    }
     if (current.layer == next.layer) {
       if (current.position != next.position) {
         const auto width = width_aware ? segment_widths[i] : track_width;
@@ -3495,6 +4451,9 @@ void accumulate_committed_spline_route_metrics(DetailedRouteResult& target,
         board.tracks.push_back(
             TrackSegment{unique_id(base + "-track-" + std::to_string(track_index++), used_ids),
                          path.net, current.layer, current.position, next.position, width, false});
+        if (scaffold_track_ids != nullptr && path.legal_scaffold) {
+          scaffold_track_ids->insert(board.tracks.back().id.value());
+        }
         planar_track_by_edge.emplace(i, board_track_index);
         ++result.added_tracks;
       }
@@ -3602,70 +4561,11 @@ void accumulate_committed_spline_route_metrics(DetailedRouteResult& target,
   // curve/PNS pipeline above rather than running a second unrelated fillet pass.
   if (use_circular_arc_refinement && config.max_spline_candidate_checks == 0U) {
     const auto fitted_before = result.fitted_circular_arcs;
-    const auto make_fillet = [](Point previous, Point corner, Point next,
-                                Nanometres maximum_radius) -> std::optional<TrackArc> {
-      const auto first_x = static_cast<long double>(previous.x.value() - corner.x.value());
-      const auto first_y = static_cast<long double>(previous.y.value() - corner.y.value());
-      const auto second_x = static_cast<long double>(next.x.value() - corner.x.value());
-      const auto second_y = static_cast<long double>(next.y.value() - corner.y.value());
-      const auto first_length = std::hypot(first_x, first_y);
-      const auto second_length = std::hypot(second_x, second_y);
-      const auto determinant = first_x * second_y - first_y * second_x;
-      if (first_length <= 1.0L || second_length <= 1.0L || determinant == 0.0L) {
-        return std::nullopt;
-      }
-      const auto first_unit_x = first_x / first_length;
-      const auto first_unit_y = first_y / first_length;
-      const auto second_unit_x = second_x / second_length;
-      const auto second_unit_y = second_y / second_length;
-      const auto cosine =
-          std::clamp(first_unit_x * second_unit_x + first_unit_y * second_unit_y, -1.0L, 1.0L);
-      const auto half_angle = std::acos(cosine) / 2.0L;
-      const auto tangent = std::tan(half_angle);
-      const auto sine = std::sin(half_angle);
-      if (tangent <= 1.0e-12L || sine <= 1.0e-12L) {
-        return std::nullopt;
-      }
-      const auto requested_radius = static_cast<long double>(maximum_radius.value());
-      auto trim = requested_radius / tangent;
-      trim = std::min({trim, first_length * 0.45L, second_length * 0.45L});
-      const auto radius = trim * tangent;
-      if (trim <= 1.0L || radius <= 1.0L) {
-        return std::nullopt;
-      }
-      const auto bisector_x = first_unit_x + second_unit_x;
-      const auto bisector_y = first_unit_y + second_unit_y;
-      const auto bisector_length = std::hypot(bisector_x, bisector_y);
-      if (bisector_length <= 1.0e-12L) {
-        return std::nullopt;
-      }
-      const auto corner_x = static_cast<long double>(corner.x.value());
-      const auto corner_y = static_cast<long double>(corner.y.value());
-      const auto center_distance = radius / sine;
-      const auto center_x = corner_x + bisector_x / bisector_length * center_distance;
-      const auto center_y = corner_y + bisector_y / bisector_length * center_distance;
-      const auto quantize = [](long double x, long double y) {
-        return Point{Nanometres{static_cast<std::int64_t>(std::llround(x))},
-                     Nanometres{static_cast<std::int64_t>(std::llround(y))}};
-      };
-      const auto arc_start =
-          quantize(corner_x + first_unit_x * trim, corner_y + first_unit_y * trim);
-      const auto arc_end =
-          quantize(corner_x + second_unit_x * trim, corner_y + second_unit_y * trim);
-      const auto toward_corner_x = corner_x - center_x;
-      const auto toward_corner_y = corner_y - center_y;
-      const auto toward_corner_length = std::hypot(toward_corner_x, toward_corner_y);
-      const auto arc_middle = quantize(center_x + toward_corner_x / toward_corner_length * radius,
-                                       center_y + toward_corner_y / toward_corner_length * radius);
-      if (!geometry::circular_arc_parameters(arc_start, arc_middle, arc_end)) {
-        return std::nullopt;
-      }
-      return TrackArc{ObjectId{}, NetId{}, LayerId{},    arc_start,
-                      arc_middle, arc_end, Nanometres{}, false};
-    };
+    const auto make_fillet = make_circular_fillet;
 
     std::size_t arc_index = 0;
     for (std::size_t corner_index = 1U; corner_index + 1U < points.size(); ++corner_index) {
+      routing_kernel_checkpoint();
       if (stop_token.stop_requested()) {
         return false;
       }
@@ -4153,6 +5053,7 @@ enum class SkewTuningStatus { completed, cancelled };
 
   for (const auto& pair_snapshot : pairs) {
     const auto* pair = &pair_snapshot;
+    routing_kernel_checkpoint();
     if (stop_token.stop_requested()) {
       return SkewTuningStatus::cancelled;
     }
@@ -4277,6 +5178,7 @@ enum class SkewTuningStatus { completed, cancelled };
           }
           const auto layout_count = periods == 1U ? 2U : 4U;
           for (std::size_t layout = 0U; layout < layout_count; ++layout) {
+            routing_kernel_checkpoint();
             if (stop_token.stop_requested()) {
               return SkewTuningStatus::cancelled;
             }
@@ -4414,6 +5316,7 @@ apply_skew_tuning_assignment_candidate(Board& board, std::set<std::string>& used
 
   std::vector<SkewTuningAssignmentPair> pair_candidates;
   for (const auto* pair : pairs) {
+    routing_kernel_checkpoint();
     if (stop_token.stop_requested()) {
       return SkewTuningStatus::cancelled;
     }
@@ -4558,6 +5461,7 @@ apply_skew_tuning_assignment_candidate(Board& board, std::set<std::string>& used
           }
           const auto layout_count = periods == 1U ? 2U : 4U;
           for (std::size_t layout = 0U; layout < layout_count; ++layout) {
+            routing_kernel_checkpoint();
             if (stop_token.stop_requested()) {
               return SkewTuningStatus::cancelled;
             }
@@ -4711,6 +5615,7 @@ apply_skew_tuning_assignment_candidate(Board& board, std::set<std::string>& used
     if (cancelled || result.differential_pair_skew_tuning_assignment_budget_exhausted) {
       return;
     }
+    routing_kernel_checkpoint();
     if (stop_token.stop_requested()) {
       cancelled = true;
       return;
@@ -4787,14 +5692,176 @@ apply_skew_tuning_assignment_candidate(Board& board, std::set<std::string>& used
   return SkewTuningStatus::completed;
 }
 
-DetailedRouteResult materialize_impl(const Board& source, const GlobalRouteResult& global,
-                                     const DetailedRouterConfig& config,
-                                     const DetailedRouteResult* checkpoint,
-                                     std::stop_token stop_token, bool use_topology_locked,
-                                     bool use_circular_arc_refinement, bool use_pull_tight,
-                                     bool use_continuous_refinement,
-                                     const std::set<NetId>& topology_excluded_nets = {}) {
+// Preserve electrical contacts before replacing off-angle terminal/medial adapters. Proposals
+// are bounded (two shortest octilinear elbows, then two Manhattan elbows), and exact copper
+// checks own acceptance. The ordinary final connectivity/DRC transaction still checks the result.
+void constrain_straight_track_angles(Board& board, const std::set<ObjectId>& protected_ids,
+                                     std::set<std::string>& used_ids, DetailedRouteResult& result,
+                                     std::stop_token stop_token) {
+  const auto needs_conversion = [&](const auto& track) {
+    return !track.locked && !protected_ids.contains(track.id) &&
+           !ordinary_track_angle(track.start, track.end);
+  };
+  if (std::none_of(board.tracks.begin(), board.tracks.end(), needs_conversion)) return;
+  std::set<std::string> protected_strings;
+  for (const auto& id : protected_ids) protected_strings.insert(id.value());
+  for (const auto& track : board.tracks) {
+    if (ordinary_track_angle(track.start, track.end)) protected_strings.insert(track.id.value());
+  }
+  result.added_tracks += split_tracks_at_exact_same_net_branches(board, used_ids, protected_strings);
+  const auto count = board.tracks.size();
+  for (std::size_t index = 0U; index < count; ++index) {
+    if (stop_token.stop_requested()) return;
+    const auto track = board.tracks[index];
+    if (!needs_conversion(track)) continue;
+    const auto dx = track.end.x.value() - track.start.x.value();
+    const auto dy = track.end.y.value() - track.start.y.value();
+    const auto diagonal = std::min(magnitude(dx), magnitude(dy));
+    const std::array<Point, 4> elbows{
+        Point{Nanometres{track.start.x.value() + direction(dx) * diagonal},
+              Nanometres{track.start.y.value() + direction(dy) * diagonal}},
+        Point{Nanometres{track.end.x.value() - direction(dx) * diagonal},
+              Nanometres{track.end.y.value() - direction(dy) * diagonal}},
+        Point{track.start.x, track.end.y}, Point{track.end.x, track.start.y}};
+    bool converted = false;
+    for (const auto elbow : elbows) {
+      if (stop_token.stop_requested()) return;
+      ++result.straight_angle_candidate_checks;
+      if (!continuous_candidate_clear(board, track.net, track.layer, track.start, elbow,
+                                      track.end, track.width,
+                                      result.straight_angle_candidate_checks)) continue;
+      auto second = track;
+      second.id = unique_id(track.id.value() + "-45-adapter", used_ids);
+      second.start = elbow;
+      board.tracks[index].end = elbow;
+      board.tracks.push_back(std::move(second));
+      ++result.added_tracks;
+      ++result.straight_angle_segments_converted;
+      converted = true;
+      break;
+    }
+    if (!converted) ++result.straight_angle_segments_unresolved;
+  }
+}
+
+// One final acceptance gate is shared by ordinary construction and exact regional-scene reuse.
+// Reusing geometry never reuses authority: validation, connectivity and DRC run again.
+void validate_materialized_candidate(const Board& source, const GlobalRouteResult& global,
+                                     const DetailedRouterConfig& config, Board candidate,
+                                     DetailedRouteResult& result, bool bounded_conflict_handoff,
+                                     const DetailedRouteResult* checkpoint) {
+  result.validation = validate_board(candidate);
+  result.connectivity = analyze_connectivity(candidate);
+  if (!global.configured_selected_nets.empty()) {
+    const std::set<NetId> accepted_nets(global.configured_selected_nets.begin(),
+                                        global.configured_selected_nets.end());
+    std::erase_if(result.connectivity.nets,
+                  [&accepted_nets](const auto& net) { return !accepted_nets.contains(net.net); });
+    result.connectivity.open_connections = 0U;
+    result.connectivity.unrouted_nets = 0U;
+    for (const auto& net : result.connectivity.nets) {
+      result.connectivity.open_connections += net.open_connections;
+      result.connectivity.unrouted_nets += net.open_connections == 0U ? 0U : 1U;
+    }
+  }
+  if (config.defer_saved_zone_fill_clearance_to_refill) {
+    auto refill_planning_candidate = candidate;
+    for (auto& zone : refill_planning_candidate.zones) {
+      zone.fills.clear();
+    }
+    result.copper_drc = check_copper_rules(refill_planning_candidate);
+    std::set<std::string> source_copper_ids;
+    for (const auto& track : source.tracks) {
+      source_copper_ids.insert(track.id.value());
+    }
+    for (const auto& arc : source.track_arcs) {
+      source_copper_ids.insert(arc.id.value());
+    }
+    for (const auto& bezier : source.track_beziers) {
+      source_copper_ids.insert(bezier.id.value());
+    }
+    for (const auto& via : source.vias) {
+      source_copper_ids.insert(via.id.value());
+    }
+    for (const auto& footprint : source.footprints) {
+      for (const auto& pad : footprint.pads) {
+        source_copper_ids.insert(pad.id.value());
+      }
+    }
+    std::erase_if(result.copper_drc.violations, [&source_copper_ids](const auto& violation) {
+      return std::all_of(
+          violation.object_ids.begin(), violation.object_ids.end(),
+          [&source_copper_ids](const auto& id) { return source_copper_ids.contains(id); });
+    });
+  } else {
+    result.copper_drc = check_copper_rules(candidate);
+  }
+  const auto unrounded = count_unrounded_non_junction_bends(candidate);
+  result.unrounded_non_junction_bends = unrounded.total();
+  result.unrounded_straight_track_bends = unrounded.straight_track;
+  result.unrounded_curve_tangent_bends = unrounded.curve_tangent;
+  result.candidate = std::move(candidate);
+  if (!result.validation.ok()) {
+    result.stop_reason = DetailedRouterStopReason::structural_violations;
+    result.diagnostic = "materialized route failed structural validation";
+  } else if (result.connectivity.open_connections != 0U) {
+    result.stop_reason = DetailedRouterStopReason::connectivity_incomplete;
+    result.diagnostic = "materialized route did not connect every multi-pad net";
+  } else if (!result.copper_drc.ok()) {
+    result.stop_reason = DetailedRouterStopReason::copper_violations;
+    result.diagnostic = bounded_conflict_handoff
+                            ? "bounded residual spline/PNS repair did not clear every represented "
+                              "copper conflict"
+                            : "materialized route violates represented copper rules";
+  } else if (result.straight_angle_segments_unresolved > 0U) {
+    result.stop_reason = DetailedRouterStopReason::invalid_path;
+    result.diagnostic = "ordinary straight-track angle conversion has no legal bounded adapter";
+  } else if (config.circular_arc_refinement && result.unrounded_non_junction_bends > 0U) {
+    result.stop_reason = DetailedRouterStopReason::invalid_path;
+    result.diagnostic = "materialized curved route retains " +
+                        std::to_string(result.unrounded_non_junction_bends) +
+                        " non-junction direction changes without quintic PH curve realization";
+  } else if (config.defer_saved_zone_fill_clearance_to_refill) {
+    result.stop_reason = DetailedRouterStopReason::zone_refill_required;
+    result.diagnostic =
+        "provisional copper is legal without saved zone fills; KiCad zone refill, strict "
+        "re-import, connectivity, and DRC are required before acceptance";
+  } else {
+    result.stop_reason = DetailedRouterStopReason::complete;
+    if (result.tuned_differential_pairs > 0U) {
+      result.diagnostic = "differential-pair skew tuned as connected DRC-clean polyline copper";
+    } else if (result.fitted_circular_arcs > 0U && result.materialized_topology_locked_paths > 0U) {
+      result.diagnostic =
+          "topology-locked medial lanes and quintic PH curve fitted arcs materialized as DRC-clean "
+          "copper";
+    } else if (result.fitted_circular_arcs > 0U) {
+      result.diagnostic =
+          "quintic PH curve routes materialized as connected DRC-clean native line/arc copper";
+    } else if (result.materialized_topology_locked_paths > 0U) {
+      result.diagnostic = "topology-locked medial lanes materialized as connected DRC-clean copper";
+    } else {
+      result.diagnostic = checkpoint == nullptr
+                              ? "global paths materialized as legal simplified copper"
+                              : "affected paths materialized with validated detailed copper reused";
+    }
+  }
+}
+
+DetailedRouteResult
+materialize_impl(const Board& source, const GlobalRouteResult& global,
+                 const DetailedRouterConfig& config, const DetailedRouteResult* checkpoint,
+                 std::stop_token stop_token, bool use_topology_locked,
+                 bool use_circular_arc_refinement, bool use_pull_tight,
+                 bool use_continuous_refinement, const std::set<NetId>& topology_excluded_nets = {},
+                 const std::vector<RegionalSplineRealization>* regional_splines = nullptr,
+                 const Board* validated_regional_scene = nullptr) {
   DetailedRouteResult result;
+  if (config.restrict_straight_track_angles && config.circular_arc_refinement) {
+    result.stop_reason = DetailedRouterStopReason::invalid_input;
+    result.diagnostic = "ordinary straight-track angles and curved refinement are incompatible";
+    return result;
+  }
+  routing_kernel_checkpoint();
   if (stop_token.stop_requested()) {
     result.stop_reason = DetailedRouterStopReason::cancelled;
     result.diagnostic = "detailed routing cancelled before materialization";
@@ -4912,14 +5979,15 @@ DetailedRouteResult materialize_impl(const Board& source, const GlobalRouteResul
   if (config.existing_routing_replacement_scope) {
     replacement_nets.clear();
     for (const auto& net : *config.existing_routing_replacement_scope) {
-      const auto source_net = std::find_if(source.nets.begin(), source.nets.end(),
-                                           [&net](const Net& candidate) {
-                                             return candidate.id == net && !candidate.name.empty();
-                                           });
+      const auto source_net =
+          std::find_if(source.nets.begin(), source.nets.end(), [&net](const Net& candidate) {
+            return candidate.id == net && !candidate.name.empty();
+          });
       if (source_net == source.nets.end() || !routed_nets.contains(net) ||
           !replacement_nets.insert(net).second) {
         result.stop_reason = DetailedRouterStopReason::invalid_input;
-        result.diagnostic = "existing-routing replacement scope must contain unique named routed nets";
+        result.diagnostic =
+            "existing-routing replacement scope must contain unique named routed nets";
         return result;
       }
     }
@@ -4934,6 +6002,37 @@ DetailedRouteResult materialize_impl(const Board& source, const GlobalRouteResul
       return result;
     }
     dimensions.emplace(net, resolved);
+  }
+  if (validated_regional_scene != nullptr) {
+    // The caller has matched complete source/route identity. Recheck dimensions/policy above,
+    // and the resulting copper below; no geometry regeneration or optimizer can alter it.
+    Board candidate = *validated_regional_scene;
+    result.reused_validated_regional_scene = true;
+    result.added_tracks = candidate.tracks.size() - source.tracks.size();
+    result.added_track_arcs = candidate.track_arcs.size() - source.track_arcs.size();
+    result.added_track_beziers = candidate.track_beziers.size() - source.track_beziers.size();
+    result.added_vias = candidate.vias.size() - source.vias.size();
+    if (config.restrict_straight_track_angles) {
+      for (std::size_t index = source.tracks.size(); index < candidate.tracks.size(); ++index) {
+        const auto& track = candidate.tracks[index];
+        const auto dx = track.end.x.value() - track.start.x.value();
+        const auto dy = track.end.y.value() - track.start.y.value();
+        if (dx != 0 && dy != 0 && std::abs(dx) != std::abs(dy))
+          ++result.straight_angle_segments_unresolved;
+      }
+      result.straight_angle_segments_unresolved += result.added_track_arcs;
+    }
+    routing_kernel_checkpoint();
+    if (stop_token.stop_requested()) {
+      result.stop_reason = DetailedRouterStopReason::cancelled;
+      result.diagnostic = "detailed routing cancelled before regional scene validation";
+      return result;
+    }
+    validate_materialized_candidate(source, global, config, std::move(candidate), result,
+                                    false, nullptr);
+    if (result.complete())
+      result.diagnostic = "exact regional copper reused with final connectivity and DRC verified";
+    return result;
   }
   std::map<NetId, std::set<Nanometres>> allowed_track_widths;
   for (const auto& net : routed_nets) {
@@ -4967,6 +6066,9 @@ DetailedRouteResult materialize_impl(const Board& source, const GlobalRouteResul
       for (const auto& arc : checkpoint->candidate->track_arcs) {
         object_nets.emplace(arc.id.value(), arc.net);
       }
+      for (const auto& bezier : checkpoint->candidate->track_beziers) {
+        object_nets.emplace(bezier.id.value(), bezier.net);
+      }
       for (const auto& via : checkpoint->candidate->vias) {
         object_nets.emplace(via.id.value(), via.net);
       }
@@ -4988,6 +6090,7 @@ DetailedRouteResult materialize_impl(const Board& source, const GlobalRouteResul
       }
       std::map<ObjectId, const TrackSegment*> source_tracks;
       std::map<ObjectId, const TrackArc*> source_arcs;
+      std::map<ObjectId, const TrackBezier*> source_beziers;
       std::map<ObjectId, const Via*> source_vias;
       for (const auto& track : source.tracks) {
         source_tracks.emplace(track.id, &track);
@@ -4998,6 +6101,7 @@ DetailedRouteResult materialize_impl(const Board& source, const GlobalRouteResul
       for (const auto& arc : source.track_arcs) {
         source_arcs.emplace(arc.id, &arc);
       }
+      for (const auto& curve : source.track_beziers) source_beziers.emplace(curve.id, &curve);
       for (const auto& track : checkpoint->candidate->tracks) {
         if (!reusable_nets.contains(track.net)) {
           continue;
@@ -5031,6 +6135,14 @@ DetailedRouteResult materialize_impl(const Board& source, const GlobalRouteResul
             (source_arc != source_arcs.end() && *source_arc->second != arc)) {
           invalidated_reuse_nets.insert(arc.net);
         }
+      }
+      for (const auto& curve : checkpoint->candidate->track_beziers) {
+        if (!reusable_nets.contains(curve.net)) continue;
+        const auto original = source_beziers.find(curve.id);
+        if ((original == source_beziers.end() &&
+             !allowed_track_widths.at(curve.net).contains(curve.width)) ||
+            (original != source_beziers.end() && *original->second != curve))
+          invalidated_reuse_nets.insert(curve.net);
       }
       for (const auto& net : invalidated_reuse_nets) {
         reusable_nets.erase(net);
@@ -5107,6 +6219,12 @@ DetailedRouteResult materialize_impl(const Board& source, const GlobalRouteResul
         ++result.reused_track_arcs;
       }
     }
+    for (const auto& bezier : checkpoint->candidate->track_beziers) {
+      if (reusable_nets.contains(bezier.net) && used_ids.insert(bezier.id.value()).second) {
+        candidate.track_beziers.push_back(bezier);
+        ++result.reused_track_beziers;
+      }
+    }
     for (const auto& via : checkpoint->candidate->vias) {
       if (reusable_nets.contains(via.net) && used_ids.insert(via.id.value()).second) {
         candidate.vias.push_back(via);
@@ -5123,6 +6241,7 @@ DetailedRouteResult materialize_impl(const Board& source, const GlobalRouteResul
   for (const auto& arc : candidate.track_arcs) {
     protected_routing_nets.insert(arc.net);
   }
+  for (const auto& curve : candidate.track_beziers) protected_routing_nets.insert(curve.net);
   for (const auto& via : candidate.vias) {
     protected_routing_nets.insert(via.net);
   }
@@ -5150,6 +6269,9 @@ DetailedRouteResult materialize_impl(const Board& source, const GlobalRouteResul
   std::set<PathKey> accepted_coupled_fanout_paths;
   std::set<PathKey> governed_shared_resource_fanout_paths;
   std::set<PathKey> rejected_shared_resource_fanout_paths;
+  const bool has_legal_scaffold = std::any_of(
+      global.paths.begin(), global.paths.end(),
+      [](const GlobalRoutePath& path) { return path.legal_scaffold; });
   std::set<NetId> materialized_topology_nets;
   if (use_topology_locked) {
     struct SharedRunOccurrence {
@@ -5494,12 +6616,16 @@ DetailedRouteResult materialize_impl(const Board& source, const GlobalRouteResul
     }
   }
   std::vector<PendingSplineRun> pending_spline_runs;
+  std::set<std::string> protected_native_track_ids;
+  std::set<std::string> scaffold_track_ids;
   for (const auto& path : global.paths) {
     if (reusable_nets.contains(path.net)) {
       continue;
     }
     const auto& resolved = dimensions.at(path.net);
     const TopologyLockedLanePath* topology_locked_path = nullptr;
+    const std::vector<GlobalRoutePoint>* exact_scaffold_points =
+        path.legal_scaffold ? &path.points : nullptr;
     if (use_topology_locked) {
       ++result.attempted_topology_locked_paths;
       const PathKey key{path.net, path.connection_index};
@@ -5515,7 +6641,9 @@ DetailedRouteResult materialize_impl(const Board& source, const GlobalRouteResul
              accepted_coupled_fanout_paths.contains(key)))) &&
           (!governed_shared_resource_fanout_paths.contains(key) ||
            !rejected_shared_resource_fanout_paths.contains(key));
-      if (prepared != prepared_topology_paths.end() && coupled_group_accepted) {
+      if (exact_scaffold_points != nullptr) {
+        // A constructive certificate owns this route's topology, including its via sites.
+      } else if (prepared != prepared_topology_paths.end() && coupled_group_accepted) {
         topology_locked_path = &prepared->second;
         materialized_topology_nets.insert(path.net);
         ++result.materialized_topology_locked_paths;
@@ -5532,9 +6660,12 @@ DetailedRouteResult materialize_impl(const Board& source, const GlobalRouteResul
     if (!materialize_path(candidate, path, resolved.track_width, resolved.via_diameter,
                           resolved.via_drill, used_ids, result, config, use_pull_tight,
                           use_continuous_refinement, use_circular_arc_refinement, stop_token,
-                          topology_locked_path != nullptr ? &topology_locked_path->points : nullptr,
-                          &pending_spline_runs)) {
+                          exact_scaffold_points != nullptr ? exact_scaffold_points
+                          : topology_locked_path != nullptr ? &topology_locked_path->points : nullptr,
+                          &pending_spline_runs, regional_splines, &protected_native_track_ids,
+                          &scaffold_track_ids)) {
       result.candidate = std::move(candidate);
+      routing_kernel_checkpoint();
       if (stop_token.stop_requested()) {
         result.stop_reason = DetailedRouterStopReason::cancelled;
         result.diagnostic = "detailed routing cancelled during materialization";
@@ -5550,12 +6681,23 @@ DetailedRouteResult materialize_impl(const Board& source, const GlobalRouteResul
   // NavMesh preparation, PH optimization, recursive certificates, arc fitting and bounded PNS are
   // independent at this boundary. Workers publish compact copper deltas into stable task slots;
   // only the original task-order reduction below may modify the candidate board.
+  for (const auto& id : protected_native_track_ids) protected_track_ids.insert(ObjectId{id});
+  std::set<std::string> curve_protected_track_ids;
+  for (const auto& id : protected_track_ids) curve_protected_track_ids.insert(id.value());
   if (use_circular_arc_refinement) {
-    result.added_tracks += split_tracks_at_exact_same_net_branches(candidate, used_ids);
+    result.added_tracks += split_tracks_at_exact_same_net_branches(candidate, used_ids, curve_protected_track_ids);
   }
-  const Board spline_navigation_board = candidate;
-  if (use_circular_arc_refinement) {
-    const auto board_level_spline_runs = collect_unrounded_spline_chains(candidate);
+  const auto realization_passes = config.retry_failed_spline_routes_after_commits ? 2U : 1U;
+  for (std::size_t realization_pass = 0U;
+       use_circular_arc_refinement && realization_pass < realization_passes; ++realization_pass) {
+    const Board spline_navigation_board = candidate;
+    const auto commits_before = result.spline_parallel_route_commits;
+    const auto board_level_spline_runs =
+        collect_unrounded_spline_chains(candidate, curve_protected_track_ids, scaffold_track_ids);
+    if (board_level_spline_runs.empty())
+      break;
+    if (realization_pass > 0U)
+      result.spline_committed_context_retry_tasks += board_level_spline_runs.size();
     struct ParallelSplineRouteResult {
       DetailedRouteResult metrics;
       std::optional<SplineRouteCopperDelta> delta;
@@ -5563,7 +6705,10 @@ DetailedRouteResult materialize_impl(const Board& source, const GlobalRouteResul
     };
     std::vector<std::optional<ParallelSplineRouteResult>> task_results(
         board_level_spline_runs.size());
-    const auto worker_count = std::min(config.spline_route_workers, board_level_spline_runs.size());
+    const auto requested_workers =
+        std::min(config.spline_route_workers, board_level_spline_runs.size());
+    auto route_worker_lease = acquire_cpu_workers(requested_workers);
+    const auto worker_count = route_worker_lease.workers();
     const auto candidate_budget_per_route =
         std::max<std::size_t>(1U, config.max_spline_candidate_checks /
                                       std::max<std::size_t>(1U, board_level_spline_runs.size()));
@@ -5592,15 +6737,22 @@ DetailedRouteResult materialize_impl(const Board& source, const GlobalRouteResul
         task_results[task] = std::move(completed);
       }
     };
-    std::vector<std::jthread> workers;
-    workers.reserve(worker_count);
-    for (std::size_t worker = 0U; worker < worker_count; ++worker)
-      workers.emplace_back(run_task);
-    workers.clear();
+    if (worker_count == 0U) {
+      // A nested/parallel routing phase already owns the shared CPU budget. Preserve the exact
+      // task order and cancellation behavior without waiting for a permit that could deadlock.
+      run_task();
+    } else {
+      std::vector<std::jthread> workers;
+      workers.reserve(worker_count);
+      for (std::size_t worker = 0U; worker < worker_count; ++worker)
+        workers.emplace_back(run_task);
+      workers.clear();
+    }
 
     result.spline_parallel_route_tasks += board_level_spline_runs.size();
     result.spline_parallel_route_workers += worker_count;
     for (std::size_t task = 0U; task < task_results.size(); ++task) {
+      routing_kernel_checkpoint();
       if (stop_token.stop_requested()) {
         result.candidate = std::move(candidate);
         result.stop_reason = DetailedRouterStopReason::cancelled;
@@ -5630,22 +6782,63 @@ DetailedRouteResult materialize_impl(const Board& source, const GlobalRouteResul
             return "connectivity";
           return "materialization";
         }();
-        result.spline_route_failure_details.push_back(
+        auto detail =
             "net=" + pending.net.value() + ";layer=" + pending.run.layer.value() +
-            ";base=" + pending.base + ";points=" + std::to_string(pending.run.points.size()) +
-            ";stage=" + stage + ";navmesh=" + completed.metrics.spline_navmesh_last_diagnostic +
+            ";base=" + pending.base + ";context_pass=" + std::to_string(realization_pass) +
+            ";points=" + std::to_string(pending.run.points.size()) +
+            ";stage=" + stage + ";initial_shape=" +
+            std::to_string(completed.metrics.spline_trajectory_initial_shape_violations) +
+            ";final_shape=" +
+            std::to_string(completed.metrics.spline_trajectory_final_shape_violations) +
+            ";final_inflections=" +
+            std::to_string(completed.metrics.spline_trajectory_final_unintended_inflections) +
+            ";final_turn=" +
+            std::to_string(completed.metrics.spline_trajectory_final_excess_turn_violations) +
+            ";navmesh=" + completed.metrics.spline_navmesh_last_diagnostic +
             ";topology=" + completed.metrics.spline_navmesh_last_topology_diagnostic +
-            ";materialization=" + completed.metrics.spline_last_materialization_diagnostic);
+            ";materialization=" + completed.metrics.spline_last_materialization_diagnostic +
+            ";polyline=";
+        for (std::size_t point = 0U; point < pending.run.points.size(); ++point) {
+          if (point > 0U)
+            detail += '|';
+          detail += std::to_string(pending.run.points[point].x.value()) + ',' +
+                    std::to_string(pending.run.points[point].y.value());
+        }
+        result.spline_route_failure_details.push_back(std::move(detail));
         result.withheld_circular_arc_corners += pending.run.points.size() - 2U;
         continue;
       }
       ++result.spline_parallel_route_candidates;
       Board transaction = candidate;
+      const auto native_touched = [&](const auto& delta) {
+        return std::any_of(delta.expected.begin(), delta.expected.end(), [&](const auto& object) {
+          return protected_native_track_ids.contains(object.id.value());
+        });
+      };
+      if (native_touched(completed.delta->tracks) || native_touched(completed.delta->arcs) ||
+          native_touched(completed.delta->beziers)) {
+        ++result.spline_parallel_route_merge_rejections;
+        result.withheld_circular_arc_corners += pending.run.points.size() - 2U;
+        continue;
+      }
       if (!apply_spline_route_delta(transaction, *completed.delta)) {
         ++result.spline_parallel_route_merge_rejections;
         result.withheld_circular_arc_corners += pending.run.points.size() - 2U;
         continue;
       }
+      const auto additional_arcs = transaction.track_arcs.size() > candidate.track_arcs.size()
+                                       ? transaction.track_arcs.size() - candidate.track_arcs.size()
+                                       : 0U;
+      if (additional_arcs > config.max_circular_arcs -
+                                std::min(config.max_circular_arcs, result.fitted_circular_arcs)) {
+        result.circular_arc_candidate_budget_exhausted = true;
+        ++result.spline_parallel_route_merge_rejections;
+        result.withheld_circular_arc_corners += pending.run.points.size() - 2U;
+        continue;
+      }
+      const auto additional_beziers = transaction.track_beziers.size() > candidate.track_beziers.size()
+                                          ? transaction.track_beziers.size() - candidate.track_beziers.size()
+                                          : 0U;
       Board checked = transaction;
       if (config.defer_saved_zone_fill_clearance_to_refill) {
         for (auto& zone : checked.zones)
@@ -5667,6 +6860,7 @@ DetailedRouteResult materialize_impl(const Board& source, const GlobalRouteResul
       }
       const auto old_track_count = candidate.tracks.size();
       const auto old_arc_count = candidate.track_arcs.size();
+      const auto old_bezier_count = candidate.track_beziers.size();
       const auto old_via_count = candidate.vias.size();
       candidate = std::move(transaction);
       const auto adjust_count = [](std::size_t& counter, std::size_t before, std::size_t after) {
@@ -5678,9 +6872,13 @@ DetailedRouteResult materialize_impl(const Board& source, const GlobalRouteResul
       };
       adjust_count(result.added_tracks, old_track_count, candidate.tracks.size());
       adjust_count(result.added_track_arcs, old_arc_count, candidate.track_arcs.size());
+      adjust_count(result.added_track_beziers, old_bezier_count, candidate.track_beziers.size());
+      result.fitted_cubic_beziers += additional_beziers;
       adjust_count(result.added_vias, old_via_count, candidate.vias.size());
       accumulate_committed_spline_route_metrics(result, completed.metrics);
       ++result.spline_parallel_route_commits;
+      if (realization_pass > 0U)
+        ++result.spline_committed_context_retry_commits;
       const auto nominal_width = dimensions.at(pending.net).track_width;
       const bool width_aware = std::any_of(
           pending.run.original_track_ids.begin(), pending.run.original_track_ids.end(),
@@ -5698,6 +6896,19 @@ DetailedRouteResult materialize_impl(const Board& source, const GlobalRouteResul
       for (const auto& id : touched_ids)
         used_ids.insert(id);
     }
+    if (result.spline_parallel_route_commits == commits_before)
+      break;
+  }
+
+  // PH/PNS owns the primary realization. Only after those bounded transactions have committed do
+  // we inspect the remaining eligible straight chains and apply the exact fillet transaction.
+  // Mixed curve tangencies remain for the final audit; this pass never reinterprets them.
+  if (use_circular_arc_refinement && !repair_residual_straight_bends(
+          candidate, used_ids, result, config, curve_protected_track_ids, stop_token)) {
+    result.candidate = std::move(candidate);
+    result.stop_reason = DetailedRouterStopReason::cancelled;
+    result.diagnostic = "detailed routing cancelled during residual bend repair";
+    return result;
   }
 
   const auto skew_tuning_status = [&]() {
@@ -5720,92 +6931,19 @@ DetailedRouteResult materialize_impl(const Board& source, const GlobalRouteResul
     return result;
   }
 
-  result.validation = validate_board(candidate);
-  result.connectivity = analyze_connectivity(candidate);
-  if (!global.configured_selected_nets.empty()) {
-    const std::set<NetId> accepted_nets(global.configured_selected_nets.begin(),
-                                        global.configured_selected_nets.end());
-    std::erase_if(result.connectivity.nets,
-                  [&accepted_nets](const auto& net) { return !accepted_nets.contains(net.net); });
-    result.connectivity.open_connections = 0U;
-    result.connectivity.unrouted_nets = 0U;
-    for (const auto& net : result.connectivity.nets) {
-      result.connectivity.open_connections += net.open_connections;
-      result.connectivity.unrouted_nets += net.open_connections == 0U ? 0U : 1U;
+  if (config.restrict_straight_track_angles) {
+    constrain_straight_track_angles(candidate, protected_track_ids, used_ids, result, stop_token);
+    routing_kernel_checkpoint();
+    if (stop_token.stop_requested()) {
+      result.candidate = std::move(candidate);
+      result.stop_reason = DetailedRouterStopReason::cancelled;
+      result.diagnostic = "detailed routing cancelled during straight-track angle conversion";
+      return result;
     }
   }
-  if (config.defer_saved_zone_fill_clearance_to_refill) {
-    auto refill_planning_candidate = candidate;
-    for (auto& zone : refill_planning_candidate.zones) {
-      zone.fills.clear();
-    }
-    result.copper_drc = check_copper_rules(refill_planning_candidate);
-    std::set<std::string> source_copper_ids;
-    for (const auto& track : source.tracks) {
-      source_copper_ids.insert(track.id.value());
-    }
-    for (const auto& arc : source.track_arcs) {
-      source_copper_ids.insert(arc.id.value());
-    }
-    for (const auto& via : source.vias) {
-      source_copper_ids.insert(via.id.value());
-    }
-    for (const auto& footprint : source.footprints) {
-      for (const auto& pad : footprint.pads) {
-        source_copper_ids.insert(pad.id.value());
-      }
-    }
-    std::erase_if(result.copper_drc.violations, [&source_copper_ids](const auto& violation) {
-      return std::all_of(
-          violation.object_ids.begin(), violation.object_ids.end(),
-          [&source_copper_ids](const auto& id) { return source_copper_ids.contains(id); });
-    });
-  } else {
-    result.copper_drc = check_copper_rules(candidate);
-  }
-  result.unrounded_non_junction_bends = count_unrounded_non_junction_bends(candidate);
-  result.candidate = std::move(candidate);
-  if (!result.validation.ok()) {
-    result.stop_reason = DetailedRouterStopReason::structural_violations;
-    result.diagnostic = "materialized route failed structural validation";
-  } else if (result.connectivity.open_connections != 0U) {
-    result.stop_reason = DetailedRouterStopReason::connectivity_incomplete;
-    result.diagnostic = "materialized route did not connect every multi-pad net";
-  } else if (!result.copper_drc.ok()) {
-    result.stop_reason = DetailedRouterStopReason::copper_violations;
-    result.diagnostic = bounded_conflict_handoff
-                            ? "bounded residual spline/PNS repair did not clear every represented "
-                              "copper conflict"
-                            : "materialized route violates represented copper rules";
-  } else if (config.circular_arc_refinement && result.unrounded_non_junction_bends > 0U) {
-    result.stop_reason = DetailedRouterStopReason::invalid_path;
-    result.diagnostic = "materialized curved route retains " +
-                        std::to_string(result.unrounded_non_junction_bends) +
-                        " non-junction direction changes without quintic PH curve realization";
-  } else if (config.defer_saved_zone_fill_clearance_to_refill) {
-    result.stop_reason = DetailedRouterStopReason::zone_refill_required;
-    result.diagnostic =
-        "provisional copper is legal without saved zone fills; KiCad zone refill, strict "
-        "re-import, connectivity, and DRC are required before acceptance";
-  } else {
-    result.stop_reason = DetailedRouterStopReason::complete;
-    if (result.tuned_differential_pairs > 0U) {
-      result.diagnostic = "differential-pair skew tuned as connected DRC-clean polyline copper";
-    } else if (result.fitted_circular_arcs > 0U && result.materialized_topology_locked_paths > 0U) {
-      result.diagnostic =
-          "topology-locked medial lanes and quintic PH curve fitted arcs materialized as DRC-clean "
-          "copper";
-    } else if (result.fitted_circular_arcs > 0U) {
-      result.diagnostic =
-          "quintic PH curve routes materialized as connected DRC-clean native line/arc copper";
-    } else if (result.materialized_topology_locked_paths > 0U) {
-      result.diagnostic = "topology-locked medial lanes materialized as connected DRC-clean copper";
-    } else {
-      result.diagnostic = checkpoint == nullptr
-                              ? "global paths materialized as legal simplified copper"
-                              : "affected paths materialized with validated detailed copper reused";
-    }
-  }
+
+  validate_materialized_candidate(source, global, config, std::move(candidate), result,
+                                  bounded_conflict_handoff, checkpoint);
   const bool higher_order_fallback_available =
       (use_topology_locked && result.materialized_topology_locked_paths > 0U) ||
       (use_continuous_refinement && result.continuously_refined_points > 0U) ||
@@ -5814,19 +6952,20 @@ DetailedRouteResult materialize_impl(const Board& source, const GlobalRouteResul
   if (!result.complete() && !result.provisional_zone_refill_candidate() &&
       use_circular_arc_refinement && result.fitted_circular_arcs > 0U &&
       result.stop_reason != DetailedRouterStopReason::invalid_path &&
-      !higher_order_fallback_available && !stop_token.stop_requested()) {
+      (!higher_order_fallback_available || has_legal_scaffold) && !stop_token.stop_requested()) {
     auto curved_rejection = result.diagnostic;
     if (!result.copper_drc.violations.empty()) {
       curved_rejection += "; first copper violation " + result.copper_drc.violations.front().code;
     }
-    auto fallback =
-        materialize_impl(source, global, config, checkpoint, stop_token, use_topology_locked, false,
-                         use_pull_tight, use_continuous_refinement, topology_excluded_nets);
+    auto fallback = materialize_impl(
+        source, global, config, checkpoint, stop_token, use_topology_locked, false, use_pull_tight,
+        use_continuous_refinement, topology_excluded_nets, regional_splines);
     fallback.fallback_polyline_materialization = true;
     fallback.attempted_circular_arc_corners = result.attempted_circular_arc_corners;
     fallback.attempted_circular_arc_candidates = result.attempted_circular_arc_candidates;
     fallback.rejected_circular_arc_candidates = result.rejected_circular_arc_candidates;
     fallback.fitted_circular_arcs = result.fitted_circular_arcs;
+    fallback.fitted_cubic_beziers = result.fitted_cubic_beziers;
     fallback.radius_reduced_circular_arcs = result.radius_reduced_circular_arcs;
     fallback.withheld_circular_arc_corners = result.withheld_circular_arc_corners;
     fallback.circular_arc_candidate_budget_exhausted =
@@ -5834,6 +6973,18 @@ DetailedRouteResult materialize_impl(const Board& source, const GlobalRouteResul
     fallback.width_aware_circular_arc_paths = result.width_aware_circular_arc_paths;
     fallback.width_aware_fitted_circular_arcs = result.width_aware_fitted_circular_arcs;
     fallback.attempted_quintic_ph_runs = result.attempted_quintic_ph_runs;
+    fallback.spline_g2_promotion_attempts = result.spline_g2_promotion_attempts;
+    fallback.spline_g2_promotions = result.spline_g2_promotions;
+    fallback.spline_g2_fallbacks = result.spline_g2_fallbacks;
+    fallback.spline_g2_promotion_microseconds = result.spline_g2_promotion_microseconds;
+    fallback.regional_native_spline_runs_materialized =
+        result.regional_native_spline_runs_materialized;
+    fallback.regional_native_track_segments_materialized =
+        result.regional_native_track_segments_materialized;
+    fallback.regional_native_track_arcs_materialized =
+        result.regional_native_track_arcs_materialized;
+    fallback.regional_native_track_beziers_materialized =
+        result.regional_native_track_beziers_materialized;
     fallback.fitted_quintic_ph_runs = result.fitted_quintic_ph_runs;
     fallback.adaptive_spline_tessellation_samples = result.adaptive_spline_tessellation_samples;
     fallback.spline_fitted_track_segments = result.spline_fitted_track_segments;
@@ -5855,10 +7006,15 @@ DetailedRouteResult materialize_impl(const Board& source, const GlobalRouteResul
     fallback.spline_funnel_points = result.spline_funnel_points;
     fallback.spline_seed_candidates = result.spline_seed_candidates;
     fallback.spline_seed_exact_legal = result.spline_seed_exact_legal;
+    fallback.spline_run_aligned_seed_candidates = result.spline_run_aligned_seed_candidates;
+    fallback.spline_run_aligned_seed_exact_legal = result.spline_run_aligned_seed_exact_legal;
     fallback.spline_seed_portfolio_improvements = result.spline_seed_portfolio_improvements;
     fallback.spline_trajectory_attempts = result.spline_trajectory_attempts;
     fallback.spline_trajectory_accepted = result.spline_trajectory_accepted;
     fallback.spline_trajectory_control_moves = result.spline_trajectory_control_moves;
+    fallback.spline_paired_obstacle_support_attempts = result.spline_paired_obstacle_support_attempts;
+    fallback.spline_paired_obstacle_supports_inserted = result.spline_paired_obstacle_supports_inserted;
+    fallback.spline_paired_obstacle_support_recoveries = result.spline_paired_obstacle_support_recoveries;
     fallback.spline_trajectory_candidate_checks = result.spline_trajectory_candidate_checks;
     fallback.spline_multistart_attempts = result.spline_multistart_attempts;
     fallback.spline_multistart_recoveries = result.spline_multistart_recoveries;
@@ -6010,7 +7166,7 @@ DetailedRouteResult materialize_impl(const Board& source, const GlobalRouteResul
             ++attempted_topology_subset_candidates;
             auto subset = materialize_impl(source, global, config, checkpoint, stop_token, true,
                                            use_circular_arc_refinement, use_pull_tight,
-                                           use_continuous_refinement, excluded);
+                                           use_continuous_refinement, excluded, regional_splines);
             if (!subset.complete() || subset.fallback_topology_locked_materialization ||
                 subset.materialized_topology_locked_paths == 0U) {
               continue;
@@ -6037,9 +7193,9 @@ DetailedRouteResult materialize_impl(const Board& source, const GlobalRouteResul
         }
       }
     }
-    auto fallback = materialize_impl(source, global, config, checkpoint, stop_token, false,
-                                     use_circular_arc_refinement, use_pull_tight,
-                                     use_continuous_refinement, topology_excluded_nets);
+    auto fallback = materialize_impl(
+        source, global, config, checkpoint, stop_token, false, use_circular_arc_refinement,
+        use_pull_tight, use_continuous_refinement, topology_excluded_nets, regional_splines);
     fallback.fallback_topology_locked_materialization = true;
     fallback.attempted_topology_locked_subset_repair_nets = attempted_topology_subset_nets;
     fallback.attempted_topology_locked_subset_repair_candidates =
@@ -6082,9 +7238,10 @@ DetailedRouteResult materialize_impl(const Board& source, const GlobalRouteResul
   }
   if (!result.complete() && use_continuous_refinement && result.continuously_refined_points > 0U &&
       !stop_token.stop_requested()) {
-    auto fallback = materialize_impl(source, global, config, checkpoint, stop_token,
-                                     use_topology_locked, use_circular_arc_refinement,
-                                     use_pull_tight, false, topology_excluded_nets);
+    auto fallback =
+        materialize_impl(source, global, config, checkpoint, stop_token, use_topology_locked,
+                         use_circular_arc_refinement, use_pull_tight, false, topology_excluded_nets,
+                         regional_splines);
     fallback.fallback_discrete_materialization = true;
     fallback.continuously_refined_points = result.continuously_refined_points;
     fallback.width_aware_continuously_refined_paths = result.width_aware_continuously_refined_paths;
@@ -6108,9 +7265,9 @@ DetailedRouteResult materialize_impl(const Board& source, const GlobalRouteResul
   }
   if (!result.complete() && use_pull_tight && result.pulled_tight_corners > 0U &&
       !stop_token.stop_requested()) {
-    auto fallback =
-        materialize_impl(source, global, config, checkpoint, stop_token, use_topology_locked,
-                         use_circular_arc_refinement, false, false, topology_excluded_nets);
+    auto fallback = materialize_impl(source, global, config, checkpoint, stop_token,
+                                     use_topology_locked, use_circular_arc_refinement, false, false,
+                                     topology_excluded_nets, regional_splines);
     fallback.fallback_orthogonal_materialization = true;
     if (fallback.complete()) {
       fallback.diagnostic =
@@ -6125,7 +7282,7 @@ DetailedRouteResult materialize_impl(const Board& source, const GlobalRouteResul
     auto fallback =
         materialize_impl(source, global, config, nullptr, stop_token, use_topology_locked,
                          use_circular_arc_refinement, use_pull_tight, use_continuous_refinement,
-                         topology_excluded_nets);
+                         topology_excluded_nets, regional_splines);
     fallback.fallback_full_materialization = true;
     fallback.invalidated_reuse_nets.assign(invalidated.begin(), invalidated.end());
     if (fallback.complete()) {
@@ -6416,7 +7573,8 @@ make_joint_spline_candidate(const Board& source, const GlobalRouteResult& global
 attempt_residual_joint_transaction(const Board& source, const GlobalRouteResult& global,
                                    const DetailedRouterConfig& config, DetailedRouteResult baseline,
                                    std::stop_token stop_token) {
-  if (!baseline.residual_conflict_handoff_attempted || stop_token.stop_requested()) {
+  if (!config.circular_arc_refinement || !baseline.residual_conflict_handoff_attempted ||
+      stop_token.stop_requested()) {
     return baseline;
   }
   for (std::size_t state = 0U; state < config.max_residual_joint_candidate_states; ++state) {
@@ -6460,6 +7618,7 @@ attempt_residual_joint_transaction(const Board& source, const GlobalRouteResult&
       return exact;
     }
     ++baseline.residual_joint_exact_transactions_rejected;
+    routing_kernel_checkpoint();
     if (stop_token.stop_requested()) {
       break;
     }
@@ -6489,13 +7648,62 @@ DetailedRouteResult materialize_detailed_route(const Board& source, const Global
   return result;
 }
 
+static void copy_regional_candidate_ranker_evidence(DetailedRouteResult& detailed,
+                                                    const RegionalRouteResult& regional) {
+  detailed.regional_candidate_ranker_requested = regional.candidate_ranker_requested;
+  detailed.regional_candidate_ranker_loaded = regional.candidate_ranker_loaded;
+  detailed.regional_candidate_ranker_trees = regional.candidate_ranker_trees;
+  detailed.regional_candidate_ranker_groups_scored = regional.candidate_ranker_groups_scored;
+  detailed.regional_candidate_ranker_candidates_scored =
+      regional.candidate_ranker_candidates_scored;
+  detailed.regional_candidate_ranker_candidates_reordered =
+      regional.candidate_ranker_candidates_reordered;
+  detailed.regional_candidate_ranker_training_rows_written =
+      regional.candidate_ranker_training_rows_written;
+  detailed.regional_candidate_ranker_training_rows_failed =
+      regional.candidate_ranker_training_rows_failed;
+  detailed.regional_candidate_ranker_diagnostic = regional.candidate_ranker_diagnostic;
+}
+
+[[nodiscard]] static std::vector<RegionalSplineRealization>
+collect_regional_native_realizations(const RegionalRouteResult& regional) {
+  if (regional.native_realization_manifest_available)
+    return regional.native_realization_manifest;
+  std::vector<RegionalSplineRealization> result;
+  for (const auto& assignment : regional.bundle_assignments) {
+    const auto window = std::find_if(regional.windows.begin(), regional.windows.end(),
+        [&](const auto& candidate) { return candidate.id == assignment.window_id; });
+    for (const auto& realization : assignment.spline_realizations) {
+      if (window != regional.windows.end() &&
+          std::find(window->owned_fragments.begin(), window->owned_fragments.end(),
+                    realization.fragment) == window->owned_fragments.end())
+        continue;
+      // Identical owned publications are idempotent. Conflicting publications remain present
+      // and fail the overlap check; never silently choose one writer's geometry.
+      if (std::find(result.begin(), result.end(), realization) == result.end())
+        result.push_back(realization);
+    }
+  }
+  std::sort(result.begin(), result.end(),
+            [](const auto& lhs, const auto& rhs) { return lhs.fragment < rhs.fragment; });
+  return result;
+}
+
 DetailedRouteResult materialize_detailed_route(const Board& source, const RoutingPlanResult& plan,
                                                const DetailedRouterConfig& config,
                                                std::stop_token stop_token) {
-  if (plan.complete() && !plan.regional.spline_candidate_available) {
+  const bool direct_legal_scaffold = plan.legal_scaffold_complete && !plan.paths.empty() &&
+      std::all_of(plan.paths.begin(), plan.paths.end(),
+                  [](const GlobalRoutePath& path) { return path.legal_scaffold; });
+  if (direct_legal_scaffold ||
+      (plan.complete() && !plan.regional.spline_candidate_available &&
+      plan.regional.native_scene_conflicts == 0U && plan.regional.unmapped_exact_copper_pairs == 0U &&
+      validate_regional_native_ownership(plan.regional))) {
     auto selected = plan.coarse_global;
     selected.paths = plan.paths;
-    return materialize_detailed_route(source, selected, config, stop_token);
+    auto detailed = materialize_detailed_route(source, selected, config, stop_token);
+    copy_regional_candidate_ranker_evidence(detailed, plan.regional);
+    return detailed;
   }
   const auto coarse_topology_complete =
       plan.coarse_global.unrouted_nets.empty() &&
@@ -6531,6 +7739,7 @@ DetailedRouteResult materialize_detailed_route(const Board& source, const Routin
       verified_layer_runs == plan.regional.planned_layer_runs &&
       verified_via_transitions == plan.regional.planned_via_transitions;
   if (!coarse_topology_complete || !bundles_complete || !plan.regional.spline_candidate_available ||
+      !plan.regional.complete() || !validate_regional_native_ownership(plan.regional) ||
       !multilayer_plans_complete || plan.regional.unmapped_clearance_shadow_conflicts != 0U ||
       plan.regional.unmapped_capacity_conflicts != 0U || stop_token.stop_requested()) {
     DetailedRouteResult rejected;
@@ -6541,6 +7750,7 @@ DetailedRouteResult materialize_detailed_route(const Board& source, const Routin
         "regional materialization requires complete coarse topology, fully attributed bounded "
         "conflicts, a complete spline bundle candidate, and exact ordered multilayer run/via "
         "planning evidence";
+    copy_regional_candidate_ranker_evidence(rejected, plan.regional);
     rejected.routability_diagnoses = diagnose_detailed_routability(rejected);
     return rejected;
   }
@@ -6557,7 +7767,61 @@ DetailedRouteResult materialize_detailed_route(const Board& source, const Routin
   candidate.stop_reason = GlobalRouterStopReason::complete;
   candidate.diagnostic =
       "bounded regional quintic PH curve candidate awaiting exact materialization";
-  auto exact = materialize_detailed_route(source, candidate, config, stop_token);
+  const auto native_realizations = config.circular_arc_refinement && plan.regional.configured.native_arc_materialization_authority
+                                       ? collect_regional_native_realizations(plan.regional)
+                                       : std::vector<RegionalSplineRealization>{};
+  const auto& artifact = plan.regional.validated_copper_scene.data;
+  const auto replacement_changes_source = [&](const auto& objects) {
+    return config.existing_routing != ExistingRoutingPolicy::preserve &&
+        std::any_of(objects.begin(), objects.end(), [&](const auto& object) {
+          return !object.locked &&
+              std::any_of(candidate.paths.begin(), candidate.paths.end(),
+                          [&](const auto& path) { return path.net == object.net; });
+        });
+  };
+  const auto scene_preserves_source = [&] {
+    if (!artifact || artifact->scene.tracks.size() < source.tracks.size() ||
+        artifact->scene.track_arcs.size() < source.track_arcs.size() ||
+        artifact->scene.track_beziers.size() < source.track_beziers.size() ||
+        artifact->scene.vias.size() < source.vias.size()) return false;
+    auto prefix = artifact->scene;
+    prefix.tracks.resize(source.tracks.size());
+    prefix.track_arcs.resize(source.track_arcs.size());
+    prefix.track_beziers.resize(source.track_beziers.size());
+    prefix.vias.resize(source.vias.size());
+    auto expected = source;
+    if (artifact->refillable_zone_fills)
+      for (auto& zone : expected.zones) zone.fills.clear();
+    return prefix == expected;
+  };
+  // A DRC certificate does not authorize bypassing requested geometry transforms.
+  // Until artifacts carry a full materialization-policy fingerprint, reuse only
+  // straight copper under an explicit no-refinement policy.
+  const bool reuse_scene = artifact &&
+      !config.circular_arc_refinement && !config.continuous_refinement &&
+      !config.topology_locked_medial_materialization && !config.pull_tight_45_degrees &&
+      !config.differential_pair_skew_tuning &&
+      !config.differential_pair_skew_tuning_batch_assignment &&
+      artifact->scene.track_arcs.size() == source.track_arcs.size() &&
+      artifact->scene.track_beziers.size() == source.track_beziers.size() &&
+      artifact->source == source && scene_preserves_source() &&
+      artifact->paths == candidate.paths &&
+      artifact->manifest == plan.regional.native_realization_manifest &&
+      artifact->refillable_zone_fills == config.defer_saved_zone_fill_clearance_to_refill &&
+      config.track_width.value() == 0 && config.via_diameter.value() == 0 &&
+      config.via_drill.value() == 0 &&
+      !replacement_changes_source(source.tracks) &&
+      !replacement_changes_source(source.track_arcs) && !replacement_changes_source(source.vias) &&
+      !replacement_changes_source(source.track_beziers) &&
+      artifact->scene.tracks.size() >= source.tracks.size() &&
+      artifact->scene.track_arcs.size() >= source.track_arcs.size() &&
+      artifact->scene.vias.size() >= source.vias.size();
+  auto exact = materialize_impl(source, candidate, config, nullptr, stop_token,
+                                config.topology_locked_medial_materialization,
+                                config.circular_arc_refinement, config.pull_tight_45_degrees,
+                                config.continuous_refinement, {}, &native_realizations,
+                                reuse_scene ? &artifact->scene : nullptr);
+  exact.routability_diagnoses = diagnose_detailed_routability(exact);
   // Preserve the regional handoff as observable transaction evidence.  The candidate passed to
   // the ordinary detailed router is intentionally overflow-free, so these facts must be copied
   // from the authoritative coarse/regional plan rather than inferred from that private candidate.
@@ -6586,6 +7850,7 @@ DetailedRouteResult materialize_detailed_route(const Board& source, const Routin
       plan.regional.spline_joint_shove_accepted + plan.regional.spline_adaptive_pair_shove_accepted;
   exact.residual_joint_exact_transactions_rejected = exact.complete() ? 0U : 1U;
   exact.residual_joint_transaction_accepted = exact.complete();
+  copy_regional_candidate_ranker_evidence(exact, plan.regional);
   if (exact.complete()) {
     exact.diagnostic =
         "bounded regional quintic PH curve transaction completed connectivity and copper DRC";
@@ -6608,6 +7873,136 @@ DetailedRouteResult materialize_detailed_route_incremental(const Board& source,
                                  config.continuous_refinement);
   result.routability_diagnoses = diagnose_detailed_routability(result);
   return result;
+}
+
+DetailedRouteResult materialize_detailed_route_incremental(const Board& source,
+                                                           const RoutingPlanResult& plan,
+                                                           const DetailedRouteResult& checkpoint,
+                                                           const DetailedRouterConfig& config,
+                                                           std::stop_token stop_token) {
+  const bool direct_legal_scaffold = plan.legal_scaffold_complete && !plan.paths.empty() &&
+      std::all_of(plan.paths.begin(), plan.paths.end(),
+                  [](const GlobalRoutePath& path) { return path.legal_scaffold; });
+  if (direct_legal_scaffold ||
+      (plan.complete() && !plan.regional.spline_candidate_available &&
+      plan.regional.native_scene_conflicts == 0U && plan.regional.unmapped_exact_copper_pairs == 0U &&
+      validate_regional_native_ownership(plan.regional))) {
+    auto selected = plan.coarse_global;
+    selected.paths = plan.paths;
+    auto detailed =
+        materialize_detailed_route_incremental(source, selected, checkpoint, config, stop_token);
+    copy_regional_candidate_ranker_evidence(detailed, plan.regional);
+    return detailed;
+  }
+
+  const auto coarse_topology_complete =
+      plan.coarse_global.unrouted_nets.empty() &&
+      plan.coarse_global.unaccepted_selected_voronoi_lane_transitions == 0U;
+  const auto bundles_complete =
+      !plan.regional.bundle_assignments.empty() &&
+      std::all_of(plan.regional.bundle_assignments.begin(), plan.regional.bundle_assignments.end(),
+                  [](const auto& assignment) { return assignment.complete(); });
+  std::vector<RegionalMultilayerRoutePlan> verified_multilayer_plans;
+  std::size_t verified_layer_runs = 0U;
+  std::size_t verified_via_transitions = 0U;
+  bool multilayer_plans_complete = true;
+  for (const auto& path : plan.regional.spline_candidate_paths) {
+    const auto crosses_layers = std::adjacent_find(
+        path.points.begin(), path.points.end(),
+        [](const auto& first, const auto& second) { return first.layer != second.layer; });
+    if (crosses_layers == path.points.end()) {
+      continue;
+    }
+    auto verified = plan_multilayer_route(source, path);
+    if (!verified) {
+      multilayer_plans_complete = false;
+      break;
+    }
+    verified_layer_runs += verified->layer_runs.size();
+    verified_via_transitions += verified->via_transitions.size();
+    verified_multilayer_plans.push_back(std::move(*verified));
+  }
+  multilayer_plans_complete =
+      multilayer_plans_complete &&
+      verified_multilayer_plans == plan.regional.multilayer_route_plans &&
+      verified_multilayer_plans.size() == plan.regional.complete_via_dependent_routes &&
+      verified_layer_runs == plan.regional.planned_layer_runs &&
+      verified_via_transitions == plan.regional.planned_via_transitions;
+  if (!coarse_topology_complete || !bundles_complete || !plan.regional.spline_candidate_available ||
+      !plan.regional.complete() || !validate_regional_native_ownership(plan.regional) ||
+      !multilayer_plans_complete || plan.regional.unmapped_clearance_shadow_conflicts != 0U ||
+      plan.regional.unmapped_capacity_conflicts != 0U || stop_token.stop_requested()) {
+    DetailedRouteResult rejected;
+    rejected.stop_reason = stop_token.stop_requested()
+                               ? DetailedRouterStopReason::cancelled
+                               : DetailedRouterStopReason::incomplete_global_route;
+    rejected.diagnostic =
+        "incremental regional materialization requires complete coarse topology, fully "
+        "attributed bounded conflicts, a complete spline bundle candidate, and exact ordered "
+        "multilayer run/via planning evidence";
+    copy_regional_candidate_ranker_evidence(rejected, plan.regional);
+    rejected.routability_diagnoses = diagnose_detailed_routability(rejected);
+    return rejected;
+  }
+
+  auto candidate = plan.coarse_global;
+  candidate.paths = plan.regional.spline_candidate_paths;
+  candidate.total_overflow = 0U;
+  candidate.sampled_overflow = 0U;
+  candidate.corridor_overflow = 0U;
+  candidate.clearance_shadow_overflow = 0U;
+  candidate.total_voronoi_overflow_nm = 0U;
+  candidate.peak_voronoi_overflow_nm = 0U;
+  candidate.clearance_shadow_conflicts.clear();
+  candidate.residual_conflict_groups.clear();
+  candidate.stop_reason = GlobalRouterStopReason::complete;
+  candidate.diagnostic =
+      "bounded regional quintic PH curve candidate awaiting incremental exact materialization";
+  const auto native_realizations = config.circular_arc_refinement && plan.regional.configured.native_arc_materialization_authority
+                                       ? collect_regional_native_realizations(plan.regional)
+                                       : std::vector<RegionalSplineRealization>{};
+  auto exact = materialize_impl(source, candidate, config, &checkpoint, stop_token,
+                                config.topology_locked_medial_materialization,
+                                config.circular_arc_refinement, config.pull_tight_45_degrees,
+                                config.continuous_refinement, {}, &native_realizations);
+  exact.routability_diagnoses = diagnose_detailed_routability(exact);
+  exact.residual_conflict_handoff_attempted = true;
+  exact.residual_conflict_groups_attempted =
+      !plan.coarse_global.residual_conflict_groups.empty()
+          ? plan.coarse_global.residual_conflict_groups.size()
+          : plan.regional.components.size();
+  std::set<NetId> handed_off_nets;
+  for (const auto& component : plan.regional.components) {
+    handed_off_nets.insert(component.nets.begin(), component.nets.end());
+  }
+  exact.residual_conflict_nets_attempted = handed_off_nets.size();
+  exact.residual_sampled_overflow_attempted = plan.coarse_global.sampled_overflow;
+  exact.residual_clearance_shadow_overflow_attempted = plan.coarse_global.clearance_shadow_overflow;
+  exact.residual_joint_candidate_states = plan.regional.joint_spline_candidates_evaluated;
+  exact.residual_joint_groups_optimized = plan.regional.bundle_assignments.size();
+  exact.residual_joint_spline_routes = std::accumulate(
+      plan.regional.bundle_assignments.begin(), plan.regional.bundle_assignments.end(),
+      std::size_t{0U}, [](const auto total, const auto& assignment) {
+        return total + assignment.spline_realizations.size();
+      });
+  exact.residual_joint_optimization_sweeps =
+      plan.regional.spline_joint_shove_attempts + plan.regional.spline_adaptive_pair_shove_attempts;
+  exact.residual_joint_control_moves =
+      plan.regional.spline_joint_shove_accepted + plan.regional.spline_adaptive_pair_shove_accepted;
+  exact.residual_joint_exact_transactions_rejected = exact.complete() ? 0U : 1U;
+  exact.residual_joint_transaction_accepted = exact.complete();
+  copy_regional_candidate_ranker_evidence(exact, plan.regional);
+  if (exact.complete()) {
+    exact.diagnostic =
+        "incremental bounded regional quintic PH curve transaction completed connectivity and "
+        "copper DRC";
+  } else if (!stop_token.stop_requested()) {
+    exact.diagnostic =
+        "incremental bounded regional quintic PH curve transaction was discarded by exact "
+        "materialization: " +
+        exact.diagnostic;
+  }
+  return exact;
 }
 
 } // namespace flux

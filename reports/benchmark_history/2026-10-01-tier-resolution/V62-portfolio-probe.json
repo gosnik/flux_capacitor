@@ -1,0 +1,69 @@
+{
+  "schema": 1,
+  "experiment": "V62",
+  "authoritative": false,
+  "hypothesis": "Whole-net alternative replacement can escape incompatible coarse corridor combinations.",
+  "research": "https://ojs.aaai.org/index.php/AAAI/article/view/21266",
+  "configuration": {
+    "board": "bm_svf",
+    "saved_source_sequence": 569,
+    "max_checks": 150,
+    "max_rounds": 3,
+    "actual_checks": 75,
+    "quantization_nm": 1
+  },
+  "before": {
+    "errors": 491,
+    "opens": 0,
+    "tracks": 1258,
+    "vias": 35,
+    "categories": {
+      "track_clearance": 420,
+      "track_via_clearance": 47,
+      "hole_clearance": 24
+    }
+  },
+  "after": {
+    "errors": 468,
+    "opens": 0,
+    "tracks": 1267,
+    "vias": 32,
+    "categories": {
+      "track_clearance": 424,
+      "track_via_clearance": 31,
+      "hole_clearance": 13
+    }
+  },
+  "accepted_changes": [
+    {
+      "nets": [
+        13,
+        14
+      ],
+      "slots": [
+        0,
+        0
+      ],
+      "errors": 478
+    },
+    {
+      "nets": [
+        22,
+        8
+      ],
+      "slots": [
+        0,
+        1
+      ],
+      "errors": 468
+    }
+  ],
+  "duration_seconds": 42.74,
+  "decision": "diagnostic only; do not integrate based on violation-count decrease; severe conflicts persist and track errors increased",
+  "limitations": [
+    "No normal angle, capacity or external KiCad qualification",
+    "Saved coarse scene rather than assembled regional copper",
+    "Replay executable rebuilt during experiment; repeat for precise binary identity"
+  ],
+  "artifacts": "build/tier-resolution-20261001-portfolio-lns-before"
+}

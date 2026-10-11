@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "experiment": "native straight adapters participate in board-complete PH realization",
+  "git_revision": "25e3b884be9b359d9c5bf0cc4fbb6cc836fd4f82",
+  "worktree": "dirty; existing work preserved",
+  "build_type": "Release",
+  "binary_sha256": "ae82b85d29aa40fbc826fbecb257e1d5d2ef0ac3ee7052c36c38bc602dbd367b",
+  "ctest_selection": "^flux_unit_tests$|arc_detour|arc_export|multilayer|flux_cli_(route_kicad|detail_kicad|usped_navmesh)|flux_routing_baseline_manifest",
+  "passed": 46,
+  "failed": 0,
+  "duration_seconds": 93.62,
+  "core_duration_seconds": 64.40,
+  "kicad_drc_fixture_checks": 2,
+  "focused_native_adapter_microtest": "passed",
+  "native_arc_byte_for_byte_regression": "passed",
+  "tier_qualification": "pending real-board benchmark"
+}

@@ -1,0 +1,661 @@
+--- a/src/regional_router.cpp
++++ b/src/regional_router.cpp
+@@ -15176,8 +15176,13 @@
+   return true;
+ }
+ 
+-static void realize_regional_straight_candidate_once(const Board& board, const GlobalRouteResult& global,
+-                                         RegionalRouteResult& result, std::stop_token stop_token) {
++using StraightAxisFirstFragments = std::set<RegionalRouteFragmentId>;
++
++static void realize_regional_straight_candidate_once(
++    const Board& board, const GlobalRouteResult& global, RegionalRouteResult& result,
++    std::stop_token stop_token,
++    const StraightAxisFirstFragments* axis_first_fragments = nullptr,
++    StraightAxisFirstFragments* eligible_axis_first_fragments = nullptr) {
+   result.straight_scene_evaluated = false;
+   result.spline_candidate_available = false;
+   result.native_realization_manifest_available = false;
+@@ -15343,8 +15348,11 @@
+       route.exit_via_site = exit_via_site;
+       route.straight_realization = true;
+       // Integer octilinear doglegs preserve every endpoint, lane target and via access anchor.
+-      // This first experiment uses a deterministic diagonal-first elbow. Exact scene checks,
+-      // rather than the discrete packing certificate, decide whether that elbow is usable.
++      // The selected alternative uses one dominant-axis run followed by a 45-degree run. It is
++      // intentionally not a Manhattan detour: its only additional degree of freedom is the
++      // elbow ordering of an existing seed chord, and exact full-scene checks remain decisive.
++      const bool axis_first = axis_first_fragments != nullptr &&
++                              axis_first_fragments->contains(fragment->id);
+       if (!seed.empty()) route.centerline.push_back(seed.front());
+       for (std::size_t i = 1; i < seed.size(); ++i) {
+         const auto first = route.centerline.back();
+@@ -15352,9 +15360,22 @@
+         const auto dx = last.x.value() - first.x.value();
+         const auto dy = last.y.value() - first.y.value();
+         if (dx != 0 && dy != 0 && std::abs(dx) != std::abs(dy)) {
++          if (eligible_axis_first_fragments != nullptr) {
++            eligible_axis_first_fragments->insert(fragment->id);
++          }
+           const auto diagonal = std::min(std::abs(dx), std::abs(dy));
+-          route.centerline.push_back({Nanometres{first.x.value() + (dx < 0 ? -diagonal : diagonal)},
+-                                      Nanometres{first.y.value() + (dy < 0 ? -diagonal : diagonal)}});
++          if (axis_first) {
++            // Consume the excess on the dominant axis, leaving an exact 45-degree finish.
++            const bool horizontal = std::abs(dx) >= std::abs(dy);
++            route.centerline.push_back(
++                horizontal
++                    ? Point{Nanometres{last.x.value() - (dx < 0 ? -diagonal : diagonal)}, first.y}
++                    : Point{first.x, Nanometres{last.y.value() - (dy < 0 ? -diagonal : diagonal)}});
++          } else {
++            route.centerline.push_back(
++                {Nanometres{first.x.value() + (dx < 0 ? -diagonal : diagonal)},
++                 Nanometres{first.y.value() + (dy < 0 ? -diagonal : diagonal)}});
++          }
+         }
+         if (route.centerline.back() != last) route.centerline.push_back(last);
+       }
+@@ -15420,6 +15441,8 @@
+   result.configured.enable_straight_realization = true;
+   result.configured.enable_spline_realization = false;
+   result.straight_scene_portfolio_checks = 0U;
++  result.straight_scene_geometry_checks = 0U;
++  result.straight_scene_geometry_improvements = 0U;
+   result.straight_scene_joint_portfolio_checks = 0U;
+   result.straight_scene_portfolio_improvements = 0U;
+   const std::vector<RegionalBundleStopReason> discrete_stop_reasons = [&] {
+@@ -15469,7 +15492,9 @@
+     apply_selection(assignment, *selected);
+     changed = true;
+   }
+-  realize_regional_straight_candidate_once(board, global, result, stop_token);
++  StraightAxisFirstFragments eligible_axis_first;
++  realize_regional_straight_candidate_once(board, global, result, stop_token, nullptr,
++                                            &eligible_axis_first);
+   result.straight_scene_trials = stop_token.stop_requested() ? 0U : 1U;
+   const auto objective = [](const auto& candidate) {
+     return std::tuple{candidate.spline_candidate_available ? 0U : 1U,
+@@ -15479,12 +15504,102 @@
+                       candidate.native_scene_conflicts};
+   };
+   if (changed && !result.spline_candidate_available && !stop_token.stop_requested()) {
+-    realize_regional_straight_candidate_once(board, global, fallback, stop_token);
++    StraightAxisFirstFragments fallback_eligible_axis_first;
++    realize_regional_straight_candidate_once(board, global, fallback, stop_token, nullptr,
++                                              &fallback_eligible_axis_first);
+     if (!stop_token.stop_requested() && objective(fallback) < objective(result)) {
+       result = std::move(fallback);
++      eligible_axis_first = std::move(fallback_eligible_axis_first);
+       result.straight_source_fallback_selected = true;
+     }
+     result.straight_scene_trials = 2U;
++  }
++  if (result.spline_candidate_available || stop_token.stop_requested()) return;
++
++  // A complete discrete scene can still fail only after its fixed diagonal-first elbows are
++  // assembled. Try complementary octilinear elbows on eligible, implicated owned fragments
++  // while retaining a share of the common budget for template portfolios.
++  // The accepted set is carried into every later template trial so a successful geometry choice
++  // cannot be accidentally undone by an otherwise unrelated bundle alternative.
++  StraightAxisFirstFragments accepted_axis_first;
++  const auto geometry_objective = objective;
++  const auto geometry_comparable = [](const RegionalRouteResult& candidate) {
++    return candidate.straight_scene_evaluated && candidate.native_scene_evaluated &&
++           candidate.native_scene_complete;
++  };
++  const auto total_portfolio_budget = result.configured.max_straight_portfolio_checks;
++  const bool bundle_alternatives_available = std::any_of(
++      result.bundle_assignments.begin(), result.bundle_assignments.end(),
++      [&](const auto& assignment) {
++        const auto differs = [&](const auto& selection) {
++          return selection.templates != assignment.selected_templates ||
++                 selection.via_choices != assignment.selected_via_choices ||
++                 selection.via_assignment_region_order != assignment.via_assignment_region_order ||
++                 selection.packed_cross_sections != assignment.packed_cross_sections;
++        };
++        return std::any_of(assignment.spline_candidate_shortlist.begin(),
++                           assignment.spline_candidate_shortlist.end(), differs);
++      });
++  // When both families have work, reserve half of the common bounded budget for retained
++  // template/pair trials. If geometry has no candidate or exhausts early, the existing bundle
++  // loops receive the unused capacity because they still use the total bound below.
++  const auto geometry_budget = bundle_alternatives_available
++      ? total_portfolio_budget / 2U + total_portfolio_budget % 2U : total_portfolio_budget;
++  if (geometry_budget > 0U && !stop_token.stop_requested() &&
++      geometry_comparable(result)) {
++    std::set<NetId> implicated_nets;
++    for (const auto& diagnosis : result.local_routability_diagnoses) {
++      if (diagnosis.locally_resolved ||
++          (!diagnosis.resource.stable_id.starts_with("native-scene:") &&
++           !diagnosis.resource.stable_id.starts_with("straight-scene:")))
++        continue;
++      implicated_nets.insert(diagnosis.resource.nets.begin(), diagnosis.resource.nets.end());
++    }
++    std::set<RegionalRouteFragmentId> geometry_candidates;
++    for (const auto& assignment : result.bundle_assignments) {
++      const auto window = std::find_if(result.windows.begin(), result.windows.end(),
++          [&](const auto& item) { return item.id == assignment.window_id; });
++      if (window == result.windows.end()) continue;
++      const bool implicated = std::any_of(window->owned_fragments.begin(), window->owned_fragments.end(),
++          [&](const auto& fragment) { return implicated_nets.contains(fragment.net); });
++      if (!implicated) continue;
++      for (const auto& fragment : window->owned_fragments) {
++        if (implicated_nets.contains(fragment.net) && eligible_axis_first.contains(fragment)) {
++          geometry_candidates.insert(fragment);
++        }
++      }
++    }
++    for (const auto& fragment : geometry_candidates) {
++      if (result.straight_scene_portfolio_checks >= geometry_budget ||
++          result.spline_candidate_available || stop_token.stop_requested())
++        break;
++      auto choices = accepted_axis_first;
++      if (!choices.insert(fragment).second) continue;
++      auto trial = result;
++      for (std::size_t restore = 0U; restore < trial.bundle_assignments.size(); ++restore)
++        trial.bundle_assignments[restore].stop_reason = discrete_stop_reasons[restore];
++      const auto prior_scaffold_checks = trial.linear_scaffold_checks;
++      const auto prior_scaffold_rejections = trial.linear_scaffold_rejections;
++      realize_regional_straight_candidate_once(board, global, trial, stop_token, &choices);
++      result.linear_scaffold_checks += trial.linear_scaffold_checks - prior_scaffold_checks;
++      result.linear_scaffold_rejections += trial.linear_scaffold_rejections - prior_scaffold_rejections;
++      ++result.straight_scene_portfolio_checks;
++      ++result.straight_scene_geometry_checks;
++      ++result.straight_scene_trials;
++      if (stop_token.stop_requested() || !geometry_comparable(trial) ||
++          !(geometry_objective(trial) < geometry_objective(result)))
++        continue;
++      trial.straight_scene_trials = result.straight_scene_trials;
++      trial.linear_scaffold_checks = result.linear_scaffold_checks;
++      trial.linear_scaffold_rejections = result.linear_scaffold_rejections;
++      trial.straight_scene_portfolio_checks = result.straight_scene_portfolio_checks;
++      trial.straight_scene_geometry_checks = result.straight_scene_geometry_checks;
++      trial.straight_scene_geometry_improvements = result.straight_scene_geometry_improvements + 1U;
++      trial.straight_scene_joint_portfolio_checks = result.straight_scene_joint_portfolio_checks;
++      trial.straight_scene_portfolio_improvements = result.straight_scene_portfolio_improvements + 1U;
++      result = std::move(trial);
++      accepted_axis_first = std::move(choices);
++    }
+   }
+   if (result.spline_candidate_available || stop_token.stop_requested()) return;
+ 
+@@ -15611,7 +15726,8 @@
+       apply_selection(trial.bundle_assignments[second->index], *second_selection);
+     const auto prior_scaffold_checks = trial.linear_scaffold_checks;
+     const auto prior_scaffold_rejections = trial.linear_scaffold_rejections;
+-    realize_regional_straight_candidate_once(board, global, trial, stop_token);
++    realize_regional_straight_candidate_once(board, global, trial, stop_token,
++                                              &accepted_axis_first);
+     result.linear_scaffold_checks += trial.linear_scaffold_checks - prior_scaffold_checks;
+     result.linear_scaffold_rejections += trial.linear_scaffold_rejections - prior_scaffold_rejections;
+     ++result.straight_scene_portfolio_checks;
+@@ -17206,6 +17322,7 @@
+   std::size_t provisional_exact_promotions_attempted = 0U;
+   std::size_t provisional_exact_promotions_succeeded = 0U;
+   std::size_t discarded_portfolio_diagnoses = 0U;
++  bool assembled_feedback_pending = false;
+ 
+   if ((config.full_strength_first_pass &&
+        (!config.interleave_routability_feedback ||
+@@ -17465,6 +17582,11 @@
+     feedback_probe.pass = pass;
+     const bool final_epoch = pass == config.max_routability_feedback_retries;
+     const bool full_strength_epoch = config.full_strength_first_pass;
++    // Leave one already-budgeted allocation epoch to consume actual assembled copper evidence.
++    const bool assembled_feedback_epoch = config.enable_assembled_straight_feedback &&
++        config.interleave_routability_feedback &&
++        !config.curved_tracks && !final_epoch &&
++        pass + 1U == config.max_routability_feedback_retries;
+     const auto epoch_iterations = [&] {
+       if (!config.interleave_routability_feedback || feedback_epoch_count == 1U) {
+         return config.global.max_iterations;
+@@ -17671,9 +17793,20 @@
+     std::vector<std::pair<GlobalRouteResult, bool>> regional_inputs;
+     const bool fresh_feedback_checkpoint_first =
+         config.regional.prioritize_frozen_scope_expansion && pass > 0U && !final_epoch;
+-    const auto regional_portfolio_limit = fresh_feedback_checkpoint_first ? 1U :
++    const auto regional_portfolio_limit =
++        (assembled_feedback_epoch || fresh_feedback_checkpoint_first) ? 1U :
+         full_strength_epoch ? config.retained_global_portfolios : config.intermediate_regional_portfolios;
+-    if (fresh_feedback_checkpoint_first) {
++    const auto globally_negotiated_checkpoint = [](const GlobalRouteResult& global) {
++      return coarse_topology_complete(global) && global.sampled_overflow == 0U &&
++          global.corridor_overflow == 0U &&
++          global.unaccepted_selected_voronoi_lane_transitions == 0U;
++    };
++    if (assembled_feedback_epoch) {
++      // Global diagnoses accumulated above describe this fresh topology. Assess that same
++      // checkpoint so its regional evidence and next retry retain matching provenance.
++      regional_inputs.emplace_back(probed_global, pass > 0U);
++    }
++    if (fresh_feedback_checkpoint_first && regional_inputs.empty()) {
+       // Learn from the newly negotiated topology now. Historical fallbacks remain retained and
+       // receive full physical search in the final epoch, after global feedback has matured.
+       regional_inputs.emplace_back(probed_global, true);
+@@ -17687,8 +17820,16 @@
+         static_cast<void>(telemetry->try_emit(std::move(deferred)));
+       }
+     }
+-    if (final_epoch && best) {
++    if (final_epoch && best && (!assembled_feedback_pending || regional_portfolio_limit > 1U)) {
+       regional_inputs.emplace_back(best->coarse_global, true);
++    }
++    // A retry informed by assembled geometry must itself reach physical assessment, even if
++    // the coarse beam would prune it. Keep the best prior physical checkpoint as a fallback.
++    if (assembled_feedback_pending && final_epoch &&
++        std::none_of(regional_inputs.begin(), regional_inputs.end(), [&](const auto& input) {
++          return same_global_topology(input.first, probed_global);
++        })) {
++      regional_inputs.emplace_back(probed_global, true);
+     }
+     for (const auto& retained : retained_global_portfolios) {
+       if (regional_inputs.size() >= regional_portfolio_limit) {
+@@ -17706,7 +17847,7 @@
+     }
+     retained_global_portfolios_evaluated += regional_inputs.size();
+     const bool intermediate_regional_probe =
+-        config.interleave_routability_feedback && !final_epoch &&
++        config.interleave_routability_feedback && !final_epoch && !assembled_feedback_epoch &&
+         (!full_strength_epoch || !config.curved_tracks);
+     feedback_probe.intermediate_regional_probe = intermediate_regional_probe;
+     if (intermediate_regional_probe) {
+@@ -17792,15 +17933,13 @@
+       // deliberately exempt and still performs the full mandatory regional/PH transaction even
+       // when global negotiation exhausts its budget.
+       const bool globally_negotiated =
+-          coarse_topology_complete(regional_candidate.coarse_global) &&
+-          regional_candidate.coarse_global.sampled_overflow == 0U &&
+-          regional_candidate.coarse_global.corridor_overflow == 0U &&
+-          regional_candidate.coarse_global.unaccepted_selected_voronoi_lane_transitions == 0U;
++          globally_negotiated_checkpoint(regional_candidate.coarse_global);
+       const bool oracle_feedback_pending = (config.oracle_first_feedback || !config.curved_tracks) &&
+           config.quantized_copper_oracle.enabled &&
+           !regional_candidate.quantized_copper_oracle.feasible();
+-      const bool intermediate_regional_ready = !intermediate_regional_probe ||
+-          (globally_negotiated && !oracle_feedback_pending);
++      const bool intermediate_regional_ready = assembled_feedback_epoch
++          ? globally_negotiated
++          : !intermediate_regional_probe || (globally_negotiated && !oracle_feedback_pending);
+       if (regional_realization_is_bounded(regional_candidate.coarse_global,
+                                           regional_attempt_config) &&
+           intermediate_regional_ready) {
+@@ -17967,6 +18106,15 @@
+                      std::to_string(feedback_probe.quantized_copper_oracle_opens);
+       static_cast<void>(telemetry->try_emit(std::move(epoch)));
+     }
++    std::optional<GlobalRouteResult> assembled_checkpoint;
++    std::vector<NetId> assembled_affected_nets;
++    if (assembled_feedback_epoch && pass_best &&
++        pass_best->regional.straight_scene_evaluated &&
++        pass_best->regional.native_scene_complete && !pass_best->complete()) {
++      assembled_affected_nets = expand_feedback_nets(
++          pass_best->coarse_global, diagnosis_nets(pass_best_regional_diagnoses));
++      if (!assembled_affected_nets.empty()) assembled_checkpoint = pass_best->coarse_global;
++    }
+     const auto final_equivalent_refresh = final_epoch && pass_best && best &&
+                                           !better(*pass_best, *best) && !better(*best, *pass_best);
+     const auto improved_best =
+@@ -18035,6 +18183,15 @@
+         feedback_probe.next_feedback_affected_nets = feedback_affected_nets.size();
+       }
+     }
++    if (assembled_checkpoint) {
++      // Keep the checkpoint paired with the selected portfolio's private regional history.
++      // Ordinary stagnation diversification must not strand this fresh exact evidence.
++      feedback_checkpoint = std::move(*assembled_checkpoint);
++      feedback_affected_nets = std::move(assembled_affected_nets);
++      feedback_probe.next_feedback_uses_repair_branch = false;
++      feedback_probe.next_feedback_affected_nets = feedback_affected_nets.size();
++      assembled_feedback_pending = true;
++    }
+     feedback_probes.push_back(std::move(feedback_probe));
+     if (best) {
+       attach_feedback_probes(*best);
+--- a/include/flux/core/regional_router.hpp
++++ b/include/flux/core/regional_router.hpp
+@@ -923,6 +923,9 @@
+   std::size_t straight_scene_trials{0U};
+   bool straight_source_fallback_selected{false};
+   std::size_t straight_scene_portfolio_checks{0U};
++  // Geometry alternatives share the portfolio budget but are measured separately.
++  std::size_t straight_scene_geometry_checks{0U};
++  std::size_t straight_scene_geometry_improvements{0U};
+   std::size_t straight_scene_joint_portfolio_checks{0U};
+   std::size_t straight_scene_portfolio_improvements{0U};
+   std::size_t straight_collapsed_via_adapters{0U};
+@@ -1222,6 +1225,9 @@
+   // envelope, regional lane/via/escape, and hydraulic feedback influence the next PathFinder
+   // allocation before all configured iterations have been consumed.
+   bool interleave_routability_feedback{true};
++  // Opt in to reserving the penultimate feedback epoch for an assembled straight-copper scene.
++  // This spends the existing final global epoch consuming that exact regional evidence.
++  bool enable_assembled_straight_feedback{false};
+   // Retain distinct outer-loop global topologies for regional comparison.  This is separate from
+   // the global router's pass-local beam: entries survive a physical-feedback epoch and therefore
+   // preserve alternatives that become attractive only after downstream evidence arrives.
+--- a/apps/flux-cli/main.cpp
++++ b/apps/flux-cli/main.cpp
+@@ -3183,6 +3183,10 @@
+                                   regional && regional->straight_source_fallback_selected ? 1U : 0U);
+   print_regional_diagnosis_metric("regional_straight_scene_portfolio_checks",
+                                   regional == nullptr ? 0U : regional->straight_scene_portfolio_checks);
++  print_regional_diagnosis_metric("regional_straight_scene_geometry_checks",
++                                  regional == nullptr ? 0U : regional->straight_scene_geometry_checks);
++  print_regional_diagnosis_metric("regional_straight_scene_geometry_improvements",
++                                  regional == nullptr ? 0U : regional->straight_scene_geometry_improvements);
+   print_regional_diagnosis_metric("regional_straight_scene_joint_portfolio_checks",
+                                   regional == nullptr ? 0U : regional->straight_scene_joint_portfolio_checks);
+   print_regional_diagnosis_metric("regional_straight_scene_portfolio_improvements",
+@@ -7030,6 +7034,7 @@
+   std::optional<std::size_t> physical_feedback_retries;
+   std::optional<bool> feedback_shadows_advisory;
+   bool oracle_first_feedback{false};
++  bool assembled_straight_feedback{false};
+   bool full_strength_first_pass{false};
+   bool no_full_strength_first_pass{false};
+   bool frozen_copper_context{false};
+@@ -7172,6 +7177,9 @@
+     } else if (argument == "--oracle-first-feedback") {
+       if (result.oracle_first_feedback) return std::nullopt;
+       result.oracle_first_feedback = true;
++    } else if (argument == "--assembled-straight-feedback") {
++      if (result.assembled_straight_feedback) return std::nullopt;
++      result.assembled_straight_feedback = true;
+     } else if (argument == "--feedback-shadow-policy") {
+       if (result.feedback_shadows_advisory.has_value() || index + 1 >= argc) return std::nullopt;
+       const std::string_view policy{argv[++index]};
+@@ -8088,7 +8096,8 @@
+ [[nodiscard]] bool autoroute_tail_is_supported(const KicadCommandTail& tail) {
+   return tail.output.has_value() && !tail.placement_envelope_constraints &&
+          !tail.physical_feedback_retries && !tail.feedback_shadows_advisory &&
+-         !tail.oracle_first_feedback && !tail.full_strength_first_pass && !tail.no_full_strength_first_pass && !tail.frozen_copper_context &&
++         !tail.oracle_first_feedback && !tail.assembled_straight_feedback &&
++         !tail.full_strength_first_pass && !tail.no_full_strength_first_pass && !tail.frozen_copper_context &&
+          !tail.expand_frozen_copper_scope && !tail.prioritize_frozen_scope_expansion &&
+          !tail.local_channel_occupancy && !tail.shared_channel_copper && !tail.centerline_channel_cuts &&
+          !tail.max_regional_bundle_states &&
+@@ -8672,7 +8681,7 @@
+                "[--placement-regions SIDECAR] "
+                "[--relative-placements SIDECAR] "
+                "[--max-router-iterations N] [--physical-feedback-retries N] "
+-               "[--feedback-shadow-policy enforced|advisory] [--oracle-first-feedback | --full-strength-first-pass | --no-full-strength-first-pass] "
++               "[--feedback-shadow-policy enforced|advisory] [--oracle-first-feedback | --assembled-straight-feedback | --full-strength-first-pass | --no-full-strength-first-pass] "
+                "[--frozen-copper-context] [--expand-frozen-copper-scope] [--prioritize-frozen-scope-expansion] "
+                "[--local-channel-occupancy] [--shared-channel-copper] [--centerline-channel-cuts] "
+                "[--max-regional-bundle-states N] [--max-straight-portfolio-checks N] [--curved-tracks] "
+@@ -8775,7 +8784,7 @@
+                "  Local channel occupancy is experimental and opt-in for route-kicad/detail-kicad.\n"
+                "  All KiCad route/detail/optimize commands accept [--grid-pitch-nm N] "
+                "[--max-router-iterations N] [--physical-feedback-retries N] "
+-               "[--feedback-shadow-policy enforced|advisory] [--oracle-first-feedback | --full-strength-first-pass | --no-full-strength-first-pass] "
++               "[--feedback-shadow-policy enforced|advisory] [--oracle-first-feedback | --assembled-straight-feedback | --full-strength-first-pass | --no-full-strength-first-pass] "
+                "[--frozen-copper-context] [--expand-frozen-copper-scope] [--prioritize-frozen-scope-expansion] "
+                "[--max-straight-portfolio-checks N] "
+                "[--max-static-seed-workers N] "
+@@ -9707,6 +9716,7 @@
+     }
+     planner_config.clearance_shadows_advisory = tail->feedback_shadows_advisory;
+     planner_config.oracle_first_feedback = tail->oracle_first_feedback;
++    planner_config.enable_assembled_straight_feedback = tail->assembled_straight_feedback;
+     planner_config.full_strength_first_pass = !tail->no_full_strength_first_pass &&
+         !tail->oracle_first_feedback && tail->xpbd_relaxation && tail->xpbd_feedback;
+     flux::RoutingPlanResult routing_plan;
+@@ -9805,6 +9815,7 @@
+     }
+     planner_config.clearance_shadows_advisory = tail->feedback_shadows_advisory;
+     planner_config.oracle_first_feedback = tail->oracle_first_feedback;
++    planner_config.enable_assembled_straight_feedback = tail->assembled_straight_feedback;
+     planner_config.full_strength_first_pass = !tail->no_full_strength_first_pass &&
+         !tail->oracle_first_feedback && tail->xpbd_relaxation && tail->xpbd_feedback;
+     flux::DetailedRouterConfig detailed_config;
+--- a/tests/unit/core_tests.cpp
++++ b/tests/unit/core_tests.cpp
+@@ -538,6 +538,116 @@
+   stop.request_stop();
+   flux::realize_regional_straight_candidate(board, global, cancelled, stop.get_token());
+   require(!cancelled.spline_candidate_available, "cancelled straight realization must fail closed");
++}
++
++void straight_elbow_alternatives_preserve_exact_copper_contract() {
++  for (const auto transform : {0, 1, 2, 3}) {
++    for (const bool coupled : {false, true}) {
++      const auto point = [transform](double x, double y) {
++        if (transform & 1) x = 60.0 - x;
++        return (transform & 2) ? mm(60.0 - y, x) : mm(x, y);
++      };
++      Board board;
++      board.source_revision = "staggered-octilinear-elbows";
++      board.outline = rectangle(0, 0, 60, 60);
++      const LayerId layer{"F.Cu"};
++      board.layers = {{layer, "F.Cu", LayerKind::copper, 0}};
++      board.nets = {{NetId{"a"}, "A", 0}, {NetId{"b"}, "B", 0},
++                    {NetId{"0-unrelated"}, "Unrelated", 0}};
++      flux::GlobalRouteResult global;
++      flux::RegionalRouteResult scene;
++      for (std::size_t i = 0; i < 4U; ++i) {
++        flux::RegionalRouteFragment fragment;
++        const auto net_index = i < 2U ? i : i == 2U ? 0U : 2U;
++        fragment.id = {board.nets[net_index].id, i == 0U ? 1U : 0U, 0U, 0U};
++        fragment.layer = layer;
++        fragment.start = i < 2U ? point(20.0 + i, 20.0) : point(40.0, i == 2U ? 40.0 : 50.0);
++        fragment.end = i < 2U ? point(30.0 + i, 26.0) : point(50.0, i == 2U ? 40.0 : 56.0);
++        if (coupled && i == 3U) {
++          fragment.start = point(45.0, 35.0);
++          fragment.end = point(45.0, 45.0);
++        }
++        // The earlier-sorting extra fragments test both filters: same-net axis-aligned copper
++        // has no elbow alternative, and unrelated non-octilinear copper has no physical conflict.
++        fragment.width = Nanometres::from_mm((transform & 1) ? 0.15 : 0.10);
++        fragment.clearance = Nanometres::from_mm(0.10);
++        fragment.explicit_width = true;
++        scene.fragments.push_back(fragment);
++        flux::RegionalRoutingWindow window;
++        window.id = i;
++        window.fragments = {fragment.id};
++        window.owned_fragments = {fragment.id};
++        scene.windows.push_back(window);
++        flux::RegionalRouteTemplate route_template;
++        route_template.id = 0U;
++        route_template.fragment = fragment.id;
++        route_template.routing_layer = layer;
++        route_template.selected_global_topology = true;
++        flux::RegionalBundleAssignment assignment;
++        assignment.window_id = i;
++        assignment.templates = {route_template};
++        assignment.selected_templates = {0U};
++        assignment.stop_reason = flux::RegionalBundleStopReason::complete;
++        scene.bundle_assignments.push_back(assignment);
++        global.paths.push_back({fragment.id.net, fragment.id.connection_index, {{fragment.start, layer}, {fragment.end, layer}}});
++      }
++      if (coupled) {
++        // A second, axis-aligned conflict needs a retained template after the elbow repair.
++        // Accepting that template must not silently regenerate the old colliding A/B elbows.
++        auto detour = scene.bundle_assignments.back().templates.front();
++        detour.id = 1U;
++        detour.selected_global_topology = false;
++        detour.topology_centerline = {point(45, 35), point(55, 35), point(55, 45), point(45, 45)};
++        scene.bundle_assignments.back().templates.push_back(detour);
++        flux::RegionalBundleSelection selection;
++        selection.templates = {1U};
++        scene.bundle_assignments.back().spline_candidate_shortlist.push_back(selection);
++      }
++      auto baseline = scene;
++      flux::realize_regional_straight_candidate(board, global, baseline);
++      require(baseline.straight_scene_evaluated && baseline.straight_scene_drc_violations > 0U &&
++                  !baseline.spline_candidate_available,
++              "fixed diagonal-first elbows must reproduce the staggered overlap");
++      // Reserve-only alternatives are not consumed by the straight shortlist selector and must
++      // not incorrectly halve the geometry budget, which needs both fragment probes here.
++      auto reserve_template = scene.bundle_assignments.front().templates.front();
++      reserve_template.id = 1U;
++      reserve_template.selected_global_topology = false;
++      reserve_template.topology_centerline = {scene.fragments.front().start, scene.fragments.front().end};
++      scene.bundle_assignments.front().templates.push_back(reserve_template);
++      flux::RegionalBundleSelection unused_reserve;
++      unused_reserve.templates = {1U};
++      scene.bundle_assignments.front().spline_candidate_reserve.push_back(unused_reserve);
++      const std::size_t budget = coupled ? 6U : 2U;
++      scene.configured.max_straight_portfolio_checks = budget;
++      flux::realize_regional_straight_candidate(board, global, scene);
++      require(scene.spline_candidate_available && scene.native_scene_complete &&
++                  scene.native_scene_conflicts == 0U && scene.straight_scene_evaluated &&
++                  scene.straight_scene_drc_violations == 0U && scene.straight_scene_open_connections == 0U &&
++                  scene.straight_scene_geometry_checks == 2U && scene.straight_scene_geometry_improvements == 1U &&
++                  scene.straight_scene_portfolio_checks > 0U && scene.straight_scene_portfolio_checks <= budget &&
++                  scene.native_realization_manifest.size() == 4U,
++              "bounded complementary elbows must clear the full scene under reflection/rotation: " +
++                  std::to_string(transform) + "/coupled=" + std::to_string(coupled));
++      if (coupled) {
++        require(scene.bundle_assignments.back().selected_templates == std::vector<std::size_t>{1U},
++                "a retained template and a geometry alternative must coexist in the accepted scene");
++      }
++      for (const auto& route : scene.native_realization_manifest) {
++        const auto fragment = std::find_if(scene.fragments.begin(), scene.fragments.end(),
++            [&](const auto& item) { return item.id == route.fragment; });
++        require(fragment != scene.fragments.end() && route.width == fragment->width &&
++                    route.layer == fragment->layer && route.centerline.front() == fragment->start &&
++                    route.centerline.back() == fragment->end,
++                "elbow alternatives must preserve source width, layer and boundary endpoints");
++        for (std::size_t i = 1; i < route.centerline.size(); ++i) {
++          const auto dx = std::abs(route.centerline[i].x.value() - route.centerline[i - 1U].x.value());
++          const auto dy = std::abs(route.centerline[i].y.value() - route.centerline[i - 1U].y.value());
++          require(dx == 0 || dy == 0 || dx == dy, "elbow alternatives must remain integer octilinear copper");
++        }
++      }
++    }
++  }
+ }
+ 
+ void straight_scene_portfolio_replays_retained_window_alternative() {
+@@ -5456,6 +5566,122 @@
+                     });
+               }),
+           "straight conflicts must return to negotiation before expensive regional portfolios");
++  // Distinct lattice rows fit abstract capacity, but wide copper overlaps at their terminal
++  // approaches. Unlike the crossing fixture above, this reaches the negotiated topology gate.
++  auto parallel = crossing;
++  parallel.source_revision = "parallel-terminal-physical-feedback";
++  parallel.rules.default_track_width = Nanometres::from_mm(0.6);
++  parallel.rules.default_clearance = Nanometres::from_mm(0.2);
++  parallel.nets = {{NetId{"a"}, "A", 0}, {NetId{"b"}, "B", 0}};
++  parallel.footprints = {terminal("a1", NetId{"a"}, mm(5.0, 10.0)),
++                         terminal("a2", NetId{"a"}, mm(25.0, 10.0)),
++                         terminal("b1", NetId{"b"}, mm(5.0, 10.6)),
++                         terminal("b2", NetId{"b"}, mm(25.0, 10.6))};
++  for (auto& footprint : parallel.footprints) {
++    footprint.courtyard = local_rectangle(0.2, 0.2);
++    footprint.pads.front().width = Nanometres::from_mm(0.2);
++    footprint.pads.front().height = Nanometres::from_mm(0.2);
++  }
++  flux::RoutingPlannerConfig assembled_feedback_config;
++  require(!assembled_feedback_config.enable_assembled_straight_feedback,
++          "reserved assembled straight feedback must remain opt-in by default");
++  assembled_feedback_config.curved_tracks = false;
++  assembled_feedback_config.full_strength_first_pass = false;
++  assembled_feedback_config.max_routability_feedback_retries = 2U;
++  assembled_feedback_config.global = crossing_config;
++  assembled_feedback_config.global.grid_pitch = Nanometres::from_mm(1.0);
++  assembled_feedback_config.global.max_iterations = 3U;
++  assembled_feedback_config.global.allow_crossing_safe_diagonal_grid_edges = false;
++  assembled_feedback_config.regional.max_nets_per_window = 2U;
++  const auto default_assembled_feedback = flux::plan_routes(parallel, assembled_feedback_config);
++  require(default_assembled_feedback.feedback_probes.size() == 3U &&
++              default_assembled_feedback.feedback_probes[1].intermediate_regional_probe &&
++              std::none_of(default_assembled_feedback.feedback_probes[1].candidates.begin(),
++                           default_assembled_feedback.feedback_probes[1].candidates.end(),
++                           [](const auto& candidate) {
++                             return candidate.regional_straight_scene_evaluated;
++                           }),
++          "the default scheduler must retain the inexpensive intermediate straight probe");
++  assembled_feedback_config.enable_assembled_straight_feedback = true;
++  const auto assembled_feedback = flux::plan_routes(parallel, assembled_feedback_config);
++  require(assembled_feedback.feedback_probes.size() == 3U &&
++              assembled_feedback.cumulative_global_iterations == 3U &&
++              !assembled_feedback.complete(),
++          "assembled feedback must preserve the three-iteration budget and reject colliding copper: " +
++              std::to_string(assembled_feedback.feedback_probes.size()) + "/" +
++              std::to_string(assembled_feedback.cumulative_global_iterations) + "/" +
++              assembled_feedback.diagnostic);
++  // The assembled straight scene is the physical authority for the next epoch: its exact
++  // failures must be published after regional realization, then consumed by the following
++  // global retry.  This deliberately keeps curved/spline realization disabled.
++  const auto interleaved_straight_retry = [&] {
++    if (assembled_feedback.feedback_probes.size() >= 2U) {
++      const auto i = assembled_feedback.feedback_probes.size() - 2U;
++      const auto& assembled = assembled_feedback.feedback_probes[i];
++      const auto& retry = assembled_feedback.feedback_probes[i + 1U];
++      const bool exact_failure = std::any_of(
++          assembled.candidates.begin(), assembled.candidates.end(), [](const auto& candidate) {
++            return candidate.global_sampled_overflow == 0U && candidate.global_corridor_overflow == 0U &&
++                candidate.regional_consulted && candidate.regional_straight_scene_evaluated &&
++                candidate.regional_straight_scene_violations > 0U &&
++                !candidate.regional_spline_realization_enabled;
++          });
++      if (!exact_failure ||
++          assembled.history_pressure_after_regional <= assembled.history_pressure_after_global ||
++          retry.history_entries_before != assembled.history_entries_after_regional ||
++          retry.history_pressure_before != assembled.history_pressure_after_regional ||
++          assembled.next_feedback_affected_nets == 0U) {
++        return false;
++      }
++      if (std::any_of(retry.candidates.begin(), retry.candidates.end(),
++                      [](const auto& candidate) {
++                        return candidate.history_informed_global && candidate.feedback_affected_nets > 0U &&
++                            candidate.regional_consulted && candidate.regional_straight_scene_evaluated;
++                      })) {
++        return true;
++      }
++    }
++    return false;
++  }();
++  require(interleaved_straight_retry,
++          "the penultimate assembled straight scene must publish exact regional failures and "
++          "the subsequent global retry must consume that history and affected-net scope: " + [&] {
++            std::string detail;
++            for (const auto& epoch : assembled_feedback.feedback_probes) {
++              detail += " pass=" + std::to_string(epoch.pass) +
++                  " pressure=" + std::to_string(epoch.history_pressure_after_global) + "/" +
++                  std::to_string(epoch.history_pressure_after_regional);
++              for (const auto& candidate : epoch.candidates) {
++                detail += " [overflow=" + std::to_string(candidate.global_sampled_overflow) +
++                    "/" + std::to_string(candidate.global_corridor_overflow) +
++                    " consulted=" + std::to_string(candidate.regional_consulted) +
++                    " scene=" + std::to_string(candidate.regional_straight_scene_evaluated) +
++                    " violations=" + std::to_string(candidate.regional_straight_scene_violations) + "]";
++              }
++            }
++            return detail;
++          }());
++  auto single_portfolio_config = assembled_feedback_config;
++  single_portfolio_config.retained_global_portfolios = 1U;
++  single_portfolio_config.intermediate_regional_portfolios = 1U;
++  const auto single_portfolio = flux::plan_routes(parallel, single_portfolio_config);
++  require(single_portfolio.feedback_probes.size() == 3U &&
++              std::all_of(single_portfolio.feedback_probes.begin(),
++                          single_portfolio.feedback_probes.end(), [](const auto& epoch) {
++                            return epoch.candidates.size() == 1U;
++                          }) &&
++              single_portfolio.feedback_probes.back().candidates.front().regional_straight_scene_evaluated,
++          "forcing the physically informed replan into final assessment must respect a one-portfolio bound");
++  auto straight_no_retry_config = assembled_feedback_config;
++  straight_no_retry_config.max_routability_feedback_retries = 0U;
++  const auto straight_no_retry = flux::plan_routes(parallel, straight_no_retry_config);
++  require(straight_no_retry.feedback_probes.size() == 1U &&
++              std::any_of(straight_no_retry.feedback_probes.front().candidates.begin(),
++                          straight_no_retry.feedback_probes.front().candidates.end(),
++                          [](const auto& candidate) {
++                            return candidate.regional_straight_scene_evaluated;
++                          }),
++          "the zero-retry straight boundary must evaluate only the initial assembled scene");
+   repeated_physics_config.global.max_iterations = 6U;
+   const auto distributed_physics = flux::plan_routes(crossing, repeated_physics_config);
+   require(!distributed_physics.complete() && distributed_physics.feedback_probes.size() == 3U &&
+@@ -9924,6 +10150,8 @@
+       {"regional_fragment_compression_preserves_tree_junctions", regional_fragment_compression_preserves_tree_junctions},
+       {"straight_regional_layer_adapters_preserve_connectivity", straight_regional_layer_adapters_preserve_connectivity},
+       {"straight_regional_lanes_require_exact_copper_proof", straight_regional_lanes_require_exact_copper_proof},
++      {"straight_elbow_alternatives_preserve_exact_copper_contract",
++       straight_elbow_alternatives_preserve_exact_copper_contract},
+       {"straight_scene_portfolio_replays_retained_window_alternative",
+        straight_scene_portfolio_replays_retained_window_alternative},
+       {"regional_capacity_tracks_longitudinal_demand",

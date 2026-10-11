@@ -1,0 +1,87 @@
+{
+  "schema": 1,
+  "experiment": "tier1-residual-cone-extended-control",
+  "board": "bm_svf",
+  "tier": 1,
+  "binary": {
+    "path": "build/parallel-exact-v15-bin/flux-cli",
+    "sha256": "afb45b9615ee59aec96e6a275eb9e67613c1fc2a601fe30d41dcf64a72d27090"
+  },
+  "artifact": "build/tier1-parallel-exact-v15-1800s-20260906",
+  "status": "diagnostic_timeout",
+  "timeout_seconds": 1800,
+  "measurement_limits": "Portfolio duration includes template generation, screening, DFS and leaf validation. complete_states denotes the retained access/lane-feasible pool, not the raw DFS leaves.",
+  "pre_native_checkpoints": [
+    {"epoch": 1, "seconds": 35.622535, "violations": 764, "opens": 0},
+    {"epoch": 2, "seconds": 191.315778, "violations": 1297, "opens": 0},
+    {"epoch": 3, "seconds": 240.895357, "violations": 2216, "opens": 0}
+  ],
+  "fourth_epoch": {
+    "portfolio_ready_seconds": 668.381104,
+    "active_tier_barrier_seconds": 874.264268,
+    "active_tier_duration_seconds": 205.883164,
+    "ordinary_splines_complete_seconds": 1067.533924,
+    "conflict_directed_master_finished_seconds": 1098.306281,
+    "residual_cones": 3,
+    "residual_windows": 3
+  },
+  "residual_cone_0": {
+    "alternative_generation_start_seconds": 1098.321247,
+    "portfolio_ready_seconds": 1276.352749,
+    "portfolio_duration_seconds": 178.031502,
+    "implicated_alternative_nets": [
+      "kicad-net-9",
+      "kicad-net-11",
+      "kicad-net-22",
+      "kicad-net-26"
+    ],
+    "same_layer_detour_attempts": 8,
+    "same_layer_detours_generated": 0,
+    "templates": 268,
+    "alternatives": 209,
+    "topology_classes": 199,
+    "terminal_templates": 24,
+    "via_templates": 212,
+    "bundle_states": 100000,
+    "complete_states": 0,
+    "active_candidates": 0,
+    "reserve_candidates": 0,
+    "stop_reason": "state_budget_exhausted",
+    "spline_candidates_evaluated": 0
+  },
+  "residual_cone_1": {
+    "alternative_generation_start_seconds": 1276.360887,
+    "portfolio_ready_seconds": 1455.905687,
+    "portfolio_duration_seconds": 179.544800,
+    "implicated_alternative_nets": [
+      "kicad-net-1",
+      "kicad-net-4",
+      "kicad-net-5",
+      "kicad-net-13",
+      "kicad-net-16",
+      "kicad-net-24"
+    ],
+    "templates": 155,
+    "alternatives": 113,
+    "topology_classes": 107,
+    "terminal_templates": 0,
+    "via_templates": 127,
+    "bundle_states": 100000,
+    "complete_states": 584,
+    "active_candidates": 8,
+    "reserve_candidates": 512,
+    "stop_reason": "complete",
+    "active_candidate_native_illegal_routes": [19, 20, 19, 20, 20, 22, 20],
+    "active_candidate_total_routes": [22, 22, 23, 24, 24, 24, 24],
+    "first_fallback_wave_started_seconds": 1653.728644,
+    "fallback_candidates_completed_before_timeout": 5,
+    "fallback_candidates_remaining_after_promotion": 504
+  },
+  "interpretation": {
+    "earliest_board_blocker": "Residual cone 0 exhausts the bounded discrete template/layer/via allocation search without a complete state; no spline algorithm is invoked for this cone.",
+    "secondary_blocker": "Residual cone 1 has many complete discrete states but every observed active and fallback physical realization remains heavily native-illegal and one fallback wave alone exceeds the remaining benchmark budget.",
+    "next_hypothesis": "Move exact monotone access and run-layer constraints into forward checking in the bounded bundle DFS so incompatible partial assignments cannot consume the complete-state budget. Preserve the candidate domains, exact lane solver, continuous realization and final DRC gates."
+  },
+  "final_kicad_drc": "not_evaluated",
+  "tier_promoted": false
+}

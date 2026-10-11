@@ -1,0 +1,30 @@
+{
+  "utc": "2026-10-08T10:10:15.679129+00:00",
+  "git_revision": "94aa691ad89576d1c0ac07a5346020da21fc9d06",
+  "default_assembled_feedback": false,
+  "files": {
+    "src/regional_router.cpp": "db1abb541d1c0b775da714cd40e5070a28bc447e0a5833bfa08f5b4ca11e3c2a",
+    "include/flux/core/regional_router.hpp": "f556385738c49a69f6faf45fa679c74eb23751e700fce592a2c026e4107a398c",
+    "apps/flux-cli/main.cpp": "136d672502389666315be8e378d5d17d7cac999dc735a939500589603b5b9086",
+    "tests/unit/core_tests.cpp": "00fbcd3117d194f616a2e32e4db696485cbeeaec95247fe3caf41bbcd2e13b1e"
+  },
+  "validation": {
+    "core": "55/55: build/final-routing-fixes-20261008/core-55.log",
+    "tier0": "passed external KiCad: build/final-routing-fixes-20261008/tier0-rerun/",
+    "review": "narrow default-off delta reviewed; no material findings"
+  },
+  "binary_sha256": "71a6e0221fe8353df99ecf026d3b9c332877f5b2cce515d6324ee3409854fcb8",
+  "frontier_status": {
+    "tier0": "pass: final default-off executable, external KiCad DRC",
+    "tier1": "not passed: V74/V75 immutable full normal-budget runs both751 assembled violations and0 opens",
+    "final_default_off_full_tier1": "not run",
+    "geometry_candidate_activation": "existing max_straight_portfolio_checks >0; default0 unchanged",
+    "assembled_feedback_activation": "explicit --assembled-straight-feedback; defaultfalse",
+    "baseline_cli_test_limit": "seven broad CLI CTests also fail on V73 baseline; no new regression established"
+  },
+  "reports": [
+    "reports/benchmark_history/2026-10-08-assembled-feedback.json",
+    "reports/benchmark_history/2026-10-08-dogleg-alternatives.json",
+    "reports/benchmark_history/2026-10-08-feedback-budget-pilot.json"
+  ]
+}

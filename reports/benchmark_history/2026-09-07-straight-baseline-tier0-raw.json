@@ -1,0 +1,49 @@
+{
+  "artifacts": [
+    {
+      "bytes": 3957,
+      "path": "run-metadata.json",
+      "sha256": "20ab9f81e42e2d0f622630c58a32cc694ea770a8dadf653cf80f115aa13f0677"
+    },
+    {
+      "bytes": 1177,
+      "path": "tier-0-pt2399_delay/analysis/global/failed-route-previews.json",
+      "sha256": "a49eca806736ac2f089cd30703b5fe8ba7932aa75ccc22eeb7fb8c72a4fdeb51"
+    },
+    {
+      "bytes": 259938,
+      "path": "tier-0-pt2399_delay/analysis/global/near-00-window-0/copper-00-B_Cu.png",
+      "sha256": "5380d2798eeb6605b7a0613d8e5bd6b652bb62b3fadf6fd45be48d7f46871517"
+    },
+    {
+      "bytes": 257017,
+      "path": "tier-0-pt2399_delay/analysis/global/near-00-window-0/copper-01-F_Cu.png",
+      "sha256": "15e65a1e01bbdcd5df2e012fb684245c6bead615a3b62964e6022a7fe1c74c68"
+    },
+    {
+      "bytes": 313200,
+      "path": "tier-0-pt2399_delay/analysis/global/near-00-window-0/provisional-overview.png",
+      "sha256": "d6b8d20d1faf8fbcc44b8391d31d265c267933e8aa0f78ef6ba8adcdfa30b65a"
+    },
+    {
+      "bytes": 17670,
+      "path": "tier-0-pt2399_delay/analysis/global/near-00-window-0/spline-controls-closeup.png",
+      "sha256": "b76ab9a18b1b53acda8ea8fd4fcbbc046da13c28e812e58a849d36405ae37933"
+    },
+    {
+      "bytes": 263263,
+      "path": "tier-0-pt2399_delay/analysis/global/near-00-window-0/spline-controls.png",
+      "sha256": "b08df75e7cd69fd70616fc90cace90dff6729a6bb12e3157b7751cd50900dec2"
+    },
+    {
+      "bytes": 146478556,
+      "path": "tier-0-pt2399_delay/telemetry/pt2399_delay-global.jsonl",
+      "sha256": "a924d9876ee63e4fad01081a1a0c2c8bc8592583438b9e30c5c869d77d091695"
+    }
+  ],
+  "boards": [],
+  "diagnostic": "Command '['/home/adam/qtbits/flux_capacitor/build/dev/flux-cli', 'route-kicad', '/home/adam/qtbits/flux_capacitor/tests/fixtures/routing-corpus/pt2399_delay.kicad_pcb', '--max-router-iterations', '1', '--max-expansions', '50000', '--max-static-seed-workers', '2', '--search-diversification', '--telemetry-level', 'diagnostic', '--telemetry-record', '/home/adam/qtbits/flux_capacitor/build/straight-baseline-tier0/tier-0-pt2399_delay/telemetry/pt2399_delay-global.jsonl']' timed out after 600 seconds",
+  "schema": "flux_routing_baseline_result",
+  "schema_version": 1,
+  "status": "failed"
+}

@@ -1,0 +1,253 @@
+{
+  "schema": 1,
+  "date": "2026-10-10",
+  "revision": "94aa691ad89576d1c0ac07a5346020da21fc9d06",
+  "working_tree": "dirty; unrelated existing work preserved",
+  "experiment": "indexed physical terrain map, radius-aware owner shadow queries and explicit packing obligations",
+  "status": "frozen_binary_validated_tier1_still_fails_concurrent_source_unvalidated",
+  "baseline_report": "reports/benchmark_history/2026-10-10-history-sharing.json",
+  "terrain_only_report": "reports/benchmark_history/2026-10-10-indexed-clearance.json",
+  "tier_order": [
+    "pt2399_delay",
+    "bm_svf"
+  ],
+  "configuration": {
+    "track_geometry": "curved",
+    "telemetry_level": "diagnostic",
+    "routing_timeout_seconds": 900,
+    "planning_timeout_seconds": 960,
+    "detailed_timeout_seconds": 960
+  },
+  "validation": {
+    "focused_suites_passed": 12,
+    "focused_suites_total": 12,
+    "core_tests_passed": 65,
+    "core_tests_total": 65,
+    "builds": [
+      "Release CLI and focused tests passed",
+      "Viewer-tree CLI and viewer passed"
+    ],
+    "independent_review": "No material issues found after bounded obligation dedup correction; partial telemetry metrics separately regression tested",
+    "source_drift_limitation": "External source edits appeared during benchmarks, including legal-scaffold routing. Builds/tests and tier results apply to the recorded unchanged binary and pre-drift source hashes, not to these later edits."
+  },
+  "source_sha256": {
+    "include/flux/core/indexed_clearance_map.hpp": "c878181a2e0a3ccb3502d613f178f6d8ba0bcec7a23f0c5d39bdf3afd0c61877",
+    "src/indexed_clearance_map.cpp": "93851525fe5a27bbadc84dce9c1921a377bceb98358494f2ca848cc912c7c493",
+    "src/hydraulic_path.cpp": "e52cc74204644b1835e8fde9609262456c4949b200af9e6687f45b93e633cd8e",
+    "src/global_router.cpp": "2da225d40e638c03fa8f42c3499cc77e7ec34f6a38630cb1ff343002ac4adc64",
+    "include/flux/core/global_router.hpp": "d8de2b3fad21177baf1967b8ab8b25200a28ed4491bc8950359882fcc24d1f5d",
+    "src/regional_router.cpp": "388b2b41f4359b75b60866623f07b942d8f40b25b10571b0ff83e1f5a7981d6b",
+    "include/flux/core/regional_router.hpp": "b689db35b3114f948191edfef5d641ec66dfe8ad71d5383d2e8aad0c4ad404f9",
+    "src/routability_knowledge.cpp": "910ff9cd42269ff2ef25306937e992492476b9761a7f639ac2710f58e45e9d41",
+    "src/routing_engine.cpp": "133f720977168bc4e59da022f6202ee689b17c6d30bac3cc002e0b5e6f9dd029",
+    "src/routing_engine_policy.cpp": "1ddd00d8dc042b2a7843a598b948e2a51328bbee0d77924c0144ad327746fc7d",
+    "src/router_telemetry.cpp": "7dac14e89faf670c8ac015c041e774abfd62e01ba64c774b1483bfcc1512518a",
+    "src/telemetry_state.cpp": "4857ab275116ccd25780e0d92cff153bc5e5101a786365a4305844f964e1f582",
+    "src/telemetry_event.cpp": "97864472ef674c7a63b2c5425d1e9870db2c07f0be38d9330b28c44bdebc5dd5",
+    "apps/flux-cli/main.cpp": "af31fe4e69fb67c7ce9821e7ab02f840320253c6d5d2d7ae3bb8ace834be700f",
+    "apps/flux-viewer/viewer_app.cpp": "ecc2da3a778824bacb501b0d444d1dc249cf45deb3eb9f3b3b005ad77a05ec8d",
+    "tests/unit/indexed_clearance_map_tests.cpp": "ab28ed6b3ab656a2f3359b57cded194e318a465c80845edab83858d0145b3f82",
+    "tests/unit/indexed_terrain_integration_tests.cpp": "b0d3850215589b627b7e36cfb3fe07e079702fa38b396cec11c10351482aabf5",
+    "tests/unit/clearance_shadow_tests.cpp": "80de41bdf03600f15d95606f0c0b0436918f49ad6f39d4648fe4580b9cab2b9a",
+    "tests/unit/routing_engine_policy_tests.cpp": "aa09e7b2883d14ece2771b0c2ec9f8b08fa53144d20393c661ce65e11037ae2d",
+    "tests/unit/telemetry_viewer_tests.cpp": "311ecee445381140f385e472137e3ad5798ed1b470db0a9b303ad1fda75721e7"
+  },
+  "binary_sha256": "c6f58105d96a7fd2ea8c5ffc6f383c096ff25b64a909ad9bd1c62879606aab4a",
+  "runs": [
+    {
+      "tier": 0,
+      "board": "pt2399_delay",
+      "artifacts": "reports/validation/indexed-shadow-20261010/tier0/tier-0-pt2399_delay",
+      "global_seconds": 26.983229144010693,
+      "detail_seconds": 421.2331348610169,
+      "configuration": {
+        "arcs": true,
+        "max_expansions": 50000,
+        "max_router_iterations": 30,
+        "max_static_seed_workers": 2,
+        "outer_timeout_seconds": 960,
+        "router_args": [
+          "--curved-tracks"
+        ],
+        "routing_timeout_seconds": 900,
+        "search_diversification": true,
+        "telemetry_level": "diagnostic",
+        "write_incomplete_preview": true
+      },
+      "engine_outcome": "exhausted",
+      "outcome": "unchanged_drc_clean_copper_strict_curve_failure",
+      "peak_rss_kib": 1330452,
+      "external_drc": 0,
+      "external_opens": 0,
+      "copper_images_visually_inspected": true,
+      "copper_image_sha256": {
+        "analysis/detailed-rejected/copper/01-B_Cu.png": "37e124173068c2e4c85d9ce30cffbccff6bf798be05600f5e5db0b27611094a7",
+        "analysis/detailed-rejected/copper/00-F_Cu.png": "2f4bf0aa0947b8aed99fba46b477745e1e32955570184d85991d9d4ff63020c2"
+      },
+      "interpretation": "Copper PNGs exactly match previous baseline. Detail runtime508->421 seconds in one sample; same seven strict-curve failures. No tier promotion.",
+      "open_connections": 0,
+      "copper_violations": 0,
+      "added_tracks": 47,
+      "added_track_beziers": 199,
+      "added_vias": 3,
+      "unrounded_non_junction_bends": 7,
+      "quantized_copper_oracle": null,
+      "regional_evaluated": null,
+      "scheduler": {
+        "routing_engine_experiment_active_us": 310334029,
+        "routing_engine_experiment_initial_explorations": 37,
+        "routing_engine_experiment_invalidated": 19,
+        "routing_engine_experiment_memory_evictions": 0,
+        "routing_engine_experiment_resumed": 57,
+        "routing_engine_experiment_retired": 16,
+        "routing_engine_experiment_started": 37,
+        "routing_engine_experiment_state_suppressions": 0,
+        "routing_engine_experiment_suspended": 78
+      },
+      "indexed_map": {
+        "static_seed_indexed_clearance_map_builds": 20,
+        "static_seed_indexed_clearance_map_cells": 53989740,
+        "static_seed_indexed_clearance_map_fallbacks": 0,
+        "static_seed_indexed_clearance_map_records": 666540,
+        "static_seed_indexed_clearance_map_references": 17573,
+        "static_seed_indexed_clearance_map_reuses": 26
+      },
+      "packing": {
+        "global_packing_obligation_budget_exhausted": false,
+        "global_unresolved_packing_obligations": 0
+      },
+      "gpu_mask": {
+        "static_seed_height_evolution_gpu_mask_cross_pipeline_reuses": 0,
+        "static_seed_height_evolution_gpu_mask_upload_reuses": 26,
+        "static_seed_height_evolution_gpu_mask_uploads": 20,
+        "static_seed_hydraulic_gpu_mask_cross_pipeline_reuses": 0,
+        "static_seed_hydraulic_gpu_mask_upload_reuses": 26,
+        "static_seed_hydraulic_gpu_mask_uploads": 20
+      }
+    },
+    {
+      "tier": 1,
+      "board": "bm_svf",
+      "artifacts": "reports/validation/indexed-shadow-20261010/tier1/tier-1-bm_svf",
+      "global_seconds": 900.1853198759782,
+      "detail_seconds": null,
+      "configuration": {
+        "max_expansions": 50000,
+        "max_router_iterations": 30,
+        "max_static_seed_workers": 2,
+        "router_args": [
+          "--crossing-safe-diagonal-grid",
+          "--direct-medial",
+          "--grid-pitch-nm",
+          "650000",
+          "--xpbd-relaxation",
+          "--xpbd-feedback",
+          "--atomic-net-trees",
+          "--hard-capacity-start-iteration",
+          "4",
+          "--max-hard-capacity-ripup-attempts-per-pass",
+          "8",
+          "--max-hard-capacity-ripup-nets-per-attempt",
+          "8",
+          "--max-hard-capacity-conflict-set-states-per-attempt",
+          "256",
+          "--terminal-escape-proximity-cost",
+          "500",
+          "--rollback-failed-hard-capacity-ripup",
+          "--defer-hard-capacity-ripup-victims-to-pass-tail",
+          "--protect-recovered-hard-capacity-ripup-nets",
+          "--curved-tracks"
+        ],
+        "routing_timeout_seconds": 900,
+        "search_diversification": true,
+        "telemetry_level": "diagnostic"
+      },
+      "engine_outcome": "timed-out",
+      "outcome": "timed_out_no_physical_improvement",
+      "peak_rss_kib": 1341448,
+      "external_drc": null,
+      "external_opens": null,
+      "preview_images_visually_inspected": true,
+      "preview_image_sha256": {
+        "analysis/global/near-00-window--1/copper-00-B_Cu.png": "d7f892a6faf1fdc47291353f6fa934321f23f257a4facf8515099fa8188b24b8",
+        "analysis/global/near-00-window--1/copper-01-F_Cu.png": "68c0079faf4ea0baca955a56b810b2f75a0ac99627e0bb222600621dd6cfa3a0"
+      },
+      "interpretation": "Zero abstract overflow does not mean completion. Same799 quantized-copper violations, no evaluated regional scene;3 unresolved packing obligations remain. Harness exit0 does not qualify board.",
+      "complete": true,
+      "routing_plan_complete": false,
+      "total_overflow": 0,
+      "unrouted_nets": 0,
+      "quantized_copper_oracle": {
+        "configured_grid_pitch_nm": 1,
+        "diagnoses": 310,
+        "drc_violation_counts": {
+          "hole_clearance": 70,
+          "track_clearance": 544,
+          "track_via_clearance": 179,
+          "via_clearance": 6
+        },
+        "drc_violations": 799,
+        "elapsed_us": 150010,
+        "feasible": false,
+        "malformed_paths": 0,
+        "open_connections": 0,
+        "paths_examined": 78,
+        "paths_materialized": 78,
+        "reused_transitions": 2,
+        "tracks": 1329,
+        "unrouted_nets": 0,
+        "vias": 56
+      },
+      "regional_evaluated": false,
+      "unresolved_packing_obligations": 3,
+      "scheduler": {
+        "routing_engine_experiment_active_us": 816793535,
+        "routing_engine_experiment_initial_explorations": 19,
+        "routing_engine_experiment_invalidated": 14,
+        "routing_engine_experiment_memory_evictions": 0,
+        "routing_engine_experiment_resumed": 74,
+        "routing_engine_experiment_retired": 3,
+        "routing_engine_experiment_started": 19,
+        "routing_engine_experiment_state_suppressions": 0,
+        "routing_engine_experiment_suspended": 89
+      },
+      "indexed_map": {
+        "static_seed_indexed_clearance_map_builds": 23,
+        "static_seed_indexed_clearance_map_cells": 36732150,
+        "static_seed_indexed_clearance_map_fallbacks": 0,
+        "static_seed_indexed_clearance_map_records": 869400,
+        "static_seed_indexed_clearance_map_references": 11858,
+        "static_seed_indexed_clearance_map_reuses": 22
+      },
+      "packing": {
+        "packing_obligation_budget_exhausted": false,
+        "regional_source_packing_obligations": 0,
+        "regional_unmapped_packing_obligations": 0,
+        "regional_unresolved_packing_obligations": 0,
+        "unresolved_packing_obligations": 3
+      },
+      "gpu_mask": {
+        "static_seed_height_evolution_gpu_mask_cross_pipeline_reuses": 0,
+        "static_seed_height_evolution_gpu_mask_upload_reuses": 22,
+        "static_seed_height_evolution_gpu_mask_uploads": 23,
+        "static_seed_hydraulic_gpu_mask_cross_pipeline_reuses": 0,
+        "static_seed_hydraulic_gpu_mask_upload_reuses": 22,
+        "static_seed_hydraulic_gpu_mask_uploads": 23
+      }
+    }
+  ],
+  "scope_limits": [
+    "Exact continuous checks remain authoritative; evolved terrain height is guidance.",
+    "Rich map records and dynamic owner BVH remain CPU-side; existing immutable mask leases provide GPU reuse.",
+    "Dynamic shadows use open-segment BVH mode; sampled-edge shadow raster remains in place.",
+    "A single timing sample cannot isolate index speedup from scheduling variation."
+  ],
+  "concurrent_source_changes": {
+    "include/flux/core/global_router.hpp": "4ea444d81810489f74af893b5cff47628019cc3d08c7f2bc165d39f3c893b72e",
+    "include/flux/core/regional_router.hpp": "e96971c0b35959bf05849b15704afc6f12421b395774d96c66ec4f9b0aeb0271",
+    "src/routing_engine.cpp": "1f9d76815981d2f9c251802fa367aacab72bf6a432f06d67db4461690b155bf0",
+    "src/routing_engine_policy.cpp": "25e5018a4b30511a0d66faea52a778af1c4d99c2d077dd3e00433365fcb82620",
+    "apps/flux-cli/main.cpp": "b7e1d1c051a5e1ca58630aa8107d56140ae8fd46b76b423c628b6c84e2ecdd3a",
+    "tests/unit/routing_engine_policy_tests.cpp": "f20ed9230e41cb6ce89e1ee2c7f6ff3d4b4e32f072366cf205ae1bf76396c566"
+  }
+}

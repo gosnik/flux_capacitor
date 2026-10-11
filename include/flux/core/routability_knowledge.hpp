@@ -23,7 +23,8 @@ enum class RoutabilityFailureKind {
   shove_deadlock,
   quantization_clearance,
   topological_trap,
-  layer_transition_conflict
+  layer_transition_conflict,
+  packing_unresolved
 };
 
 enum class RoutabilityFailureStage {
@@ -55,6 +56,24 @@ struct RoutabilityResourceReference {
   bool operator==(const RoutabilityResourceReference&) const = default;
 };
 
+// Identity within the exact global checkpoint probed by the copper oracle. Original (not
+// quantized) endpoints allow consumers to reject stale provenance after topology changes.
+struct RoutabilitySourceSegment {
+  NetId net;
+  std::size_t connection_index{0U};
+  std::size_t segment_index{0U};
+  LayerId layer;
+  Point start;
+  Point end;
+  bool operator==(const RoutabilitySourceSegment&) const = default;
+};
+
+struct RoutabilitySourceSegmentPair {
+  RoutabilitySourceSegment first;
+  RoutabilitySourceSegment second;
+  bool operator==(const RoutabilitySourceSegmentPair&) const = default;
+};
+
 struct RoutabilityDiagnosis {
   RoutabilityFailureKind kind{RoutabilityFailureKind::topological_trap};
   RoutabilityFailureStage stage{RoutabilityFailureStage::global_probe};
@@ -71,6 +90,11 @@ struct RoutabilityDiagnosis {
   // an exact packed-lane bridge).  Retain them for attribution, telemetry, and affected-cone
   // expansion without charging the same failure a second time through generic physical history.
   bool contributes_to_history{true};
+  // Preserve pair associations when spatial diagnoses coalesce, rather than generating a
+  // cross-product of nearby same-net branches. Via failures identify their attached
+  // planar routing edges as repair owners, not as an assertion that those edges collide.
+  // Empty when exact routing ownership is unavailable.
+  std::vector<RoutabilitySourceSegmentPair> source_segment_pairs{};
 
   bool operator==(const RoutabilityDiagnosis&) const = default;
 };
@@ -120,6 +144,10 @@ struct RoutabilityProbeConfig {
   Nanometres clearance_severity_quantum{Nanometres::from_mm(0.05)};
   std::size_t max_diagnoses{4'096U};
   std::size_t max_history_entries{4'096U};
+  // An exact quantized-copper oracle may own physical feedback. In that mode the global shadow
+  // witnesses remain in diagnoses for telemetry and repair-scope attribution, but must not also
+  // deposit generic regional pressure.
+  bool clearance_shadows_contribute_to_history{true};
 
   bool operator==(const RoutabilityProbeConfig&) const = default;
 };

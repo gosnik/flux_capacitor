@@ -1,0 +1,45 @@
+{
+  "schema": 1,
+  "experiment": "dynamic-native-drc-parity-control",
+  "hypothesis": "Regional native-copper assessment can select generated tracks, arcs and vias in exact dynamic DRC because the caller already discards immutable source-only violations.",
+  "candidate_binary_sha256": "46c528d98df84130763b5d1ed081a55aeb76e6cc3902b206ec21dc6dd52a3401",
+  "artifact": "build/tier0-dynamic-native-drc-v12-20260906",
+  "board": "pt2399_delay",
+  "tier": 0,
+  "status": "failed",
+  "global": {
+    "duration_seconds": 206.56027540299692,
+    "paths": 50,
+    "unrouted_nets": 0,
+    "native_windows_checked": 13,
+    "native_pieces_checked": 472,
+    "native_copper_violations": 68,
+    "native_legal_windows": 4
+  },
+  "detailed": {
+    "duration_seconds": 281.3391042680014,
+    "complete": false,
+    "tracks": 167,
+    "arcs": 255,
+    "vias": 5,
+    "opens": 0,
+    "internal_copper_violations": 0,
+    "malformed_non_ph_bends": 79,
+    "diagnostic": "materialized curved route retains 79 non-junction direction changes without quintic PH curve realization"
+  },
+  "differential_diagnosis": {
+    "common_candidate_fingerprint": "08c3a1c6c70fe762",
+    "window": 3,
+    "rank": 6,
+    "routes": ["kicad-net-23/1/0/1", "kicad-net-4/0/0/6"],
+    "full_drc_route_legality": [false, false],
+    "dynamic_drc_route_legality": [false, true],
+    "root_cause": "Dynamic DRC checked selected tracks/arcs against static vias but omitted the symmetric selected-via versus static-track/static-arc relationships. The net-4 route owned endpoint vias, so its false legality changed regional selection."
+  },
+  "interpretation": {
+    "hypothesis_result": "implementation_bug_exposed",
+    "decision": "reject_v12_and_fix_dynamic_via_symmetry",
+    "safety": "No board was promoted. The malformed result was rejected before output and never reached KiCad DRC.",
+    "next_experiment": "Add selected-via versus static track/arc checks to the bounded DRC API, prove selected-subset equivalence in a micro-test, and rerun Tier 0 before Tier 1."
+  }
+}

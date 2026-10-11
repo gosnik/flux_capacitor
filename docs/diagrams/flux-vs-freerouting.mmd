@@ -1,0 +1,30 @@
+flowchart TB
+  subgraph FR["FreeRouting: inspected revision 2d2e7423"]
+    F0["Current physical board and incomplete connections"] --> F1["Choose connected and unconnected same-net item sets"]
+    F1 --> F2["Maze through clearance-compensated rooms and doors"]
+    F2 --> F3["Search considers width, vias, shoving and priced rip-up"]
+    F3 --> F4["Locate path, remove chosen connections, insert physical copper"]
+    F4 --> F5["Local pull-tight; applicable strict-DRC rejection"]
+    F5 --> F6{"Connections remain?"}
+    F6 -->|Yes| F7["Next connection or pass; adjust order and rip-up cost; recover best board"]
+    F7 --> F0
+    F6 -->|No| F8["Gated board optimization and final validation"]
+  end
+  subgraph FL["Flux: benchmarked path"]
+    X0["Canonical board, terrain guidance, NavMesh and portfolios"] --> X1["Global topology, capacity and shadow negotiation"]
+    X1 --> X2["Quantized provisional-copper probe and packing obligations"]
+    X2 --> X3["Bounded regional preparation and candidate portfolios"]
+    X3 --> X4["Lane realization, PH geometry, eligible XPBD and AVBD"]
+    X4 --> X5{"Complete legal physical scene?"}
+    X5 -->|No| X6["Diagnose, retain preparation, select regional or upstream action"]
+    X6 --> X1
+    X6 --> X3
+    X5 -->|Yes| X7["Materialize Beziers and tracks; validate curves, connectivity and DRC"]
+  end
+  subgraph NEW["Flux: concurrent source addition, not in this benchmark binary"]
+    C0["Construct legal copper scaffold before ordinary regional prefix"] --> C1["Retain legal connections; bounded physical search and victim exchange"]
+    C1 --> C2{"Whole-board oracle feasible?"}
+    C2 -->|Yes| X7
+    C2 -->|No| X6
+  end
+  X1 -. enabled and eligible .-> C0

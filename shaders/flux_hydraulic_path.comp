@@ -37,6 +37,9 @@ layout(push_constant) uniform Push {
   uint exploration_score_quantum;
   uint erosion_height_scale;
   uint lateral_erosion_divisor;
+  int anisotropy_axis_x;
+  int anisotropy_axis_y;
+  uint transverse_anisotropy_per_mille;
   uint clearance_score_scale;
   uint maximum_clearance_reward_cells;
   uint downstream_pressure_score_scale;
@@ -68,6 +71,20 @@ uint read_potential(uint cell) { return push.read_a != 0u ? potential_a[cell] : 
 
 uint read_clearance(uint cell) {
   return push.clearance_read_a != 0u ? obstacle_clearance_a[cell] : obstacle_clearance_b[cell];
+}
+
+uint directional_scale(int step_x, int step_y) {
+  if (push.transverse_anisotropy_per_mille == 1000u)
+    return 1000u;
+  uint axis_norm = uint(abs(push.anisotropy_axis_x)) + uint(abs(push.anisotropy_axis_y));
+  if (axis_norm == 0u)
+    return 1000u;
+  uint cross = uint(abs(push.anisotropy_axis_x * step_y - push.anisotropy_axis_y * step_x));
+  return 1000u + ((push.transverse_anisotropy_per_mille - 1000u) * cross) / axis_norm;
+}
+
+uint anisotropic_step_cost(uint ordinary_cost, int step_x, int step_y) {
+  return (ordinary_cost * directional_scale(step_x, step_y) + 999u) / 1000u;
 }
 
 bool diagonal_is_open(int x, int y, int nx, int ny) {
@@ -285,7 +302,8 @@ void main() {
           if (walkable[neighbour] == 0u || !diagonal_is_open(x, y, nx, ny))
             continue;
           uint value = read_potential(neighbour);
-          uint cost = dx[direction] != 0 && dy[direction] != 0 ? 1414u : 1000u;
+          uint ordinary_cost = dx[direction] != 0 && dy[direction] != 0 ? 1414u : 1000u;
+          uint cost = anisotropic_step_cost(ordinary_cost, dx[direction], dy[direction]);
           uint pressure = min(downstream_pressure[neighbour], push.maximum_downstream_pressure);
           // Host validation bounds this product below infinite_height. Keeping the hot relaxation
           // arithmetic in the native 32-bit domain also avoids driver-dependent widened division.
@@ -321,8 +339,11 @@ void main() {
       uint neighbour = uint(ny) * push.width + uint(nx);
       if (walkable[neighbour] == 0u || !diagonal_is_open(x, y, nx, ny))
         continue;
-      uint divisor =
-          push.lateral_erosion_divisor * (dx[direction] != 0 && dy[direction] != 0 ? 2u : 1u);
+      uint divisor = (push.lateral_erosion_divisor *
+                          (dx[direction] != 0 && dy[direction] != 0 ? 2u : 1u) *
+                          directional_scale(dx[direction], dy[direction]) +
+                      999u) /
+                     1000u;
       effective_flow += batch_flow[neighbour] / max(1u, divisor);
     }
     if (effective_flow == 0u)

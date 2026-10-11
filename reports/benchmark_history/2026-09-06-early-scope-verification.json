@@ -1,0 +1,22 @@
+{
+  "experiment": "early frozen-scope scheduling",
+  "git_revision": "25e3b884be9b359d9c5bf0cc4fbb6cc836fd4f82",
+  "worktree": "dirty baseline preserved; experimental option defaults off",
+  "baseline_cli_sha256": "a207a0253daff3a0e09a663b9b85f86c2cf6b4a94ca054bfbfa5b2822fd0129e",
+  "experimental_cli_sha256": "d54d2d9d20a57b8090d9f8a13955ca5196e1102841311a49b87ad82a1752c6a1",
+  "focused_tests": {"passed":44,"failed":0,"seconds":126.51},
+  "all_non_corpus_tests": {"passed":120,"failed":7,"seconds":231.39,
+    "log":"build/early-scope-verification-20260906/LastTest.log"},
+  "differential_check": "Each of the seven failures was rerun on both binaries: exit codes and entire stdout SHA256 matched exactly. These failures predate this scheduling experiment; expectations were not relaxed.",
+  "preexisting_failures": [
+    {"test":"flux_cli_direct_medial_route_demo","exit_code":0,"regex_matches":false,"stdout_sha256":"76f4ad5462b9db10b32ae759c862ce216c644700ebc885eeb672a3edaaa99d5a"},
+    {"test":"flux_cli_incremental_route_demo","exit_code":0,"regex_matches":false,"stdout_sha256":"02b57c66e56f8b1f1b8b7441d90c91f771cc3e155279fb84a15eb1345aac3b65"},
+    {"test":"flux_cli_strict_medial_detail_demo","exit_code":0,"regex_matches":false,"stdout_sha256":"675c81e790e46c443d2e18b23460ebd6886897c75aaae00a96b566544f4b79fc"},
+    {"test":"flux_cli_incremental_detail_demo","exit_code":0,"regex_matches":false,"stdout_sha256":"3e6510f5489af99f70805a73b4b35079e53f30f8228ba667dd808afdd6c135ca"},
+    {"test":"flux_cli_optimize_demo","exit_code":6,"regex_matches":false,"stdout_sha256":"47771d6aec9b9476c283dab7ab3c1d248392d5f23927fe323f0410ccb8b86c11"},
+    {"test":"flux_cli_optimize_demo_pareto","exit_code":6,"regex_matches":false,"stdout_sha256":"47771d6aec9b9476c283dab7ab3c1d248392d5f23927fe323f0410ccb8b86c11"},
+    {"test":"flux_cli_group_optimize_demo","exit_code":6,"regex_matches":false,"stdout_sha256":"8192f08c130a2619b76f2c20beb87c1d57da8bf82e629f2ad916ce4fbbcfad82"}
+  ],
+  "python_checks": ["runner and summarizer compile", "streamed telemetry handles truncated tail"],
+  "benchmark_status": "Tier-0 detailed DRC and Tier-1 baseline/experiment still running"
+}

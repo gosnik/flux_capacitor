@@ -1,0 +1,137 @@
+{
+  "experiment": "LittlePlanets-style CPU height evolution for static corridor discovery",
+  "date": "2026-10-09",
+  "git_revision": "94aa691ad89576d1c0ac07a5346020da21fc9d06",
+  "dirty_worktree": true,
+  "board": "pt2399_delay",
+  "tier": 0,
+  "configuration": {
+    "max_router_iterations": 1,
+    "max_expansions": 50000,
+    "max_static_seed_workers": 2,
+    "telemetry": false
+  },
+  "runs": {
+    "droplet_baseline": {
+      "artifact": "build/height-evolution-validation/baseline-tier0-pt2399_delay.json",
+      "elapsed_seconds": 56.68,
+      "peak_rss_kib": 428428,
+      "metrics": {
+        "complete": false,
+        "stop_reason": "iteration_limit",
+        "paths": 50,
+        "clearance_shadow_overflow": 3,
+        "unrouted_nets": 0,
+        "static_seed_hydraulic_attempts": 48,
+        "static_seed_hydraulic_accepted": 45,
+        "static_seed_hydraulic_failures": 3,
+        "static_seed_hydraulic_gpu_routes": 46,
+        "static_seed_hydraulic_gpu_clearance_cache_hits": 0,
+        "static_seed_hydraulic_gpu_peak_batch_size": 1,
+        "static_seed_hydraulic_gpu_buffer_reuses": 676,
+        "static_seed_hydraulic_gpu_buffer_growths": 14,
+        "static_seed_hydraulic_cpu_fallbacks": 0,
+        "static_seed_hydraulic_relaxation_passes": 23552,
+        "static_seed_hydraulic_droplet_steps": 7999488,
+        "static_seed_hydraulic_discovery_cells": 695520,
+        "static_seed_hydraulic_exact_certified_chords": 743,
+        "static_seed_hydraulic_projection_failures": 1,
+        "total_overflow": 3,
+        "regional_native_arc_copper_violations": 1
+      }
+    },
+    "height_evolution": {
+      "artifact": "build/height-evolution-validation/terrain-tier0-pt2399_delay.json",
+      "elapsed_seconds": 63.11,
+      "peak_rss_kib": 456860,
+      "metrics": {
+        "complete": false,
+        "stop_reason": "iteration_limit",
+        "paths": 50,
+        "clearance_shadow_overflow": 3,
+        "unrouted_nets": 0,
+        "static_seed_hydraulic_attempts": 48,
+        "static_seed_hydraulic_accepted": 46,
+        "static_seed_height_evolution_attempts": 48,
+        "static_seed_height_evolution_accepted": 46,
+        "static_seed_height_evolution_iterations": 460,
+        "static_seed_height_evolution_changed_cells": 553963,
+        "static_seed_height_evolution_expanded_nodes": 39889,
+        "static_seed_hydraulic_failures": 2,
+        "static_seed_hydraulic_gpu_routes": 0,
+        "static_seed_hydraulic_gpu_clearance_cache_hits": 0,
+        "static_seed_hydraulic_gpu_peak_batch_size": 0,
+        "static_seed_hydraulic_gpu_buffer_reuses": 0,
+        "static_seed_hydraulic_gpu_buffer_growths": 0,
+        "static_seed_hydraulic_cpu_fallbacks": 0,
+        "static_seed_hydraulic_relaxation_passes": 0,
+        "static_seed_hydraulic_droplet_steps": 0,
+        "static_seed_hydraulic_discovery_cells": 695520,
+        "static_seed_hydraulic_exact_certified_chords": 750,
+        "static_seed_hydraulic_projection_failures": 0,
+        "total_overflow": 3,
+        "regional_native_arc_copper_violations": 1
+      }
+    },
+    "height_evolution_detail": {
+      "artifact": "build/height-evolution-validation/terrain-tier0-detail.stdout",
+      "configuration": {
+        "routing_timeout_ms": 180000,
+        "curved_tracks": true,
+        "write_incomplete_preview": true
+      },
+      "elapsed_seconds": 180.17,
+      "peak_rss_kib": 595984,
+      "exit_code": 5,
+      "metrics": {
+        "complete": false,
+        "stop_reason": "invalid_path",
+        "global_complete": false,
+        "global_stop_reason": "iteration_limit",
+        "static_seed_height_evolution_attempts": 48,
+        "static_seed_height_evolution_invoked": 46,
+        "static_seed_height_evolution_accepted": 46,
+        "static_seed_height_evolution_iterations": 460,
+        "static_seed_height_evolution_changed_cells": 553963,
+        "static_seed_height_evolution_expanded_nodes": 39889,
+        "added_tracks": 48,
+        "added_track_beziers": 178,
+        "unrounded_non_junction_bends": 9,
+        "added_vias": 3,
+        "spline_navmesh_last_diagnostic": "free-space offset output failed exact conservative validation: output hole 2 violates source clearance; free-space offset output failed exact conservative validation: output region overlaps polygonal obstacle 115",
+        "open_connections": 0,
+        "copper_violations": 0,
+        "diagnostic": "bounded regional quintic PH curve transaction was discarded by exact materialization: materialized curved route retains 9 non-junction direction changes without quintic PH curve realization; routing engine: timed-out"
+      }
+    }
+  },
+  "limitations": [
+    "Bounded single-board experiment; no tier promotion or full-suite qualification.",
+    "Global timing may overlap core testing; timings are descriptive, not a controlled performance comparison.",
+    "Initial global comparison predates cancellation forwarding and requested/invoked counter distinction.",
+    "The backend is CPU and opt-in; other Flux stages still require Vulkan.",
+    "Detail run precedes cancellation-diagnostic string changes only. Nine residual joints versus 16 in earlier B\u00e9zier run is exploratory, not a controlled ablation."
+  ],
+  "decision": "Retain opt-in for further experiments; proposal acceptance improved by one but global residual conflicts did not improve.",
+  "validation": {
+    "release_build": "passed; final executable postdates cancellation diagnostic patches",
+    "terrain_tests": {
+      "passed": 2,
+      "total": 2,
+      "elapsed_seconds": 0.23
+    },
+    "core_tests": {
+      "passed": 64,
+      "total": 64,
+      "elapsed_seconds": 89.04,
+      "note": "After API/cancellation changes; before diagnostic-only string changes."
+    },
+    "kicad_drc": {
+      "exit_code": 0,
+      "violations": 0,
+      "unconnected_items": 0,
+      "original_project_rules": true,
+      "artifact": "build/height-evolution-validation/terrain-tier0-detail-drc.json"
+    }
+  }
+}

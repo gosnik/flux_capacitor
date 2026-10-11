@@ -1,0 +1,50 @@
+{
+  "authoritative": false,
+  "qualification": false,
+  "source_checkpoint": "V60 standalone selected coarse checkpoint, oracle491/0 reproduced",
+  "purpose": "Rejected diagnostic preview; not the unresolved regional candidate",
+  "internal": {
+    "authoritative": false,
+    "snapshot_sequence": 2567,
+    "paths": 78,
+    "detail_complete": false,
+    "tracks": 486,
+    "arcs": 0,
+    "vias": 35,
+    "validation_errors": 0,
+    "opens": 0,
+    "drc_violations": 160,
+    "diagnostic": "materialized route violates represented copper rules",
+    "preview_written": true
+  },
+  "kicad": {
+    "version": "9.0.8",
+    "counts": {
+      "error:tracks_crossing": 64,
+      "error:shorting_items": 20,
+      "error:clearance": 23,
+      "warning:silk_over_copper": 8,
+      "warning:text_height": 22,
+      "warning:lib_footprint_mismatch": 27,
+      "warning:lib_footprint_issues": 7,
+      "warning:track_dangling": 2
+    },
+    "total_violations": 173,
+    "unconnected": 0,
+    "errors": 107,
+    "warnings": 66
+  },
+  "angles": {
+    "horizontal": 162,
+    "vertical": 177,
+    "diagonal_45": 144,
+    "other": 3
+  },
+  "arcs": 0,
+  "vias": 35,
+  "route_length_nm": 1008584316,
+  "project_rules_sha256": "04856904fe9070f7decd33b676d3f58e44676b6c930e65fa8a16f0ddd65d54db",
+  "same_rules_as_source": true,
+  "ordinary_angle_audit_passed": false,
+  "limitation": "Rejected detail preview retains three non-H/V/45 segments that the legality-gated angle converter could not replace. No tier is promoted or valid output claimed. The successful Tier0 outputs have zero such segments."
+}

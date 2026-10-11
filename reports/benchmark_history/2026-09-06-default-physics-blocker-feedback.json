@@ -1,0 +1,870 @@
+{
+  "schema": 1,
+  "experiment": "default-physics-outside-blocker-feedback",
+  "notes": [
+    "Both runs: Release, N6/default R4, enforced shadows, no explicit full-strength flag, 600-second planning timeout. Concurrent CPU/GPU load prevents controlled speed comparison.",
+    "Control binary 5d0c8ecc16a296bcc8c0df3d90902b6ae1454af753985eb2ef4a4a76eb19e82e. Blocker-feedback planning binary af3b78d6cfee5f367ee9f9749008d921e0632b5c968785f0276631ccd3f9a97c. Final verified binary 974f5509ed80b5c1fc05b3d31cb8920d33dd8629916f151a7f0a082f4dcbaf79 removes a diagnostic ID assignment already overwritten by the existing coalescer; routing behavior unchanged.",
+    "First epoch history count changes 23 to 24 after preserving outside-blocker ownership. Later oracle conflict reduction still leaves 9 opens; no final board or final KiCad DRC, no tier promotion."
+  ],
+  "runs": [
+    {
+      "root": "build/default-physics-reroute-tier0",
+      "metadata": {
+        "artifact_contract": {
+          "analysis_pngs_required_for_routing": true,
+          "failed_route_png_mode": "both",
+          "files_write_once": true,
+          "max_failed_route_png_results": 8,
+          "source_boards_immutable": true,
+          "telemetry_level": null,
+          "telemetry_required_for_routing": true
+        },
+        "capability_contract": {
+          "reference": {
+            "commit": "e239e067c204870b4ac570fc9e931a374bdfd5b4",
+            "project": "KiCadRoutingTools",
+            "repository": "https://github.com/drandyhaas/KiCadRoutingTools",
+            "version": "0.21.5"
+          },
+          "schema": "flux_parity_manifest",
+          "schema_version": 1,
+          "sha256": "d8b57b3e1ba5c761fa2c610ffea1aa2e1f70f845f988ab7e92fbceca36fda5d0"
+        },
+        "corpus": {
+          "manifest_sha256": "e5685277e3917f4a153d29a2214afb717b13b41395bcf48b04f555adb923bede",
+          "path": "/home/adam/qtbits/flux_capacitor/tests/fixtures/routing-corpus",
+          "source_corpus": {
+            "commit": "661c88b3c3b0ebc9ade65eab63d30b1cde217fb4",
+            "discussion": "https://github.com/drandyhaas/KiCadRoutingTools/discussions/117",
+            "repository": "drandyhaas/KiCadRoutingTools",
+            "stress_directory": "https://github.com/drandyhaas/KiCadRoutingTools/tree/main/tests/stress"
+          }
+        },
+        "created_utc": "2026-09-05T23:16:54.683052+00:00",
+        "environment": {
+          "flux": {
+            "board_schema": 21,
+            "engine": "flux_capacitor",
+            "gpu_api_version_raw": 4211017,
+            "gpu_available": true,
+            "gpu_device": "NVIDIA GeForce RTX 5080",
+            "gpu_device_id": 11266,
+            "gpu_device_type": "discrete",
+            "gpu_diagnostic": "",
+            "gpu_driver_version_raw": 2496987136,
+            "gpu_override": null,
+            "gpu_vendor_id": 4318,
+            "production_gpu_required": true,
+            "version": "0.140.0"
+          },
+          "flux_vulkan_device_override": null,
+          "inkscape": {
+            "available": true,
+            "command": [
+              "/snap/bin/inkscape",
+              "--version"
+            ],
+            "returncode": 0,
+            "stderr": "",
+            "stdout": "Inkscape 1.4.4 (dcaf3e7d9e, 2026-05-05)"
+          },
+          "kicad_cli": {
+            "available": true,
+            "command": [
+              "/usr/bin/kicad-cli",
+              "--version"
+            ],
+            "returncode": 0,
+            "stderr": "",
+            "stdout": "9.0.8"
+          },
+          "platform": "Linux-7.0.0-31-generic-x86_64-with-glibc2.43",
+          "python": "3.14.4 (main, Jun 18 2026, 14:25:02) [GCC 15.2.0]"
+        },
+        "executable": {
+          "path": "/home/adam/qtbits/flux_capacitor/build/release/flux-cli",
+          "sha256": "5d0c8ecc16a296bcc8c0df3d90902b6ae1454af753985eb2ef4a4a76eb19e82e"
+        },
+        "invocation": [
+          "/home/adam/qtbits/flux_capacitor/tests/python/verify_routing_corpus.py",
+          "--flux-cli",
+          "build/release/flux-cli",
+          "--corpus",
+          "tests/fixtures/routing-corpus",
+          "--board",
+          "pt2399_delay",
+          "--artifacts",
+          "build/default-physics-reroute-tier0",
+          "--iteration-budget",
+          "6",
+          "--feedback-shadow-policy",
+          "enforced",
+          "--kicad-cli",
+          "/usr/bin/kicad-cli",
+          "--inkscape",
+          "/snap/bin/inkscape"
+        ],
+        "mode": "routing",
+        "schema": "flux_routing_baseline",
+        "schema_version": 1,
+        "selection": {
+          "boards": [
+            {
+              "effective_planning_timeout_seconds": 600,
+              "id": "pt2399_delay",
+              "level": 0,
+              "project_sha256": "ddbcc3d30ca8a4e88f38be0bb5a12f4f29f67048bd503d3e77b2e615196bab8a",
+              "qualification": "detailed_complete",
+              "reference_sha256": "0ffb5710e07ee6f65bb6951a9ca1ebf9d52bb701852b1e9f83696991043d7eb6",
+              "router_args": [
+                "--feedback-shadow-policy",
+                "enforced"
+              ],
+              "source_sha256": "c48693b458eb28ae11f2ef099acf33ee9a797d87f430457c6961b41e2f2c4cab",
+              "status": "qualified"
+            }
+          ],
+          "explicit_boards": [
+            "pt2399_delay"
+          ],
+          "iteration_budget_override": 6,
+          "level": "unlocked",
+          "planning_timeout_override_seconds": null
+        }
+      },
+      "outcome": {
+        "artifacts": [
+          {
+            "bytes": 3840,
+            "path": "run-metadata.json",
+            "sha256": "ebed28995b6378c28ec1b80e505ee0060aae4a35b1b730aa080512833f1697fc"
+          },
+          {
+            "bytes": 5794,
+            "path": "tier-0-pt2399_delay/analysis/global/failed-route-previews.json",
+            "sha256": "9a61ef4e1c8a7373b4e0251b921941f92e90cfa4570d71426f226d02c5eef7fe"
+          },
+          {
+            "bytes": 252607,
+            "path": "tier-0-pt2399_delay/analysis/global/near-00-window-0/copper-00-B_Cu.png",
+            "sha256": "04c18ca11148aebf2f3b40c356ba10792692854903690ce030845917daa9f832"
+          },
+          {
+            "bytes": 270914,
+            "path": "tier-0-pt2399_delay/analysis/global/near-00-window-0/copper-01-F_Cu.png",
+            "sha256": "d9cc7386fc16e1ad681e3163a0f81a66983b5879c1181b5c0ebea6d46b215089"
+          },
+          {
+            "bytes": 319632,
+            "path": "tier-0-pt2399_delay/analysis/global/near-00-window-0/provisional-overview.png",
+            "sha256": "7d8de9120b24565f8675d70a877079318403b6cde4514284a6574447da4ceca1"
+          },
+          {
+            "bytes": 17670,
+            "path": "tier-0-pt2399_delay/analysis/global/near-00-window-0/spline-controls-closeup.png",
+            "sha256": "b76ab9a18b1b53acda8ea8fd4fcbbc046da13c28e812e58a849d36405ae37933"
+          },
+          {
+            "bytes": 263263,
+            "path": "tier-0-pt2399_delay/analysis/global/near-00-window-0/spline-controls.png",
+            "sha256": "b08df75e7cd69fd70616fc90cace90dff6729a6bb12e3157b7751cd50900dec2"
+          },
+          {
+            "bytes": 263858,
+            "path": "tier-0-pt2399_delay/analysis/global/near-01-window-3/copper-00-B_Cu.png",
+            "sha256": "25a942fa4b5b7cc3c673e1241938eabec314e09367cd0dfe2be9f9ecd99175c7"
+          },
+          {
+            "bytes": 276995,
+            "path": "tier-0-pt2399_delay/analysis/global/near-01-window-3/copper-01-F_Cu.png",
+            "sha256": "b3fe6e5b8446286d57bda5097f04e378890552bb0ae6a72c8fbf565fd43c7942"
+          },
+          {
+            "bytes": 353794,
+            "path": "tier-0-pt2399_delay/analysis/global/near-01-window-3/provisional-overview.png",
+            "sha256": "a0b5522526cf573674deb6964b9d82605bcfac0246de58023f10977056ac1acc"
+          },
+          {
+            "bytes": 119837,
+            "path": "tier-0-pt2399_delay/analysis/global/near-01-window-3/spline-controls-closeup.png",
+            "sha256": "7259db210b5b0aa73baa4f7ddc6f3ef5938028caa765008bc16239d3d341e885"
+          },
+          {
+            "bytes": 297927,
+            "path": "tier-0-pt2399_delay/analysis/global/near-01-window-3/spline-controls.png",
+            "sha256": "499d1c3d84d091cc79ba1b2190f19dfb30503042eced44df50e702af62ae49b2"
+          },
+          {
+            "bytes": 252608,
+            "path": "tier-0-pt2399_delay/analysis/global/near-02-window-3/copper-00-B_Cu.png",
+            "sha256": "9e074af94e8bf3e531c49eb524aaf434c996745072eda7d61de298ad2c98c36d"
+          },
+          {
+            "bytes": 271180,
+            "path": "tier-0-pt2399_delay/analysis/global/near-02-window-3/copper-01-F_Cu.png",
+            "sha256": "b2a7d7af3ea395d43c78b16859ed857e668ba0225f13b92157471b1fa7fc9a8f"
+          },
+          {
+            "bytes": 318512,
+            "path": "tier-0-pt2399_delay/analysis/global/near-02-window-3/provisional-overview.png",
+            "sha256": "135a192d6afb92a81a290f4f5fd5a0515c072a60b34cce8ad9c7677c7d20a2f6"
+          },
+          {
+            "bytes": 8705,
+            "path": "tier-0-pt2399_delay/analysis/global/near-02-window-3/spline-controls-closeup.png",
+            "sha256": "a0a2f00698b63efb2aeed3655459a40f5ef00bce59ab20074c7ff71a146cf308"
+          },
+          {
+            "bytes": 262834,
+            "path": "tier-0-pt2399_delay/analysis/global/near-02-window-3/spline-controls.png",
+            "sha256": "f4db2a6d9990baf77e2e41a10e29c4f800568119b5047b3201b4db09211d7ded"
+          },
+          {
+            "bytes": 274318,
+            "path": "tier-0-pt2399_delay/analysis/global/near-03-window-1/copper-00-F_Cu.png",
+            "sha256": "7ddd788e8a5508b7b2484e00a5e34333d103f376db395c8e4ffd94c7f6c4193b"
+          },
+          {
+            "bytes": 281137,
+            "path": "tier-0-pt2399_delay/analysis/global/near-03-window-1/provisional-overview.png",
+            "sha256": "38255110607df624aebdb7c59fd4539929e69f1129196fb2f8ce382b34dcb5aa"
+          },
+          {
+            "bytes": 12702,
+            "path": "tier-0-pt2399_delay/analysis/global/near-03-window-1/spline-controls-closeup.png",
+            "sha256": "9efc0b4951f218357019bb8593013757fb39fc38b0d81385a15b84100e0be742"
+          },
+          {
+            "bytes": 241954,
+            "path": "tier-0-pt2399_delay/analysis/global/near-03-window-1/spline-controls.png",
+            "sha256": "9899dbda8cfade61b052501d5f49a0fdbdc77f0c84099a0571e8fe658af61207"
+          },
+          {
+            "bytes": 252677,
+            "path": "tier-0-pt2399_delay/analysis/global/near-04-window-3/copper-00-B_Cu.png",
+            "sha256": "bf250dd998ccf54fb9bf8687779b77cbbb5140e1fbc2606d8caf03e3e9413892"
+          },
+          {
+            "bytes": 271180,
+            "path": "tier-0-pt2399_delay/analysis/global/near-04-window-3/copper-01-F_Cu.png",
+            "sha256": "b2a7d7af3ea395d43c78b16859ed857e668ba0225f13b92157471b1fa7fc9a8f"
+          },
+          {
+            "bytes": 318552,
+            "path": "tier-0-pt2399_delay/analysis/global/near-04-window-3/provisional-overview.png",
+            "sha256": "4958f0d01322adc6a3382e20880c892a7a16f788e4e44457e09f2e81aff9bc0c"
+          },
+          {
+            "bytes": 7477,
+            "path": "tier-0-pt2399_delay/analysis/global/near-04-window-3/spline-controls-closeup.png",
+            "sha256": "a09b1e98d0f274d6168b38dcdceb95603a914f02f57f8791209d2b0463f69133"
+          },
+          {
+            "bytes": 262813,
+            "path": "tier-0-pt2399_delay/analysis/global/near-04-window-3/spline-controls.png",
+            "sha256": "42d3049cc7d5a11f3c369e5af33df2457bad37eaca606ec21f4e5738bf25fdac"
+          },
+          {
+            "bytes": 254047,
+            "path": "tier-0-pt2399_delay/analysis/global/near-05-window-3/copper-00-B_Cu.png",
+            "sha256": "2d811a73a8db81b596cc894cd3d76fa6fd473042d7882b47ff25a160062e0a2f"
+          },
+          {
+            "bytes": 271180,
+            "path": "tier-0-pt2399_delay/analysis/global/near-05-window-3/copper-01-F_Cu.png",
+            "sha256": "b2a7d7af3ea395d43c78b16859ed857e668ba0225f13b92157471b1fa7fc9a8f"
+          },
+          {
+            "bytes": 321016,
+            "path": "tier-0-pt2399_delay/analysis/global/near-05-window-3/provisional-overview.png",
+            "sha256": "c84757ffdd71e4dad1e6fc6763e38dcd8204e7bb1169447616c3d435874c9e1a"
+          },
+          {
+            "bytes": 9798,
+            "path": "tier-0-pt2399_delay/analysis/global/near-05-window-3/spline-controls-closeup.png",
+            "sha256": "2c36a315a3efa215d5497cc7fab46a130c01ec88f4c6081922ca41ac1710c1e6"
+          },
+          {
+            "bytes": 266071,
+            "path": "tier-0-pt2399_delay/analysis/global/near-05-window-3/spline-controls.png",
+            "sha256": "199dc844ebbffbe615bd82defc72180166bde606ec6fa4e6e195d31589bec69c"
+          },
+          {
+            "bytes": 253970,
+            "path": "tier-0-pt2399_delay/analysis/global/near-06-window-3/copper-00-B_Cu.png",
+            "sha256": "6b08f48edc8526793fb061d285efcfbeb2ce83101594c316d84f0432c8c71b01"
+          },
+          {
+            "bytes": 271180,
+            "path": "tier-0-pt2399_delay/analysis/global/near-06-window-3/copper-01-F_Cu.png",
+            "sha256": "b2a7d7af3ea395d43c78b16859ed857e668ba0225f13b92157471b1fa7fc9a8f"
+          },
+          {
+            "bytes": 321314,
+            "path": "tier-0-pt2399_delay/analysis/global/near-06-window-3/provisional-overview.png",
+            "sha256": "cdd7e655859bd039802749add9be1436e25592800c313bc5ab18b56a6a0f53bf"
+          },
+          {
+            "bytes": 10975,
+            "path": "tier-0-pt2399_delay/analysis/global/near-06-window-3/spline-controls-closeup.png",
+            "sha256": "0d16abfad4118c3f0c09109323682ebf117ffc20854a7a1bd94b5c817e483abf"
+          },
+          {
+            "bytes": 266312,
+            "path": "tier-0-pt2399_delay/analysis/global/near-06-window-3/spline-controls.png",
+            "sha256": "2e94dd438ba5d16ab4dcd5aac12f69443ab4a7edfdba6fda3193bfa5b19dab63"
+          },
+          {
+            "bytes": 252728,
+            "path": "tier-0-pt2399_delay/analysis/global/near-07-window-3/copper-00-B_Cu.png",
+            "sha256": "535344382b79e87123fc3da86e94a9526561a7b50c9f4e0edd48ab2ebd4b9da3"
+          },
+          {
+            "bytes": 271180,
+            "path": "tier-0-pt2399_delay/analysis/global/near-07-window-3/copper-01-F_Cu.png",
+            "sha256": "b2a7d7af3ea395d43c78b16859ed857e668ba0225f13b92157471b1fa7fc9a8f"
+          },
+          {
+            "bytes": 318431,
+            "path": "tier-0-pt2399_delay/analysis/global/near-07-window-3/provisional-overview.png",
+            "sha256": "d5fc51e46445c9fe3df56db6c2f718196d96be7cd91dc77bbb7d388179241498"
+          },
+          {
+            "bytes": 8308,
+            "path": "tier-0-pt2399_delay/analysis/global/near-07-window-3/spline-controls-closeup.png",
+            "sha256": "f4d1f833db7c667b11e6ff700bf7cbde168debd042996916d493c59d35cc025f"
+          },
+          {
+            "bytes": 262431,
+            "path": "tier-0-pt2399_delay/analysis/global/near-07-window-3/spline-controls.png",
+            "sha256": "314d5c7fcea171389f9dec3d7e24e1e44fac5c6d7ea32a35ce9fe0271c2389dc"
+          },
+          {
+            "bytes": 228070926,
+            "path": "tier-0-pt2399_delay/telemetry/pt2399_delay-global.jsonl",
+            "sha256": "4c85081dcc8c93574ffae5a4606dee876dc336daa26b3299ddbc7fdfbe9627ff"
+          }
+        ],
+        "boards": [],
+        "diagnostic": "Command '['/home/adam/qtbits/flux_capacitor/build/release/flux-cli', 'route-kicad', '/home/adam/qtbits/flux_capacitor/tests/fixtures/routing-corpus/pt2399_delay.kicad_pcb', '--max-router-iterations', '6', '--max-expansions', '50000', '--max-static-seed-workers', '2', '--search-diversification', '--feedback-shadow-policy', 'enforced', '--telemetry-level', 'diagnostic', '--telemetry-record', '/home/adam/qtbits/flux_capacitor/build/default-physics-reroute-tier0/tier-0-pt2399_delay/telemetry/pt2399_delay-global.jsonl']' timed out after 600 seconds",
+        "schema": "flux_routing_baseline_result",
+        "schema_version": 1,
+        "status": "failed"
+      },
+      "planning_records": [],
+      "epoch_telemetry": [
+        {
+          "artifact": "build/default-physics-reroute-tier0/tier-0-pt2399_delay/telemetry/pt2399_delay-global.jsonl",
+          "messages": [
+            "interleaved routing epoch started: pathfinder_budget=2, retained_portfolios=0, physical_history_entries=0",
+            "interleaved routing epoch completed: regional_candidates=1, history_entries=23, history_pressure=820206, quantized_oracle_violations=32, quantized_oracle_opens=0",
+            "interleaved routing epoch started: pathfinder_budget=1, retained_portfolios=1, physical_history_entries=23",
+            "interleaved routing epoch completed: regional_candidates=2, history_entries=44, history_pressure=1646693, quantized_oracle_violations=0, quantized_oracle_opens=9",
+            "interleaved routing epoch started: pathfinder_budget=1, retained_portfolios=2, physical_history_entries=44",
+            "interleaved routing epoch completed: regional_candidates=2, history_entries=45, history_pressure=2495463, quantized_oracle_violations=0, quantized_oracle_opens=9",
+            "interleaved routing epoch started: pathfinder_budget=1, retained_portfolios=2, physical_history_entries=45"
+          ],
+          "events": [
+            {
+              "monotonic_time_us": 2180,
+              "message": "interleaved routing epoch started: pathfinder_budget=2, retained_portfolios=0, physical_history_entries=0"
+            },
+            {
+              "monotonic_time_us": 271532176,
+              "message": "interleaved routing epoch completed: regional_candidates=1, history_entries=23, history_pressure=820206, quantized_oracle_violations=32, quantized_oracle_opens=0"
+            },
+            {
+              "monotonic_time_us": 271583254,
+              "message": "interleaved routing epoch started: pathfinder_budget=1, retained_portfolios=1, physical_history_entries=23"
+            },
+            {
+              "monotonic_time_us": 353945197,
+              "message": "interleaved routing epoch completed: regional_candidates=2, history_entries=44, history_pressure=1646693, quantized_oracle_violations=0, quantized_oracle_opens=9"
+            },
+            {
+              "monotonic_time_us": 354065806,
+              "message": "interleaved routing epoch started: pathfinder_budget=1, retained_portfolios=2, physical_history_entries=44"
+            },
+            {
+              "monotonic_time_us": 493987243,
+              "message": "interleaved routing epoch completed: regional_candidates=2, history_entries=45, history_pressure=2495463, quantized_oracle_violations=0, quantized_oracle_opens=9"
+            },
+            {
+              "monotonic_time_us": 494112795,
+              "message": "interleaved routing epoch started: pathfinder_budget=1, retained_portfolios=2, physical_history_entries=45"
+            }
+          ],
+          "event_counts": {
+            "RoutingStarted": 1,
+            "snapshot": 76,
+            "SearchSummary": 605,
+            "RouteCandidateSelected": 1879,
+            "HydraulicFieldUpdated": 282,
+            "NetQueued": 110,
+            "PathFinderIterationStarted": 8,
+            "RouteRippedUp": 1,
+            "PathFinderIterationCompleted": 8,
+            "BestCheckpointUpdated": 4,
+            "NetFailed": 36,
+            "ConflictAdded": 37,
+            "ResidualGroupUpdated": 30,
+            "ViaCandidateGenerated": 162,
+            "ViaAssigned": 12,
+            "CheckpointSelected": 3
+          },
+          "non_authoritative_last_snapshot": {
+            "monotonic_time_us": 593542587,
+            "metrics": {
+              "iteration": 0,
+              "total_nets": 20,
+              "routed_nets": 0,
+              "unrouted_nets": 0,
+              "total_groups": 4,
+              "routed_groups": 0,
+              "unrouted_groups": 0,
+              "sampled_overflow": 0,
+              "corridor_overflow": 0,
+              "physical_overflow_nm": 0,
+              "clearance_shadow_conflicts": 0,
+              "regional_conflicts": 5,
+              "route_cost": 0,
+              "vias": 4,
+              "rip_ups": 0,
+              "search_expansions": 0,
+              "selected_checkpoint": 0,
+              "best_checkpoint": 0,
+              "selected_is_best": false
+            }
+          }
+        }
+      ]
+    },
+    {
+      "root": "build/default-physics-blocker-feedback-tier0",
+      "metadata": {
+        "artifact_contract": {
+          "analysis_pngs_required_for_routing": true,
+          "failed_route_png_mode": "both",
+          "files_write_once": true,
+          "max_failed_route_png_results": 8,
+          "source_boards_immutable": true,
+          "telemetry_level": null,
+          "telemetry_required_for_routing": true
+        },
+        "capability_contract": {
+          "reference": {
+            "commit": "e239e067c204870b4ac570fc9e931a374bdfd5b4",
+            "project": "KiCadRoutingTools",
+            "repository": "https://github.com/drandyhaas/KiCadRoutingTools",
+            "version": "0.21.5"
+          },
+          "schema": "flux_parity_manifest",
+          "schema_version": 1,
+          "sha256": "d8b57b3e1ba5c761fa2c610ffea1aa2e1f70f845f988ab7e92fbceca36fda5d0"
+        },
+        "corpus": {
+          "manifest_sha256": "e5685277e3917f4a153d29a2214afb717b13b41395bcf48b04f555adb923bede",
+          "path": "/home/adam/qtbits/flux_capacitor/tests/fixtures/routing-corpus",
+          "source_corpus": {
+            "commit": "661c88b3c3b0ebc9ade65eab63d30b1cde217fb4",
+            "discussion": "https://github.com/drandyhaas/KiCadRoutingTools/discussions/117",
+            "repository": "drandyhaas/KiCadRoutingTools",
+            "stress_directory": "https://github.com/drandyhaas/KiCadRoutingTools/tree/main/tests/stress"
+          }
+        },
+        "created_utc": "2026-09-05T23:22:56.592866+00:00",
+        "environment": {
+          "flux": {
+            "board_schema": 21,
+            "engine": "flux_capacitor",
+            "gpu_api_version_raw": 4211017,
+            "gpu_available": true,
+            "gpu_device": "NVIDIA GeForce RTX 5080",
+            "gpu_device_id": 11266,
+            "gpu_device_type": "discrete",
+            "gpu_diagnostic": "",
+            "gpu_driver_version_raw": 2496987136,
+            "gpu_override": null,
+            "gpu_vendor_id": 4318,
+            "production_gpu_required": true,
+            "version": "0.140.0"
+          },
+          "flux_vulkan_device_override": null,
+          "inkscape": {
+            "available": true,
+            "command": [
+              "/snap/bin/inkscape",
+              "--version"
+            ],
+            "returncode": 0,
+            "stderr": "",
+            "stdout": "Inkscape 1.4.4 (dcaf3e7d9e, 2026-05-05)"
+          },
+          "kicad_cli": {
+            "available": true,
+            "command": [
+              "/usr/bin/kicad-cli",
+              "--version"
+            ],
+            "returncode": 0,
+            "stderr": "",
+            "stdout": "9.0.8"
+          },
+          "platform": "Linux-7.0.0-31-generic-x86_64-with-glibc2.43",
+          "python": "3.14.4 (main, Jun 18 2026, 14:25:02) [GCC 15.2.0]"
+        },
+        "executable": {
+          "path": "/home/adam/qtbits/flux_capacitor/build/release/flux-cli",
+          "sha256": "af3b78d6cfee5f367ee9f9749008d921e0632b5c968785f0276631ccd3f9a97c"
+        },
+        "invocation": [
+          "/home/adam/qtbits/flux_capacitor/tests/python/verify_routing_corpus.py",
+          "--flux-cli",
+          "build/release/flux-cli",
+          "--corpus",
+          "tests/fixtures/routing-corpus",
+          "--board",
+          "pt2399_delay",
+          "--artifacts",
+          "build/default-physics-blocker-feedback-tier0",
+          "--iteration-budget",
+          "6",
+          "--feedback-shadow-policy",
+          "enforced",
+          "--kicad-cli",
+          "/usr/bin/kicad-cli",
+          "--inkscape",
+          "/snap/bin/inkscape"
+        ],
+        "mode": "routing",
+        "schema": "flux_routing_baseline",
+        "schema_version": 1,
+        "selection": {
+          "boards": [
+            {
+              "effective_planning_timeout_seconds": 600,
+              "id": "pt2399_delay",
+              "level": 0,
+              "project_sha256": "ddbcc3d30ca8a4e88f38be0bb5a12f4f29f67048bd503d3e77b2e615196bab8a",
+              "qualification": "detailed_complete",
+              "reference_sha256": "0ffb5710e07ee6f65bb6951a9ca1ebf9d52bb701852b1e9f83696991043d7eb6",
+              "router_args": [
+                "--feedback-shadow-policy",
+                "enforced"
+              ],
+              "source_sha256": "c48693b458eb28ae11f2ef099acf33ee9a797d87f430457c6961b41e2f2c4cab",
+              "status": "qualified"
+            }
+          ],
+          "explicit_boards": [
+            "pt2399_delay"
+          ],
+          "iteration_budget_override": 6,
+          "level": "unlocked",
+          "planning_timeout_override_seconds": null
+        }
+      },
+      "outcome": {
+        "artifacts": [
+          {
+            "bytes": 3849,
+            "path": "run-metadata.json",
+            "sha256": "a712b9aec76d31ba3deb6b311eeb099de816d440e7f9b988d9d8a15f7dfe839d"
+          },
+          {
+            "bytes": 5803,
+            "path": "tier-0-pt2399_delay/analysis/global/failed-route-previews.json",
+            "sha256": "69d32e35dc08becf680b09fee32c329b8b8b545a912df124cc24bca27adfe031"
+          },
+          {
+            "bytes": 253407,
+            "path": "tier-0-pt2399_delay/analysis/global/near-00-window-0/copper-00-B_Cu.png",
+            "sha256": "f84a4b55710e7bd4ccebc5db0f02ef0faa9f396e833fc494f186255efa024ba7"
+          },
+          {
+            "bytes": 269992,
+            "path": "tier-0-pt2399_delay/analysis/global/near-00-window-0/copper-01-F_Cu.png",
+            "sha256": "75e958844397a74eac597392997d6eb95fe87ff0ed7139eadc5ff68a8ff855a6"
+          },
+          {
+            "bytes": 319844,
+            "path": "tier-0-pt2399_delay/analysis/global/near-00-window-0/provisional-overview.png",
+            "sha256": "b83b8ecbc099815341409ec9639762ed875de0ad153aac37ae93e7f47c04da15"
+          },
+          {
+            "bytes": 17670,
+            "path": "tier-0-pt2399_delay/analysis/global/near-00-window-0/spline-controls-closeup.png",
+            "sha256": "b76ab9a18b1b53acda8ea8fd4fcbbc046da13c28e812e58a849d36405ae37933"
+          },
+          {
+            "bytes": 263263,
+            "path": "tier-0-pt2399_delay/analysis/global/near-00-window-0/spline-controls.png",
+            "sha256": "b08df75e7cd69fd70616fc90cace90dff6729a6bb12e3157b7751cd50900dec2"
+          },
+          {
+            "bytes": 264985,
+            "path": "tier-0-pt2399_delay/analysis/global/near-01-window-3/copper-00-B_Cu.png",
+            "sha256": "17645e888c294402d6f48c9a21b2526dfedb16e557a50068f6ce71492a5a014a"
+          },
+          {
+            "bytes": 275942,
+            "path": "tier-0-pt2399_delay/analysis/global/near-01-window-3/copper-01-F_Cu.png",
+            "sha256": "5c1696547b749d38d4861d96274d861fd349dae47d96c11202a38f7d49e1a632"
+          },
+          {
+            "bytes": 353765,
+            "path": "tier-0-pt2399_delay/analysis/global/near-01-window-3/provisional-overview.png",
+            "sha256": "9e030ceb7233cf9709d2f5041c4253351ca227fce3504e7091de15cedf197b8d"
+          },
+          {
+            "bytes": 119837,
+            "path": "tier-0-pt2399_delay/analysis/global/near-01-window-3/spline-controls-closeup.png",
+            "sha256": "7259db210b5b0aa73baa4f7ddc6f3ef5938028caa765008bc16239d3d341e885"
+          },
+          {
+            "bytes": 297927,
+            "path": "tier-0-pt2399_delay/analysis/global/near-01-window-3/spline-controls.png",
+            "sha256": "499d1c3d84d091cc79ba1b2190f19dfb30503042eced44df50e702af62ae49b2"
+          },
+          {
+            "bytes": 253390,
+            "path": "tier-0-pt2399_delay/analysis/global/near-02-window-3/copper-00-B_Cu.png",
+            "sha256": "6b5e7b0ed07a532a61588eceb85fe8495bf5b867ab46e8598b1d0fca16316257"
+          },
+          {
+            "bytes": 270225,
+            "path": "tier-0-pt2399_delay/analysis/global/near-02-window-3/copper-01-F_Cu.png",
+            "sha256": "1e9491b4eaed03ad52c226b99409acc04f1ca360f86a7be01e907236c700bf56"
+          },
+          {
+            "bytes": 318489,
+            "path": "tier-0-pt2399_delay/analysis/global/near-02-window-3/provisional-overview.png",
+            "sha256": "cf84e460d0df57659bf116c3eb0531318b68e1e5eb148e8327c675ff3fb8261a"
+          },
+          {
+            "bytes": 8705,
+            "path": "tier-0-pt2399_delay/analysis/global/near-02-window-3/spline-controls-closeup.png",
+            "sha256": "a0a2f00698b63efb2aeed3655459a40f5ef00bce59ab20074c7ff71a146cf308"
+          },
+          {
+            "bytes": 262834,
+            "path": "tier-0-pt2399_delay/analysis/global/near-02-window-3/spline-controls.png",
+            "sha256": "f4db2a6d9990baf77e2e41a10e29c4f800568119b5047b3201b4db09211d7ded"
+          },
+          {
+            "bytes": 273418,
+            "path": "tier-0-pt2399_delay/analysis/global/near-03-window-1/copper-00-F_Cu.png",
+            "sha256": "3bc9f9cca5bdce95aa168872f32d8af86e6f85b19e130fd142a8954a4dcb2e26"
+          },
+          {
+            "bytes": 280361,
+            "path": "tier-0-pt2399_delay/analysis/global/near-03-window-1/provisional-overview.png",
+            "sha256": "dcfc217cc0934b40650b45d98493600bc60fd97d6a44ac2401e2593600131b69"
+          },
+          {
+            "bytes": 12702,
+            "path": "tier-0-pt2399_delay/analysis/global/near-03-window-1/spline-controls-closeup.png",
+            "sha256": "9efc0b4951f218357019bb8593013757fb39fc38b0d81385a15b84100e0be742"
+          },
+          {
+            "bytes": 241954,
+            "path": "tier-0-pt2399_delay/analysis/global/near-03-window-1/spline-controls.png",
+            "sha256": "9899dbda8cfade61b052501d5f49a0fdbdc77f0c84099a0571e8fe658af61207"
+          },
+          {
+            "bytes": 253442,
+            "path": "tier-0-pt2399_delay/analysis/global/near-04-window-3/copper-00-B_Cu.png",
+            "sha256": "4d3144f3e61a8a2186f0b3ba423f895f54e46cbebb0d41e5c20db62c55ef394a"
+          },
+          {
+            "bytes": 270225,
+            "path": "tier-0-pt2399_delay/analysis/global/near-04-window-3/copper-01-F_Cu.png",
+            "sha256": "1e9491b4eaed03ad52c226b99409acc04f1ca360f86a7be01e907236c700bf56"
+          },
+          {
+            "bytes": 318572,
+            "path": "tier-0-pt2399_delay/analysis/global/near-04-window-3/provisional-overview.png",
+            "sha256": "071e756c3d867f603aed6c488ef04dfb5b6976860ce305763f8229bf04c482aa"
+          },
+          {
+            "bytes": 7477,
+            "path": "tier-0-pt2399_delay/analysis/global/near-04-window-3/spline-controls-closeup.png",
+            "sha256": "a09b1e98d0f274d6168b38dcdceb95603a914f02f57f8791209d2b0463f69133"
+          },
+          {
+            "bytes": 262813,
+            "path": "tier-0-pt2399_delay/analysis/global/near-04-window-3/spline-controls.png",
+            "sha256": "42d3049cc7d5a11f3c369e5af33df2457bad37eaca606ec21f4e5738bf25fdac"
+          },
+          {
+            "bytes": 255163,
+            "path": "tier-0-pt2399_delay/analysis/global/near-05-window-3/copper-00-B_Cu.png",
+            "sha256": "9d47b8a00151371a250f94d0e1c5068a81f27c299362e3f7eaf5e8b7d35be89a"
+          },
+          {
+            "bytes": 270225,
+            "path": "tier-0-pt2399_delay/analysis/global/near-05-window-3/copper-01-F_Cu.png",
+            "sha256": "1e9491b4eaed03ad52c226b99409acc04f1ca360f86a7be01e907236c700bf56"
+          },
+          {
+            "bytes": 321262,
+            "path": "tier-0-pt2399_delay/analysis/global/near-05-window-3/provisional-overview.png",
+            "sha256": "fea69f33d99645235c714c07d6aeed0c059de32820ec5fb6df690532349800bf"
+          },
+          {
+            "bytes": 9798,
+            "path": "tier-0-pt2399_delay/analysis/global/near-05-window-3/spline-controls-closeup.png",
+            "sha256": "2c36a315a3efa215d5497cc7fab46a130c01ec88f4c6081922ca41ac1710c1e6"
+          },
+          {
+            "bytes": 266071,
+            "path": "tier-0-pt2399_delay/analysis/global/near-05-window-3/spline-controls.png",
+            "sha256": "199dc844ebbffbe615bd82defc72180166bde606ec6fa4e6e195d31589bec69c"
+          },
+          {
+            "bytes": 255151,
+            "path": "tier-0-pt2399_delay/analysis/global/near-06-window-3/copper-00-B_Cu.png",
+            "sha256": "dfa4e0b3001e5857958a55c6b14f5e5191a0b82fa74f7646db641d9bf5ccdcb7"
+          },
+          {
+            "bytes": 270225,
+            "path": "tier-0-pt2399_delay/analysis/global/near-06-window-3/copper-01-F_Cu.png",
+            "sha256": "1e9491b4eaed03ad52c226b99409acc04f1ca360f86a7be01e907236c700bf56"
+          },
+          {
+            "bytes": 321590,
+            "path": "tier-0-pt2399_delay/analysis/global/near-06-window-3/provisional-overview.png",
+            "sha256": "ee884cb3d4f71899298b84bfeb149cdbf9453042026c20dbb9bfaddefb95a6c1"
+          },
+          {
+            "bytes": 10975,
+            "path": "tier-0-pt2399_delay/analysis/global/near-06-window-3/spline-controls-closeup.png",
+            "sha256": "0d16abfad4118c3f0c09109323682ebf117ffc20854a7a1bd94b5c817e483abf"
+          },
+          {
+            "bytes": 266312,
+            "path": "tier-0-pt2399_delay/analysis/global/near-06-window-3/spline-controls.png",
+            "sha256": "2e94dd438ba5d16ab4dcd5aac12f69443ab4a7edfdba6fda3193bfa5b19dab63"
+          },
+          {
+            "bytes": 253457,
+            "path": "tier-0-pt2399_delay/analysis/global/near-07-window-3/copper-00-B_Cu.png",
+            "sha256": "dd228ef6d6576e2810c891899eb490167541c88386860c55093ae6f7181ca669"
+          },
+          {
+            "bytes": 270225,
+            "path": "tier-0-pt2399_delay/analysis/global/near-07-window-3/copper-01-F_Cu.png",
+            "sha256": "1e9491b4eaed03ad52c226b99409acc04f1ca360f86a7be01e907236c700bf56"
+          },
+          {
+            "bytes": 318356,
+            "path": "tier-0-pt2399_delay/analysis/global/near-07-window-3/provisional-overview.png",
+            "sha256": "1e0879bf54384635c32d047f9632534679aabefb63803cecddc65ec4e6087e95"
+          },
+          {
+            "bytes": 8308,
+            "path": "tier-0-pt2399_delay/analysis/global/near-07-window-3/spline-controls-closeup.png",
+            "sha256": "f4d1f833db7c667b11e6ff700bf7cbde168debd042996916d493c59d35cc025f"
+          },
+          {
+            "bytes": 262431,
+            "path": "tier-0-pt2399_delay/analysis/global/near-07-window-3/spline-controls.png",
+            "sha256": "314d5c7fcea171389f9dec3d7e24e1e44fac5c6d7ea32a35ce9fe0271c2389dc"
+          },
+          {
+            "bytes": 222230830,
+            "path": "tier-0-pt2399_delay/telemetry/pt2399_delay-global.jsonl",
+            "sha256": "e79f42e76c8827b0cefefd38a0aa607ff307f8e812597b4e0306ae84baa3c4ef"
+          }
+        ],
+        "boards": [],
+        "diagnostic": "Command '['/home/adam/qtbits/flux_capacitor/build/release/flux-cli', 'route-kicad', '/home/adam/qtbits/flux_capacitor/tests/fixtures/routing-corpus/pt2399_delay.kicad_pcb', '--max-router-iterations', '6', '--max-expansions', '50000', '--max-static-seed-workers', '2', '--search-diversification', '--feedback-shadow-policy', 'enforced', '--telemetry-level', 'diagnostic', '--telemetry-record', '/home/adam/qtbits/flux_capacitor/build/default-physics-blocker-feedback-tier0/tier-0-pt2399_delay/telemetry/pt2399_delay-global.jsonl']' timed out after 600 seconds",
+        "schema": "flux_routing_baseline_result",
+        "schema_version": 1,
+        "status": "failed"
+      },
+      "planning_records": [],
+      "epoch_telemetry": [
+        {
+          "artifact": "build/default-physics-blocker-feedback-tier0/tier-0-pt2399_delay/telemetry/pt2399_delay-global.jsonl",
+          "messages": [
+            "interleaved routing epoch started: pathfinder_budget=2, retained_portfolios=0, physical_history_entries=0",
+            "interleaved routing epoch completed: regional_candidates=1, history_entries=24, history_pressure=820221, quantized_oracle_violations=32, quantized_oracle_opens=0",
+            "interleaved routing epoch started: pathfinder_budget=1, retained_portfolios=1, physical_history_entries=24",
+            "interleaved routing epoch completed: regional_candidates=2, history_entries=45, history_pressure=1650224, quantized_oracle_violations=0, quantized_oracle_opens=9",
+            "interleaved routing epoch started: pathfinder_budget=1, retained_portfolios=2, physical_history_entries=45",
+            "interleaved routing epoch completed: regional_candidates=2, history_entries=47, history_pressure=2463802, quantized_oracle_violations=0, quantized_oracle_opens=9"
+          ],
+          "events": [
+            {
+              "monotonic_time_us": 2190,
+              "message": "interleaved routing epoch started: pathfinder_budget=2, retained_portfolios=0, physical_history_entries=0"
+            },
+            {
+              "monotonic_time_us": 359656989,
+              "message": "interleaved routing epoch completed: regional_candidates=1, history_entries=24, history_pressure=820221, quantized_oracle_violations=32, quantized_oracle_opens=0"
+            },
+            {
+              "monotonic_time_us": 359715396,
+              "message": "interleaved routing epoch started: pathfinder_budget=1, retained_portfolios=1, physical_history_entries=24"
+            },
+            {
+              "monotonic_time_us": 455227332,
+              "message": "interleaved routing epoch completed: regional_candidates=2, history_entries=45, history_pressure=1650224, quantized_oracle_violations=0, quantized_oracle_opens=9"
+            },
+            {
+              "monotonic_time_us": 455388859,
+              "message": "interleaved routing epoch started: pathfinder_budget=1, retained_portfolios=2, physical_history_entries=45"
+            },
+            {
+              "monotonic_time_us": 543795126,
+              "message": "interleaved routing epoch completed: regional_candidates=2, history_entries=47, history_pressure=2463802, quantized_oracle_violations=0, quantized_oracle_opens=9"
+            }
+          ],
+          "event_counts": {
+            "RoutingStarted": 1,
+            "snapshot": 75,
+            "SearchSummary": 603,
+            "RouteCandidateSelected": 1629,
+            "HydraulicFieldUpdated": 235,
+            "NetQueued": 100,
+            "PathFinderIterationStarted": 8,
+            "RouteRippedUp": 1,
+            "PathFinderIterationCompleted": 8,
+            "BestCheckpointUpdated": 4,
+            "NetFailed": 36,
+            "ConflictAdded": 37,
+            "ResidualGroupUpdated": 30,
+            "ViaCandidateGenerated": 162,
+            "ViaAssigned": 12,
+            "CheckpointSelected": 3
+          },
+          "non_authoritative_last_snapshot": {
+            "monotonic_time_us": 543911987,
+            "metrics": {
+              "iteration": 0,
+              "total_nets": 20,
+              "routed_nets": 20,
+              "unrouted_nets": 0,
+              "total_groups": 4,
+              "routed_groups": 0,
+              "unrouted_groups": 0,
+              "sampled_overflow": 0,
+              "corridor_overflow": 0,
+              "physical_overflow_nm": 0,
+              "clearance_shadow_conflicts": 19,
+              "regional_conflicts": 5,
+              "route_cost": 120650,
+              "vias": 4,
+              "rip_ups": 0,
+              "search_expansions": 0,
+              "selected_checkpoint": 0,
+              "best_checkpoint": 0,
+              "selected_is_best": false
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

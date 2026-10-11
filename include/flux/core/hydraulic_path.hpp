@@ -1,12 +1,17 @@
 #pragma once
 
+#include "flux/core/terrain_evolution.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace flux {
+
+class IndexedClearanceMap;
 
 inline constexpr std::uint32_t hydraulic_unreachable_height = 0x3fffffffU;
 
@@ -15,6 +20,14 @@ inline constexpr std::uint32_t hydraulic_unreachable_height = 0x3fffffffU;
 // high-flow cells between dispatches. The result is only a corridor proposal; graph/topology,
 // copper, connectivity, and DRC gates remain authoritative.
 struct HydraulicPathConfig {
+  // Explicit CPU height-evolution backend; never an implicit GPU fallback.
+  bool evolve_terrain_height{false};
+  // Reusable 0.05 mm physical pixel index beneath height-evolution / CPU polygon discovery.
+  // The alternate non-height GPU polygon raster retains its device-side implementation.
+  // Disabling this retains the exhaustive polygon-raster oracle for differential tests.
+  bool use_indexed_clearance_map{true};
+  TerrainEvolutionConfig terrain_evolution{};
+
   std::size_t relaxation_iterations{512U};
   std::size_t droplet_batches{6U};
   std::size_t droplets_per_batch{2'048U};
@@ -33,6 +46,13 @@ struct HydraulicPathConfig {
   // A flowing cell also erodes its immediate banks by this divisor (diagonals use twice it),
   // producing a useful corridor field rather than a one-cell visualization filament.
   std::uint32_t lateral_erosion_divisor{4U};
+  // Optional direction-dependent terrain metric. The signed axis is expressed in raster-space
+  // components in [-1024, 1024]. A ratio of 1000 is isotropic; larger values increase travel
+  // cost and reduce bank erosion in directions transverse to the axis. This changes only the
+  // advisory river proposal and never the immutable walkable mask or an exact legality gate.
+  std::int32_t anisotropy_axis_x{0};
+  std::int32_t anisotropy_axis_y{0};
+  std::uint32_t transverse_anisotropy_per_mille{1'000U};
   // Downstream routing failures are a non-authoritative positive terrain cost. Successful exact
   // copper is supplied separately as a bounded initial erosion prior. Both fields are optional;
   // zero-valued cells reproduce the ordinary hydraulic solve exactly.
@@ -90,6 +110,30 @@ struct HydraulicPathInput {
 };
 
 struct HydraulicPathResult {
+  std::shared_ptr<const IndexedClearanceMap> indexed_clearance_map;
+  std::size_t indexed_clearance_map_builds{0U};
+  std::size_t indexed_clearance_map_reuses{0U};
+  std::size_t indexed_clearance_map_cells{0U};
+  std::size_t indexed_clearance_map_records{0U};
+  std::size_t indexed_clearance_map_references{0U};
+  std::size_t indexed_clearance_map_fallbacks{0U};
+  std::string indexed_clearance_map_diagnostic;
+
+  bool used_height_evolution{false};
+  bool height_evolution_invoked{false};
+  // True only after a terrain-evolution GPU dispatch completed. This is deliberately distinct
+  // from prefer_gpu, which is merely a request, and from the hydraulic-raster GPU counters.
+  bool height_evolution_gpu_invoked{false};
+  std::size_t height_evolution_gpu_dispatches{0U};
+  std::size_t height_evolution_gpu_mask_uploads{0U};
+  std::size_t height_evolution_gpu_mask_upload_reuses{0U};
+  std::size_t height_evolution_gpu_mask_cross_pipeline_reuses{0U};
+  std::uint64_t height_evolution_field_us{0U};
+  std::uint64_t height_evolution_extraction_us{0U};
+  std::size_t height_evolution_iterations{0U};
+  std::size_t height_evolution_expanded_nodes{0U};
+  std::size_t height_evolution_changed_cells{0U};
+
   std::vector<std::size_t> riverbed;
   // Complete row-major routing terrain. Static potential is the destination gravity field;
   // terrain_height is that field after erosion. Obstacles and disconnected free-space components
@@ -136,6 +180,9 @@ struct HydraulicPathResult {
   std::size_t gpu_batch_size{0U};
   std::size_t gpu_persistent_buffer_reuses{0U};
   std::size_t gpu_buffer_growths{0U};
+  std::size_t gpu_mask_uploads{0U};
+  std::size_t gpu_mask_upload_reuses{0U};
+  std::size_t gpu_mask_cross_pipeline_reuses{0U};
   bool cpu_fallback{false};
   bool budget_exhausted{false};
   std::string diagnostic;
@@ -147,7 +194,7 @@ struct HydraulicPathResult {
 
 [[nodiscard]] HydraulicPathResult
 solve_hydraulic_erosion_path(const HydraulicPathInput& input,
-                             const HydraulicPathConfig& config = {});
+                             const HydraulicPathConfig& config = {}, std::stop_token stop_token = {});
 
 [[nodiscard]] bool hydraulic_gpu_compute_available();
 

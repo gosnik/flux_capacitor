@@ -1,0 +1,105 @@
+{
+  "experiment": "V59",
+  "board": "bm_svf",
+  "tier": 1,
+  "stage": "regional via-access candidate generation",
+  "baseline": "V56 completed benchmark, window25 occurrence7",
+  "nets": [
+    "kicad-net-1",
+    "kicad-net-16"
+  ],
+  "layer": "B.Cu",
+  "failure": "All 16 retained via pairs fail their disks or attached-runup checks; alternatives retain arbitrary-angle shortest chords. Straight realization changes those chords later.",
+  "evidence": {
+    "pair4_67": "GND via is 650000nm from V_MID frozen runup anchor; required675000nm",
+    "pair5_64": "B.Cu approach distance366816nm; required450000nm",
+    "retained_pair_combinations": 16,
+    "compatible_retained_pairs": 0,
+    "octilinear_compatible_combinations_without_static_checks": 408
+  },
+  "candidates_ranked": [
+    {
+      "rank": 1,
+      "technique": "Generate octilinear runup postures before static and mutual access checks",
+      "experiment": "Replace arbitrary chord candidates with diagonal-first, diagonal-last and orthogonal elbows in straight mode; preserve existing ranking and budgets."
+    },
+    {
+      "rank": 2,
+      "technique": "Retain multiple postures per via site for joint access assignment",
+      "cost": "Larger candidate domains; defer until the simpler representation fix is measured."
+    },
+    {
+      "rank": 3,
+      "technique": "Expand frozen anchor scope upstream",
+      "cost": "Topology change may be necessary if exact static obstacles invalidate all postures."
+    }
+  ],
+  "hypothesis": "The access stage falsely rejects compatible straight geometry because it checks an arbitrary-angle surrogate. Checking legal-angle candidates early will recover some access assignments.",
+  "success": "Two-net access reproduced and recovered with actual static checks; fewer incomplete assignments or exact whole-scene conflicts without opens/regressions.",
+  "qualification": "Only complete required connections and benchmark KiCad DRC can qualify Tier1.",
+  "research": [
+    {
+      "url": "https://docs.kicad.org/doxygen/pns__line__placer_8cpp_source.html",
+      "technique": "DIRECTION_45 posture selection",
+      "assumptions": "Segment-based route heads, alternate straight/diagonal posture",
+      "integration": "Via approach candidate generation, at most four constant-size connectors",
+      "benefit": "Match physical copper before checking access compatibility",
+      "downside": "Does not explore obstacle homotopy or jointly choose multiple postures at one site"
+    },
+    {
+      "url": "https://openroad.readthedocs.io/en/latest/main/src/drt/README.html",
+      "technique": "Separate pin access, track assignment, detailed search/repair",
+      "integration": "Improve access representation before downstream physical packing",
+      "limitation": "IC-specific rules and grid assumptions are not copied"
+    }
+  ],
+  "status": "completed and reverted",
+  "isolated_exact_copper": {
+    "chords": {
+      "pitch_nm": 1,
+      "tracks": 4,
+      "vias": 2,
+      "drc_violations": 2,
+      "categories": {
+        "track_clearance": 2
+      },
+      "opens": 78
+    },
+    "elbows": {
+      "pitch_nm": 1,
+      "tracks": 6,
+      "vias": 2,
+      "drc_violations": 0,
+      "categories": {},
+      "opens": 78
+    },
+    "interpretation": "Static source board plus these two connected approach/via polylines only; 78 board opens are expected because the rest of routing is absent. Zero local DRC does not establish whole-scene or frozen-continuation feasibility."
+  },
+  "frozen_scene_probe": {
+    "tested": 48,
+    "baseline_drc": 613,
+    "best_drc": 624,
+    "min_opens": 0,
+    "max_opens": 0,
+    "interpretation": "All 48 tested mutually compatible access pairs worsen the frozen whole-board scene; this bounded sweep is not proof that no full-scene improvement exists."
+  },
+  "verification_so_far": {
+    "tier0": "qualified, KiCad DRC passes",
+    "core": "51/51 (before final production integration addition); production microcase separately passes",
+    "broader": "127/134; same seven known baseline demo failures"
+  },
+  "decision": "revert: local legality does not generalize to frozen or assembled whole-board geometry",
+  "patch": "V59-reverted-octilinear-runups.patch",
+  "tier1": {
+    "qualified": false,
+    "duration_seconds": 1754.7063729639995,
+    "complete_assignments_before": 45,
+    "complete_assignments_after": 46,
+    "windows": 47,
+    "selected_scene_evaluated": false,
+    "coarse_drc": 613,
+    "coarse_opens": 0,
+    "interpretation": "Targeted two-net access recovered, but three assembled scenes worsened and no whole-board qualification improved."
+  },
+  "benchmark_history": "V59-V60-benchmarks.json"
+}

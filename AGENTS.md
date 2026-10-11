@@ -904,6 +904,9 @@ Do not manually promote a tier based on visual inspection.
 
 # Performance Discipline
 
+Run tier benchmarks sequentially, one tier run at a time, always with telemetry enabled and
+recorded. Do not overlap tier runs. Preserve the telemetry alongside each run's results.
+
 Correctness comes first, but track computational cost.
 
 For each meaningful improvement record:
@@ -1206,4 +1209,3 @@ Begin now with the following sequence:
 As soon as Tier 1 passes reliably, move the frontier to Tier 2 and repeat the same process.
 
 The benchmark ladder—not the elegance of any particular algorithm—is the final measure of progress.
-

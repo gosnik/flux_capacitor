@@ -1,0 +1,348 @@
+[
+  {
+    "net": "V_IN",
+    "pads": [
+      {
+        "reference": "R2",
+        "number": "2",
+        "plated": false,
+        "layers": [
+          "F.Cu"
+        ]
+      },
+      {
+        "reference": "INPUT1",
+        "number": "1",
+        "plated": true,
+        "layers": [
+          "F.Cu",
+          "B.Cu"
+        ]
+      },
+      {
+        "reference": "R1",
+        "number": "1",
+        "plated": false,
+        "layers": [
+          "F.Cu"
+        ]
+      }
+    ],
+    "reference_length_mm_by_layer": {
+      "F.Cu": 43.15451649281442
+    },
+    "reference_vias": []
+  },
+  {
+    "net": "Net-(R4-Pad1)",
+    "pads": [
+      {
+        "reference": "U4",
+        "number": "1",
+        "plated": false,
+        "layers": [
+          "F.Cu"
+        ]
+      },
+      {
+        "reference": "R4",
+        "number": "1",
+        "plated": false,
+        "layers": [
+          "F.Cu"
+        ]
+      },
+      {
+        "reference": "R7",
+        "number": "2",
+        "plated": false,
+        "layers": [
+          "F.Cu"
+        ]
+      },
+      {
+        "reference": "U2",
+        "number": "4",
+        "plated": true,
+        "layers": [
+          "F.Cu",
+          "B.Cu"
+        ]
+      }
+    ],
+    "reference_length_mm_by_layer": {
+      "F.Cu": 5.893064284074428,
+      "B.Cu": 4.673471713899363
+    },
+    "reference_vias": [
+      [
+        52070000,
+        83312000
+      ]
+    ]
+  },
+  {
+    "net": "GND",
+    "pads": [
+      {
+        "reference": "U3",
+        "number": "4",
+        "plated": false,
+        "layers": [
+          "F.Cu"
+        ]
+      },
+      {
+        "reference": "R2",
+        "number": "1",
+        "plated": false,
+        "layers": [
+          "F.Cu"
+        ]
+      },
+      {
+        "reference": "RV2",
+        "number": "1",
+        "plated": true,
+        "layers": [
+          "F.Cu",
+          "B.Cu"
+        ]
+      },
+      {
+        "reference": "C4",
+        "number": "2",
+        "plated": false,
+        "layers": [
+          "F.Cu"
+        ]
+      },
+      {
+        "reference": "U4",
+        "number": "4",
+        "plated": false,
+        "layers": [
+          "F.Cu"
+        ]
+      },
+      {
+        "reference": "R16",
+        "number": "1",
+        "plated": false,
+        "layers": [
+          "F.Cu"
+        ]
+      },
+      {
+        "reference": "C3",
+        "number": "2",
+        "plated": false,
+        "layers": [
+          "F.Cu"
+        ]
+      },
+      {
+        "reference": "R10",
+        "number": "2",
+        "plated": false,
+        "layers": [
+          "F.Cu"
+        ]
+      },
+      {
+        "reference": "C5",
+        "number": "2",
+        "plated": false,
+        "layers": [
+          "F.Cu"
+        ]
+      },
+      {
+        "reference": "R17",
+        "number": "1",
+        "plated": false,
+        "layers": [
+          "F.Cu"
+        ]
+      },
+      {
+        "reference": "U5",
+        "number": "4",
+        "plated": false,
+        "layers": [
+          "F.Cu"
+        ]
+      },
+      {
+        "reference": "GND1",
+        "number": "1",
+        "plated": true,
+        "layers": [
+          "F.Cu",
+          "B.Cu"
+        ]
+      },
+      {
+        "reference": "GND1",
+        "number": "2",
+        "plated": true,
+        "layers": [
+          "F.Cu",
+          "B.Cu"
+        ]
+      },
+      {
+        "reference": "GND1",
+        "number": "3",
+        "plated": true,
+        "layers": [
+          "F.Cu",
+          "B.Cu"
+        ]
+      },
+      {
+        "reference": "GND1",
+        "number": "4",
+        "plated": true,
+        "layers": [
+          "F.Cu",
+          "B.Cu"
+        ]
+      },
+      {
+        "reference": "GND1",
+        "number": "5",
+        "plated": true,
+        "layers": [
+          "F.Cu",
+          "B.Cu"
+        ]
+      }
+    ],
+    "reference_length_mm_by_layer": {
+      "F.Cu": 21.23479298408027,
+      "B.Cu": 173.18670869756838
+    },
+    "reference_vias": [
+      [
+        55499000,
+        92964000
+      ],
+      [
+        57531000,
+        58293000
+      ],
+      [
+        49595000,
+        75819000
+      ],
+      [
+        69469000,
+        53848000
+      ],
+      [
+        49658183,
+        85058767
+      ],
+      [
+        68326000,
+        57404000
+      ],
+      [
+        69088000,
+        84963000
+      ],
+      [
+        74930000,
+        92964000
+      ],
+      [
+        51435000,
+        81945000
+      ]
+    ]
+  },
+  {
+    "net": "V_BF",
+    "pads": [
+      {
+        "reference": "R3",
+        "number": "2",
+        "plated": false,
+        "layers": [
+          "F.Cu"
+        ]
+      },
+      {
+        "reference": "OUTPUT1",
+        "number": "5",
+        "plated": true,
+        "layers": [
+          "F.Cu",
+          "B.Cu"
+        ]
+      }
+    ],
+    "reference_length_mm_by_layer": {
+      "F.Cu": 57.4146446622363
+    },
+    "reference_vias": []
+  },
+  {
+    "net": "Net-(C2-Pad2)",
+    "pads": [
+      {
+        "reference": "RV1",
+        "number": "2",
+        "plated": true,
+        "layers": [
+          "F.Cu",
+          "B.Cu"
+        ]
+      },
+      {
+        "reference": "R3",
+        "number": "1",
+        "plated": false,
+        "layers": [
+          "F.Cu"
+        ]
+      },
+      {
+        "reference": "U4",
+        "number": "7",
+        "plated": false,
+        "layers": [
+          "F.Cu"
+        ]
+      },
+      {
+        "reference": "C2",
+        "number": "2",
+        "plated": false,
+        "layers": [
+          "F.Cu"
+        ]
+      },
+      {
+        "reference": "U1",
+        "number": "4",
+        "plated": true,
+        "layers": [
+          "F.Cu",
+          "B.Cu"
+        ]
+      }
+    ],
+    "reference_length_mm_by_layer": {
+      "F.Cu": 57.87901629029809,
+      "B.Cu": 3.625061684419096
+    },
+    "reference_vias": [
+      [
+        56699000,
+        74257000
+      ]
+    ]
+  }
+]

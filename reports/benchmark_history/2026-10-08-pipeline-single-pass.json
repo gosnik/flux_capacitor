@@ -1,0 +1,109 @@
+{
+  "experiment": "V76",
+  "date": "2026-10-08T11:02:04.783472+00:00",
+  "revision": "94aa691ad89576d1c0ac07a5346020da21fc9d06",
+  "binary_sha256": "597df546808b79867f1c9587c8572d0707c2ce022076c88a23e0e5d111972054",
+  "source_snapshot": "build/pipeline-single-pass-20261008/experiment/source",
+  "task_patch": "build/pipeline-single-pass-20261008/implementation.patch",
+  "configuration": {
+    "track_geometry": "straight",
+    "max_straight_portfolio_checks": 24,
+    "max_straight_joint_windows": 4
+  },
+  "validation": {
+    "focused_tests": {
+      "passed": 5,
+      "total": 5
+    },
+    "core_tests": {
+      "passed": 57,
+      "total": 57
+    },
+    "tier0": {
+      "board": "pt2399_delay",
+      "qualified": true,
+      "paths": 50,
+      "external_kicad_drc": "pass",
+      "artifacts": "build/pipeline-single-pass-20261008/tier0"
+    }
+  },
+  "tier1": {
+    "status": "completed",
+    "board": "bm_svf",
+    "qualification": false,
+    "control": {
+      "scene_violations": 751,
+      "scene_open_connections": 0,
+      "wrapper_open_connections": 78,
+      "runtime_wall_clock": "43:24.80",
+      "maximum_rss_kb": 549740,
+      "artifacts": "build/pipeline-single-pass-20261008/control-tier1"
+    },
+    "experiment": {
+      "scene_violations": 751,
+      "scene_open_connections": 0,
+      "wrapper_open_connections": 78,
+      "runtime_wall_clock": "38:44.87",
+      "maximum_rss_kb": 613008,
+      "multi_window_checks": 4,
+      "multi_window_improvements": 0,
+      "cumulative_cache_evictions": 20482,
+      "cumulative_navigation_cache_hits": 124867,
+      "cumulative_navigation_cache_misses": 8692,
+      "candidate_cache_evictions": 8309,
+      "candidate_source_cache_hits": 2140,
+      "candidate_source_cache_misses": 1359,
+      "candidate_navigation_cache_hits": 49336,
+      "candidate_navigation_cache_misses": 3499,
+      "candidate_geometry_cache_hits": 0,
+      "candidate_geometry_cache_misses": 3499,
+      "artifacts": "build/pipeline-single-pass-20261008/experiment-tier1",
+      "cumulative_fixed_geometry_checks": 0,
+      "cumulative_fixed_geometry_rejections": 0
+    },
+    "outcome": "Both coarse plans contain 78 paths with 0 unrouted and 0 overflow. Both assembled scenes have 751 violations and 0 scene opens. The runner reports 78 open connections for the unaccepted detailed output; neither board qualifies.",
+    "control_artifacts": "build/pipeline-single-pass-20261008/control-tier1",
+    "experiment_artifacts": "build/pipeline-single-pass-20261008/experiment-tier1"
+  },
+  "measurement_notes": [
+    "Regional timing counters are inclusive; do not sum nested stages.",
+    "Cumulative planning counters include discarded regional attempts and promotions.",
+    "Runtime comparison is observational under concurrent control, experiment and viewer workloads.",
+    "Bundled changes require ablations to attribute individual benefits.",
+    "Experiment wrapper wall time/RSS were reported by the benchmark agent; its raw time log is not preserved in the artifact directory. Per-board duration_seconds remains directly verifiable."
+  ],
+  "review": {
+    "status": "no remaining material findings",
+    "fixed": [
+      "LRU active-reference lifetime",
+      "Scene reuse geometry-policy guards"
+    ],
+    "coverage_gaps": [
+      "Forced cache eviction with retained handle",
+      "Cumulative promotion counter regression"
+    ]
+  },
+  "reanalysis": {
+    "planning_seconds": {
+      "control": 2591.7709111130025,
+      "experiment": 2312.4873234660045
+    },
+    "inclusive_cumulative_seconds": {
+      "bundle_assignment": 2179.939124,
+      "alternative_domain": 697.46114,
+      "access_selection": 651.623155,
+      "bundle_search": 381.727733,
+      "channel_construction": 0.298772
+    },
+    "bundle_assignment_percent": 94.26815454852577,
+    "navigation_cache_hit_percent": 93.49201476501023,
+    "lane_timer_warning": "Per-call integer microsecond truncation undercounts 27920949 invocations; use nanoseconds or batched timing.",
+    "priorities": [
+      "Measure exclusive cost and preserve raw timing artifacts",
+      "Prepare/cache reusable access and domain computations with complete dependency keys",
+      "Build and select physically compatible bend/via/escape candidates within small conflict regions",
+      "Use measured failure to regenerate alternatives or expand repair scope",
+      "Retain bounded joint search experimentally; do not simply increase its budget"
+    ]
+  }
+}

@@ -1,15 +1,21 @@
 #include "flux/core/routing_compute.hpp"
 #include "flux/core/spline_route.hpp"
 
+#include "flux/core/cpu_worker_budget.hpp"
 #include "flux/core/geometry.hpp"
+#include "flux/core/routing_kernel.hpp"
+
+#include <boost/multiprecision/cpp_dec_float.hpp>
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <complex>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <mutex>
 #include <numeric>
@@ -19,7 +25,46 @@
 #include <utility>
 #include <vector>
 
+#if __has_include(<experimental/simd>)
+#include <experimental/simd>
+#define FLUX_HAS_EXPERIMENTAL_SIMD 1
+#else
+#define FLUX_HAS_EXPERIMENTAL_SIMD 0
+#endif
+
 namespace flux {
+
+struct PreparedSplineCorridor {
+  struct Bounds {
+    long double minimum_x{0.0L};
+    long double minimum_y{0.0L};
+    long double maximum_x{0.0L};
+    long double maximum_y{0.0L};
+  };
+  std::vector<Polygon> regions;
+  std::vector<Bounds> bounds;
+};
+
+bool QuinticPHRoute::operator==(const QuinticPHRoute& other) const {
+  const auto corridors_equal = [&] {
+    if (prepared_corridor == other.prepared_corridor)
+      return true;
+    if (!prepared_corridor || !other.prepared_corridor)
+      return false;
+    // Bounds are a deterministic cache derived from regions.  Comparing only the source regions
+    // avoids pointer identity becoming part of a route's semantic state.
+    return prepared_corridor->regions == other.prepared_corridor->regions;
+  };
+  return control_points == other.control_points && corridor_anchors == other.corridor_anchors &&
+         node_parameters == other.node_parameters && node_derivatives == other.node_derivatives &&
+         segments == other.segments && corridors_equal() &&
+         parameter_exponent == other.parameter_exponent && tangent_scale == other.tangent_scale &&
+         requested_continuity == other.requested_continuity &&
+         tangent_continuous == other.tangent_continuous &&
+         curvature_continuous == other.curvature_continuous &&
+         node_tangent_directions == other.node_tangent_directions;
+}
+
 namespace {
 
 using Complex = std::complex<long double>;
@@ -613,6 +658,26 @@ struct PHKinematics {
         std::abs(evaluate_preimage_kinematics(segment, segment.curvature_extremum_parameters[i])
                      .curvature));
   }
+  // Beautiful routing is a fairness problem, not merely an endpoint-interpolation problem.
+  // Prefer PH branches whose curvature changes monotonically (a spiral) or has at most the one
+  // interior extremum needed by a fair C-shaped transition. The scale-normalized total variation
+  // also distinguishes equally regular algebraic branches without changing any hard certificate.
+  constexpr std::size_t fairness_samples = 24U;
+  auto prior_curvature = evaluate_preimage_kinematics(segment, 0.0L).curvature;
+  long double curvature_variation = 0.0L;
+  for (std::size_t sample = 1U; sample <= fairness_samples; ++sample) {
+    const auto curvature =
+        evaluate_preimage_kinematics(segment, static_cast<long double>(sample) /
+                                                  static_cast<long double>(fairness_samples))
+            .curvature;
+    curvature_variation += std::abs(curvature - prior_curvature);
+    prior_curvature = curvature;
+  }
+  const auto interior_extrema = static_cast<std::size_t>(std::count_if(
+      segment.curvature_extremum_parameters.begin(),
+      segment.curvature_extremum_parameters.begin() + segment.curvature_extremum_count,
+      [](long double parameter) { return parameter > 0.0L && parameter < 1.0L; }));
+  const auto excess_curvature_extrema = interior_extrema > 1U ? interior_extrema - 1U : 0U;
   long double hull_excess = 0.0L;
   const auto unit = normalized(chord);
   for (const auto point : segment.bezier) {
@@ -627,6 +692,8 @@ struct PHKinematics {
   return static_cast<long double>(segment.cusp_count) * 1.0e18L +
          static_cast<long double>(loops) * 1.0e12L +
          static_cast<long double>(inflections) * 1.0e8L +
+         static_cast<long double>(excess_curvature_extrema) * chord_length * 20.0L +
+         curvature_variation * chord_length * chord_length * 4.0L +
          peak_curvature * chord_length * chord_length * 10.0L +
          absolute_rotation(segment) * chord_length + std::max(0.0L, length - chord_length) * 2.0L +
          hull_excess * 10.0L;
@@ -646,15 +713,13 @@ struct PHKinematics {
         route.segments[i].route_parameter_end - route.segments[i].route_parameter_start;
     left.tangent = scale(left.tangent, 1.0L / left_span);
     right.tangent = scale(right.tangent, 1.0L / right_span);
-    left.second_derivative = scale(left.second_derivative, 1.0L / (left_span * left_span));
-    right.second_derivative = scale(right.second_derivative, 1.0L / (right_span * right_span));
     const auto tangent_scale_value = std::max({1.0L, norm(left.tangent), norm(right.tangent)});
     route.tangent_continuous =
         route.tangent_continuous &&
         norm(subtract(left.tangent, right.tangent)) <= tangent_scale_value * 1.0e-9L;
     route.curvature_continuous =
         route.curvature_continuous &&
-        norm(subtract(left.second_derivative, right.second_derivative)) <= 10.0L;
+        std::abs(left.curvature_per_nm - right.curvature_per_nm) <= 1.0e-10L;
   }
   return route.tangent_continuous;
 }
@@ -722,10 +787,10 @@ void clamp_node_to_anchor(QuinticPHRoute& route, std::size_t index, Nanometres m
         add(route.corridor_anchors[index],
             scale(delta, static_cast<long double>(maximum.value()) / length));
   }
-  if (route.convex_corridor.empty())
+  if (!route.prepared_corridor)
     return;
   if (std::any_of(
-          route.convex_corridor.begin(), route.convex_corridor.end(),
+          route.prepared_corridor->regions.begin(), route.prepared_corridor->regions.end(),
           [&](const auto& cell) { return point_in_convex(cell, route.control_points[index]); }))
     return;
   route.control_points[index] = route.corridor_anchors[index];
@@ -838,8 +903,7 @@ bool rebuild_quintic_ph_route(QuinticPHRoute& route) {
   return build_route_segments_from_derivatives(route);
 }
 
-bool rebuild_quintic_ph_route_around_control(QuinticPHRoute& route,
-                                             std::size_t control_index) {
+bool rebuild_quintic_ph_route_around_control(QuinticPHRoute& route, std::size_t control_index) {
   if (control_index >= route.control_points.size() ||
       route.segments.size() + 1U != route.control_points.size())
     return rebuild_quintic_ph_route(route);
@@ -896,7 +960,8 @@ make_quintic_ph_route_from_nodes(const std::vector<Point>& nodes,
   if (!rebuild_quintic_ph_route(route))
     return std::nullopt;
   if (config.continuity == PHJoinContinuity::curvature &&
-      !enforce_quintic_ph_continuity(route, config.continuity, config.continuity_tolerance_nm,
+      !enforce_quintic_ph_continuity(route, config.continuity,
+                                     config.curvature_tolerance_per_nm,
                                      config.maximum_continuity_iterations))
     return std::nullopt;
   return route;
@@ -981,64 +1046,160 @@ make_run_aligned_quintic_ph_route(const std::vector<Point>& polyline, Nanometres
   return make_guarded_quintic_ph_route(polyline, corner_guard, config, false, true);
 }
 
-bool enforce_quintic_ph_continuity(QuinticPHRoute& route, PHJoinContinuity continuity,
-                                   long double tolerance_nm, std::size_t maximum_iterations) {
+long double quintic_ph_max_curvature_jump(const QuinticPHRoute& route) {
+  long double result = 0.0L;
+  for (std::size_t i = 1U; i < route.segments.size(); ++i) {
+    const auto left = evaluate_segment_differential(route.segments[i - 1U], 1.0L).curvature_per_nm;
+    const auto right = evaluate_segment_differential(route.segments[i], 0.0L).curvature_per_nm;
+    if (!std::isfinite(left) || !std::isfinite(right))
+      return std::numeric_limits<long double>::infinity();
+    result = std::max(result, std::abs(left - right));
+  }
+  return result;
+}
+
+bool enforce_quintic_ph_continuity(QuinticPHRoute& output, PHJoinContinuity continuity,
+                                   long double curvature_tolerance_per_nm,
+                                   std::size_t maximum_iterations, std::stop_token stop_token) {
+  // Promotion is optional. Bound work independently of a caller's route/sample budget and
+  // leave the original candidate intact on cancellation or an oversized request.
+  if (stop_token.stop_requested() || output.control_points.size() > 130U ||
+      !std::isfinite(curvature_tolerance_per_nm))
+    return false;
+  auto route = output;
   if (!rebuild_quintic_ph_route(route))
     return false;
   route.requested_continuity = continuity;
-  if (continuity == PHJoinContinuity::tangent || route.segments.size() <= 1U)
+  if (continuity == PHJoinContinuity::tangent || route.segments.size() <= 1U) {
+    output = std::move(route);
     return true;
-  // Bounded nonlinear relaxation of shared nodal derivatives.  Every
-  // interpolation point and C1 join is invariant; only the one derivative
-  // shared by the adjacent Hermite segments moves.
+  }
+  // Bounded nonlinear relaxation of shared nodal derivatives. Every interpolation point and G1
+  // join is invariant; only the derivative shared by adjacent Hermite segments moves. G2 is a
+  // geometric condition, so minimize the scalar curvature jump—not the parameter-dependent
+  // second-derivative vector that would incorrectly demand full parametric C2 continuity.
   auto best = route;
-  auto mismatch = [](const QuinticPHRoute& value) {
-    long double result = 0.0L;
-    for (std::size_t i = 1U; i < value.segments.size(); ++i) {
-      auto left = evaluate_segment_differential(value.segments[i - 1U], 1.0L).second_derivative;
-      auto right = evaluate_segment_differential(value.segments[i], 0.0L).second_derivative;
-      const auto left_span =
-          value.segments[i - 1U].route_parameter_end - value.segments[i - 1U].route_parameter_start;
-      const auto right_span =
-          value.segments[i].route_parameter_end - value.segments[i].route_parameter_start;
-      left = scale(left, 1.0L / (left_span * left_span));
-      right = scale(right, 1.0L / (right_span * right_span));
-      result = std::max(result, norm(subtract(left, right)));
-    }
-    return result;
-  };
+  const auto mismatch = quintic_ph_max_curvature_jump;
   auto best_mismatch = mismatch(best);
-  for (std::size_t iteration = 0U; iteration < maximum_iterations && best_mismatch > tolerance_nm;
+  const auto tolerance = std::max(0.0L, curvature_tolerance_per_nm);
+  const auto residuals = [](const QuinticPHRoute& value) {
+    std::vector<long double> values;
+    values.reserve(value.segments.size() > 0U ? value.segments.size() - 1U : 0U);
+    for (std::size_t join = 1U; join < value.segments.size(); ++join) {
+      values.push_back(
+          evaluate_segment_differential(value.segments[join - 1U], 1.0L).curvature_per_nm -
+          evaluate_segment_differential(value.segments[join], 0.0L).curvature_per_nm);
+    }
+    return values;
+  };
+  const auto solve = [](std::vector<std::array<long double, 3U>> matrix,
+                        std::vector<long double> rhs) -> std::optional<std::vector<long double>> {
+    const auto size = rhs.size();
+    // Each residual involves two spans and three neighboring nodal magnitudes. Use a
+    // tridiagonal solve, declining ill-conditioned pivots rather than amplifying noise.
+    for (std::size_t row = 0U; row < size; ++row) {
+      if (row > 0U) {
+        const auto factor = matrix[row][0U] / matrix[row - 1U][1U];
+        matrix[row][1U] -= factor * matrix[row - 1U][2U];
+        rhs[row] -= factor * rhs[row - 1U];
+      }
+      if (!std::isfinite(matrix[row][1U]) || std::abs(matrix[row][1U]) <= 1.0e-30L)
+        return std::nullopt;
+    }
+    for (std::size_t row = size; row-- > 0U;) {
+      if (row + 1U < size)
+        rhs[row] -= matrix[row][2U] * rhs[row + 1U];
+      rhs[row] /= matrix[row][1U];
+      if (!std::isfinite(rhs[row]))
+        return std::nullopt;
+    }
+    return rhs;
+  };
+  const auto joins = route.segments.size() - 1U;
+  for (std::size_t iteration = 0U;
+       iteration < std::min<std::size_t>(maximum_iterations, 24U) && best_mismatch > tolerance;
        ++iteration) {
-    bool improved = false;
-    for (std::size_t node = 1U; node + 1U < route.control_points.size(); ++node) {
-      const auto original = best.node_derivatives[node];
-      const auto local =
-          std::min(norm(subtract(route.control_points[node], route.control_points[node - 1U])),
-                   norm(subtract(route.control_points[node + 1U], route.control_points[node])));
-      const auto step = std::max(1.0L, local * 0.02L / static_cast<long double>(iteration + 1U));
-      for (const auto direction :
-           std::array<SplineVector, 4U>{{{1, 0}, {-1, 0}, {0, 1}, {0, -1}}}) {
-        auto candidate = best;
-        candidate.node_derivatives[node] = add(original, scale(direction, step));
-        if (!(norm(candidate.node_derivatives[node]) > 0.0L) ||
-            !build_route_segments_from_derivatives(candidate))
-          continue;
-        const auto candidate_mismatch = mismatch(candidate);
-        if (candidate_mismatch + 1.0e-9L < best_mismatch) {
-          best = std::move(candidate);
-          best_mismatch = candidate_mismatch;
-          improved = true;
+    routing_kernel_checkpoint();
+    if (stop_token.stop_requested())
+      return false;
+    const auto base_residuals = residuals(best);
+    std::vector<SplineVector> directions(joins);
+    std::vector<long double> magnitudes(joins);
+    std::vector<std::array<long double, 3U>> jacobian(joins);
+    bool jacobian_valid = true;
+    auto candidate = best;
+    for (std::size_t variable = 0U; variable < joins; ++variable) {
+      if (stop_token.stop_requested())
+        return false;
+      const auto node = variable + 1U;
+      magnitudes[variable] = norm(best.node_derivatives[node]);
+      directions[variable] = normalized(best.node_derivatives[node]);
+      const auto probe = std::max(1.0L, magnitudes[variable] * 1.0e-4L);
+      candidate.node_derivatives[node] = scale(directions[variable], magnitudes[variable] + probe);
+      for (const auto span_index : {node - 1U, node}) {
+        const auto interval =
+            best.node_parameters[span_index + 1U] - best.node_parameters[span_index];
+        auto span = interpolate_quintic_ph_segment(
+            best.control_points[span_index], best.control_points[span_index + 1U],
+            scale(candidate.node_derivatives[span_index], interval),
+            scale(candidate.node_derivatives[span_index + 1U], interval));
+        if (!span) {
+          jacobian_valid = false;
+          break;
         }
+        span->route_parameter_start = best.node_parameters[span_index];
+        span->route_parameter_end = best.node_parameters[span_index + 1U];
+        candidate.segments[span_index] = *span;
+      }
+      if (!jacobian_valid)
+        break;
+      for (std::size_t equation = variable > 0U ? variable - 1U : 0U;
+           equation < std::min(joins, variable + 2U); ++equation) {
+        const auto residual =
+            evaluate_segment_differential(candidate.segments[equation], 1.0L).curvature_per_nm -
+            evaluate_segment_differential(candidate.segments[equation + 1U], 0.0L).curvature_per_nm;
+        jacobian[equation][variable + 1U - equation] =
+            (residual - base_residuals[equation]) / probe;
+      }
+      candidate.node_derivatives[node] = best.node_derivatives[node];
+      candidate.segments[node - 1U] = best.segments[node - 1U];
+      candidate.segments[node] = best.segments[node];
+    }
+    if (!jacobian_valid)
+      break;
+    std::vector<long double> rhs(joins);
+    std::transform(base_residuals.begin(), base_residuals.end(), rhs.begin(),
+                   [](long double value) { return -value; });
+    const auto delta = solve(std::move(jacobian), std::move(rhs));
+    if (!delta)
+      break;
+    bool improved = false;
+    for (const auto damping : {1.0L, 0.5L, 0.25L, 0.125L, 0.0625L}) {
+      auto candidate = best;
+      for (std::size_t variable = 0U; variable < joins; ++variable) {
+        const auto bounded_delta = std::clamp((*delta)[variable], -magnitudes[variable] * 0.5L,
+                                              magnitudes[variable] * 0.5L);
+        candidate.node_derivatives[variable + 1U] = scale(
+            directions[variable], std::max(1.0L, magnitudes[variable] + damping * bounded_delta));
+      }
+      if (!build_route_segments_from_derivatives(candidate))
+        continue;
+      const auto candidate_mismatch = mismatch(candidate);
+      if (candidate_mismatch + 1.0e-18L < best_mismatch) {
+        best = std::move(candidate);
+        best_mismatch = candidate_mismatch;
+        improved = true;
+        break;
       }
     }
     if (!improved)
       break;
-    route = best;
   }
   route = best;
-  route.curvature_continuous = best_mismatch <= tolerance_nm;
-  return route.curvature_continuous;
+  route.curvature_continuous = best_mismatch <= tolerance;
+  if (stop_token.stop_requested()) return false;
+  output = std::move(route);
+  return output.curvature_continuous;
 }
 
 SplineVector evaluate_quintic_ph(const QuinticPHRoute& route, long double parameter) {
@@ -1188,7 +1349,24 @@ bool set_quintic_ph_corridor(QuinticPHRoute& route, const std::vector<Polygon>& 
   if (convex_regions.empty() ||
       !std::all_of(convex_regions.begin(), convex_regions.end(), convex_polygon))
     return false;
-  route.convex_corridor = convex_regions;
+  auto prepared = std::make_shared<PreparedSplineCorridor>();
+  prepared->regions = convex_regions;
+  prepared->bounds.reserve(convex_regions.size());
+  for (const auto& polygon : convex_regions) {
+    PreparedSplineCorridor::Bounds bounds{
+        static_cast<long double>(polygon.vertices.front().x.value()),
+        static_cast<long double>(polygon.vertices.front().y.value()),
+        static_cast<long double>(polygon.vertices.front().x.value()),
+        static_cast<long double>(polygon.vertices.front().y.value())};
+    for (const auto point : polygon.vertices) {
+      bounds.minimum_x = std::min(bounds.minimum_x, static_cast<long double>(point.x.value()));
+      bounds.minimum_y = std::min(bounds.minimum_y, static_cast<long double>(point.y.value()));
+      bounds.maximum_x = std::max(bounds.maximum_x, static_cast<long double>(point.x.value()));
+      bounds.maximum_y = std::max(bounds.maximum_y, static_cast<long double>(point.y.value()));
+    }
+    prepared->bounds.push_back(bounds);
+  }
+  route.prepared_corridor = std::move(prepared);
   // A corridor is a constraint on an existing route, not a geometric degree of freedom. Every
   // public constructor and deformation path has already prepared the quadratic preimage, power
   // bases, extrema, and bounds. Rebuilding here repeated the eight-branch PH interpolation and
@@ -1358,12 +1536,10 @@ struct Bounds {
 
 } // namespace
 
-std::vector<PHOffsetIntersection>
-intersect_quintic_ph_offsets(const PHRationalOffset& first, const PHRationalOffset& second,
-                             Nanometres tolerance, std::size_t maximum_subdivision_depth,
-                             std::size_t maximum_intersections,
-                             std::size_t maximum_subdivision_nodes,
-                             PHOffsetIntersectionStats* stats) {
+std::vector<PHOffsetIntersection> intersect_quintic_ph_offsets(
+    const PHRationalOffset& first, const PHRationalOffset& second, Nanometres tolerance,
+    std::size_t maximum_subdivision_depth, std::size_t maximum_intersections,
+    std::size_t maximum_subdivision_nodes, PHOffsetIntersectionStats* stats) {
   std::vector<PHOffsetIntersection> result;
   if (stats != nullptr)
     *stats = {};
@@ -1462,8 +1638,8 @@ intersect_quintic_ph_offsets(const PHRationalOffset& first, const PHRationalOffs
 }
 
 std::vector<PHOffsetSubdivisionBounds>
-subdivide_quintic_ph_offset_bounds(const PHRationalOffset& offset,
-                                   std::size_t subdivision_depth, Nanometres outward_guard) {
+subdivide_quintic_ph_offset_bounds(const PHRationalOffset& offset, std::size_t subdivision_depth,
+                                   Nanometres outward_guard) {
   std::vector<PHOffsetSubdivisionBounds> result;
   if (!offset.regular || outward_guard.value() < 0 || subdivision_depth > 12U)
     return result;
@@ -1483,15 +1659,14 @@ subdivide_quintic_ph_offset_bounds(const PHRationalOffset& offset,
     const auto bounds = rational_bounds(piece);
     const auto guard = static_cast<long double>(outward_guard.value());
     const auto clamp_i64 = [](long double value) {
-      return static_cast<std::int64_t>(std::clamp(
-          value, static_cast<long double>(std::numeric_limits<std::int64_t>::min()),
-          static_cast<long double>(std::numeric_limits<std::int64_t>::max())));
+      return static_cast<std::int64_t>(
+          std::clamp(value, static_cast<long double>(std::numeric_limits<std::int64_t>::min()),
+                     static_cast<long double>(std::numeric_limits<std::int64_t>::max())));
     };
-    result.push_back(PHOffsetSubdivisionBounds{
-        clamp_i64(std::floor(bounds.minimum_x - guard)),
-        clamp_i64(std::floor(bounds.minimum_y - guard)),
-        clamp_i64(std::ceil(bounds.maximum_x + guard)),
-        clamp_i64(std::ceil(bounds.maximum_y + guard))});
+    result.push_back(PHOffsetSubdivisionBounds{clamp_i64(std::floor(bounds.minimum_x - guard)),
+                                               clamp_i64(std::floor(bounds.minimum_y - guard)),
+                                               clamp_i64(std::ceil(bounds.maximum_x + guard)),
+                                               clamp_i64(std::ceil(bounds.maximum_y + guard))});
   }
   return result;
 }
@@ -1709,21 +1884,41 @@ hull_vertical_interval(const std::vector<SplineVector>& hull, long double x) {
 // hull's upper and lower boundaries are linear and the cell cross section is constant, so covering
 // the endpoint vertical ranges proves the complete hull slab. This avoids the false empty corners
 // introduced by a whole-hull AABB while remaining a conservative continuous certificate.
-[[nodiscard]] bool corridor_covers_bezier_hull(const std::vector<Polygon>& corridor,
+[[nodiscard]] bool corridor_covers_bezier_hull(const PreparedSplineCorridor& corridor,
                                                const std::array<SplineVector, 6U>& controls) {
-  if (std::any_of(corridor.begin(), corridor.end(),
-                  [&](const auto& polygon) { return polygon_contains_all(polygon, controls); }))
-    return true;
+  const auto hull = convex_hull_controls(controls);
+  if (hull.empty())
+    return false;
+  auto hull_minimum_x = hull.front().x;
+  auto hull_minimum_y = hull.front().y;
+  auto hull_maximum_x = hull.front().x;
+  auto hull_maximum_y = hull.front().y;
+  for (const auto point : hull) {
+    hull_minimum_x = std::min(hull_minimum_x, point.x);
+    hull_minimum_y = std::min(hull_minimum_y, point.y);
+    hull_maximum_x = std::max(hull_maximum_x, point.x);
+    hull_maximum_y = std::max(hull_maximum_y, point.y);
+  }
+  // The guard union may contain thousands of cells, while one recursively subdivided Bézier hull
+  // normally intersects only a handful. Filter by immutable cached AABBs before constructing
+  // interval events; otherwise every candidate repeatedly sorts every unrelated cell boundary.
   std::vector<ContinuousRectangle> rectangles;
-  rectangles.reserve(corridor.size());
-  for (const auto& polygon : corridor) {
+  rectangles.reserve(std::min<std::size_t>(corridor.regions.size(), 64U));
+  for (std::size_t index = 0U; index < corridor.regions.size(); ++index) {
+    const auto& bounds = corridor.bounds[index];
+    if (bounds.maximum_x < hull_minimum_x || bounds.minimum_x > hull_maximum_x ||
+        bounds.maximum_y < hull_minimum_y || bounds.minimum_y > hull_maximum_y) {
+      continue;
+    }
+    const auto& polygon = corridor.regions[index];
+    if (polygon_contains_all(polygon, controls))
+      return true;
     const auto rectangle = axis_aligned_rectangle(polygon);
     if (!rectangle)
       return false;
     rectangles.push_back(*rectangle);
   }
-  const auto hull = convex_hull_controls(controls);
-  if (hull.empty())
+  if (rectangles.empty())
     return false;
   const auto [minimum_x, maximum_x] = std::minmax_element(
       hull.begin(), hull.end(), [](const auto a, const auto b) { return a.x < b.x; });
@@ -1771,6 +1966,19 @@ hull_vertical_interval(const std::vector<SplineVector>& hull, long double x) {
   return true;
 }
 
+[[nodiscard]] long double corridor_distance_to_point(const PreparedSplineCorridor& corridor,
+                                                     SplineVector point) {
+  auto result = std::numeric_limits<long double>::infinity();
+  for (const auto& bounds : corridor.bounds) {
+    const auto dx = std::max({bounds.minimum_x - point.x, 0.0L, point.x - bounds.maximum_x});
+    const auto dy = std::max({bounds.minimum_y - point.y, 0.0L, point.y - bounds.maximum_y});
+    result = std::min(result, std::hypot(dx, dy));
+    if (result == 0.0L)
+      break;
+  }
+  return result;
+}
+
 struct TrajectoryAssessment {
   std::size_t violations{std::numeric_limits<std::size_t>::max()};
   std::size_t shape_violations{std::numeric_limits<std::size_t>::max()};
@@ -1778,7 +1986,174 @@ struct TrajectoryAssessment {
   std::size_t sampled_clearance_violations{0U};
   long double worst_bend_parameter{0.5L};
   long double objective{std::numeric_limits<long double>::infinity()};
+  long double regularity{0.0L};
 };
+
+[[nodiscard]] long double exact_route_arc_length(const QuinticPHRoute& route) {
+  return std::accumulate(route.segments.begin(), route.segments.end(), 0.0L,
+                         [](long double total, const QuinticPHSegment& segment) {
+                           return total + quintic_ph_arc_length(segment);
+                         });
+}
+
+// Returns a very small, clearance-field-derived portfolio for a shortcut that crosses an
+// obstacle.  The two new controls are interpolation stations (never Bezier handles): they sit
+// just before and after the sampled blocked interval and are displaced together to the same side
+// of the shortcut.  Exact shape/envelope checks remain the acceptance authority.
+[[nodiscard]] std::vector<QuinticPHRoute>
+paired_obstacle_support_proposals(const QuinticPHRoute& blocked,
+                                  const QuinticPHRoute* reference,
+                                  const SplineTrajectoryOptimizationConfig& config,
+                                  const SplineClearanceEvaluator& clearance_evaluator,
+                                  std::optional<long double> collision_hint = std::nullopt) {
+  std::vector<QuinticPHRoute> proposals;
+  if (!clearance_evaluator || blocked.segments.empty() ||
+      !config.enable_paired_obstacle_supports || config.maximum_paired_obstacle_probes < 8U)
+    return proposals;
+  const auto probes = std::min<std::size_t>(128U, config.maximum_paired_obstacle_probes);
+  const auto required = static_cast<long double>(config.minimum_clearance.value());
+  long double first_bad = std::numeric_limits<long double>::infinity();
+  long double last_bad = -std::numeric_limits<long double>::infinity();
+  for (std::size_t sample = 1U; sample + 1U < probes; ++sample) {
+    routing_kernel_checkpoint();
+    const auto parameter = static_cast<long double>(sample) / static_cast<long double>(probes - 1U);
+    const auto probe = clearance_evaluator(evaluate_quintic_ph(blocked, parameter));
+    if (!probe.represented_legal || probe.clearance_nm < required) {
+      first_bad = std::min(first_bad, parameter);
+      last_bad = std::max(last_bad, parameter);
+    }
+  }
+  // The continuous certificate can find an obstacle thinner than a normal optimisation sample.
+  // Seed the bracket from that exact subdivision witness, then expand it by one bounded probe.
+  if (collision_hint) {
+    const auto parameter = std::clamp(*collision_hint, 0.001L, 0.999L);
+    const auto probe = clearance_evaluator(evaluate_quintic_ph(blocked, parameter));
+    if (!probe.represented_legal || probe.clearance_nm < required) {
+      // Deliberately bracket just this witnessed obstacle.  A single pair must not bridge two
+      // disconnected collision islands that happen to lie on the same shortcut.
+      first_bad = parameter;
+      last_bad = parameter;
+      const auto stride = 1.0L / static_cast<long double>(probes - 1U);
+      for (std::size_t step = 1U; step < probes / 2U; ++step) {
+        const auto left = parameter - stride * static_cast<long double>(step);
+        if (left <= 0.0L) break;
+        const auto left_probe = clearance_evaluator(evaluate_quintic_ph(blocked, left));
+        if (left_probe.represented_legal && left_probe.clearance_nm >= required) break;
+        first_bad = left;
+      }
+      for (std::size_t step = 1U; step < probes / 2U; ++step) {
+        const auto right = parameter + stride * static_cast<long double>(step);
+        if (right >= 1.0L) break;
+        const auto right_probe = clearance_evaluator(evaluate_quintic_ph(blocked, right));
+        if (right_probe.represented_legal && right_probe.clearance_nm >= required) break;
+        last_bad = right;
+      }
+    }
+  }
+  if (!std::isfinite(first_bad) || !std::isfinite(last_bad))
+    return proposals;
+  const auto denominator = static_cast<long double>(probes - 1U);
+  const auto probe_span = 1.0L / denominator;
+  const auto approach = std::max(0.02L, first_bad - probe_span);
+  const auto departure = std::min(0.98L, last_bad + probe_span);
+  if (!(approach + 0.02L < departure))
+    return proposals;
+  const auto middle = (approach + departure) * 0.5L;
+  auto tangent = evaluate_quintic_ph_differential(blocked, middle).tangent;
+  if (!(norm(tangent) > 1.0e-9L))
+    tangent = subtract(blocked.control_points.back(), blocked.control_points.front());
+  if (!(norm(tangent) > 1.0e-9L))
+    return proposals;
+  const auto side = normalized(SplineVector{-tangent.y, tangent.x});
+  // Tightening may replace a much larger existing detour.  Its old, already topology-approved
+  // excursion is a safe search bound; treating the ordinary local optimisation displacement as
+  // a hard cap would incorrectly make a 20 mm hump unable to become a 5 mm skirt.
+  const auto inherited_excursion = reference && !reference->segments.empty()
+                                       ? norm(subtract(evaluate_quintic_ph(*reference, middle),
+                                                       evaluate_quintic_ph(blocked, middle)))
+                                       : 0.0L;
+  const auto max_distance = std::max({1'000.0L,
+                                      static_cast<long double>(config.maximum_corridor_displacement.value()),
+                                      inherited_excursion});
+  const auto legal_offset = [&](SplineVector origin, SplineVector direction) -> std::optional<long double> {
+    long double low = 0.0L;
+    long double high = std::max<long double>(1'000.0L,
+        static_cast<long double>(std::max(config.control_step, config.continuous_envelope.hull_tolerance).value()));
+    while (high <= max_distance) {
+      const auto probe = clearance_evaluator(add(origin, scale(direction, high)));
+      if (probe.represented_legal && probe.clearance_nm >= required) {
+        for (std::size_t iteration = 0U; iteration < 6U; ++iteration) {
+          const auto test = (low + high) * 0.5L;
+          const auto refined = clearance_evaluator(add(origin, scale(direction, test)));
+          if (refined.represented_legal && refined.clearance_nm >= required)
+            high = test;
+          else
+            low = test;
+        }
+        return high + static_cast<long double>(config.continuous_envelope.hull_tolerance.value());
+      }
+      high *= 2.0L;
+    }
+    return std::nullopt;
+  };
+  // Prefer the side occupied by the old legal detour, then also try its mirror.  The latter is
+  // useful for recovery where no legal predecessor exists.
+  const auto base_middle = evaluate_quintic_ph(blocked, middle);
+  const auto preferred_sign = reference && !reference->segments.empty() &&
+                                      dot(subtract(evaluate_quintic_ph(*reference, middle), base_middle), side) < 0.0L
+                                  ? -1.0L : 1.0L;
+  for (const auto sign : {preferred_sign, -preferred_sign}) {
+    routing_kernel_checkpoint();
+    const auto direction = scale(side, sign);
+    const auto approach_point = evaluate_quintic_ph(blocked, approach);
+    const auto departure_point = evaluate_quintic_ph(blocked, departure);
+    // Lift the two stations as one bridge.  Testing only their local clearance would put both
+    // just outside the entry/exit boundary and let the PH span sag through the obstacle.
+    const auto middle_offset = legal_offset(base_middle, direction);
+    const auto approach_offset = legal_offset(approach_point, direction);
+    const auto departure_offset = legal_offset(departure_point, direction);
+    if (!middle_offset || !approach_offset || !departure_offset)
+      continue;
+    const auto shared_offset = std::max({*middle_offset, *approach_offset, *departure_offset});
+    auto candidate = blocked;
+    // Insert in descending parameter order so both parameters refer to the unchanged shortcut.
+    if (!insert_quintic_ph_interpolation_node(candidate, departure) ||
+        !insert_quintic_ph_interpolation_node(candidate, approach))
+      continue;
+    const auto closest = [&](SplineVector point) {
+      std::size_t index = 1U;
+      long double distance = std::numeric_limits<long double>::infinity();
+      for (std::size_t i = 1U; i + 1U < candidate.control_points.size(); ++i) {
+        const auto candidate_distance = norm(subtract(candidate.control_points[i], point));
+        if (candidate_distance < distance) { distance = candidate_distance; index = i; }
+      }
+      return index;
+    };
+    const auto approach_index = closest(approach_point);
+    const auto departure_index = closest(departure_point);
+    if (approach_index == departure_index)
+      continue;
+    // The field probe supplies a conservative escape height.  Try a tiny coupled contraction
+    // portfolio as well; only the full continuous envelope may admit one, and callers rank legal
+    // variants by exact PH length.  Moving both stations together preserves the local skirt
+    // topology instead of independently creating two arbitrary handles.
+    for (const auto factor : {1.0L, 0.9L, 0.8L, 0.7L}) {
+      routing_kernel_checkpoint();
+      auto tightened = candidate;
+      tightened.control_points[approach_index] =
+          add(approach_point, scale(direction, shared_offset * factor));
+      tightened.control_points[departure_index] =
+          add(departure_point, scale(direction, shared_offset * factor));
+      if (tightened.corridor_anchors.size() == tightened.control_points.size()) {
+        tightened.corridor_anchors[approach_index] = tightened.control_points[approach_index];
+        tightened.corridor_anchors[departure_index] = tightened.control_points[departure_index];
+      }
+      if (rebuild_quintic_ph_route(tightened))
+        proposals.push_back(std::move(tightened));
+    }
+  }
+  return proposals;
+}
 
 [[nodiscard]] long double tangent_penalty(SplineVector tangent,
                                           const std::optional<SplineVector>& preferred) {
@@ -1801,7 +2176,9 @@ assess_trajectory(const QuinticPHRoute& route, const SplineTrajectoryOptimizatio
   result.bend_radius_violations = shape.bend_radius_violations;
   result.worst_bend_parameter = shape.worst_bend_parameter;
   result.violations += result.shape_violations;
-  result.objective = 0.0L;
+  // Exact PH arc length is the primary feasible objective. Curvature terms below are only a
+  // secondary regularity tie-breaker; clearance contributes solely to violation detection.
+  result.objective = config.weights.length * exact_route_arc_length(route) / 1'000'000.0L;
   constexpr long double nm_per_mm = 1'000'000.0L;
   auto prior = evaluate_quintic_ph_differential(route, 0.0L);
   for (std::size_t i = 0U; i < config.samples; ++i) {
@@ -1811,13 +2188,15 @@ assess_trajectory(const QuinticPHRoute& route, const SplineTrajectoryOptimizatio
     long double step_mm = 0.0L;
     if (i > 0U) {
       step_mm = norm(subtract(sample.position, prior.position)) / nm_per_mm;
-      result.objective += config.weights.length * step_mm;
       const auto change = (sample.curvature_per_nm - prior.curvature_per_nm) * nm_per_mm;
-      result.objective +=
-          config.weights.curvature_change * change * change / std::max(1.0e-9L, step_mm);
+      const auto variation = config.weights.curvature_change * change * change /
+                             std::max(1.0e-9L, step_mm);
+      result.objective += variation;
+      result.regularity += variation;
     }
     const auto curvature = sample.curvature_per_nm * nm_per_mm;
     result.objective += config.weights.curvature * curvature * curvature * step_mm;
+    result.regularity += config.weights.curvature * curvature * curvature * step_mm;
     if (config.minimum_bend_radius.value() > 0 &&
         sample.bend_radius_nm < static_cast<long double>(config.minimum_bend_radius.value())) {
       const auto deficit =
@@ -1834,13 +2213,6 @@ assess_trajectory(const QuinticPHRoute& route, const SplineTrajectoryOptimizatio
             config.weights.clearance * std::pow(std::max(0.0L, deficit) / nm_per_mm, 2.0L);
         ++result.violations;
         ++result.sampled_clearance_violations;
-      } else {
-        const auto influence = static_cast<long double>(
-            std::max<std::int64_t>(0, config.clearance_influence_distance.value()));
-        if (influence > 0.0L && probe.clearance_nm < influence) {
-          result.objective += config.weights.clearance *
-                              std::pow((influence - probe.clearance_nm) / influence, 2.0L);
-        }
       }
     }
     prior = sample;
@@ -1880,6 +2252,264 @@ assess_trajectory(const QuinticPHRoute& route, const SplineTrajectoryOptimizatio
 }
 
 } // namespace
+
+PreparedPHSegmentCertificate
+prepare_quintic_ph_segment_certificate(const QuinticPHSegment& segment,
+                                       std::size_t subdivision_depth) {
+  PreparedPHSegmentCertificate result;
+  subdivision_depth = std::min<std::size_t>(subdivision_depth, 10U);
+  const auto hash_mix = [&](long double value) {
+    const auto component = static_cast<std::uint64_t>(std::hash<long double>{}(value));
+    result.geometry_fingerprint ^=
+        component + 0x9e3779b97f4a7c15ULL + (result.geometry_fingerprint << 6U) +
+        (result.geometry_fingerprint >> 2U);
+  };
+  for (const auto control : segment.bezier) {
+    hash_mix(control.x);
+    hash_mix(control.y);
+  }
+  const auto make_node = [](const std::array<SplineVector, 6U>& controls, long double first,
+                            long double last, std::size_t depth) {
+    PHBezierCertificateNode node;
+    node.bezier = controls;
+    node.first_parameter = first;
+    node.last_parameter = last;
+    node.depth = depth;
+    long double minimum_x = controls.front().x;
+    long double minimum_y = controls.front().y;
+    long double maximum_x = controls.front().x;
+    long double maximum_y = controls.front().y;
+    for (const auto point : controls) {
+      minimum_x = std::min(minimum_x, point.x);
+      minimum_y = std::min(minimum_y, point.y);
+      maximum_x = std::max(maximum_x, point.x);
+      maximum_y = std::max(maximum_y, point.y);
+    }
+    // Conversion can round inward. One extra representable double in the outward direction
+    // restores containment and makes the subsequent SIMD-friendly AABB test conservative.
+    node.outward_bounds = {
+        std::nextafter(static_cast<double>(minimum_x), -std::numeric_limits<double>::infinity()),
+        std::nextafter(static_cast<double>(minimum_y), -std::numeric_limits<double>::infinity()),
+        std::nextafter(static_cast<double>(maximum_x), std::numeric_limits<double>::infinity()),
+        std::nextafter(static_cast<double>(maximum_y), std::numeric_limits<double>::infinity())};
+    return node;
+  };
+  result.nodes.push_back(make_node(segment.bezier, 0.0L, 1.0L, 0U));
+  for (std::size_t node_index = 0U; node_index < result.nodes.size(); ++node_index) {
+    const auto depth = result.nodes[node_index].depth;
+    if (depth >= subdivision_depth)
+      continue;
+    const auto controls = result.nodes[node_index].bezier;
+    const auto first_parameter = result.nodes[node_index].first_parameter;
+    const auto last_parameter = result.nodes[node_index].last_parameter;
+    const auto [left, right] = split_bezier(controls);
+    const auto middle = (first_parameter + last_parameter) * 0.5L;
+    const auto first_child = result.nodes.size();
+    result.nodes.push_back(make_node(left, first_parameter, middle, depth + 1U));
+    const auto second_child = result.nodes.size();
+    result.nodes.push_back(make_node(right, middle, last_parameter, depth + 1U));
+    result.nodes[node_index].first_child = first_child;
+    result.nodes[node_index].second_child = second_child;
+  }
+  return result;
+}
+
+PHCenterlineClearanceVerdict certify_quintic_ph_segment_clearance(
+    const PreparedPHSegmentCertificate& first, const PreparedPHSegmentCertificate& second,
+    long double required_separation_nm, Nanometres numerical_guard,
+    std::size_t maximum_node_pairs, PHCenterlineClearanceStats* stats) {
+  if (stats != nullptr)
+    *stats = {};
+  if (first.nodes.empty() || second.nodes.empty() || !(required_separation_nm >= 0.0L) ||
+      maximum_node_pairs == 0U)
+    return PHCenterlineClearanceVerdict::ambiguous;
+  const auto guard = std::max(0.0L, static_cast<long double>(numerical_guard.value()));
+  const auto midpoint = [](const std::array<SplineVector, 6U>& controls) {
+    auto work = controls;
+    for (std::size_t level = 1U; level < work.size(); ++level)
+      for (std::size_t index = 0U; index + level < work.size(); ++index)
+        work[index] = lerp(work[index], work[index + 1U], 0.5L);
+    return work.front();
+  };
+  const auto size_squared = [](const auto& bounds) {
+    const auto dx = bounds[2] - bounds[0];
+    const auto dy = bounds[3] - bounds[1];
+    return dx * dx + dy * dy;
+  };
+  std::vector<std::pair<std::size_t, std::size_t>> stack{{0U, 0U}};
+  bool ambiguous = false;
+  std::size_t visited = 0U;
+  const auto collision_threshold = std::max(0.0L, required_separation_nm - guard);
+  const auto sample_collision = [&](SplineVector a, SplineVector b) {
+    const auto dx = a.x - b.x;
+    const auto dy = a.y - b.y;
+    const auto distance_squared = dx * dx + dy * dy;
+    const auto threshold_squared = collision_threshold * collision_threshold;
+    const auto scale = std::max({1.0L, std::abs(distance_squared), std::abs(threshold_squared)});
+    if (std::abs(distance_squared - threshold_squared) >
+        64.0L * std::numeric_limits<long double>::epsilon() * scale)
+      return distance_squared < threshold_squared;
+
+    // This path is deliberately restricted to numerically degenerate, near-tangent samples.
+    // It makes the final contact predicate independent of the platform's long-double width. A
+    // sample miss is never used to prove separation: unresolved leaves still fall through to the
+    // rational-offset isolator.
+    using HighPrecision = boost::multiprecision::cpp_dec_float_50;
+    if (stats != nullptr)
+      ++stats->multiprecision_comparisons;
+    const auto high_dx = HighPrecision{dx};
+    const auto high_dy = HighPrecision{dy};
+    const auto high_threshold = HighPrecision{collision_threshold};
+    return high_dx * high_dx + high_dy * high_dy < high_threshold * high_threshold;
+  };
+
+#if FLUX_HAS_EXPERIMENTAL_SIMD
+  using CertificateSimd = std::experimental::native_simd<double>;
+  constexpr auto batch_width = CertificateSimd::size();
+#else
+  constexpr std::size_t batch_width = 1U;
+#endif
+  const auto outward_double_separated = [&](const auto& a, const auto& b) {
+    // The stored interval endpoints already enclose the long-double hull. Subtraction,
+    // multiplication, and addition must also be rounded outward: an upward-rounded nominal SIMD
+    // sum is not by itself a valid lower distance bound. This scalar confirmation is needed only
+    // for lanes which the vector screen considers separable.
+    const auto downward = [](double value) {
+      return value > 0.0 ? std::nextafter(value, 0.0) : 0.0;
+    };
+    const auto dx = std::max(
+        {0.0, downward(a[0] - b[2]), downward(b[0] - a[2])});
+    const auto dy = std::max(
+        {0.0, downward(a[1] - b[3]), downward(b[1] - a[3])});
+    const auto dx_squared = downward(dx * dx);
+    const auto dy_squared = downward(dy * dy);
+    const auto lower_distance_squared = downward(dx_squared + dy_squared);
+    const auto upper_threshold = std::nextafter(
+        static_cast<double>(required_separation_nm + guard),
+        std::numeric_limits<double>::infinity());
+    const auto upper_threshold_squared =
+        std::nextafter(upper_threshold * upper_threshold,
+                       std::numeric_limits<double>::infinity());
+    return lower_distance_squared > upper_threshold_squared;
+  };
+  while (!stack.empty() && visited < maximum_node_pairs) {
+    const auto count = std::min({batch_width, stack.size(), maximum_node_pairs - visited});
+    std::array<std::pair<std::size_t, std::size_t>, batch_width> pairs{};
+    for (std::size_t lane = 0U; lane < count; ++lane) {
+      pairs[lane] = stack.back();
+      stack.pop_back();
+    }
+    std::array<bool, batch_width> separated{};
+#if FLUX_HAS_EXPERIMENTAL_SIMD
+    std::array<double, batch_width> a_minimum_x{};
+    std::array<double, batch_width> a_minimum_y{};
+    std::array<double, batch_width> a_maximum_x{};
+    std::array<double, batch_width> a_maximum_y{};
+    std::array<double, batch_width> b_minimum_x{};
+    std::array<double, batch_width> b_minimum_y{};
+    std::array<double, batch_width> b_maximum_x{};
+    std::array<double, batch_width> b_maximum_y{};
+    for (std::size_t lane = 0U; lane < count; ++lane) {
+      const auto& a = first.nodes[pairs[lane].first].outward_bounds;
+      const auto& b = second.nodes[pairs[lane].second].outward_bounds;
+      a_minimum_x[lane] = a[0];
+      a_minimum_y[lane] = a[1];
+      a_maximum_x[lane] = a[2];
+      a_maximum_y[lane] = a[3];
+      b_minimum_x[lane] = b[0];
+      b_minimum_y[lane] = b[1];
+      b_maximum_x[lane] = b[2];
+      b_maximum_y[lane] = b[3];
+    }
+    const CertificateSimd zero{0.0};
+    const CertificateSimd a_min_x{a_minimum_x.data(), std::experimental::element_aligned};
+    const CertificateSimd a_min_y{a_minimum_y.data(), std::experimental::element_aligned};
+    const CertificateSimd a_max_x{a_maximum_x.data(), std::experimental::element_aligned};
+    const CertificateSimd a_max_y{a_maximum_y.data(), std::experimental::element_aligned};
+    const CertificateSimd b_min_x{b_minimum_x.data(), std::experimental::element_aligned};
+    const CertificateSimd b_min_y{b_minimum_y.data(), std::experimental::element_aligned};
+    const CertificateSimd b_max_x{b_maximum_x.data(), std::experimental::element_aligned};
+    const CertificateSimd b_max_y{b_maximum_y.data(), std::experimental::element_aligned};
+    const auto dx = std::experimental::max(
+        zero, std::experimental::max(a_min_x - b_max_x, b_min_x - a_max_x));
+    const auto dy = std::experimental::max(
+        zero, std::experimental::max(a_min_y - b_max_y, b_min_y - a_max_y));
+    const auto outward_threshold = std::nextafter(
+        static_cast<double>(required_separation_nm + guard),
+        std::numeric_limits<double>::infinity());
+    const auto outward_threshold_squared =
+        std::nextafter(outward_threshold * outward_threshold,
+                       std::numeric_limits<double>::infinity());
+    const auto separated_mask = dx * dx + dy * dy > CertificateSimd{outward_threshold_squared};
+    for (std::size_t lane = 0U; lane < count; ++lane) {
+      separated[lane] =
+          separated_mask[lane] &&
+          outward_double_separated(first.nodes[pairs[lane].first].outward_bounds,
+                                   second.nodes[pairs[lane].second].outward_bounds);
+    }
+    if (stats != nullptr) {
+      ++stats->simd_batches;
+      stats->simd_lanes += count;
+    }
+#else
+    for (std::size_t lane = 0U; lane < count; ++lane) {
+      const auto& a = first.nodes[pairs[lane].first].outward_bounds;
+      const auto& b = second.nodes[pairs[lane].second].outward_bounds;
+      separated[lane] = outward_double_separated(a, b);
+    }
+#endif
+    visited += count;
+    if (stats != nullptr)
+      stats->node_pairs = visited;
+
+    for (std::size_t lane = 0U; lane < count; ++lane) {
+      const auto [first_index, second_index] = pairs[lane];
+      const auto& a = first.nodes[first_index];
+      const auto& b = second.nodes[second_index];
+      if (separated[lane]) {
+        if (stats != nullptr)
+          ++stats->double_separation_proofs;
+        continue;
+      }
+      const std::array<SplineVector, 3U> a_probes{a.bezier.front(), midpoint(a.bezier),
+                                                  a.bezier.back()};
+      const std::array<SplineVector, 3U> b_probes{b.bezier.front(), midpoint(b.bezier),
+                                                  b.bezier.back()};
+      bool collision = false;
+      for (const auto pa : a_probes)
+        for (const auto pb : b_probes)
+          collision = collision || sample_collision(pa, pb);
+      if (collision) {
+        if (stats != nullptr)
+          ++stats->long_double_collision_proofs;
+        return PHCenterlineClearanceVerdict::colliding;
+      }
+      const auto a_leaf = a.first_child == std::numeric_limits<std::size_t>::max();
+      const auto b_leaf = b.first_child == std::numeric_limits<std::size_t>::max();
+      if (a_leaf && b_leaf) {
+        ambiguous = true;
+        if (stats != nullptr)
+          ++stats->ambiguous_leaf_pairs;
+        continue;
+      }
+      if (!a_leaf &&
+          (b_leaf || size_squared(a.outward_bounds) >= size_squared(b.outward_bounds))) {
+        stack.emplace_back(a.second_child, second_index);
+        stack.emplace_back(a.first_child, second_index);
+      } else {
+        stack.emplace_back(first_index, b.second_child);
+        stack.emplace_back(first_index, b.first_child);
+      }
+    }
+  }
+  if (!stack.empty()) {
+    ambiguous = true;
+    if (stats != nullptr)
+      stats->node_budget_exhausted = true;
+  }
+  return ambiguous ? PHCenterlineClearanceVerdict::ambiguous
+                   : PHCenterlineClearanceVerdict::separated;
+}
 
 std::vector<SplineSample> adaptive_tessellate_quintic_ph(const QuinticPHRoute& route,
                                                          Nanometres tolerance,
@@ -1977,7 +2607,12 @@ fit_spline_samples_to_lines_and_arcs(const std::vector<SplineSample>& samples, N
     // former farthest-span comparison favored a longer line within tolerance, then emitted a
     // differently directed line for the following span, recreating visible polygonal bends after
     // successful continuous optimization.
-    const auto use_arc = accepted_arc > first + 1U && accepted_line + 1U < samples.size();
+    // A valid floating-point circle can become collinear on the integer copper lattice.
+    // Do not publish that invalid primitive and then retry at ever finer sampling density.
+    const auto use_arc = accepted_arc > first + 1U && accepted_line + 1U < samples.size() &&
+        geometry::circular_arc_parameters(quantize(samples[first].position),
+            quantize(samples[first + (accepted_arc - first) / 2U].position),
+            quantize(samples[accepted_arc].position)).has_value();
     const auto accepted = use_arc ? accepted_arc : accepted_line;
     if (use_arc) {
       const auto middle = first + (accepted_arc - first) / 2U;
@@ -1998,6 +2633,272 @@ fit_spline_samples_to_lines_and_arcs(const std::vector<SplineSample>& samples, N
   return first + 1U == samples.size() ? result : std::vector<SplineFittedPiece>{};
 }
 
+long double native_spline_max_join_angle(const std::vector<SplineFittedPiece>& pieces) {
+  const auto invalid = std::numeric_limits<long double>::infinity();
+  if (pieces.empty())
+    return invalid;
+  std::optional<SplineVector> prior_tangent;
+  std::optional<Point> prior_end;
+  long double maximum = 0.0L;
+  for (const auto& piece : pieces) {
+    if (piece.start == piece.end || (prior_end && *prior_end != piece.start))
+      return invalid;
+    SplineVector start_tangent{
+        static_cast<long double>(piece.end.x.value()) - piece.start.x.value(),
+        static_cast<long double>(piece.end.y.value()) - piece.start.y.value()};
+    auto end_tangent = start_tangent;
+    if (piece.kind == SplineFittedPieceKind::circular_arc) {
+      const auto arc = geometry::circular_arc_parameters(piece.start, piece.middle, piece.end);
+      if (!arc)
+        return invalid;
+      const auto sign = arc->sweep_radians > 0.0L ? 1.0L : -1.0L;
+      const auto tangent = [&](Point point) {
+        return SplineVector{-sign * (static_cast<long double>(point.y.value()) - arc->center_y_nm),
+                            sign * (static_cast<long double>(point.x.value()) - arc->center_x_nm)};
+      };
+      start_tangent = tangent(piece.start);
+      end_tangent = tangent(piece.end);
+    }
+    if (piece.kind == SplineFittedPieceKind::cubic_bezier) {
+      start_tangent = {static_cast<long double>(piece.control1.x.value()) - piece.start.x.value(),
+                       static_cast<long double>(piece.control1.y.value()) - piece.start.y.value()};
+      end_tangent = {static_cast<long double>(piece.end.x.value()) - piece.control2.x.value(),
+                     static_cast<long double>(piece.end.y.value()) - piece.control2.y.value()};
+      if (norm(start_tangent) <= 0.0L || norm(end_tangent) <= 0.0L) return invalid;
+    }
+    if (prior_tangent) {
+      const auto angle = std::abs(
+          std::atan2(cross(*prior_tangent, start_tangent), dot(*prior_tangent, start_tangent)));
+      if (!std::isfinite(angle))
+        return invalid;
+      maximum = std::max(maximum, angle);
+    }
+    prior_tangent = end_tangent;
+    prior_end = piece.end;
+  }
+  return maximum;
+}
+
+namespace {
+
+[[nodiscard]] SplineVector native_piece_tangent(const SplineFittedPiece& piece, bool end) {
+  SplineVector direction{static_cast<long double>(piece.end.x.value()) - piece.start.x.value(),
+                         static_cast<long double>(piece.end.y.value()) - piece.start.y.value()};
+  if (piece.kind == SplineFittedPieceKind::circular_arc) {
+    const auto arc = geometry::circular_arc_parameters(piece.start, piece.middle, piece.end);
+    if (!arc)
+      return {};
+    const auto point = end ? piece.end : piece.start;
+    const auto sign = arc->sweep_radians > 0.0L ? 1.0L : -1.0L;
+    direction = {-sign * (point.y.value() - arc->center_y_nm),
+                 sign * (point.x.value() - arc->center_x_nm)};
+  }
+  return normalized(direction);
+}
+
+// Equal-distance planar Hermite biarc. The connection solves
+// 2(1-t0.t1)d^2 + 2(v.(t0+t1))d - v.v = 0. Use its stable positive root;
+// reject reversing/major-arc cases so the caller subdivides rather than creating a loop.
+[[nodiscard]] std::vector<SplineFittedPiece> tangent_biarc(const SplineSample& first,
+                                                           const SplineSample& last,
+                                                           SplineVector t0, SplineVector t1,
+                                                           long double maximum_angle) {
+  const auto v = subtract(last.position, first.position);
+  if (norm(v) < 1.0L || norm(t0) == 0.0L || norm(t1) == 0.0L || dot(v, t0) < 0.0L ||
+      dot(v, t1) < 0.0L)
+    return {};
+  const auto projection = dot(v, add(t0, t1));
+  const auto a = 2.0L * std::max(0.0L, 1.0L - dot(t0, t1));
+  const auto denominator = projection + std::sqrt(projection * projection + a * dot(v, v));
+  if (!(denominator > 0.0L))
+    return {};
+  const auto d = dot(v, v) / denominator;
+  const auto joint =
+      scale(add(add(first.position, last.position), scale(subtract(t0, t1), d)), 0.5L);
+  const auto arc_from_tangent = [](SplineVector p, SplineVector tangent,
+                                   SplineVector q) -> std::optional<SplineFittedPiece> {
+    const auto chord = subtract(q, p);
+    if (quantize(p) == quantize(q))
+      return std::nullopt;
+    const auto normal_projection = cross(tangent, chord);
+    SplineFittedPiece piece{
+        SplineFittedPieceKind::segment, quantize(p), {}, quantize(q), 0.0L, 1.0L};
+    if (std::abs(normal_projection) < 1.0L)
+      return piece;
+    const auto radius = dot(chord, chord) / (2.0L * normal_projection);
+    const auto center = add(p, scale(SplineVector{-tangent.y, tangent.x}, radius));
+    const auto radial0 = subtract(p, center);
+    const auto radial1 = subtract(q, center);
+    auto sweep = std::atan2(cross(radial0, radial1), dot(radial0, radial1));
+    const auto pi = std::acos(-1.0L);
+    if (sweep * radius < 0.0L)
+      sweep += radius > 0.0L ? 2.0L * pi : -2.0L * pi;
+    if (!std::isfinite(sweep) || std::abs(sweep) > pi)
+      return std::nullopt;
+    const auto c = std::cos(sweep / 2.0L);
+    const auto s = std::sin(sweep / 2.0L);
+    piece.middle = quantize(
+        add(center, SplineVector{radial0.x * c - radial0.y * s, radial0.x * s + radial0.y * c}));
+    if (geometry::circular_arc_parameters(piece.start, piece.middle, piece.end))
+      piece.kind = SplineFittedPieceKind::circular_arc;
+    return piece;
+  };
+  auto left = arc_from_tangent(first.position, t0, joint);
+  auto right = arc_from_tangent(last.position, scale(t1, -1.0L), joint);
+  if (!left || !right)
+    return {};
+  std::swap(right->start, right->end);
+  const auto parameter = (first.parameter + last.parameter) / 2.0L;
+  left->first_parameter = first.parameter;
+  left->last_parameter = parameter;
+  right->first_parameter = parameter;
+  right->last_parameter = last.parameter;
+  std::vector<SplineFittedPiece> pieces{*left, *right};
+  const auto angle = [](SplineVector a, SplineVector b) {
+    return std::abs(std::atan2(cross(a, b), dot(a, b)));
+  };
+  // Endpoint errors add at neighboring biarcs. Reserve half the budget for that join.
+  if (native_spline_max_join_angle(pieces) > maximum_angle ||
+      angle(native_piece_tangent(*left, false), t0) > maximum_angle / 4.0L ||
+      angle(native_piece_tangent(*right, true), t1) > maximum_angle / 4.0L)
+    return {};
+  return pieces;
+}
+
+[[nodiscard]] std::vector<SplineFittedPiece>
+fit_tangent_biarcs(const QuinticPHRoute& route, const std::vector<SplineSample>& samples,
+                   const NativeSplineFitConfig& config, Nanometres tolerance,
+                   std::stop_token stop_token) {
+  if (samples.size() < 2U)
+    return {};
+  std::vector<SplineVector> tangents;
+  tangents.reserve(samples.size());
+  for (const auto& sample : samples) {
+    const auto [span, local] = locate_segment(route, sample.parameter);
+    std::array<SplineVector, 5U> derivative;
+    for (std::size_t i = 0U; i < derivative.size(); ++i)
+      derivative[i] = subtract(route.segments[span].bezier[i + 1U], route.segments[span].bezier[i]);
+    tangents.push_back(normalized(evaluate_bezier(derivative, local)));
+  }
+  std::vector<SplineFittedPiece> result;
+  for (std::size_t first = 0U; first + 1U < samples.size();) {
+    if (stop_token.stop_requested())
+      return {};
+    std::vector<SplineFittedPiece> best;
+    std::size_t accepted = first;
+    const auto limit = first + std::min(samples.size() - first - 1U,
+                                        std::max<std::size_t>(1U, config.maximum_arc_samples));
+    for (std::size_t last = first + 1U; last <= limit; ++last) {
+      auto pieces = tangent_biarc(samples[first], samples[last], tangents[first], tangents[last],
+                                  config.maximum_join_angle_radians);
+      if (pieces.empty())
+        continue;
+      const auto fits_point = [&](Point point) {
+        auto distance = std::numeric_limits<long double>::infinity();
+        for (const auto& piece : pieces)
+          distance = std::min(
+              distance, piece.kind == SplineFittedPieceKind::circular_arc
+                            ? geometry::point_circular_arc_distance_nm(point, piece.start,
+                                                                       piece.middle, piece.end)
+                            : geometry::point_segment_distance_nm(point, piece.start, piece.end));
+        return distance <= static_cast<long double>(tolerance.value());
+      };
+      bool fits = true;
+      for (std::size_t sample = first; fits && sample <= last; ++sample)
+        fits = fits_point(quantize(samples[sample].position));
+      // Endpoint tangent constraints can bow a biarc away from a nearly flat PH interval.
+      // Probe inside even a two-sample interval; endpoint agreement alone is insufficient.
+      for (const auto fraction : {0.25L, 0.5L, 0.75L}) {
+        if (!fits)
+          break;
+        const auto parameter = samples[first].parameter +
+                               fraction * (samples[last].parameter - samples[first].parameter);
+        const auto [span, local] = locate_segment(route, parameter);
+        fits = fits_point(quantize(evaluate_bezier(route.segments[span].bezier, local)));
+      }
+      if (fits) {
+        best = std::move(pieces);
+        accepted = last;
+      }
+    }
+    if (best.empty() ||
+        best.size() > config.maximum_pieces - std::min(config.maximum_pieces, result.size()))
+      return {};
+    result.insert(result.end(), best.begin(), best.end());
+    first = accepted;
+  }
+  return native_spline_max_join_angle(result) <= config.maximum_join_angle_radians
+             ? result
+             : std::vector<SplineFittedPiece>{};
+}
+
+} // namespace
+
+std::vector<SplineFittedPiece> fit_quintic_ph_to_native_copper(const QuinticPHRoute& route,
+                                                               const NativeSplineFitConfig& config,
+                                                               std::stop_token stop_token,
+                                                               NativeSplineFitStats* stats) {
+  if (stats != nullptr)
+    *stats = {};
+  const auto timed_us = [](auto started) {
+    return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - started).count());
+  };
+  if (!std::isfinite(config.maximum_join_angle_radians) ||
+      config.maximum_join_angle_radians < 0.0L || config.fit_tolerance.value() <= 0 ||
+      config.tessellation_tolerance.value() <= 0)
+    return {};
+  auto tolerance = config.tessellation_tolerance;
+  auto fit_tolerance = config.fit_tolerance;
+  for (std::size_t attempt = 0U;
+       attempt < std::min<std::size_t>(8U, config.maximum_refinement_attempts) &&
+       !stop_token.stop_requested();
+       ++attempt) {
+    if (stats != nullptr)
+      ++stats->attempts;
+    const auto tessellation_started = std::chrono::steady_clock::now();
+    const auto samples = adaptive_tessellate_quintic_ph(route, tolerance, config.maximum_depth,
+                                                        config.maximum_samples);
+    if (stats != nullptr) {
+      stats->tessellation_us += timed_us(tessellation_started);
+      stats->peak_samples = std::max(stats->peak_samples, samples.size());
+    }
+    if (samples.empty())
+      return {};
+    const auto lattice_started = std::chrono::steady_clock::now();
+    std::vector<SplineSample> lattice_samples;
+    lattice_samples.reserve(samples.size());
+    for (const auto& sample : samples) {
+      if (lattice_samples.empty() ||
+          quantize(lattice_samples.back().position) != quantize(sample.position))
+        lattice_samples.push_back(sample);
+      else if (sample.parameter == samples.back().parameter && lattice_samples.size() > 1U)
+        lattice_samples.back() = sample;
+    }
+    if (stats != nullptr)
+      stats->lattice_filter_us += timed_us(lattice_started);
+    const auto line_arc_started = std::chrono::steady_clock::now();
+    auto pieces = fit_spline_samples_to_lines_and_arcs(
+        lattice_samples, fit_tolerance, config.maximum_arc_samples, config.maximum_pieces);
+    if (stats != nullptr)
+      stats->line_arc_fit_us += timed_us(line_arc_started);
+    if (!pieces.empty() &&
+        native_spline_max_join_angle(pieces) <= config.maximum_join_angle_radians)
+      return pieces;
+    const auto biarc_started = std::chrono::steady_clock::now();
+    pieces = fit_tangent_biarcs(route, lattice_samples, config, fit_tolerance, stop_token);
+    if (stats != nullptr)
+      stats->tangent_biarc_fit_us += timed_us(biarc_started);
+    if (!pieces.empty())
+      return pieces;
+    if (tolerance.value() == 1 && fit_tolerance.value() == 1)
+      break;
+    tolerance = Nanometres{std::max<std::int64_t>(1, tolerance.value() / 2)};
+    fit_tolerance = Nanometres{std::max<std::int64_t>(1, fit_tolerance.value() / 2)};
+  }
+  return {};
+}
+
 SplineShapeCertificate certify_quintic_ph_shape(const QuinticPHRoute& route,
                                                 const SplineShapeCertificationConfig& config) {
   SplineShapeCertificate result;
@@ -2013,7 +2914,10 @@ SplineShapeCertificate certify_quintic_ph_shape(const QuinticPHRoute& route,
   result.samples = samples.size();
   for (std::size_t i = 1U; i < samples.size(); ++i) {
     for (std::size_t j = i + 2U; j < samples.size(); ++j) {
-      if (i == 1U && j + 1U == samples.size())
+      // Only a genuinely closed route shares its first and last endpoints. Open
+      // copper routes must also reject a crossing between those two spans.
+      if (i == 1U && j + 1U == samples.size() &&
+          samples.front().position == samples.back().position)
         continue;
       if (proper_segment_intersection(samples[i - 1U].position, samples[i].position,
                                       samples[j - 1U].position, samples[j].position))
@@ -2126,13 +3030,8 @@ certify_quintic_ph_continuous_envelope(const QuinticPHRoute& route, Nanometres m
         result.budget_exhausted = true;
         return result;
       }
-      const auto corridor_legal = route.convex_corridor.empty() ||
-                                  corridor_covers_bezier_hull(route.convex_corridor, node.controls);
-      if (!corridor_legal && node.depth >= config.maximum_subdivision_depth) {
-        result.worst_parameter = (node.first + node.last) * 0.5L;
-        ++result.corridor_violations;
-        continue;
-      }
+      auto corridor_legal = !route.prepared_corridor ||
+                            corridor_covers_bezier_hull(*route.prepared_corridor, node.controls);
       const auto diameter = [&] {
         long double value = 0.0L;
         for (const auto a : node.controls)
@@ -2141,6 +3040,27 @@ certify_quintic_ph_continuous_envelope(const QuinticPHRoute& route, Nanometres m
         return value;
       }();
       bool clearance_legal = true;
+      // A conservative NavMesh contains only cells whose complete rectangle is legal. Clearance
+      // boundaries therefore leave legal sub-cell slivers outside the guard-cell union. Once a
+      // subdivided Bézier hull is smaller than its exact point-to-boundary certificate, prove that
+      // hull directly against the prepared offset domain. The ordered topology gates and winding
+      // check still prevent a homotopy change, while the final quantized copper DRC remains the
+      // transaction authority.
+      if (!corridor_legal && clearance_evaluator) {
+        const auto midpoint = evaluate_bezier(node.controls, 0.5L);
+        const auto probe = clearance_evaluator(midpoint);
+        if (probe.clearance_nm < result.worst_clearance_nm) {
+          result.worst_clearance_nm = probe.clearance_nm;
+          result.worst_parameter = (node.first + node.last) * 0.5L;
+          result.worst_normal = probe.obstacle_normal;
+        }
+        const auto near_selected_corridor =
+            route.prepared_corridor &&
+            corridor_distance_to_point(*route.prepared_corridor, midpoint) <= diameter + tolerance;
+        corridor_legal =
+            near_selected_corridor && probe.represented_legal &&
+            probe.clearance_nm - diameter >= static_cast<long double>(minimum_clearance.value());
+      }
       if (clearance_evaluator && !config.corridor_certifies_clearance) {
         const auto probe = clearance_evaluator(evaluate_bezier(node.controls, 0.5L));
         if (probe.clearance_nm < result.worst_clearance_nm) {
@@ -2221,21 +3141,90 @@ std::size_t shove_quintic_ph_interpolation_corridor(QuinticPHRoute& route, long 
 SplineTrajectoryOptimizationResult
 optimize_quintic_ph_trajectory(QuinticPHRoute& route,
                                const SplineTrajectoryOptimizationConfig& config,
-                               const SplineClearanceEvaluator& clearance_evaluator) {
+                               const SplineClearanceEvaluator& clearance_evaluator,
+                               const SplineRouteConstraintEvaluator& route_constraint) {
   SplineTrajectoryOptimizationResult result;
   if (!rebuild_quintic_ph_route(route) || route.control_points.size() < 2U ||
-      config.maximum_candidate_checks == 0U)
+      config.maximum_candidate_checks == 0U || (route_constraint && !route_constraint(route)))
     return result;
   auto best = route;
   auto best_assessment = assess_trajectory(best, config, clearance_evaluator);
+  const auto original_assessment = best_assessment;
+  // Every proposal family uses the same feasible objective, including XPBD and multistart.
+  const auto better_candidate = [&](const QuinticPHRoute& candidate,
+                                    const TrajectoryAssessment& assessment,
+                                    const SplineContinuousEnvelopeCertificate& envelope,
+                                    const SplineContinuousEnvelopeCertificate& incumbent_envelope) {
+    const auto violations = assessment.violations + envelope.violations();
+    const auto incumbent_violations = best_assessment.violations + incumbent_envelope.violations();
+    const bool legal = violations == 0U && envelope.legal;
+    const bool incumbent_legal = incumbent_violations == 0U && incumbent_envelope.legal;
+    if (legal != incumbent_legal) return legal;
+    if (legal) {
+      const auto length = exact_route_arc_length(candidate);
+      const auto incumbent_length = exact_route_arc_length(best);
+      return length + 1.0e-9L < incumbent_length ||
+             (std::abs(length - incumbent_length) <= 1.0e-9L &&
+              assessment.regularity < best_assessment.regularity);
+    }
+    return violations < incumbent_violations ||
+           (violations == incumbent_violations &&
+            (envelope.worst_clearance_nm > incumbent_envelope.worst_clearance_nm + 0.5L ||
+             (envelope.worst_clearance_nm == incumbent_envelope.worst_clearance_nm &&
+              assessment.objective < best_assessment.objective)));
+  };
   result.initial_violations = best_assessment.violations;
   result.initial_shape_violations = best_assessment.shape_violations;
   result.initial_bend_radius_violations = best_assessment.bend_radius_violations;
   result.initial_sampled_clearance_violations = best_assessment.sampled_clearance_violations;
+  result.initial_arc_length_nm = exact_route_arc_length(best);
+  result.initial_regularity = best_assessment.regularity;
   result.initial_objective = best_assessment.objective;
   const auto initial_envelope = certify_quintic_ph_continuous_envelope(
       best, config.minimum_clearance, clearance_evaluator, config.continuous_envelope);
   result.initial_continuous_violations = initial_envelope.violations();
+  // A collision has two boundaries.  Before adding a single control at its worst sample (which
+  // tends to make one broad hump), try a bounded approach/departure pair derived from those
+  // boundaries.  This path is also used for genuinely infeasible input, where it may reduce the
+  // violation set before ordinary coordinate descent begins.
+  if ((best_assessment.violations + initial_envelope.violations()) > 0U &&
+      config.enable_paired_obstacle_supports &&
+      config.maximum_paired_obstacle_support_pairs > 0U &&
+      result.adaptive_controls_inserted + 2U <= config.maximum_adaptive_control_insertions) {
+    ++result.paired_obstacle_support_attempts;
+    const auto paired = paired_obstacle_support_proposals(
+        best, &route, config, clearance_evaluator, initial_envelope.worst_parameter);
+    bool selected_pair = false;
+    bool recovered_legal = false;
+    for (auto candidate : paired) {
+      if (result.candidate_checks >= config.maximum_candidate_checks) {
+        result.budget_exhausted = true;
+        break;
+      }
+      ++result.candidate_checks;
+      routing_kernel_checkpoint();
+      if (route_constraint && !route_constraint(candidate))
+        continue;
+      const auto assessment = assess_trajectory(candidate, config, clearance_evaluator);
+      const auto envelope = certify_quintic_ph_continuous_envelope(
+          candidate, config.minimum_clearance, clearance_evaluator, config.continuous_envelope);
+      const auto incumbent_envelope = certify_quintic_ph_continuous_envelope(
+          best, config.minimum_clearance, clearance_evaluator, config.continuous_envelope);
+      if (!better_candidate(candidate, assessment, envelope, incumbent_envelope))
+        continue;
+      const auto became_legal = assessment.violations == 0U && envelope.legal;
+      best = std::move(candidate);
+      best_assessment = assessment;
+      selected_pair = true;
+      recovered_legal = recovered_legal || became_legal;
+    }
+    if (selected_pair) {
+      result.adaptive_controls_inserted += 2U;
+      result.paired_obstacle_supports_inserted += 2U;
+      if (recovered_legal)
+        ++result.paired_obstacle_support_recoveries;
+    }
+  }
   if (config.prefer_gpu_preconditioner && config.gpu_precondition_iterations > 0U &&
       best.control_points.size() >= 3U &&
       best.control_points.size() <= std::numeric_limits<std::uint32_t>::max()) {
@@ -2292,15 +3281,13 @@ optimize_quintic_ph_trajectory(QuinticPHRoute& route,
             static_cast<long double>(preconditioned.positions_nm[point].second)};
         clamp_node_to_anchor(candidate, point, config.maximum_corridor_displacement);
       }
-      if (rebuild_quintic_ph_route(candidate)) {
+      if (rebuild_quintic_ph_route(candidate) &&
+          (!route_constraint || route_constraint(candidate))) {
         const auto assessment = assess_trajectory(candidate, config, clearance_evaluator);
         const auto envelope = certify_quintic_ph_continuous_envelope(
             candidate, config.minimum_clearance, clearance_evaluator, config.continuous_envelope);
         const auto candidate_violations = assessment.violations + envelope.violations();
-        const auto best_violations = best_assessment.violations + initial_envelope.violations();
-        if (candidate_violations < best_violations ||
-            (candidate_violations == best_violations &&
-             assessment.objective + 1.0e-12L < best_assessment.objective)) {
+        if (better_candidate(candidate, assessment, envelope, initial_envelope)) {
           best = std::move(candidate);
           best_assessment = assessment;
           result.gpu_precondition_accepted = true;
@@ -2311,17 +3298,22 @@ optimize_quintic_ph_trajectory(QuinticPHRoute& route,
   }
   // Parameterization and tangent magnitude are part of PH interpolation, not
   // cosmetic post-processing. Explore a small deterministic portfolio before
-  // adding degrees of freedom: a longer tangent generally relaxes a tight
-  // bend, while chord-length parameters redistribute freedom on unequal spans.
+  // adding degrees of freedom. Shorter tangents suppress algebraic branch
+  // overshoot/extra inflections on closely spaced staircase controls, while a
+  // longer tangent can relax a genuinely tight bend. Chord-length parameters
+  // redistribute freedom on unequal spans. Keep the low-tension alternatives
+  // first because the bounded default examines only four starts.
   struct InterpolationStart {
     long double exponent;
     long double tangent_scale;
   };
-  const std::array<InterpolationStart, 4U> interpolation_starts{
-      {{best.parameter_exponent, best.tangent_scale * 1.5L},
+  const std::array<InterpolationStart, 6U> interpolation_starts{
+      {{best.parameter_exponent, best.tangent_scale * 0.5L},
+       {best.parameter_exponent, best.tangent_scale * 0.75L},
+       {1.0L, best.tangent_scale * 0.75L},
+       {best.parameter_exponent, best.tangent_scale * 1.5L},
        {1.0L, best.tangent_scale},
-       {best.parameter_exponent, best.tangent_scale * 2.0L},
-       {1.0L, best.tangent_scale * 2.5L}}};
+       {best.parameter_exponent, best.tangent_scale * 2.0L}}};
   for (const auto start : interpolation_starts) {
     if (result.multistart_attempts >= config.maximum_multistart_attempts)
       break;
@@ -2331,6 +3323,8 @@ optimize_quintic_ph_trajectory(QuinticPHRoute& route,
     candidate.tangent_scale = start.tangent_scale;
     if (!rebuild_quintic_ph_route(candidate))
       continue;
+    if (route_constraint && !route_constraint(candidate))
+      continue;
     const auto assessment = assess_trajectory(candidate, config, clearance_evaluator);
     const auto envelope = certify_quintic_ph_continuous_envelope(
         candidate, config.minimum_clearance, clearance_evaluator, config.continuous_envelope);
@@ -2338,9 +3332,7 @@ optimize_quintic_ph_trajectory(QuinticPHRoute& route,
     const auto best_envelope = certify_quintic_ph_continuous_envelope(
         best, config.minimum_clearance, clearance_evaluator, config.continuous_envelope);
     const auto best_violations = best_assessment.violations + best_envelope.violations();
-    if (candidate_violations < best_violations ||
-        (candidate_violations == best_violations &&
-         assessment.objective + 1.0e-12L < best_assessment.objective)) {
+    if (better_candidate(candidate, assessment, envelope, best_envelope)) {
       if (best_violations > 0U && candidate_violations == 0U)
         ++result.multistart_recoveries;
       best = std::move(candidate);
@@ -2361,11 +3353,15 @@ optimize_quintic_ph_trajectory(QuinticPHRoute& route,
     auto candidate = best;
     if (!insert_quintic_ph_interpolation_node(candidate, parameter))
       break;
+    if (route_constraint && !route_constraint(candidate))
+      break;
     const auto candidate_assessment = assess_trajectory(candidate, config, clearance_evaluator);
     ++result.adaptive_controls_inserted;
-    if (candidate_assessment.violations < best_assessment.violations ||
-        (candidate_assessment.violations == best_assessment.violations &&
-         candidate_assessment.objective < best_assessment.objective)) {
+    const auto envelope = certify_quintic_ph_continuous_envelope(
+        candidate, config.minimum_clearance, clearance_evaluator, config.continuous_envelope);
+    const auto incumbent_envelope = certify_quintic_ph_continuous_envelope(
+        best, config.minimum_clearance, clearance_evaluator, config.continuous_envelope);
+    if (better_candidate(candidate, candidate_assessment, envelope, incumbent_envelope)) {
       best = std::move(candidate);
       best_assessment = candidate_assessment;
     } else {
@@ -2381,12 +3377,22 @@ optimize_quintic_ph_trajectory(QuinticPHRoute& route,
                     [&](auto existing) { return std::abs(existing - parameter) < 0.025L; })) {
       parameter = std::clamp(parameter + (parameter < 0.5L ? 0.1L : -0.1L), 0.05L, 0.95L);
     }
-    if (!insert_quintic_ph_interpolation_node(best, parameter))
+    auto candidate = best;
+    if (!insert_quintic_ph_interpolation_node(candidate, parameter))
+      break;
+    if (route_constraint && !route_constraint(candidate))
       break;
     ++result.adaptive_controls_inserted;
-    best_assessment = assess_trajectory(best, config, clearance_evaluator);
-    adaptive_envelope = certify_quintic_ph_continuous_envelope(
-        best, config.minimum_clearance, clearance_evaluator, config.continuous_envelope);
+    const auto assessment = assess_trajectory(candidate, config, clearance_evaluator);
+    const auto envelope = certify_quintic_ph_continuous_envelope(
+        candidate, config.minimum_clearance, clearance_evaluator, config.continuous_envelope);
+    // An infeasible curve may need another interpolation degree of freedom before any
+    // shortening/clearance move becomes available. This bounded recovery proposal is never
+    // published as legal, and does not apply to feasible inputs.
+    if (assessment.shape_violations > best_assessment.shape_violations) break;
+    best = std::move(candidate);
+    best_assessment = assessment;
+    adaptive_envelope = envelope;
   }
   auto best_continuous_envelope = adaptive_envelope;
   auto step = std::max<long double>(1.0L, static_cast<long double>(config.control_step.value()));
@@ -2395,7 +3401,11 @@ optimize_quintic_ph_trajectory(QuinticPHRoute& route,
   const auto refinement_iterations = result.gpu_precondition_legal
                                          ? std::min<std::size_t>(config.maximum_iterations, 8U)
                                          : config.maximum_iterations;
-  BoundedWorkerPool exact_candidate_pool(std::max<std::size_t>(1U, config.exact_candidate_workers));
+  // Concurrent routing phases share this lease. If another phase owns the CPU budget, exact
+  // evaluation remains serial on this caller instead of creating nested worker pools.
+  auto exact_candidate_lease = acquire_cpu_workers(
+      config.exact_candidate_workers > 1U ? config.exact_candidate_workers : 0U);
+  BoundedWorkerPool exact_candidate_pool(exact_candidate_lease.workers());
   RoutingComputeSplineScoreInput score_template;
   if (config.prefer_gpu_polishing) {
     long double minimum_x = best.control_points.front().x;
@@ -2410,10 +3420,12 @@ optimize_quintic_ph_trajectory(QuinticPHRoute& route,
     };
     for (const auto point : best.control_points)
       include(point);
-    for (const auto& polygon : best.convex_corridor)
-      for (const auto point : polygon.vertices)
-        include(SplineVector{static_cast<long double>(point.x.value()),
-                             static_cast<long double>(point.y.value())});
+    if (best.prepared_corridor) {
+      for (const auto& polygon : best.prepared_corridor->regions)
+        for (const auto point : polygon.vertices)
+          include(SplineVector{static_cast<long double>(point.x.value()),
+                               static_cast<long double>(point.y.value())});
+    }
     const auto margin = static_cast<long double>(
         std::max(config.maximum_corridor_displacement, config.clearance_influence_distance)
             .value());
@@ -2436,7 +3448,7 @@ optimize_quintic_ph_trajectory(QuinticPHRoute& route,
                      static_cast<std::size_t>(std::ceil((maximum_y - minimum_y) / pitch)) + 1U));
     const auto field_cells = score_template.field_width * score_template.field_height;
     score_template.signed_clearance_nm.resize(field_cells);
-    score_template.corridor_mask.resize(field_cells, best.convex_corridor.empty() ? 1U : 0U);
+    score_template.corridor_mask.resize(field_cells, best.prepared_corridor ? 0U : 1U);
     for (std::size_t cell = 0U; cell < field_cells; ++cell) {
       const auto x = cell % score_template.field_width;
       const auto y = cell / score_template.field_width;
@@ -2450,9 +3462,10 @@ optimize_quintic_ph_trajectory(QuinticPHRoute& route,
       } else {
         score_template.signed_clearance_nm[cell] = std::numeric_limits<float>::max();
       }
-      if (!best.convex_corridor.empty()) {
+      if (best.prepared_corridor) {
         score_template.corridor_mask[cell] =
-            std::any_of(best.convex_corridor.begin(), best.convex_corridor.end(),
+            std::any_of(best.prepared_corridor->regions.begin(),
+                        best.prepared_corridor->regions.end(),
                         [&](const auto& polygon) { return point_in_convex(polygon, point); })
                 ? 1U
                 : 0U;
@@ -2513,11 +3526,29 @@ optimize_quintic_ph_trajectory(QuinticPHRoute& route,
         if (norm(probe.obstacle_normal) > 0.0L)
           proposals.push_back({normalized(probe.obstacle_normal), 1.0L});
       }
+      if (best_continuous_envelope.violations() > 0U &&
+          norm(best_continuous_envelope.worst_normal) > 0.0L &&
+          node < best.node_parameters.size()) {
+        const auto before_span = best.node_parameters[node] - best.node_parameters[node - 1U];
+        const auto after_span = best.node_parameters[node + 1U] - best.node_parameters[node];
+        const auto support = 2.0L * std::max(before_span, after_span);
+        const auto distance =
+            std::abs(best.node_parameters[node] - best_continuous_envelope.worst_parameter);
+        const auto influence = support > 0.0L ? std::max(0.0L, 1.0L - distance / support) : 0.0L;
+        if (influence > 0.0L) {
+          // Project an exact continuous collision normal back onto nearby interpolation nodes.
+          // This is the PH-chain equivalent of elastic-band/PNS basis weighting: the node whose
+          // support overlaps the collision moves most, while distant controls remain frozen.
+          proposals.push_back(
+              {normalized(best_continuous_envelope.worst_normal), 0.5L + influence});
+        }
+      }
       for (const auto& proposal : proposals) {
-        if (result.candidate_checks++ >= config.maximum_candidate_checks) {
+        if (result.candidate_checks >= config.maximum_candidate_checks) {
           result.budget_exhausted = true;
           break;
         }
+        ++result.candidate_checks;
         auto candidate = best;
         candidate.control_points[node] =
             add(candidate.control_points[node],
@@ -2557,6 +3588,13 @@ optimize_quintic_ph_trajectory(QuinticPHRoute& route,
       ++result.gpu_polish_batches;
       result.gpu_polish_candidates += candidate_routes.size();
       auto batch = score_template;
+      if (best_assessment.violations == 0U && best_continuous_envelope.legal) {
+        // The advisory GPU shortlist must not prune taut moves in favour of extra clearance
+        // or lower bending energy. Its hard violation counts remain active; the CPU then
+        // compares exact PH length and curvature regularity for the shortlisted candidates.
+        batch.objective_weights = {1.0F, 0.0F, 0.0F, 0.0F, 0.0F};
+        batch.clearance_influence_nm = 0;
+      }
       batch.sample_count = config.samples;
       batch.candidate_count = candidate_routes.size();
       batch.top_k = std::min<std::size_t>(candidate_routes.size(),
@@ -2609,15 +3647,17 @@ optimize_quintic_ph_trajectory(QuinticPHRoute& route,
       SplineContinuousEnvelopeCertificate continuous_envelope;
     };
     std::vector<std::optional<ExactCandidateEvaluation>> exact_evaluations(exact_candidates.size());
-    if (config.exact_candidate_workers > 1U && exact_candidates.size() > 1U) {
+    if (exact_candidate_lease.workers() > 1U && exact_candidates.size() > 1U) {
       ++result.parallel_exact_waves;
       result.parallel_exact_checks += exact_candidates.size();
     }
     exact_candidate_pool.run(exact_candidates.size(), [&](std::size_t slot) {
       const auto candidate_index = exact_candidates[slot];
       auto& candidate = candidate_routes[candidate_index];
-      if (!rebuild_quintic_ph_route_around_control(
-              candidate, candidate_control_nodes[candidate_index]))
+      if (!rebuild_quintic_ph_route_around_control(candidate,
+                                                   candidate_control_nodes[candidate_index]))
+        return;
+      if (route_constraint && !route_constraint(candidate))
         return;
       exact_evaluations[slot] = ExactCandidateEvaluation{
           assess_trajectory(candidate, config, clearance_evaluator),
@@ -2633,19 +3673,45 @@ optimize_quintic_ph_trajectory(QuinticPHRoute& route,
       const auto candidate_violations = assessment.violations + continuous_envelope.violations();
       const auto best_violations =
           best_assessment.violations + best_continuous_envelope.violations();
-      const auto better = candidate_violations < best_violations ||
-                          (candidate_violations == best_violations &&
-                           assessment.objective + 1.0e-12L < best_assessment.objective);
+      const bool candidate_legal = candidate_violations == 0U && continuous_envelope.legal;
+      const bool best_legal = best_violations == 0U && best_continuous_envelope.legal;
+      const auto candidate_length = exact_route_arc_length(candidate_routes[exact_candidates[slot]]);
+      const auto best_length = exact_route_arc_length(best);
+      const auto better = candidate_legal != best_legal ? candidate_legal :
+          candidate_legal ? (candidate_length + 1.0e-9L < best_length ||
+                             (std::abs(candidate_length - best_length) <= 1.0e-9L &&
+                              assessment.regularity + 1.0e-12L < best_assessment.regularity)) :
+          (candidate_violations < best_violations ||
+           (candidate_violations == best_violations &&
+            (continuous_envelope.worst_clearance_nm > best_continuous_envelope.worst_clearance_nm + 0.5L ||
+             (continuous_envelope.worst_clearance_nm == best_continuous_envelope.worst_clearance_nm &&
+              assessment.objective + 1.0e-12L < best_assessment.objective))));
       if (!better)
         continue;
-      if (!selected_slot ||
-          assessment.violations + continuous_envelope.violations() <
-              exact_evaluations[*selected_slot]->assessment.violations +
-                  exact_evaluations[*selected_slot]->continuous_envelope.violations() ||
-          (assessment.violations + continuous_envelope.violations() ==
-               exact_evaluations[*selected_slot]->assessment.violations +
-                   exact_evaluations[*selected_slot]->continuous_envelope.violations() &&
-           assessment.objective < exact_evaluations[*selected_slot]->assessment.objective))
+      const auto selected_violations = [&] {
+        if (!selected_slot)
+          return std::numeric_limits<std::size_t>::max();
+        return exact_evaluations[*selected_slot]->assessment.violations +
+               exact_evaluations[*selected_slot]->continuous_envelope.violations();
+      }();
+      const bool selected_legal = selected_slot && selected_violations == 0U &&
+                                  exact_evaluations[*selected_slot]->continuous_envelope.legal;
+      const auto selected_length = selected_slot
+          ? exact_route_arc_length(candidate_routes[exact_candidates[*selected_slot]])
+          : std::numeric_limits<long double>::infinity();
+      const bool selected_better = !selected_slot ? true :
+          candidate_legal != selected_legal ? candidate_legal :
+          candidate_legal ? (candidate_length < selected_length ||
+                             (candidate_length == selected_length && assessment.regularity <
+                              exact_evaluations[*selected_slot]->assessment.regularity)) :
+          (candidate_violations < selected_violations ||
+           (candidate_violations == selected_violations &&
+            (continuous_envelope.worst_clearance_nm >
+                 exact_evaluations[*selected_slot]->continuous_envelope.worst_clearance_nm + 0.5L ||
+             (continuous_envelope.worst_clearance_nm ==
+                  exact_evaluations[*selected_slot]->continuous_envelope.worst_clearance_nm &&
+              assessment.objective < exact_evaluations[*selected_slot]->assessment.objective))));
+      if (selected_better)
         selected_slot = slot;
     }
     if (selected_slot) {
@@ -2662,6 +3728,47 @@ optimize_quintic_ph_trajectory(QuinticPHRoute& route,
       if (step < 1.0L)
         break;
     }
+  }
+  // The normal engine path reaches this optimiser after materialising PH geometry, rather than
+  // through the public tautening API.  Give an already legal broad detour one bounded shortcut
+  // attempt here so paired obstacle supports are available in that pipeline too.  The helper is
+  // non-recursive and its exact shape/envelope/topology gates remain authoritative.
+  if (config.enable_paired_obstacle_supports && clearance_evaluator &&
+      best_assessment.violations == 0U && best_continuous_envelope.legal &&
+      result.candidate_checks < config.maximum_candidate_checks) {
+    auto tightening_config = config;
+    tightening_config.maximum_candidate_checks -= result.candidate_checks;
+    tightening_config.maximum_paired_obstacle_support_pairs =
+        config.maximum_paired_obstacle_support_pairs > result.paired_obstacle_supports_inserted / 2U
+            ? 1U : 0U;
+    auto tightened = best;
+    PHRouteTighteningStatistics tightening_statistics;
+    const bool shortened = tauten_quintic_ph_route(
+        tightened, tightening_config, clearance_evaluator, route_constraint, 1U,
+        &tightening_statistics);
+    result.candidate_checks += tightening_statistics.candidate_checks;
+    result.paired_obstacle_support_attempts += tightening_statistics.paired_attempts;
+    if (shortened) {
+      const auto tightened_assessment = assess_trajectory(tightened, config, clearance_evaluator);
+      const auto tightened_envelope = certify_quintic_ph_continuous_envelope(
+          tightened, config.minimum_clearance, clearance_evaluator, config.continuous_envelope);
+      if (tightened_assessment.violations == 0U && tightened_envelope.legal &&
+          (!config.postpolish_route_constraint || config.postpolish_route_constraint(tightened)) &&
+          exact_route_arc_length(tightened) + 1.0e-9L < exact_route_arc_length(best)) {
+        result.paired_obstacle_supports_inserted +=
+            tightening_statistics.paired_supports_inserted;
+        best = std::move(tightened);
+        best_assessment = tightened_assessment;
+        best_continuous_envelope = tightened_envelope;
+      }
+    }
+  }
+  // Preserve a legal input across all recovery/preconditioning paths.
+  if (original_assessment.violations == 0U && initial_envelope.legal &&
+      (best_assessment.violations != 0U || !best_continuous_envelope.legal ||
+       exact_route_arc_length(best) > exact_route_arc_length(route) + 1.0e-9L)) {
+    best = route;
+    best_assessment = original_assessment;
   }
   route = best;
   auto final_shape_config = config.shape;
@@ -2684,10 +3791,113 @@ optimize_quintic_ph_trajectory(QuinticPHRoute& route,
   result.final_continuous_clearance_violations = final_envelope.clearance_violations;
   result.continuous_hulls_checked = final_envelope.hulls_checked;
   result.continuous_budget_exhausted = final_envelope.budget_exhausted;
+  result.final_arc_length_nm = exact_route_arc_length(route);
+  result.final_regularity = best_assessment.regularity;
   result.final_objective = best_assessment.objective;
-  result.legal = best_assessment.violations == 0U && final_shape.legal && final_envelope.legal;
+  result.legal = best_assessment.violations == 0U && final_shape.legal && final_envelope.legal &&
+                 (!route_constraint || route_constraint(route));
   result.accepted = result.legal;
   return result;
+}
+
+bool tauten_quintic_ph_route(QuinticPHRoute& output,
+                             const SplineTrajectoryOptimizationConfig& config,
+                             const SplineClearanceEvaluator& clearance_evaluator,
+                             const SplineRouteConstraintEvaluator& route_constraint,
+                             std::size_t maximum_removals,
+                             PHRouteTighteningStatistics* statistics) {
+  PHRouteTighteningStatistics local_statistics;
+  auto& stats = statistics ? *statistics : local_statistics;
+  stats = {};
+  if (maximum_removals == 0U || config.maximum_candidate_checks == 0U ||
+      output.control_points.size() <= 2U)
+    return false;
+  auto route = output;
+  if (!rebuild_quintic_ph_route(route)) return false;
+  const auto legal = [&](const QuinticPHRoute& candidate) {
+    auto shape_config = config.shape;
+    shape_config.minimum_bend_radius = config.minimum_bend_radius;
+    return (!route_constraint || route_constraint(candidate)) &&
+           certify_quintic_ph_shape(candidate, shape_config).legal &&
+           certify_quintic_ph_continuous_envelope(candidate, config.minimum_clearance,
+                                                  clearance_evaluator,
+                                                  config.continuous_envelope).legal;
+  };
+  if (!legal(route)) return false;
+  bool shortened = false;
+  auto& checks = stats.candidate_checks;
+  std::size_t paired_pairs_used = 0U;
+  for (std::size_t removed = 0U; removed < maximum_removals && route.control_points.size() > 2U;
+       ++removed) {
+    const auto baseline = exact_route_arc_length(route);
+    std::optional<QuinticPHRoute> best;
+    long double best_length = baseline;
+    bool best_is_pair = false;
+    for (std::size_t node = 1U; node + 1U < route.control_points.size() &&
+         checks < config.maximum_candidate_checks; ++node) {
+      routing_kernel_checkpoint();
+      ++checks;
+      if (node < route.node_tangent_directions.size() &&
+          norm(route.node_tangent_directions[node]) > 0.0L)
+        continue; // An explicitly constrained tangent is a protected interpolation station.
+      auto candidate = route;
+      candidate.control_points.erase(candidate.control_points.begin() +
+                                     static_cast<std::ptrdiff_t>(node));
+      if (candidate.corridor_anchors.size() == route.control_points.size())
+        candidate.corridor_anchors.erase(candidate.corridor_anchors.begin() +
+                                         static_cast<std::ptrdiff_t>(node));
+      if (candidate.node_tangent_directions.size() == route.control_points.size())
+        candidate.node_tangent_directions.erase(candidate.node_tangent_directions.begin() +
+                                                static_cast<std::ptrdiff_t>(node));
+      if (!rebuild_quintic_ph_route(candidate)) continue;
+      if (legal(candidate)) {
+        const auto length = exact_route_arc_length(candidate);
+        if (length + 1.0e-9L < best_length) {
+          best = std::move(candidate);
+          best_length = length;
+          best_is_pair = false;
+        }
+        continue;
+      }
+      // Removing a broad, legal hump can expose a blocked shortcut.  Replace it with a bounded
+      // approach/departure pair only when the complete exact certificate says it is a strict
+      // shortening.  The original route remains untouched when a topology/corridor callback
+      // vetoes either support placement.
+      if (!config.enable_paired_obstacle_supports ||
+          paired_pairs_used >= config.maximum_paired_obstacle_support_pairs ||
+          checks >= config.maximum_candidate_checks)
+        continue;
+      const auto blocked_envelope = certify_quintic_ph_continuous_envelope(
+          candidate, config.minimum_clearance, clearance_evaluator, config.continuous_envelope);
+      ++stats.paired_attempts;
+      const auto paired = paired_obstacle_support_proposals(candidate, &route, config,
+                                                             clearance_evaluator,
+                                                             blocked_envelope.worst_parameter);
+      for (auto support_candidate : paired) {
+        if (checks >= config.maximum_candidate_checks)
+          break;
+        ++checks;
+        routing_kernel_checkpoint();
+        if (!legal(support_candidate))
+          continue;
+        const auto length = exact_route_arc_length(support_candidate);
+        if (length + 1.0e-9L < best_length) {
+          best = std::move(support_candidate);
+          best_length = length;
+          best_is_pair = true;
+        }
+      }
+    }
+    if (!best) break;
+    if (best_is_pair) {
+      ++paired_pairs_used;
+      stats.paired_supports_inserted += 2U;
+    }
+    route = std::move(*best);
+    shortened = true;
+  }
+  if (shortened) output = std::move(route);
+  return shortened;
 }
 
 SplineTrajectoryOptimizationResult

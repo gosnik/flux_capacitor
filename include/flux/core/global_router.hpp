@@ -1,11 +1,14 @@
 #pragma once
 
 #include "flux/core/board.hpp"
+#include "flux/core/live_copper_terrain.hpp"
+#include "flux/core/board_terrain_guidance.hpp"
 #include "flux/core/navmesh_route.hpp"
 #include "flux/core/routability_knowledge.hpp"
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <stop_token>
 #include <string>
 #include <vector>
@@ -31,8 +34,13 @@ struct GlobalRouterConfig {
   // continuous PH realization is not constrained to these coordinates, but a 0.5 mm seed avoids
   // encoding avoidable 1 mm staircases into its selected corridor.
   Nanometres grid_pitch{Nanometres::from_mm(0.5)};
-  // Zero derives the smallest exact grid multiple that preserves resolved via-to-via spacing. An
-  // explicit value must be an exact multiple of grid_pitch and satisfy the same physical gate.
+  // Candidate sites may be closer than simultaneous copper occupancy only when exact
+  // sampled-clearance conflicts are reserved and enforced (not merely advisory).
+  // This is a search-domain experiment, not a relaxation of copper acceptance rules.
+  bool allow_dense_candidate_grid{false};
+  // Zero permits a via candidate at every global node. An explicit value selects a sparser exact
+  // grid multiple. Candidate density is not via legality: selected via discs still consume exact
+  // clearance shadows/resources and must pass regional and final DRC.
   Nanometres via_site_pitch{Nanometres{0}};
   std::size_t via_site_phase_x{0};
   std::size_t via_site_phase_y{0};
@@ -44,8 +52,9 @@ struct GlobalRouterConfig {
   // This is mutually exclusive with the checkerboard triangulation above.
   bool allow_crossing_safe_diagonal_grid_edges{false};
   // Exact-distance physical shadows for already selected sampled polylines, pad-access stubs,
-  // and through-via transitions. Conflicting edge/node shadows are negotiated resources: soft
-  // passes pay present/history cost and hard passes expose attributed blockers for bounded rip-up.
+  // and through-via transitions. Legacy/direct global routing negotiates them; an enclosing exact
+  // quantized-copper feedback loop may instead set clearance_shadows_advisory_only, retaining
+  // only coalesced telemetry and regional-scope witnesses.
   bool reserve_sampled_route_clearance{true};
   std::size_t max_clearance_shadow_conflict_resources{100'000};
   // A positive value normalizes physical clearance deficit into bounded present/history pressure.
@@ -59,6 +68,9 @@ struct GlobalRouterConfig {
   // capacity, detailed copper validation, and KiCad DRC remain authoritative.
   std::uint32_t capacity_reserve_per_mille{250};
   std::uint64_t capacity_reserve_cost{600};
+  // Capacity of unrepresented sampled edges/nodes. Straight interiors of a certified free-space
+  // corridor inherit that corridor's exact-clearance-checked parallel-lane capacity; turns,
+  // terminals, vias, crossings, and unmapped resources continue to use this capacity-one gate.
   std::size_t edge_capacity{1};
   std::size_t max_iterations{30};
   // Deterministic outer physical-feedback epoch. Ordinary callers leave this at zero; the
@@ -106,7 +118,12 @@ struct GlobalRouterConfig {
   std::size_t max_corridor_neck_down_states{5'000'000};
   std::size_t max_free_space_edges{2'000'000};
   std::uint64_t step_cost{100};
-  std::uint64_t via_cost{800};
+  // A legal layer transition is three nominal planar steps, not eight.  The KRT bm_svf oracle
+  // demonstrates that the physically clean two-layer solution is intentionally via-rich (73
+  // vias for 78 connections); an eight-step blanket tax keeps Flux trapped in planar conflict
+  // cones long before actual via-site scarcity is known. Exact via envelopes, negotiated via
+  // resources, regional site selection, and DRC remain authoritative costs/gates.
+  std::uint64_t via_cost{300};
   std::uint64_t present_congestion_cost{2'000};
   std::uint64_t history_congestion_cost{500};
   // Non-authoritative physical-routing diagnoses from an earlier outer-loop pass. These are
@@ -157,10 +174,11 @@ struct GlobalRouterConfig {
   // Before negotiated allocation, retain bounded exact hybrid-graph topology alternatives for
   // every ordinary connection. These are mandatory planning evidence, not copper.
   // Retain a compact topology portfolio rather than only the two independently shortest paths.
-  // Candidate zero is the shortest family, candidate one is edge-diversified, and the remaining
-  // bounded slots may use deterministic bidirectional RRT-Connect and per-copper-layer hydraulic
-  // erosion NavMesh corridors.
-  std::size_t max_static_seed_candidates_per_connection{4};
+  // Candidate zero is shortest, candidate one is edge-diversified, and bounded slots then retain
+  // deterministic RRT-Connect, per-layer hydraulic erosion, and one explicit perimeter-biased
+  // fallback. The latter is protected because the KRT bm_svf oracle proves that a longer outer
+  // homotopy can be the physically feasible answer even when it is unattractive in isolation.
+  std::size_t max_static_seed_candidates_per_connection{5};
   std::size_t max_static_seed_searches{200'000};
   std::size_t max_static_seed_reprojection_searches{200'000};
   bool use_static_seed_rrt_connect_alternatives{true};
@@ -169,7 +187,26 @@ struct GlobalRouterConfig {
   // Hydraulic erosion is a mandatory per-layer topology family. It has no disable switch: every
   // static portfolio must reserve and evaluate at least one bounded hydraulic candidate.
   std::size_t max_static_seed_hydraulic_candidates{1};
-  HydraulicPathConfig static_seed_hydraulic_flow{};
+  HydraulicPathConfig static_seed_hydraulic_flow = [] {
+    HydraulicPathConfig flow;
+    flow.evolve_terrain_height = true;
+    flow.prefer_gpu = true;
+    return flow;
+  }();
+  // Replacement snapshot of session-laid copper. This is a soft hydraulic terrain input only:
+  // it never changes free-space extraction, sampled capacity, or exact copper legality.
+  LiveCopperTerrainSnapshot live_copper_terrain{};
+  // Engine-owned monotonically increasing revision. Equality of the full snapshot is checked as
+  // well, so a caller cannot accidentally retain cached seed portfolios after changed copper.
+  std::size_t live_copper_terrain_revision{0U};
+  // Board/layer guidance is an advisory, shared immutable erosion field. Each connection still
+  // builds and checks its own exact net-specific free-space map; a disabled field is useful for
+  // deterministic ablations.
+  BoardTerrainGuidanceConfig board_terrain_guidance{};
+  // Runtime-only immutable geometry cache. It is excluded from configuration equality and is
+  // guarded by full raster-input equality before reuse.
+  std::shared_ptr<BoardTerrainGuidanceCache> board_terrain_guidance_cache{
+      std::make_shared<BoardTerrainGuidanceCache>()};
   // Zero selects min(hardware concurrency, eligible NetTasks). A positive value is a runtime-only
   // cap; stable task slots and ordered reduction keep routing results independent of this value.
   std::size_t max_static_seed_workers{0};
@@ -183,6 +220,11 @@ struct GlobalRouterConfig {
   bool use_navmesh_funnel_spline_seeds{true};
   // Zero uses grid_pitch. A positive pitch controls only the polygonal navigation decomposition.
   Nanometres global_navmesh_cell_pitch{Nanometres{0}};
+  UspedConfig global_navmesh_usped{};
+  // Copies within a routing session reuse immutable geometry across feedback epochs. Null disables
+  // caching; this runtime-only handle never participates in checkpoint geometry identity.
+  std::shared_ptr<NavMeshPreparationCache> navmesh_preparation_cache{
+      std::make_shared<NavMeshPreparationCache>()};
   std::size_t max_global_navmesh_cells_per_seed{100'000};
   std::size_t max_global_navmesh_search_expansions_per_seed{100'000};
   Nanometres global_spline_minimum_bend_radius{Nanometres::from_mm(0.25)};
@@ -257,6 +299,12 @@ struct GlobalRouterConfig {
   // On a selective pass after hard-capacity failure, invalidate at most this many highest-evidence
   // blocker nets for each failed net in addition to the failed nets themselves. Zero disables.
   std::size_t max_hard_capacity_blocker_reuse_invalidations_per_failed_net{0};
+  // When an exact quantized-copper oracle follows global allocation, clearance shadows cease to
+  // be a negotiated feasibility dimension. They remain populated as coalesced physical
+  // witnesses for telemetry and regional conflict-cone construction, but do not contribute to
+  // total_overflow, transition blocking, present cost, or generic sampled edge/node history.
+  // Direct global-router users leave this false unless they provide an equivalent exact oracle.
+  bool clearance_shadows_advisory_only{false};
   std::uint64_t voronoi_centering_cost{10};
   std::uint64_t voronoi_resource_present_cost{400};
   std::uint64_t voronoi_resource_history_cost{200};
@@ -337,6 +385,10 @@ enum class GlobalRouteSegmentWidthKind {
 struct RoutingGeometricCorridorRun {
   LayerId layer;
   std::vector<Polygon> topology_cells;
+  // Aligned with topology_cells. Retaining the actual adaptive leaf depth lets diagnostic
+  // consumers distinguish coarse cells from clearance-boundary subdivisions without rebuilding
+  // the per-net free-space domain.
+  std::vector<std::size_t> topology_cell_refinement_levels;
   std::vector<NavMeshPortal> portals;
   // Immutable directed portal crossings selected by the NavMesh/funnel stage.  A regional or
   // detailed continuous realization must retain this sequence unless it explicitly replaces the
@@ -379,6 +431,10 @@ struct GlobalRoutePath {
   std::uint64_t medial_neck_down_length_nm{0};
   std::size_t corridor_neck_down_segments{0};
   std::uint64_t corridor_neck_down_length_nm{0};
+  // Set only after a constructive stage has certified the complete polyline mutually legal.
+  // Detailed realization keeps its exact points, layer-transition sites and terminal approach
+  // directions; it may only fit copper locally within those selected planar runs.
+  bool legal_scaffold{false};
 
   [[nodiscard]] bool medial_topology_complete() const {
     return !medial_resource_sequence.empty() && medial_topology_breaks == 0U &&
@@ -534,6 +590,17 @@ struct RoutingClearanceShadowConflict {
   std::optional<GlobalRoutePoint> shadow_owner_second;
 
   bool operator==(const RoutingClearanceShadowConflict&) const = default;
+};
+
+// A clearance-qualified pair occupying one represented corridor within its sampled capacity.
+// The common centreline is a lane-packing obligation, not a proved clearance-shadow violation:
+// detailed packing must assign mutually legal offsets before copper can be accepted.
+struct RoutingCorridorPackingObligation {
+  std::size_t corridor_id{0};
+  bool neck_down{false};
+  RoutingClearanceShadowConflict witness;
+
+  bool operator==(const RoutingCorridorPackingObligation&) const = default;
 };
 
 enum class RoutingCorridorOrientation { horizontal, vertical };
@@ -726,12 +793,14 @@ struct GlobalRouteResult {
   std::vector<NetId> configured_selected_nets;
   std::vector<NetId> configured_priority_nets;
   Nanometres configured_grid_pitch{Nanometres{0}};
+  bool configured_dense_candidate_grid{false};
   Nanometres configured_via_site_pitch{Nanometres{0}};
   std::size_t configured_via_site_phase_x{0};
   std::size_t configured_via_site_phase_y{0};
   bool configured_diagonal_grid_edges{false};
   bool configured_crossing_safe_diagonal_grid_edges{false};
   bool configured_sampled_route_clearance_reservations{false};
+  bool configured_clearance_shadows_advisory_only{false};
   std::size_t configured_max_clearance_shadow_conflict_resources{0};
   Nanometres configured_clearance_shadow_cost_quantum;
   std::uint32_t configured_capacity_reserve_per_mille{0};
@@ -755,14 +824,40 @@ struct GlobalRouteResult {
   std::size_t static_seed_rrt_connect_iterations{0};
   std::size_t configured_max_static_seed_hydraulic_candidates{0};
   HydraulicPathConfig configured_static_seed_hydraulic_flow{};
+  LiveCopperTerrainSnapshot configured_live_copper_terrain{};
+  std::size_t configured_live_copper_terrain_revision{0U};
+  BoardTerrainGuidanceConfig configured_board_terrain_guidance{};
+  BoardTerrainGuidanceStats board_terrain_guidance_stats{};
   std::size_t static_seed_hydraulic_attempts{0};
   std::size_t static_seed_hydraulic_accepted{0};
+  std::size_t static_seed_height_evolution_attempts{0};
+  std::size_t static_seed_height_evolution_invoked{0};
+  std::size_t static_seed_height_evolution_gpu_invoked{0};
+  std::size_t static_seed_height_evolution_gpu_dispatches{0};
+  std::size_t static_seed_height_evolution_gpu_mask_uploads{0};
+  std::size_t static_seed_height_evolution_gpu_mask_upload_reuses{0};
+  std::size_t static_seed_height_evolution_gpu_mask_cross_pipeline_reuses{0};
+  std::uint64_t static_seed_height_evolution_field_us{0};
+  std::uint64_t static_seed_height_evolution_extraction_us{0};
+  std::size_t static_seed_height_evolution_accepted{0};
+  std::size_t static_seed_height_evolution_iterations{0};
+  std::size_t static_seed_height_evolution_changed_cells{0};
+  std::size_t static_seed_height_evolution_expanded_nodes{0};
+  std::size_t static_seed_indexed_clearance_map_builds{0};
+  std::size_t static_seed_indexed_clearance_map_reuses{0};
+  std::size_t static_seed_indexed_clearance_map_cells{0};
+  std::size_t static_seed_indexed_clearance_map_records{0};
+  std::size_t static_seed_indexed_clearance_map_references{0};
+  std::size_t static_seed_indexed_clearance_map_fallbacks{0};
   std::size_t static_seed_hydraulic_failures{0};
   std::size_t static_seed_hydraulic_gpu_routes{0};
   std::size_t static_seed_hydraulic_gpu_clearance_cache_hits{0};
   std::size_t static_seed_hydraulic_gpu_peak_batch_size{0};
   std::size_t static_seed_hydraulic_gpu_buffer_reuses{0};
   std::size_t static_seed_hydraulic_gpu_buffer_growths{0};
+  std::size_t static_seed_hydraulic_gpu_mask_uploads{0};
+  std::size_t static_seed_hydraulic_gpu_mask_upload_reuses{0};
+  std::size_t static_seed_hydraulic_gpu_mask_cross_pipeline_reuses{0};
   std::size_t static_seed_hydraulic_cpu_fallbacks{0};
   std::size_t static_seed_hydraulic_relaxation_passes{0};
   std::size_t static_seed_hydraulic_droplet_steps{0};
@@ -811,6 +906,7 @@ struct GlobalRouteResult {
   Nanometres configured_global_spline_shove_step;
   bool configured_navmesh_funnel_spline_seeds{false};
   Nanometres configured_global_navmesh_cell_pitch;
+  UspedConfig configured_global_navmesh_usped;
   Nanometres configured_global_spline_minimum_bend_radius;
   std::size_t configured_max_global_navmesh_cells_per_seed{0};
   std::size_t configured_max_global_navmesh_search_expansions_per_seed{0};
@@ -840,9 +936,11 @@ struct GlobalRouteResult {
   std::size_t static_seed_corridor_nodes{0};
   std::size_t static_seed_spline_samples{0};
   std::size_t static_seed_navmesh_domains{0};
+  std::size_t session_navmesh_cache_hits{0}, session_navmesh_cache_misses{0};
   std::size_t static_seed_navmesh_routes{0};
   std::size_t static_seed_navmesh_cells{0};
   std::size_t static_seed_navmesh_refined_parents{0};
+  std::size_t static_seed_usped_refined_parents{0};
   std::size_t static_seed_navmesh_refined_leaves{0};
   std::size_t static_seed_navmesh_rejected_leaves{0};
   std::size_t static_seed_navmesh_gpu_wavefront_routes{0};
@@ -867,6 +965,8 @@ struct GlobalRouteResult {
   std::size_t static_seed_reprojection_searches{0};
   std::size_t static_seed_reprojections_accepted{0};
   std::size_t static_seed_reprojections_reverted{0};
+  std::size_t static_seed_tree_attachment_nodes{0};
+  std::size_t static_seed_attachment_reprojections_reverted{0};
   std::size_t static_seed_corridor_departures{0};
   std::size_t static_seed_complete_trees{0};
   std::size_t static_seed_partial_trees{0};
@@ -913,6 +1013,8 @@ struct GlobalRouteResult {
   std::size_t sampled_overflow{0};
   std::size_t corridor_overflow{0};
   std::size_t clearance_shadow_overflow{0};
+  std::size_t clearance_shadow_raster_samples{0};
+  std::size_t clearance_shadow_coalesced_samples{0};
   std::size_t routability_history_entries{0};
   std::size_t routability_history_edges{0};
   std::uint64_t routability_history_pressure{0};
@@ -922,6 +1024,7 @@ struct GlobalRouteResult {
   bool clearance_shadow_owner_history_phase_attempted{false};
   std::size_t clearance_shadow_owner_history_passes{0};
   bool clearance_shadow_conflict_budget_exhausted{false};
+  bool corridor_packing_obligation_budget_exhausted{false};
   std::uint64_t total_cost{0};
   GlobalRouteCheckpointObjective configured_checkpoint_objective{
       GlobalRouteCheckpointObjective::aggregate_overflow};
@@ -1028,6 +1131,8 @@ struct GlobalRouteResult {
   std::size_t hard_capacity_soft_cut_probes{0};
   std::size_t hard_capacity_soft_cut_routes{0};
   std::size_t hard_capacity_soft_cut_blockers{0};
+  // Broad-phase shadow hits that do not violate the probe's selected copper clearance.
+  std::size_t hard_capacity_soft_cut_legal_shadow_observations{0};
   bool configured_rollback_failed_hard_capacity_ripup{false};
   std::size_t hard_capacity_failed_retry_rollbacks{0};
   bool configured_defer_hard_capacity_ripup_victims_to_pass_tail{false};
@@ -1077,6 +1182,7 @@ struct GlobalRouteResult {
   std::vector<RoutingNeckDownObstacleImpact> neck_down_obstacle_impacts;
   std::vector<RoutingResourceUsage> resource_usage;
   std::vector<RoutingClearanceShadowConflict> clearance_shadow_conflicts;
+  std::vector<RoutingCorridorPackingObligation> unresolved_corridor_packing;
   std::vector<RoutingCorridorUsage> corridor_usage;
   std::vector<RoutingCorridorUsage> corridor_neck_down_usage;
   std::vector<RoutingVoronoiCorridorEvidence> voronoi_corridor_evidence;
@@ -1189,7 +1295,8 @@ struct GlobalRouteResult {
 
 // Authoritative deterministic checkpoint ordering used by global routing and available to the
 // integrated placement loop. The dimensioned policy changes intermediate selection only; route
-// completion still requires every legacy overflow category to reach zero.
+// completion requires every authoritative overflow category to reach zero. Advisory shadow
+// witnesses are deliberately absent from total_overflow when an exact oracle owns that gate.
 [[nodiscard]] bool global_route_checkpoint_better(
     const GlobalRouteResult& lhs, const GlobalRouteResult& rhs,
     GlobalRouteCheckpointObjective objective = GlobalRouteCheckpointObjective::aggregate_overflow);
@@ -1210,6 +1317,14 @@ collect_global_route_group_pressure(const GlobalRouteResult& result,
 [[nodiscard]] bool routing_net_pressure_more_severe(
     const RoutingNetPressure& lhs, const RoutingNetPressure& rhs,
     GlobalRouteCheckpointObjective objective = GlobalRouteCheckpointObjective::aggregate_overflow);
+
+// The conservative occupancy spacing for the selected/incomplete named nets. This
+// is also the source-rule floor used when a CLI caller leaves its pitch unspecified.
+// Zero means no scoped copper needs routing; nullopt means spacing cannot be represented.
+// Explicit dense candidate grids may opt out of this floor only through their normal
+// physically enforced validation path; this helper never relaxes physical dimensions.
+[[nodiscard]] std::optional<Nanometres>
+minimum_legal_planar_grid_pitch(const Board& board, const GlobalRouterConfig& config = {});
 
 // Deterministic planning-stage global routing. Paths reserve represented copper and
 // board-edge clearance, but only detailed materialization plus DRC can accept them.

@@ -1,0 +1,72 @@
+{
+  "schema": 1,
+  "date": "2026-09-06",
+  "board": "bm_svf",
+  "tier": 1,
+  "role": "independent topology oracle, not a Flux benchmark pass",
+  "flux_revision": "d1a06aa",
+  "reference_router": "KiCadRoutingTools",
+  "reference_revision": "ec2bf0e1021c0ed95c45b14664d02c56777a0974",
+  "artifacts": "build/reference-benchmarks/krt-bm_svf-20260906-025mm-strict",
+  "input_sha256": "308ce5513cb6b2b33820648a0062a54f548f6b3c13d856cdcd9b7c3ac8a20d2a",
+  "original_project_sha256": "04856904fe9070f7decd33b676d3f58e44676b6c930e65fa8a16f0ddd65d54db",
+  "output_sha256": "731b23ae591ca0614d1482087dcbcfc64b74b354400b8f8745296ed54bf7670a",
+  "parameters": {
+    "track_width_mm": 0.25,
+    "clearance_mm": 0.2,
+    "via_diameter_mm": 0.7,
+    "via_drill_mm": 0.3,
+    "escalation": "off",
+    "strict_sizes": true,
+    "fix_drc_settings": false,
+    "fab_tier": "standard",
+    "route_trace": true
+  },
+  "metrics": {
+    "routed_nets": 25,
+    "unrouted_nets": 0,
+    "connected_pad_pairs": 78,
+    "required_pad_pairs": 78,
+    "track_count": 601,
+    "arc_count": 0,
+    "via_count": 68,
+    "track_length_mm": 893.5735735154643,
+    "wall_time_seconds": 8.61,
+    "user_cpu_seconds": 8.08,
+    "system_cpu_seconds": 1.8,
+    "maximum_resident_set_kib": 307984,
+    "reported_iterations": 675119,
+    "measured_output_track_widths_mm": [0.25],
+    "measured_output_via_diameters_mm": [0.7],
+    "measured_output_drills_mm": [0.3]
+  },
+  "external_validation": {
+    "validator": "/usr/bin/kicad-cli",
+    "version": "9.0.8",
+    "project": "byte-identical copy of original fixture project beside renamed output",
+    "severity": "error",
+    "exit_code": 0,
+    "violations": 0,
+    "unconnected_items": 0,
+    "drc_categories": {},
+    "report": "build/reference-benchmarks/krt-bm_svf-20260906-025mm-strict/drc-original-rules.json"
+  },
+  "local_topology": {
+    "flux_conflict": "ordinary window 0, channel 61, forced fragments on kicad-net-25 and kicad-net-26",
+    "net_25_name": "VACTROL_POS",
+    "net_25_reference_layers": {"F.Cu": 7, "B.Cu": 3},
+    "net_25_reference_vias_mm": [[69.2, 56.8], [66.4, 56.8], [63.7, 55.7]],
+    "net_26_name": "Net-(R17-Pad2)",
+    "net_26_reference_layers": {"F.Cu": 11},
+    "net_26_reference_vias": 0,
+    "observation": "Reference net 25 changes layer near the conflict region and approaches the pad from the west; net 26 escapes southeast instead of entering Flux's forced shared northern channel. This is a different routing topology, not evidence that the existing channel inequality should be relaxed."
+  },
+  "limitations": [
+    "This does not implement Flux's flowing-curved-trace objective.",
+    "The via diameter is stronger than Flux's current 0.60 mm default, not an exact parameter match.",
+    "The wall time covers the reference router process, not the separate external DRC process.",
+    "Flux benchmark dimensions, source board and source project were not changed.",
+    "The successful reference establishes existence; no reference tracks were copied into Flux."
+  ],
+  "tier_promoted": false
+}

@@ -1,0 +1,39 @@
+{
+  "date": "2026-10-01",
+  "experiment": "normal-tier1-baseline",
+  "board": "bm_svf",
+  "tier": 1,
+  "command": "./run_tiers.sh --level 1 --board bm_svf --artifacts build/tier-resolution-20261001-baseline-tier1",
+  "artifact": "build/tier-resolution-20261001-baseline-tier1",
+  "git_revision": "94aa691ad89576d1c0ac07a5346020da21fc9d06",
+  "executable": {
+    "path": "build/tier-resolution-20261001-baseline-cli",
+    "sha256": "a31787adff25da99b305b3e35ce593a9be632042c5be77babbf30795f8d0e0a2"
+  },
+  "qualification": "unknown",
+  "termination": "No harness result or final DRC artifact was written; telemetry ended during regional analysis and the original process is no longer present. Exact exit/timeout status unavailable.",
+  "metrics": {
+    "authoritative": {
+      "last_snapshot_total_nets": 25,
+      "last_snapshot_routed_nets": 25,
+      "last_snapshot_unrouted_nets": 0,
+      "last_snapshot_sampled_overflow": 0,
+      "last_snapshot_corridor_overflow": 0,
+      "last_snapshot_physical_overflow_nm": 0,
+      "last_snapshot_clearance_shadow_conflicts": 235,
+      "last_snapshot_regional_conflicts": 198,
+      "last_snapshot_vias": 90,
+      "regional_conflict_graph_edges": 220,
+      "regional_conflict_graph_components": 33,
+      "telemetry_last_monotonic_time_us": 1178141171
+    },
+    "unknown": [
+      "final qualification",
+      "KiCad DRC counts",
+      "opens/shorts after final materialization",
+      "exact process exit status",
+      "peak RSS"
+    ]
+  },
+  "telemetry": "build/tier-resolution-20261001-baseline-tier1/tier-1-bm_svf/telemetry/bm_svf-global.jsonl"
+}

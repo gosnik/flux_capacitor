@@ -1,0 +1,30 @@
+{
+  "board": "bm_svf",
+  "tier": 1,
+  "stage": "regional native copper certification before scope retry",
+  "classification": ["local interaction", "search scheduling", "physical legalisation"],
+  "candidate": "kicad-net-3:0:0:1",
+  "blocker": "kicad-net-2:2:0:1",
+  "layer": "F.Cu",
+  "candidate_endpoints_mm": [[72.34,93.98],[72.34,92.64]],
+  "violation": "track_clearance",
+  "clearance_deficit_nm": 450000,
+  "evidence": "build/curvature-corridor-tier1-seed/tier-1-bm_svf/telemetry/bm_svf-global.jsonl",
+  "observations": {
+    "ordinary_rejection_seconds_approx": 515,
+    "residual_retry_start_seconds_approx": 638,
+    "diagnostic_timeout_seconds": 900,
+    "topology_complete": true,
+    "selected_paths": 78,
+    "final_kicad_drc": "not_evaluated"
+  },
+  "mechanism": "Outside-fragment ownership cannot change until both conflict-directed and residual searches return. Repeated native candidate rejections already identify a movable outside blocker.",
+  "alternative_route_exists": "unknown; expanded joint ownership may help, not a feasibility proof",
+  "ranked_experiments": [
+    "Escalate a new exact outside-fragment witness before same-scope retries, only with remaining scope budget",
+    "Move the repeated physical conflict into upstream global allocation",
+    "Measure and reuse regional alternative geometry caches across scope retries"
+  ],
+  "normal_budget_baseline": "build/tier1-full-baseline-20260906",
+  "normal_budget_baseline_status": "process absent on resumption, no final run-result; unknown termination cause; telemetry reached epoch 2 at 3120.26 seconds, not a normal-budget timeout verdict"
+}

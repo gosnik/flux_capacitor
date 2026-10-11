@@ -3,6 +3,7 @@
 #include "flux/telemetry/event.hpp"
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <mutex>
@@ -24,6 +25,9 @@ struct ConnectionStatus {
 
 class LiveClient {
 public:
+  static constexpr std::size_t maximum_pending_events = 16'384U;
+  static constexpr std::size_t maximum_pending_bytes = 32U * 1024U * 1024U;
+  static constexpr std::size_t maximum_message_bytes = 8U * 1024U * 1024U;
   LiveClient() = default;
   ~LiveClient();
   LiveClient(const LiveClient&) = delete;
@@ -42,6 +46,7 @@ private:
 
   mutable std::mutex mutex_;
   std::deque<telemetry::Event> pending_;
+  std::size_t pending_bytes_{0U};
   ConnectionStatus status_;
   std::jthread thread_;
 };

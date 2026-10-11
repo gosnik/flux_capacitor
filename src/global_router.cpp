@@ -1,4 +1,8 @@
+#include "flux/core/bezier_copper.hpp"
+#include <stdexcept>
+#include "flux/core/routing_kernel.hpp"
 #include "flux/core/global_router.hpp"
+#include "flux/core/cpu_worker_budget.hpp"
 
 #include "flux/core/board_free_space.hpp"
 #include "flux/core/connectivity.hpp"
@@ -6,6 +10,7 @@
 #include "flux/core/free_space_offset.hpp"
 #include "flux/core/free_space_skeleton.hpp"
 #include "flux/core/geometry.hpp"
+#include "flux/core/indexed_clearance_map.hpp"
 #include "flux/core/keepout_geometry.hpp"
 #include "flux/core/navmesh_route.hpp"
 #include "flux/core/pns_router.hpp"
@@ -19,6 +24,7 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -27,6 +33,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <numeric>
 #include <optional>
 #include <queue>
@@ -191,6 +198,23 @@ struct Edge {
               grid.node(cell_x + 1U, cell_y + 1U, first_layer)};
 }
 
+[[nodiscard]] bool is_diagonal_grid_edge(const Grid& grid, const Edge& edge) {
+  const auto [first_x, first_y, first_layer] = grid.decode(edge.first);
+  const auto [second_x, second_y, second_layer] = grid.decode(edge.second);
+  return first_layer == second_layer &&
+         std::max(first_x, second_x) - std::min(first_x, second_x) == 1U &&
+         std::max(first_y, second_y) - std::min(first_y, second_y) == 1U;
+}
+
+[[nodiscard]] bool is_atomic_planar_chord(const Grid& grid, const Edge& edge) {
+  const auto [first_x, first_y, first_layer] = grid.decode(edge.first);
+  const auto [second_x, second_y, second_layer] = grid.decode(edge.second);
+  return first_layer == second_layer &&
+         std::max(first_x, second_x) - std::min(first_x, second_x) <= 1U &&
+         std::max(first_y, second_y) - std::min(first_y, second_y) <= 1U &&
+         (first_x != second_x || first_y != second_y);
+}
+
 enum class ObstacleShape { segment, circular_arc, point, pad, drill, zone, keepout };
 
 struct PolygonBounds {
@@ -251,8 +275,89 @@ struct ClearanceShadowCertificate {
   std::optional<std::size_t> owner_node;
 };
 
+struct ClearanceShadowOwnerSegment {
+  NetId net;
+  std::size_t layer{0};
+  Point start;
+  Point end;
+  long double occupied_radius_nm{0.0L};
+  std::optional<Edge> owner_edge;
+  std::optional<std::size_t> owner_node;
+};
+
+// Exact direct-edge certificates are discovered lazily while a search reads an otherwise
+// immutable occupancy.  A cache is value-owned by RoutingOccupancy: copies must not share it,
+// because either copy may later receive a serial occupancy update and invalidate its cache.
+//
+// The lock protects cache construction and lookup.  A completed entry is never changed, so a
+// returned reference remains immutable during parallel searches.  Cache invalidation is part of
+// the serial add/remove occupancy path; that path must not overlap a search using this occupancy.
+struct DirectClearanceCertificateCache {
+  mutable std::mutex mutex;
+  std::map<Edge, std::map<NetId, ClearanceShadowCertificate>> certificates;
+  std::set<Edge> complete;
+  // Immutable owner broad phase for direct chords. It is constructed from the current occupancy
+  // generation and copied safely with that occupancy; a serial occupancy mutation clears it.
+  std::shared_ptr<const IndexedClearanceMap> owner_index;
+  bool owner_index_attempted{false};
+
+  DirectClearanceCertificateCache() = default;
+
+  DirectClearanceCertificateCache(const DirectClearanceCertificateCache& other) {
+    std::lock_guard lock(other.mutex);
+    certificates = other.certificates;
+    complete = other.complete;
+    owner_index = other.owner_index;
+    owner_index_attempted = other.owner_index_attempted;
+  }
+
+  DirectClearanceCertificateCache& operator=(const DirectClearanceCertificateCache& other) {
+    if (this == &other) {
+      return *this;
+    }
+    std::scoped_lock lock(mutex, other.mutex);
+    certificates = other.certificates;
+    complete = other.complete;
+    owner_index = other.owner_index;
+    owner_index_attempted = other.owner_index_attempted;
+    return *this;
+  }
+
+  DirectClearanceCertificateCache(DirectClearanceCertificateCache&& other) {
+    std::lock_guard lock(other.mutex);
+    certificates = std::move(other.certificates);
+    complete = std::move(other.complete);
+    owner_index = std::move(other.owner_index);
+    owner_index_attempted = other.owner_index_attempted;
+  }
+
+  DirectClearanceCertificateCache& operator=(DirectClearanceCertificateCache&& other) {
+    if (this == &other) {
+      return *this;
+    }
+    std::scoped_lock lock(mutex, other.mutex);
+    certificates = std::move(other.certificates);
+    complete = std::move(other.complete);
+    owner_index = std::move(other.owner_index);
+    owner_index_attempted = other.owner_index_attempted;
+    return *this;
+  }
+
+  void clear() {
+    std::lock_guard lock(mutex);
+    certificates.clear();
+    complete.clear();
+    owner_index.reset();
+    owner_index_attempted = false;
+  }
+};
+
 struct RoutingOccupancy {
   std::map<Edge, std::set<NetId>> edges;
+  // Both diagonals through one grid cell canonicalize to one sampled edge. Keep their owners
+  // explicit so that synthetic crossing resource can never inherit the unrelated horizontal
+  // corridor capacity represented by its canonical key.
+  std::map<Edge, std::set<NetId>> crossing_cell_edges;
   std::map<std::size_t, std::set<NetId>> nodes;
   // Conservative physical-clearance shadows are separate from PathFinder capacity accounting:
   // they prohibit a later sampled centreline without pretending the shadow itself consumes a
@@ -261,7 +366,19 @@ struct RoutingOccupancy {
   // occupant's copper radius and the actual occupied resource that cast the shadow. Search compares
   // the distance with the candidate radius plus resolved clearance; negotiated history charges each
   // participant on its own resource.
+  // These keys are always the actual sampled chord.  In particular, the two diagonals of a
+  // crossing-safe cell intentionally retain distinct physical identities here; only `edges`
+  // and `crossing_cell_edges` above use sampled_capacity_edge().
   std::map<Edge, std::map<NetId, ClearanceShadowCertificate>> clearance_edges;
+  // Candidate chords need the same physical identity during post-route shadow accounting.
+  // Capacity occupancy cannot provide it because it aliases crossing-safe diagonals.
+  std::map<Edge, std::set<NetId>> clearance_planar_edges;
+  // Long direct Voronoi edges cannot use a sampled chord certificate as their geometry.  Cache
+  // their exact distance to each occupied owner segment lazily for this occupancy generation.
+  std::vector<ClearanceShadowOwnerSegment> clearance_owner_segments;
+  mutable DirectClearanceCertificateCache direct_clearance_cache;
+  long double clearance_max_candidate_radius_nm{0.0L};
+  long double clearance_max_clearance_nm{0.0L};
   std::map<std::size_t, std::map<NetId, ClearanceShadowCertificate>> clearance_nodes;
   std::map<std::size_t, std::set<NetId>> corridors;
   std::map<std::size_t, std::set<NetId>> corridor_neck_downs;
@@ -270,6 +387,10 @@ struct RoutingOccupancy {
   std::map<std::size_t, std::map<NetId, std::uint64_t>> voronoi_demand_nm_by_net;
   std::map<std::size_t, std::set<NetId>> direct_medial_neck_downs;
 };
+
+[[nodiscard]] const std::map<NetId, ClearanceShadowCertificate>&
+clearance_certificates_for_edge(const Grid& grid, const RoutingOccupancy& occupancy,
+                                const Edge& edge, bool exact_segment);
 
 // A hard rip-up temporarily removes selected copper so a blocked net can be retried.  Retaining
 // the former sampled edges as a soft, pass-local cost prevents that retry from simply taking over
@@ -546,6 +667,8 @@ struct SearchCostPolicy {
   std::set<std::size_t> corridor_nodes;
   std::uint64_t alternative_edge_penalty{0};
   std::uint64_t corridor_departure_penalty{0};
+  bool prefer_perimeter{false};
+  std::uint64_t interior_depth_cost{0};
   // The maps are owned by the routing pass.  They contain only corridors that every complete
   // static seed tree for a remaining net traverses, so optional alternatives are not treated as
   // reserved future capacity.
@@ -627,7 +750,7 @@ struct CorridorGraph {
       return {0U, 1U};
     }
     const auto& corridor = corridors[*corridor_id];
-    if (corridor.capacity <= 1U) {
+    if (corridor.last_lane <= corridor.first_lane) {
       return {0U, 1U};
     }
     const auto [x, y, unused_layer] = grid.decode(edge.first);
@@ -638,9 +761,43 @@ struct CorridorGraph {
     const auto doubled_offset =
         doubled_lane > lane_sum ? doubled_lane - lane_sum : lane_sum - doubled_lane;
     return {static_cast<std::uint64_t>(doubled_offset),
-            static_cast<std::uint64_t>(2U * (corridor.capacity - 1U))};
+            static_cast<std::uint64_t>(2U * (corridor.last_lane - corridor.first_lane))};
   }
 };
+
+// The sampled graph represents reachability, whereas a free-space corridor represents the
+// physical cross-section available to several laterally separated traces.  Do not force every
+// route using the same longitudinal sample onto a fictitious capacity-one wire: inherit the
+// corridor's count of exact-clearance-checked centreline lanes.  Diagonals, vias, turns,
+// terminals, and edges outside a represented corridor deliberately retain sampled capacity.
+[[nodiscard]] std::size_t sampled_planar_edge_capacity(const Edge& edge,
+                                                       const CorridorGraph& corridors,
+                                                       const CorridorGraph& corridor_neck_downs,
+                                                       const RoutingOccupancy* occupancy,
+                                                       std::size_t fallback_capacity,
+                                                       bool candidate_uses_neck_down = false) {
+  std::optional<std::size_t> capacity;
+  if (!candidate_uses_neck_down) {
+    if (const auto corridor = corridors.corridor_for(edge)) {
+      capacity = corridors.corridors[*corridor].capacity;
+    }
+  }
+  const bool occupied_by_neck_down =
+      occupancy != nullptr && occupancy->corridor_neck_down_edges.contains(edge);
+  if (occupancy != nullptr && occupancy->crossing_cell_edges.contains(edge)) {
+    return fallback_capacity;
+  }
+  if (candidate_uses_neck_down || occupied_by_neck_down) {
+    if (const auto corridor = corridor_neck_downs.corridor_for(edge)) {
+      const auto narrow_capacity = corridor_neck_downs.corridors[*corridor].capacity;
+      // Mixed nominal/narrow occupancy uses the smaller certified cross-section.  The dedicated
+      // physical corridor resources still account for the two width modes independently.
+      capacity = capacity ? std::min(*capacity, narrow_capacity)
+                          : std::optional<std::size_t>{narrow_capacity};
+    }
+  }
+  return capacity ? std::max<std::size_t>(1U, *capacity) : fallback_capacity;
+}
 
 [[nodiscard]] bool
 river_following_lane_available(const Grid& grid, const RoutingOccupancy& occupancy,
@@ -698,7 +855,13 @@ struct VoronoiPathFinderGuidance {
   }
 };
 
-enum class GlobalSeedFamily { shortest, diversified, rrt_connect, hydraulic_erosion };
+enum class GlobalSeedFamily {
+  shortest,
+  diversified,
+  rrt_connect,
+  hydraulic_erosion,
+  perimeter_fallback
+};
 
 [[nodiscard]] std::string_view global_seed_family_name(GlobalSeedFamily family) {
   switch (family) {
@@ -710,6 +873,8 @@ enum class GlobalSeedFamily { shortest, diversified, rrt_connect, hydraulic_eros
     return "rrt_connect";
   case GlobalSeedFamily::hydraulic_erosion:
     return "hydraulic_erosion";
+  case GlobalSeedFamily::perimeter_fallback:
+    return "perimeter_fallback";
   }
   return "unknown";
 }
@@ -733,6 +898,8 @@ struct GlobalSeedCandidate {
     std::vector<std::uint16_t> free_space;
     std::vector<std::uint16_t> downstream_pressure;
     std::vector<std::uint16_t> success_prior;
+    bool height_evolution{false};
+    bool height_evolution_gpu{false};
   };
   NetId net;
   std::size_t connection_index{0};
@@ -770,6 +937,7 @@ struct StaticSeedStats {
   std::size_t navmesh_routes{0};
   std::size_t navmesh_cells{0};
   std::size_t navmesh_refined_parents{0};
+  std::size_t usped_refined_parents{0};
   std::size_t navmesh_refined_leaves{0};
   std::size_t navmesh_rejected_leaves{0};
   std::size_t navmesh_gpu_wavefront_routes{0};
@@ -790,12 +958,34 @@ struct StaticSeedStats {
   std::size_t hydraulic_gpu_peak_batch_size{0};
   std::size_t hydraulic_gpu_buffer_reuses{0};
   std::size_t hydraulic_gpu_buffer_growths{0};
+  std::size_t hydraulic_gpu_mask_uploads{0};
+  std::size_t hydraulic_gpu_mask_upload_reuses{0};
+  std::size_t hydraulic_gpu_mask_cross_pipeline_reuses{0};
   std::size_t hydraulic_cpu_fallbacks{0};
   std::size_t hydraulic_relaxation_passes{0};
   std::size_t hydraulic_droplet_steps{0};
   std::size_t hydraulic_discovery_cells{0};
   std::size_t hydraulic_exact_certified_chords{0};
   std::size_t hydraulic_projection_failures{0};
+  std::size_t height_evolution_attempts{0};
+  std::size_t height_evolution_invoked{0};
+  std::size_t height_evolution_gpu_invoked{0};
+  std::size_t height_evolution_gpu_dispatches{0};
+  std::size_t height_evolution_gpu_mask_uploads{0};
+  std::size_t height_evolution_gpu_mask_upload_reuses{0};
+  std::size_t height_evolution_gpu_mask_cross_pipeline_reuses{0};
+  std::uint64_t height_evolution_field_us{0};
+  std::uint64_t height_evolution_extraction_us{0};
+  std::size_t height_evolution_accepted{0};
+  std::size_t height_evolution_iterations{0};
+  std::size_t height_evolution_changed_cells{0};
+  std::size_t height_evolution_expanded_nodes{0};
+  std::size_t indexed_clearance_map_builds{0};
+  std::size_t indexed_clearance_map_reuses{0};
+  std::size_t indexed_clearance_map_cells{0};
+  std::size_t indexed_clearance_map_records{0};
+  std::size_t indexed_clearance_map_references{0};
+  std::size_t indexed_clearance_map_fallbacks{0};
   std::size_t navmesh_certificate_domains{0};
   std::size_t funnel_points{0};
   std::size_t trajectory_attempts{0};
@@ -810,6 +1000,8 @@ struct StaticSeedStats {
   std::size_t reprojection_searches{0};
   std::size_t reprojections_accepted{0};
   std::size_t reprojections_reverted{0};
+  std::size_t tree_attachment_nodes{0};
+  std::size_t attachment_reprojections_reverted{0};
   std::size_t corridor_departures{0};
   std::size_t complete_trees{0};
   std::size_t partial_trees{0};
@@ -1657,6 +1849,17 @@ public:
               static_cast<long double>(track.width.value()) / 2.0L, std::nullopt, std::nullopt});
         }
       }
+      if (!board.track_beziers.empty()) {
+        const auto proxies = flatten_board_beziers_conservatively(board);
+        if (!proxies.certified) throw std::runtime_error("uncertified cubic copper obstacle");
+        for (std::size_t i = board.tracks.size(); i < proxies.board.tracks.size(); ++i) {
+          const auto& track = proxies.board.tracks[i];
+          const auto layer = layer_index(track.layer);
+          if (layer) add_obstacle(IndexedObstacle{
+              track.id, track.net, *layer, ObstacleShape::segment, track.start, track.end,
+              static_cast<long double>(track.width.value()) / 2.0L, std::nullopt, std::nullopt});
+        }
+      }
       for (const auto& arc : board.track_arcs) {
         const auto layer = layer_index(arc.layer);
         const auto critical = geometry::circular_arc_extrema(arc.start, arc.middle, arc.end);
@@ -1747,6 +1950,10 @@ public:
 
   [[nodiscard]] long double maximum_planned_radius_nm() const {
     return geometry_->maximum_planned_radius_nm;
+  }
+
+  [[nodiscard]] long double maximum_track_radius_nm() const {
+    return geometry_->maximum_track_radius_nm;
   }
 
   [[nodiscard]] long double maximum_clearance_nm() const { return geometry_->maximum_clearance_nm; }
@@ -2219,10 +2426,10 @@ private:
           continue;
         }
         if (drill.net != net && board_.rules.hole_clearance.value() > 0) {
-          const auto actual = planned_via
-                                  ? point_to_drill_boundary_distance_nm(start, drill)
-                                  : segment_to_pad_copper_distance_nm(
-                                        start, end, drill_clearance_shape(drill));
+          const auto actual =
+              planned_via
+                  ? point_to_drill_boundary_distance_nm(start, drill)
+                  : segment_to_pad_copper_distance_nm(start, end, drill_clearance_shape(drill));
           const auto required =
               planned_radius_nm + static_cast<long double>(board_.rules.hole_clearance.value());
           if (actual < required) {
@@ -2261,10 +2468,9 @@ private:
       }
       auto planned_envelope = planned_radius_nm + planned_pair_clearance;
       if (planned_via && obstacle.net != net && board_.rules.hole_clearance.value() > 0) {
-        planned_envelope =
-            std::max(planned_envelope,
-                     static_cast<long double>(rules_for(net).via_drill.value()) / 2.0L +
-                         static_cast<long double>(board_.rules.hole_clearance.value()));
+        planned_envelope = std::max(
+            planned_envelope, static_cast<long double>(rules_for(net).via_drill.value()) / 2.0L +
+                                  static_cast<long double>(board_.rules.hole_clearance.value()));
       }
       const auto required = planned_envelope + (is_pad || is_zone ? 0.0L : obstacle.radius_nm);
       const auto actual =
@@ -2402,9 +2608,11 @@ private:
     return std::nullopt;
   }
   if (!config.static_seed_hydraulic_flow.prefer_gpu) {
-    diagnostic = "Flux production routing cannot disable mandatory GPU hydraulic discovery; the "
-                 "CPU implementation is reserved for deterministic tests and oracle comparisons";
-    return std::nullopt;
+    if (!config.static_seed_hydraulic_flow.evolve_terrain_height) {
+      diagnostic = "Flux production routing cannot disable mandatory GPU hydraulic discovery; the "
+                   "CPU implementation is reserved for deterministic tests and oracle comparisons";
+      return std::nullopt;
+    }
   }
   const bool invalid_static_seed =
       static_seed_family_slots_overflow ||
@@ -2466,20 +2674,22 @@ private:
       neck_down_width_enabled != neck_down_length_enabled ||
       medial_neck_down_width_enabled != medial_neck_down_length_enabled ||
       corridor_neck_down_width_enabled != corridor_neck_down_length_enabled) {
-    diagnostic = "router values must be positive and edge capacity must remain one until lanes "
-                 "are materialized explicitly; terminal neck-down width and length must be "
-                 "positive together; medial neck-down width and length must also be positive "
-                 "together; corridor neck-down width and length must also be positive together "
-                 "with a positive state budget; a nonzero retry heuristic weight must be in "
-                 "(1000, 10000] per mille; present congestion multiplier/cap must be at least "
-                 "1000 per mille, the cap must not be smaller than the multiplier, and escalation "
-                 "must start no earlier than iteration two; local pin-escape pitch must be a "
-                 "positive exact divisor of the global pitch with a positive expansion bound; "
-                 "an explicit via-site pitch must be an exact positive multiple of the planar "
-                 "grid pitch and its X/Y phases must lie within that stride; checkerboard and "
-                 "crossing-safe diagonal policies are mutually exclusive; enabled early "
-                 "spline/PNS guidance requires positive costs, geometry bounds, and effort "
-                 "budgets; capacity reserve must be no greater than 1000 per mille";
+    diagnostic =
+        "router values must be positive and the fallback sampled edge capacity must "
+        "remain one; represented straight corridor interiors derive their capacity "
+        "from exact-clearance-checked parallel lanes; terminal neck-down width and length must be "
+        "positive together; medial neck-down width and length must also be positive "
+        "together; corridor neck-down width and length must also be positive together "
+        "with a positive state budget; a nonzero retry heuristic weight must be in "
+        "(1000, 10000] per mille; present congestion multiplier/cap must be at least "
+        "1000 per mille, the cap must not be smaller than the multiplier, and escalation "
+        "must start no earlier than iteration two; local pin-escape pitch must be a "
+        "positive exact divisor of the global pitch with a positive expansion bound; "
+        "an explicit via-site pitch must be an exact positive multiple of the planar "
+        "grid pitch and its X/Y phases must lie within that stride; checkerboard and "
+        "crossing-safe diagonal policies are mutually exclusive; enabled early "
+        "spline/PNS guidance requires positive costs, geometry bounds, and effort "
+        "budgets; capacity reserve must be no greater than 1000 per mille";
     return std::nullopt;
   }
   if (local_pin_escape_enabled) {
@@ -2563,66 +2773,26 @@ private:
     diagnostic = "corridor neck-down requires sampled free-space corridors";
     return std::nullopt;
   }
-  long double minimum_planar_pitch = 0.0L;
-  long double minimum_via_pitch = 0.0L;
-  const auto account_rules = [&minimum_planar_pitch, &minimum_via_pitch](
-                                 const ResolvedNetRoutingRules& rules, bool pair_member) {
-    const auto clearance = static_cast<long double>(
-        (pair_member ? std::max(rules.clearance, rules.differential_pair_gap) : rules.clearance)
-            .value());
-    minimum_planar_pitch = std::max(
-        minimum_planar_pitch, static_cast<long double>(rules.track_width.value()) + clearance);
-    minimum_via_pitch = std::max(minimum_via_pitch,
-                                 static_cast<long double>(rules.via_diameter.value()) + clearance);
-  };
-  if (board.nets.empty()) {
-    account_rules(resolve_net_routing_rules(board, NetId{}), false);
-  } else {
-    const std::set<NetId> selected(config.selected_nets.begin(), config.selected_nets.end());
-    std::map<NetId, std::size_t> open_connections;
-    if (selected.empty()) {
-      for (const auto& connectivity : analyze_connectivity(board).nets) {
-        open_connections.emplace(connectivity.net, connectivity.open_connections);
-      }
-    }
-    for (const auto& net : board.nets) {
-      const auto open = open_connections.find(net.id);
-      const bool planned = !selected.empty() ? selected.contains(net.id)
-                                             : open != open_connections.end() && open->second > 0U;
-      if (!planned || net.name.empty()) {
-        continue;
-      }
-      const bool pair_member =
-          std::any_of(board.differential_pairs.begin(), board.differential_pairs.end(),
-                      [&net](const DifferentialPair& pair) {
-                        return pair.positive_net == net.id || pair.negative_net == net.id;
-                      });
-      account_rules(resolve_net_routing_rules(board, net.id), pair_member);
-    }
+  const auto minimum_planar_pitch = minimum_legal_planar_grid_pitch(board, config);
+  if (!minimum_planar_pitch) {
+    diagnostic = "resolved copper spacing exceeds representable planar pitch";
+    return std::nullopt;
   }
   const auto resolved_via_pitch = [&]() {
     if (explicit_via_pitch) {
       return config.via_site_pitch.value();
     }
-    // Planar route resolution and via placement resolution are separate physical decisions.  A
-    // fine topology grid must not make every node a via site when adjacent vias would violate the
-    // resolved rules.  Round the required spacing upward to an exact grid stride so deterministic
-    // integer site phases remain unchanged.
-    const auto pitch = config.grid_pitch.value();
-    if (pitch <= 0) {
-      return pitch;
-    }
-    const auto required = static_cast<std::int64_t>(std::ceil(minimum_via_pitch));
-    const auto strides = std::max<std::int64_t>(1, (required + pitch - 1) / pitch);
-    return strides * pitch;
+    // A candidate lattice is a search domain, not an assertion that every adjacent candidate may
+    // be occupied simultaneously. The previous rule-safe stride removed many decisive escape
+    // sites before PathFinder could compare them. Retain every planar node and let exact via
+    // envelopes, occupancy/history, the regional joint solver, and DRC decide compatibility.
+    return config.grid_pitch.value();
   }();
-  const auto required_planar_pitch =
-      config.allow_diagonal_grid_edges || config.allow_crossing_safe_diagonal_grid_edges
-          ? minimum_planar_pitch * std::sqrt(2.0L)
-          : minimum_planar_pitch;
-  if (static_cast<long double>(config.grid_pitch.value()) < required_planar_pitch ||
-      static_cast<long double>(resolved_via_pitch) < minimum_via_pitch) {
-    diagnostic = "planar grid or via-site pitch cannot preserve resolved per-net copper spacing";
+  const bool dense_grid_physically_guarded = config.allow_dense_candidate_grid &&
+      config.reserve_sampled_route_clearance && !config.clearance_shadows_advisory_only;
+  if (config.grid_pitch < *minimum_planar_pitch &&
+      !dense_grid_physically_guarded) {
+    diagnostic = "planar grid cannot preserve resolved per-net copper spacing";
     return std::nullopt;
   }
 
@@ -2791,12 +2961,33 @@ build_corridor_graph(const Grid& grid, const GlobalRouterConfig& config,
   // any boundary/capacity change terminates it so PathFinder sees the physical bottleneck.
   using Run = std::pair<std::size_t, std::size_t>;
   using ActiveRun = std::pair<std::size_t, std::size_t>;
+  const auto lane_center_spacing_nm =
+      explicit_width
+          ? static_cast<long double>(explicit_width->value()) +
+                static_cast<long double>(explicit_clearance.value())
+          : 2.0L * obstacles.maximum_track_radius_nm() + obstacles.maximum_clearance_nm();
+  const auto physical_lane_capacity = [&](std::size_t sampled_lanes) {
+    if (sampled_lanes <= 1U || !(lane_center_spacing_nm > 0.0L)) {
+      return sampled_lanes;
+    }
+    // The first and last exact-legal sampled centrelines certify the physical cross-section;
+    // continuous lane packing may place intermediate traces between them. Consequently a finer
+    // or coarser topology grid does not itself create or destroy physical routing capacity.
+    const auto centre_span_nm =
+        static_cast<long double>(sampled_lanes - 1U) * static_cast<long double>(grid.pitch);
+    const auto additional = static_cast<std::uint64_t>(
+        std::floor(std::max(0.0L, centre_span_nm) / lane_center_spacing_nm));
+    const auto bounded = std::min<std::uint64_t>(
+        additional + 1U, static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()));
+    return static_cast<std::size_t>(bounded);
+  };
   const auto add_corridor = [&](std::size_t layer, RoutingCorridorOrientation orientation,
                                 Point first, Point last, std::size_t capacity,
                                 std::size_t first_lane, std::size_t last_lane) {
     const auto id = result.corridors.size();
-    result.corridors.push_back(CorridorDescriptor{id, layer, orientation, first, last, capacity,
-                                                  false, first_lane, last_lane});
+    result.corridors.push_back(CorridorDescriptor{id, layer, orientation, first, last,
+                                                  physical_lane_capacity(capacity), false,
+                                                  first_lane, last_lane});
     return id;
   };
   const auto edge_free = [&](const Edge& edge) {
@@ -4061,7 +4252,9 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
                               const CorridorGraph& corridor_neck_downs,
                               const SharedVoronoiAllocationGraph& voronoi_allocation,
                               RoutingObstacleIndex& obstacles, const GlobalRouterConfig& config,
-                              const RoutingHistory& initial_history, std::stop_token stop_token) {
+                              const RoutingHistory& initial_history, std::stop_token stop_token,
+                              const std::shared_ptr<const BoardTerrainGuidance>& board_terrain_guidance,
+                              const std::function<void(const GlobalSeedCandidate&)>& publish_candidate = {}) {
   StaticSeedPlan plan;
   auto& stats = plan.stats;
   const auto node_count = grid.layer_size() * grid.layers.size();
@@ -4086,9 +4279,10 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
   const auto hardware_workers = std::max(1U, std::thread::hardware_concurrency());
   const auto requested_workers =
       config.max_static_seed_workers == 0U ? hardware_workers : config.max_static_seed_workers;
-  const auto worker_count = std::min<std::size_t>(tasks.size(), requested_workers);
+  auto worker_lease = acquire_cpu_workers(std::min<std::size_t>(tasks.size(), requested_workers));
+  const auto worker_count = worker_lease.workers();
   stats.tasks_dispatched = tasks.size();
-  stats.workers_used = worker_count;
+  stats.workers_used = tasks.empty() ? 0U : std::max<std::size_t>(1U, worker_count);
   const auto task_budget = [](std::size_t total, std::size_t index, std::size_t count) {
     return count == 0U ? 0U : total / count + (index < total % count ? 1U : 0U);
   };
@@ -4148,6 +4342,14 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
               policy.kind = SearchCostPolicyKind::static_seed;
               policy.penalized_edges = tree_candidate == 0U ? std::set<Edge>{} : first_tree_edges;
               policy.alternative_edge_penalty = task_config.static_seed_alternative_edge_penalty;
+              const auto perimeter_candidate =
+                  std::size_t{2U} + task_config.max_static_seed_rrt_connect_candidates +
+                  task_config.max_static_seed_hydraulic_candidates;
+              policy.prefer_perimeter = tree_candidate == perimeter_candidate;
+              policy.interior_depth_cost =
+                  policy.prefer_perimeter
+                      ? std::max<std::uint64_t>(1U, task_config.step_cost / 4U)
+                      : 0U;
               local_stats.penalty_reruns =
                   saturating_count_add(local_stats.penalty_reruns, tree_candidate == 0U ? 0U : 1U);
               ++local_stats.searches;
@@ -4201,12 +4403,15 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
               const auto hydraulic_first = rrt_last;
               const auto hydraulic_last =
                   hydraulic_first + task_config.max_static_seed_hydraulic_candidates;
+              const auto perimeter_family_candidate = hydraulic_last;
               branches.back().family =
                   task_config.use_static_seed_rrt_connect_alternatives &&
                           tree_candidate >= rrt_first && tree_candidate < rrt_last
                       ? GlobalSeedFamily::rrt_connect
                   : tree_candidate >= hydraulic_first && tree_candidate < hydraulic_last
                       ? GlobalSeedFamily::hydraulic_erosion
+                  : tree_candidate == perimeter_family_candidate
+                      ? GlobalSeedFamily::perimeter_fallback
                   : tree_candidate == 0U ? GlobalSeedFamily::shortest
                                          : GlobalSeedFamily::diversified;
               branches.back().goals = {branches.back().route.nodes.back()};
@@ -4226,7 +4431,8 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
             const auto externally_diversified =
                 !branches.empty() &&
                 (branches.front().family == GlobalSeedFamily::rrt_connect ||
-                 branches.front().family == GlobalSeedFamily::hydraulic_erosion);
+                 branches.front().family == GlobalSeedFamily::hydraulic_erosion ||
+                 branches.front().family == GlobalSeedFamily::perimeter_fallback);
             if (duplicate) {
               ++local_stats.deduplicated_candidates;
               // A duplicate carrier graph is still useful to an independent topology generator:
@@ -4265,10 +4471,12 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
   };
   std::vector<std::jthread> workers;
   workers.reserve(worker_count);
+  if (worker_count == 0U) run_task();
   for (std::size_t index = 0U; index < worker_count; ++index) {
     workers.emplace_back(run_task);
   }
   workers.clear();
+  worker_lease = {};
 
   // Stable slots decouple completion order from all externally visible candidate/metric order.
   for (auto& result : task_results) {
@@ -4524,7 +4732,7 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
 
   struct NavigationDomain {
     std::vector<OffsetFreeSpaceRegion> regions;
-    std::vector<std::optional<PreparedNavMeshDomain>> prepared_regions;
+    std::vector<std::shared_ptr<const PreparedNavMeshDomain>> prepared_regions;
     Nanometres center_clearance;
     bool complete{false};
     bool regions_are_offset{true};
@@ -4566,6 +4774,30 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
         auto& stats = plan.stats;
         auto& obstacles = result->obstacles;
         plan.candidates = std::move(refinement_inputs[task_index]);
+        // A static candidate index denotes a complete growing route tree, not a collection of
+        // interchangeable point-to-point paths. Later branches may terminate at an interior
+        // lattice node of an earlier carrier. Refining every carrier independently while
+        // constraining only its own endpoints can silently remove that junction and leave a
+        // combinatorially complete but physically disconnected tree. Record the downstream
+        // attachment nodes that each earlier carrier must retain before any candidate changes.
+        std::vector<std::set<std::size_t>> required_tree_attachments(plan.candidates.size());
+        for (std::size_t branch = 0U; branch < plan.candidates.size(); ++branch) {
+          const auto& child = plan.candidates[branch];
+          for (const auto goal : child.goals) {
+            for (std::size_t carrier = 0U; carrier < branch; ++carrier) {
+              const auto& candidate = plan.candidates[carrier];
+              if (candidate.tree_candidate_index == child.tree_candidate_index &&
+                  std::find(candidate.route.nodes.begin(), candidate.route.nodes.end(), goal) !=
+                      candidate.route.nodes.end()) {
+                required_tree_attachments[carrier].insert(goal);
+              }
+            }
+          }
+        }
+        for (const auto& attachments : required_tree_attachments) {
+          stats.tree_attachment_nodes =
+              saturating_count_add(stats.tree_attachment_nodes, attachments.size());
+        }
         const auto corridor_cell_budget =
             task_budget(config.max_static_seed_corridor_cells, task_index, tasks.size());
         const auto reprojection_budget =
@@ -4607,7 +4839,9 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
           return navigation_domains.emplace(key, std::move(domain)).first->second;
         };
 
-        for (auto& candidate : plan.candidates) {
+        for (std::size_t candidate_index = 0U; candidate_index < plan.candidates.size();
+             ++candidate_index) {
+          auto& candidate = plan.candidates[candidate_index];
           if (stop_token.stop_requested()) {
             break;
           }
@@ -4650,7 +4884,12 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
             const PreparedNavMeshDomain* selected_prepared_region = nullptr;
             bool selected_region_is_offset = true;
             Nanometres center_clearance{0};
-            if (config.use_navmesh_funnel_spline_seeds) {
+            // The generic endpoint-only NavMesh query returns the shortest free-space homotopy.
+            // Applying it here would erase the deliberately long perimeter route immediately
+            // after discovering it. Preserve the sampled carrier for this fallback; subsequent
+            // PH fitting may smooth it only within its bounded control corridor.
+            if (config.use_navmesh_funnel_spline_seeds &&
+                candidate.family != GlobalSeedFamily::perimeter_fallback) {
               auto& domain = navigation_domain(*task, layer);
               center_clearance = domain.center_clearance;
               if (domain.complete) {
@@ -4661,7 +4900,7 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
                 for (std::size_t region_index = 0U; region_index < domain.regions.size();
                      ++region_index) {
                   const auto& region = domain.regions[region_index];
-                  const NavMeshConfig navmesh_config{
+                  NavMeshConfig navmesh_config{
                       navmesh_pitch,
                       config.max_global_navmesh_cells_per_seed,
                       config.max_global_navmesh_search_expansions_per_seed,
@@ -4673,9 +4912,13 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
                                                         navmesh_pitch.value())),
                       domain.regions_are_offset ? Nanometres{0} : domain.center_clearance,
                       std::nullopt};
+                  navmesh_config.usped = config.global_navmesh_usped;
                   if (!domain.prepared_regions[region_index]) {
                     domain.prepared_regions[region_index] =
-                        prepare_navmesh_domain(region, navmesh_config);
+                        config.navmesh_preparation_cache
+                            ? config.navmesh_preparation_cache->prepare(region, navmesh_config)
+                            : std::make_shared<const PreparedNavMeshDomain>(
+                                  prepare_navmesh_domain(region, navmesh_config));
                   }
                   NavMeshRouteResult routed;
                   if (candidate.family == GlobalSeedFamily::rrt_connect) {
@@ -4721,6 +4964,15 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
                     NavMeshHydraulicConfig hydraulic_config;
                     hydraulic_config.flow = flow;
                     hydraulic_config.opened_guard_rings = 1U;
+                    hydraulic_config.board_terrain_guidance = board_terrain_guidance;
+                    hydraulic_config.board_terrain_layer = grid.layers[layer];
+                    const auto live_copper = live_copper_terrain_deposits(
+                        config.live_copper_terrain, candidate.net, grid.layers[layer]);
+                    hydraulic_config.downstream_feedback.insert(
+                        hydraulic_config.downstream_feedback.end(), live_copper.begin(),
+                        live_copper.end());
+                    if (flow.evolve_terrain_height)
+                      ++stats.height_evolution_attempts;
                     for (const auto& entry : config.routability_history) {
                       const auto layer_matches = entry.resource.layer.value().empty() ||
                                                  entry.resource.layer == grid.layers[layer];
@@ -4732,6 +4984,9 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
                         continue;
                       std::uint64_t weight = 1U;
                       switch (entry.kind) {
+                      case RoutabilityFailureKind::packing_unresolved:
+                        weight = 0U;
+                        break;
                       case RoutabilityFailureKind::packing_capacity_exceeded:
                         weight = 2U;
                         break;
@@ -4811,7 +5066,7 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
                     }
                     routed = route_prepared_navmesh_hydraulic(
                         *domain.prepared_regions[region_index], points.front(), points.back(),
-                        navmesh_config, hydraulic_config);
+                        navmesh_config, hydraulic_config, stop_token);
                     if (!routed.hydraulic_erosion_field.empty()) {
                       candidate.hydraulic_fields.push_back(
                           GlobalSeedCandidate::HydraulicFieldEvidence{
@@ -4825,7 +5080,8 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
                               routed.hydraulic_erosion_field, routed.hydraulic_heightmap,
                               routed.hydraulic_free_space_field,
                               routed.hydraulic_downstream_pressure_field,
-                              routed.hydraulic_success_prior_field});
+                              routed.hydraulic_success_prior_field, routed.used_height_evolution,
+                              routed.height_evolution_gpu_invoked});
                     }
                     stats.hydraulic_relaxation_passes = saturating_count_add(
                         stats.hydraulic_relaxation_passes, routed.hydraulic_relaxation_passes);
@@ -4847,8 +5103,62 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
                         stats.hydraulic_gpu_buffer_reuses, routed.hydraulic_gpu_buffer_reuses);
                     stats.hydraulic_gpu_buffer_growths = saturating_count_add(
                         stats.hydraulic_gpu_buffer_growths, routed.hydraulic_gpu_buffer_growths);
+                    stats.hydraulic_gpu_mask_uploads = saturating_count_add(
+                        stats.hydraulic_gpu_mask_uploads, routed.hydraulic_gpu_mask_uploads);
+                    stats.hydraulic_gpu_mask_upload_reuses = saturating_count_add(
+                        stats.hydraulic_gpu_mask_upload_reuses, routed.hydraulic_gpu_mask_upload_reuses);
+                    stats.hydraulic_gpu_mask_cross_pipeline_reuses = saturating_count_add(
+                        stats.hydraulic_gpu_mask_cross_pipeline_reuses, routed.hydraulic_gpu_mask_cross_pipeline_reuses);
                     stats.hydraulic_cpu_fallbacks = saturating_count_add(
                         stats.hydraulic_cpu_fallbacks, routed.hydraulic_cpu_fallback ? 1U : 0U);
+                    stats.height_evolution_invoked += routed.height_evolution_invoked ? 1U : 0U;
+                    stats.height_evolution_gpu_invoked = saturating_count_add(
+                        stats.height_evolution_gpu_invoked,
+                        routed.height_evolution_gpu_invoked ? 1U : 0U);
+                    stats.height_evolution_gpu_dispatches = saturating_count_add(
+                        stats.height_evolution_gpu_dispatches,
+                        routed.height_evolution_gpu_dispatches);
+                    stats.height_evolution_gpu_mask_uploads = saturating_count_add(
+                        stats.height_evolution_gpu_mask_uploads,
+                        routed.height_evolution_gpu_mask_uploads);
+                    stats.height_evolution_gpu_mask_upload_reuses = saturating_count_add(
+                        stats.height_evolution_gpu_mask_upload_reuses,
+                        routed.height_evolution_gpu_mask_upload_reuses);
+                    stats.height_evolution_gpu_mask_cross_pipeline_reuses = saturating_count_add(
+                        stats.height_evolution_gpu_mask_cross_pipeline_reuses,
+                        routed.height_evolution_gpu_mask_cross_pipeline_reuses);
+                    stats.height_evolution_field_us = saturating_add(
+                        stats.height_evolution_field_us, routed.height_evolution_field_us);
+                    stats.height_evolution_extraction_us = saturating_add(
+                        stats.height_evolution_extraction_us,
+                        routed.height_evolution_extraction_us);
+                    stats.indexed_clearance_map_builds = saturating_count_add(
+                        stats.indexed_clearance_map_builds,
+                        routed.indexed_clearance_map_builds);
+                    stats.indexed_clearance_map_reuses = saturating_count_add(
+                        stats.indexed_clearance_map_reuses,
+                        routed.indexed_clearance_map_reuses);
+                    stats.indexed_clearance_map_cells = saturating_count_add(
+                        stats.indexed_clearance_map_cells,
+                        routed.indexed_clearance_map_cells);
+                    stats.indexed_clearance_map_records = saturating_count_add(
+                        stats.indexed_clearance_map_records,
+                        routed.indexed_clearance_map_records);
+                    stats.indexed_clearance_map_references = saturating_count_add(
+                        stats.indexed_clearance_map_references,
+                        routed.indexed_clearance_map_references);
+                    stats.indexed_clearance_map_fallbacks = saturating_count_add(
+                        stats.indexed_clearance_map_fallbacks,
+                        routed.indexed_clearance_map_fallbacks);
+                    if (routed.used_height_evolution) {
+                      stats.height_evolution_accepted += routed.ok() ? 1U : 0U;
+                      stats.height_evolution_iterations = saturating_count_add(
+                          stats.height_evolution_iterations, routed.height_evolution_iterations);
+                      stats.height_evolution_changed_cells = saturating_count_add(
+                          stats.height_evolution_changed_cells, routed.height_evolution_changed_cells);
+                      stats.height_evolution_expanded_nodes = saturating_count_add(
+                          stats.height_evolution_expanded_nodes, routed.height_evolution_expanded_nodes);
+                    }
                     if (routed.ok()) {
                       ++stats.hydraulic_accepted;
                     } else {
@@ -4870,6 +5180,8 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
                       saturating_count_add(stats.navmesh_cells, routed.cells.size());
                   stats.navmesh_refined_parents = saturating_count_add(
                       stats.navmesh_refined_parents, routed.adaptive_refined_parent_cells);
+                  stats.usped_refined_parents = saturating_count_add(
+                      stats.usped_refined_parents, routed.usped_refined_parents);
                   stats.navmesh_refined_leaves = saturating_count_add(
                       stats.navmesh_refined_leaves, routed.adaptive_refined_leaf_cells);
                   stats.navmesh_rejected_leaves = saturating_count_add(
@@ -5149,9 +5461,13 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
                   }
                 }
                 run.topology_cells.reserve(navmesh_route->topology_guard_cells.size());
+                run.topology_cell_refinement_levels.reserve(
+                    navmesh_route->topology_guard_cells.size());
                 for (const auto cell : navmesh_route->topology_guard_cells) {
                   if (cell < navmesh_route->cells.size()) {
                     run.topology_cells.push_back(navmesh_route->cells[cell].polygon());
+                    run.topology_cell_refinement_levels.push_back(
+                        navmesh_route->cells[cell].refinement_level);
                   }
                 }
                 run.required_envelope_width = required_envelope;
@@ -5463,6 +5779,27 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
             ++stats.reprojections_reverted;
             continue;
           }
+          const auto& required_attachments = required_tree_attachments[candidate_index];
+          const auto preserves_tree_attachments =
+              std::all_of(required_attachments.begin(), required_attachments.end(),
+                          [&](const auto attachment) {
+                            return std::find(refined.nodes.begin(), refined.nodes.end(),
+                                             attachment) != refined.nodes.end();
+                          });
+          if (!preserves_tree_attachments) {
+            ++stats.reprojections_reverted;
+            ++stats.attachment_reprojections_reverted;
+            if (result->diagnostics.size() <
+                config.max_static_seed_candidates_per_connection) {
+              result->diagnostics.push_back(
+                  "net " + task->net.value() + " tree " +
+                  std::to_string(candidate.tree_candidate_index) + " connection " +
+                  std::to_string(candidate.connection_index) +
+                  ": spline reprojection discarded because it removed a downstream tree "
+                  "attachment");
+            }
+            continue;
+          }
           stats.corridor_departures = saturating_count_add(
               stats.corridor_departures,
               static_cast<std::size_t>(
@@ -5489,6 +5826,15 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
         }
       } catch (...) {
         result->failure = std::current_exception();
+      }
+      // A completed net's immutable candidate geometry is safe to observe before other workers
+      // finish. It remains provisional; publication cannot influence routing or reduction order.
+      if (publish_candidate && !result->failure && !stop_token.stop_requested()) {
+        try {
+          for (const auto& candidate : result->plan.candidates) publish_candidate(candidate);
+        } catch (...) {
+          // A diagnostic allocation or sink failure cannot fail a completed routing task.
+        }
       }
       refinement_results[task_index] = std::move(result);
     }
@@ -5517,6 +5863,8 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
     stats.navmesh_cells = saturating_count_add(stats.navmesh_cells, local.navmesh_cells);
     stats.navmesh_refined_parents =
         saturating_count_add(stats.navmesh_refined_parents, local.navmesh_refined_parents);
+    stats.usped_refined_parents =
+        saturating_count_add(stats.usped_refined_parents, local.usped_refined_parents);
     stats.navmesh_refined_leaves =
         saturating_count_add(stats.navmesh_refined_leaves, local.navmesh_refined_leaves);
     stats.navmesh_rejected_leaves =
@@ -5546,6 +5894,46 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
         saturating_count_add(stats.hydraulic_accepted, local.hydraulic_accepted);
     stats.hydraulic_failures =
         saturating_count_add(stats.hydraulic_failures, local.hydraulic_failures);
+    stats.height_evolution_attempts = saturating_count_add(
+        stats.height_evolution_attempts, local.height_evolution_attempts);
+    stats.height_evolution_invoked = saturating_count_add(
+        stats.height_evolution_invoked, local.height_evolution_invoked);
+    stats.height_evolution_gpu_invoked = saturating_count_add(
+        stats.height_evolution_gpu_invoked, local.height_evolution_gpu_invoked);
+    stats.height_evolution_gpu_dispatches = saturating_count_add(
+        stats.height_evolution_gpu_dispatches, local.height_evolution_gpu_dispatches);
+    stats.height_evolution_gpu_mask_uploads = saturating_count_add(
+        stats.height_evolution_gpu_mask_uploads, local.height_evolution_gpu_mask_uploads);
+    stats.height_evolution_gpu_mask_upload_reuses = saturating_count_add(
+        stats.height_evolution_gpu_mask_upload_reuses,
+        local.height_evolution_gpu_mask_upload_reuses);
+    stats.height_evolution_gpu_mask_cross_pipeline_reuses = saturating_count_add(
+        stats.height_evolution_gpu_mask_cross_pipeline_reuses,
+        local.height_evolution_gpu_mask_cross_pipeline_reuses);
+    stats.height_evolution_field_us = saturating_add(
+        stats.height_evolution_field_us, local.height_evolution_field_us);
+    stats.height_evolution_extraction_us = saturating_add(
+        stats.height_evolution_extraction_us, local.height_evolution_extraction_us);
+    stats.height_evolution_accepted = saturating_count_add(
+        stats.height_evolution_accepted, local.height_evolution_accepted);
+    stats.height_evolution_iterations = saturating_count_add(
+        stats.height_evolution_iterations, local.height_evolution_iterations);
+    stats.height_evolution_changed_cells = saturating_count_add(
+        stats.height_evolution_changed_cells, local.height_evolution_changed_cells);
+    stats.height_evolution_expanded_nodes = saturating_count_add(
+        stats.height_evolution_expanded_nodes, local.height_evolution_expanded_nodes);
+    stats.indexed_clearance_map_builds = saturating_count_add(
+        stats.indexed_clearance_map_builds, local.indexed_clearance_map_builds);
+    stats.indexed_clearance_map_reuses = saturating_count_add(
+        stats.indexed_clearance_map_reuses, local.indexed_clearance_map_reuses);
+    stats.indexed_clearance_map_cells = saturating_count_add(
+        stats.indexed_clearance_map_cells, local.indexed_clearance_map_cells);
+    stats.indexed_clearance_map_records = saturating_count_add(
+        stats.indexed_clearance_map_records, local.indexed_clearance_map_records);
+    stats.indexed_clearance_map_references = saturating_count_add(
+        stats.indexed_clearance_map_references, local.indexed_clearance_map_references);
+    stats.indexed_clearance_map_fallbacks = saturating_count_add(
+        stats.indexed_clearance_map_fallbacks, local.indexed_clearance_map_fallbacks);
     stats.hydraulic_gpu_routes =
         saturating_count_add(stats.hydraulic_gpu_routes, local.hydraulic_gpu_routes);
     stats.hydraulic_gpu_clearance_cache_hits = saturating_count_add(
@@ -5556,6 +5944,12 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
         saturating_count_add(stats.hydraulic_gpu_buffer_reuses, local.hydraulic_gpu_buffer_reuses);
     stats.hydraulic_gpu_buffer_growths = saturating_count_add(stats.hydraulic_gpu_buffer_growths,
                                                               local.hydraulic_gpu_buffer_growths);
+    stats.hydraulic_gpu_mask_uploads = saturating_count_add(stats.hydraulic_gpu_mask_uploads,
+                                                              local.hydraulic_gpu_mask_uploads);
+    stats.hydraulic_gpu_mask_upload_reuses = saturating_count_add(stats.hydraulic_gpu_mask_upload_reuses,
+                                                              local.hydraulic_gpu_mask_upload_reuses);
+    stats.hydraulic_gpu_mask_cross_pipeline_reuses = saturating_count_add(stats.hydraulic_gpu_mask_cross_pipeline_reuses,
+                                                              local.hydraulic_gpu_mask_cross_pipeline_reuses);
     stats.hydraulic_cpu_fallbacks =
         saturating_count_add(stats.hydraulic_cpu_fallbacks, local.hydraulic_cpu_fallbacks);
     stats.hydraulic_relaxation_passes =
@@ -5593,6 +5987,10 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
         saturating_count_add(stats.reprojections_accepted, local.reprojections_accepted);
     stats.reprojections_reverted =
         saturating_count_add(stats.reprojections_reverted, local.reprojections_reverted);
+    stats.tree_attachment_nodes =
+        saturating_count_add(stats.tree_attachment_nodes, local.tree_attachment_nodes);
+    stats.attachment_reprojections_reverted = saturating_count_add(
+        stats.attachment_reprojections_reverted, local.attachment_reprojections_reverted);
     stats.corridor_departures =
         saturating_count_add(stats.corridor_departures, local.corridor_departures);
     stats.pns_proposal_attempts =
@@ -6126,6 +6524,7 @@ build_voronoi_pathfinder_guidance(const Grid& grid, const VoronoiCorridorEvidenc
     }
 
     while (!open.empty()) {
+    routing_kernel_checkpoint();
       const auto current = open.front();
       open.pop();
       const auto [x, y, layer] = grid.decode(current);
@@ -6577,6 +6976,7 @@ build_voronoi_pathfinder_guidance(const Grid& grid, const VoronoiCorridorEvidenc
     open.push(node);
   }
   while (!open.empty()) {
+    routing_kernel_checkpoint();
     const auto current = open.front();
     open.pop();
     const auto [x, y, layer] = grid.decode(current);
@@ -6756,21 +7156,30 @@ local_planar_escape_pressure(const Grid& grid, std::size_t node, const RoutingOc
           saturating_add(pressure, saturating_multiply(static_cast<std::uint64_t>(found->second),
                                                        config.routability_history_cost));
     }
-    const auto clearance_pressure = [&task](const auto& resources, const auto& key) {
+    const auto required_planar_clearance =
+        static_cast<long double>(task.nominal_track_width.value()) / 2.0L +
+        static_cast<long double>(task.physical_clearance.value());
+    const auto clearance_pressure = [&task, required_planar_clearance](const auto& resources,
+                                                                        const auto& key) {
       const auto found = resources.find(key);
       if (found == resources.end()) {
         return std::uint64_t{0};
       }
       return static_cast<std::uint64_t>(
           std::count_if(found->second.begin(), found->second.end(),
-                        [&](const auto& item) { return item.first != task.net; }));
+                        [&](const auto& item) {
+                          return item.first != task.net &&
+                                 item.second.available_nm < required_planar_clearance;
+                        }));
     };
-    pressure = saturating_add(
-        pressure, saturating_multiply(clearance_pressure(occupancy.clearance_edges, sampled_edge),
-                                      config.present_congestion_cost));
-    pressure = saturating_add(
-        pressure, saturating_multiply(clearance_pressure(occupancy.clearance_nodes, next),
-                                      config.present_congestion_cost));
+    if (!config.clearance_shadows_advisory_only) {
+      pressure = saturating_add(
+          pressure, saturating_multiply(clearance_pressure(occupancy.clearance_edges, edge),
+                                        config.present_congestion_cost));
+      pressure = saturating_add(
+          pressure, saturating_multiply(clearance_pressure(occupancy.clearance_nodes, next),
+                                        config.present_congestion_cost));
+    }
     if (const auto corridor = corridors.corridor_for(edge)) {
       if (const auto found = occupancy.corridors.find(*corridor);
           found != occupancy.corridors.end()) {
@@ -7119,6 +7528,7 @@ search_path(const Grid& grid, const std::vector<std::size_t>& starts,
   auto active_heuristic_weight_per_mille = heuristic_weight_per_mille;
   while (true) {
     while (!open.empty() && phase_expansions < config.max_expansions_per_connection) {
+      routing_kernel_checkpoint();
       if (stop_token.stop_requested()) {
         SearchResult cancelled;
         cancelled.cancelled = true;
@@ -7452,6 +7862,12 @@ search_path(const Grid& grid, const std::vector<std::size_t>& starts,
               : transition.width_kind == GlobalRouteSegmentWidthKind::medial_neck_down
                   ? medial_neck_down.value_or(Nanometres{0})
                   : Nanometres{0};
+          const auto sampled_edge_capacity_limit =
+              owns_sampled_capacity && !is_via && !is_direct
+                  ? sampled_planar_edge_capacity(
+                        edge, corridors, corridor_neck_downs, &occupancy, config.edge_capacity,
+                        transition.width_kind == GlobalRouteSegmentWidthKind::corridor_neck_down)
+                  : config.edge_capacity;
           const auto candidate_radius =
               is_via ? static_cast<long double>(task.via_diameter.value()) / 2.0L
                      : static_cast<long double>(
@@ -7461,13 +7877,9 @@ search_path(const Grid& grid, const std::vector<std::size_t>& starts,
           const auto required_from_occupied_copper =
               candidate_radius + static_cast<long double>(task.physical_clearance.value());
           const auto clearance_blockers = [&net, required_from_occupied_copper,
-                                           &config](const auto& resources, const auto& key) {
+                                           &config](const auto& certificates) {
             std::map<NetId, std::size_t> blockers;
-            const auto found = resources.find(key);
-            if (found == resources.end()) {
-              return blockers;
-            }
-            for (const auto& [occupant, certificate] : found->second) {
+            for (const auto& [occupant, certificate] : certificates) {
               if (occupant != net && certificate.available_nm < required_from_occupied_copper) {
                 const auto deficit = required_from_occupied_copper - certificate.available_nm;
                 const auto quantum = config.clearance_shadow_cost_quantum.value();
@@ -7480,14 +7892,16 @@ search_path(const Grid& grid, const std::vector<std::size_t>& starts,
             }
             return blockers;
           };
-          const auto clearance_reserve_for = [&net, required_from_occupied_copper,
-                                              &config](const auto& resources, const auto& key) {
-            std::uint64_t penalty = 0U;
+          const auto clearance_blockers_at = [&clearance_blockers](const auto& resources,
+                                                                     const auto& key) {
             const auto found = resources.find(key);
-            if (found == resources.end()) {
-              return penalty;
-            }
-            for (const auto& [occupant, certificate] : found->second) {
+            return found == resources.end() ? std::map<NetId, std::size_t>{}
+                                            : clearance_blockers(found->second);
+          };
+          const auto clearance_reserve_for = [&net, required_from_occupied_copper,
+                                              &config](const auto& certificates) {
+            std::uint64_t penalty = 0U;
+            for (const auto& [occupant, certificate] : certificates) {
               if (occupant != net) {
                 penalty = saturating_add(
                     penalty, clearance_shadow_reserve_penalty(
@@ -7496,27 +7910,39 @@ search_path(const Grid& grid, const std::vector<std::size_t>& starts,
             }
             return penalty;
           };
+          const auto clearance_reserve_at = [&clearance_reserve_for](const auto& resources,
+                                                                       const auto& key) {
+            const auto found = resources.find(key);
+            return found == resources.end() ? std::uint64_t{0}
+                                            : clearance_reserve_for(found->second);
+          };
           std::map<NetId, std::size_t> physical_shadow_blockers;
           std::uint64_t clearance_reserve_penalty = 0U;
-          if (config.reserve_sampled_route_clearance) {
+          if (config.reserve_sampled_route_clearance &&
+              !config.clearance_shadows_advisory_only) {
             const auto merge_blockers = [&physical_shadow_blockers](const auto& blockers) {
               for (const auto& [blocker, pressure] : blockers) {
                 auto& retained = physical_shadow_blockers[blocker];
                 retained = std::max(retained, pressure);
               }
             };
-            merge_blockers(clearance_blockers(occupancy.clearance_edges, sampled_edge));
-            merge_blockers(clearance_blockers(occupancy.clearance_nodes, next));
+            merge_blockers(clearance_blockers(
+                clearance_certificates_for_edge(grid, occupancy, edge,
+                                                !is_atomic_planar_chord(grid, edge))));
+            merge_blockers(clearance_blockers_at(occupancy.clearance_nodes, next));
             clearance_reserve_penalty =
                 saturating_add(clearance_reserve_penalty,
-                               clearance_reserve_for(occupancy.clearance_edges, sampled_edge));
+                               clearance_reserve_for(
+                                   clearance_certificates_for_edge(
+                                       grid, occupancy, edge,
+                                       !is_atomic_planar_chord(grid, edge))));
             clearance_reserve_penalty = saturating_add(
-                clearance_reserve_penalty, clearance_reserve_for(occupancy.clearance_nodes, next));
+                clearance_reserve_penalty, clearance_reserve_at(occupancy.clearance_nodes, next));
             if (is_via || current_is_search_start) {
-              merge_blockers(clearance_blockers(occupancy.clearance_nodes, current_node));
+              merge_blockers(clearance_blockers_at(occupancy.clearance_nodes, current_node));
               clearance_reserve_penalty =
                   saturating_add(clearance_reserve_penalty,
-                                 clearance_reserve_for(occupancy.clearance_nodes, current_node));
+                                 clearance_reserve_at(occupancy.clearance_nodes, current_node));
             }
           }
           if (enforce_hard_capacity) {
@@ -7532,12 +7958,12 @@ search_path(const Grid& grid, const std::vector<std::size_t>& starts,
             const bool sampled_start_over_capacity = owns_sampled_capacity &&
                                                      current_is_search_start &&
                                                      current_start_occupied >= config.edge_capacity;
-            if ((owns_sampled_capacity && (edge_occupied >= config.edge_capacity ||
+            if ((owns_sampled_capacity && (edge_occupied >= sampled_edge_capacity_limit ||
                                            node_occupied >= config.edge_capacity)) ||
                 sampled_start_over_capacity) {
               ++hard_sampled_capacity_rejected_transitions;
               hard_rejected = true;
-              if (edge_occupied >= config.edge_capacity &&
+              if (edge_occupied >= sampled_edge_capacity_limit &&
                   edge_occupants != occupancy.edges.end()) {
                 transition_blockers.insert(edge_occupants->second.begin(),
                                            edge_occupants->second.end());
@@ -7707,16 +8133,31 @@ search_path(const Grid& grid, const std::vector<std::size_t>& starts,
           if (cost_policy.penalized_edges.contains(edge)) {
             edge_cost = saturating_add(edge_cost, cost_policy.alternative_edge_penalty);
           }
+          if (cost_policy.prefer_perimeter && !is_via && cost_policy.interior_depth_cost > 0U) {
+            const auto [first_x, first_y, unused_first_layer] = grid.decode(edge.first);
+            const auto [second_x, second_y, unused_second_layer] = grid.decode(edge.second);
+            static_cast<void>(unused_first_layer);
+            static_cast<void>(unused_second_layer);
+            const auto depth = [&](std::size_t x, std::size_t y) {
+              return std::min({x, y, grid.width - 1U - x, grid.height - 1U - y});
+            };
+            const auto interior_depth = std::min(depth(first_x, first_y), depth(second_x, second_y));
+            edge_cost = saturating_add(
+                edge_cost,
+                saturating_multiply(static_cast<std::uint64_t>(interior_depth),
+                                    cost_policy.interior_depth_cost));
+          }
           if (cost_policy.kind == SearchCostPolicyKind::corridor_reprojection &&
               (!cost_policy.corridor_nodes.contains(current_node) ||
                !cost_policy.corridor_nodes.contains(next))) {
             edge_cost = saturating_add(edge_cost, cost_policy.corridor_departure_penalty);
           }
-          if (edge_occupied >= config.edge_capacity) {
+          if (edge_occupied >= sampled_edge_capacity_limit) {
             edge_cost = saturating_add(
-                edge_cost, saturating_multiply(static_cast<std::uint64_t>(
-                                                   edge_occupied - config.edge_capacity + 1U),
-                                               config.present_congestion_cost));
+                edge_cost,
+                saturating_multiply(
+                    static_cast<std::uint64_t>(edge_occupied - sampled_edge_capacity_limit + 1U),
+                    config.present_congestion_cost));
           }
           if (node_occupied >= config.edge_capacity) {
             edge_cost = saturating_add(
@@ -7738,27 +8179,29 @@ search_path(const Grid& grid, const std::vector<std::size_t>& starts,
           edge_cost = saturating_add(edge_cost,
                                      saturating_multiply(static_cast<std::uint64_t>(node_history),
                                                          config.history_congestion_cost));
-          if (const auto found =
-                  history.clearance_edges.find(RoutingHistory::ClearanceEdgeKey{net, sampled_edge});
-              found != history.clearance_edges.end()) {
-            edge_cost = saturating_add(
-                edge_cost, saturating_multiply(static_cast<std::uint64_t>(found->second),
-                                               config.history_congestion_cost));
-          }
-          if (const auto found =
-                  history.clearance_nodes.find(RoutingHistory::ClearanceNodeKey{net, next});
-              found != history.clearance_nodes.end()) {
-            edge_cost = saturating_add(
-                edge_cost, saturating_multiply(static_cast<std::uint64_t>(found->second),
-                                               config.history_congestion_cost));
-          }
-          if (current_is_search_start) {
-            if (const auto found = history.clearance_nodes.find(
-                    RoutingHistory::ClearanceNodeKey{net, current_node});
+          if (!config.clearance_shadows_advisory_only) {
+            if (const auto found = history.clearance_edges.find(
+                    RoutingHistory::ClearanceEdgeKey{net, edge});
+                found != history.clearance_edges.end()) {
+              edge_cost = saturating_add(
+                  edge_cost, saturating_multiply(static_cast<std::uint64_t>(found->second),
+                                                 config.history_congestion_cost));
+            }
+            if (const auto found =
+                    history.clearance_nodes.find(RoutingHistory::ClearanceNodeKey{net, next});
                 found != history.clearance_nodes.end()) {
               edge_cost = saturating_add(
                   edge_cost, saturating_multiply(static_cast<std::uint64_t>(found->second),
                                                  config.history_congestion_cost));
+            }
+            if (current_is_search_start) {
+              if (const auto found = history.clearance_nodes.find(
+                      RoutingHistory::ClearanceNodeKey{net, current_node});
+                  found != history.clearance_nodes.end()) {
+                edge_cost = saturating_add(
+                    edge_cost, saturating_multiply(static_cast<std::uint64_t>(found->second),
+                                                   config.history_congestion_cost));
+              }
             }
           }
           if (owns_sampled_capacity && current_is_search_start) {
@@ -7966,6 +8409,7 @@ search_path(const Grid& grid, const std::vector<std::size_t>& starts,
         config.expansion_retry_heuristic_weight_per_mille > 1'000U) {
       std::priority_queue<QueueEntry, std::vector<QueueEntry>, std::greater<>> rekeyed;
       while (!open.empty()) {
+    routing_kernel_checkpoint();
         const auto entry = open.top();
         open.pop();
         if (entry.cost != distances[entry.state]) {
@@ -8045,8 +8489,13 @@ void erase_net_from_clearance_map(const NetId& net,
 
 void remove_net_occupancy(const NetId& net, RoutingOccupancy& occupancy) {
   erase_net_from_set_map(net, occupancy.edges);
+  erase_net_from_set_map(net, occupancy.crossing_cell_edges);
   erase_net_from_set_map(net, occupancy.nodes);
   erase_net_from_clearance_map(net, occupancy.clearance_edges);
+  erase_net_from_set_map(net, occupancy.clearance_planar_edges);
+  std::erase_if(occupancy.clearance_owner_segments,
+                [&net](const auto& segment) { return segment.net == net; });
+  occupancy.direct_clearance_cache.clear();
   erase_net_from_clearance_map(net, occupancy.clearance_nodes);
   erase_net_from_set_map(net, occupancy.corridors);
   erase_net_from_set_map(net, occupancy.corridor_neck_downs);
@@ -8093,6 +8542,13 @@ void add_clearance_segment_occupancy(const NetId& net, std::size_t layer, Point 
   if (layer >= grid.layers.size() || grid.width == 0U || grid.height == 0U) {
     return;
   }
+  occupancy.clearance_owner_segments.push_back(
+      ClearanceShadowOwnerSegment{net, layer, start, end, occupied_radius_nm, owner_edge, owner_node});
+  occupancy.clearance_max_candidate_radius_nm =
+      std::max(occupancy.clearance_max_candidate_radius_nm, maximum_other_radius_nm);
+  occupancy.clearance_max_clearance_nm =
+      std::max(occupancy.clearance_max_clearance_nm, maximum_clearance_nm);
+  occupancy.direct_clearance_cache.clear();
   const auto required = occupied_radius_nm + maximum_other_radius_nm + maximum_clearance_nm;
   const auto expansion = static_cast<std::int64_t>(std::ceil(required));
   const auto [first_x, last_x] = clearance_grid_range(
@@ -8144,8 +8600,9 @@ void add_clearance_segment_occupancy(const NetId& net, std::size_t layer, Point 
             geometry::segment_distance_nm(point, grid.point(next_x, next_y), start, end);
         if (edge_distance < required) {
           const auto available = edge_distance - occupied_radius_nm;
-          auto& certificates =
-              occupancy.clearance_edges[sampled_capacity_edge(grid, Edge{node, next})];
+          // Clearance is geometric: never coalesce opposite diagonals merely because their
+          // capacity resource is shared by crossing-safe routing.
+          auto& certificates = occupancy.clearance_edges[Edge{node, next}];
           const auto [certificate, inserted] = certificates.try_emplace(
               net, ClearanceShadowCertificate{available, owner_edge, owner_node});
           if (!inserted && available < certificate->second.available_nm) {
@@ -8155,6 +8612,148 @@ void add_clearance_segment_occupancy(const NetId& net, std::size_t layer, Point 
       }
     }
   }
+}
+
+[[nodiscard]] const std::map<NetId, ClearanceShadowCertificate>&
+clearance_certificates_for_edge(const Grid& grid, const RoutingOccupancy& occupancy,
+                                const Edge& edge, bool exact_segment) {
+  static const std::map<NetId, ClearanceShadowCertificate> empty;
+  if (!exact_segment) {
+    const auto found = occupancy.clearance_edges.find(edge);
+    return found == occupancy.clearance_edges.end() ? empty : found->second;
+  }
+  // Static seed searches share an empty occupancy.  There can be no exact certificate without
+  // an owner segment, so avoid turning a read-only query into a cache insertion in that case.
+  if (occupancy.clearance_owner_segments.empty()) {
+    return empty;
+  }
+  auto& cache = occupancy.direct_clearance_cache;
+  std::lock_guard lock(cache.mutex);
+  if (!cache.complete.contains(edge)) {
+    auto& certificates = cache.certificates[edge];
+    const auto [first_x, first_y, layer] = grid.decode(edge.first);
+    const auto [second_x, second_y, second_layer] = grid.decode(edge.second);
+    if (layer == second_layer) {
+      const auto start = grid.point(first_x, first_y);
+      const auto end = grid.point(second_x, second_y);
+      const auto candidate_min_x = std::min(start.x.value(), end.x.value());
+      const auto candidate_max_x = std::max(start.x.value(), end.x.value());
+      const auto candidate_min_y = std::min(start.y.value(), end.y.value());
+      const auto candidate_max_y = std::max(start.y.value(), end.y.value());
+      if (!cache.owner_index_attempted) {
+        cache.owner_index_attempted = true;
+        constexpr std::size_t owner_index_maximum_bytes = 32ULL * 1024ULL * 1024ULL;
+        const auto maximum_indexed_owners =
+            owner_index_maximum_bytes /
+            (sizeof(IndexedClearancePrimitive) + sizeof(std::uint32_t) * 2U +
+             sizeof(IndexedClearanceMap::BvhNode) * 2U);
+        // The BVH builder's cap is checked after primitive allocation. Preflight it here so a
+        // huge occupancy falls back to exhaustive exact checks without allocating its index.
+        if (occupancy.clearance_owner_segments.size() <= maximum_indexed_owners) {
+          std::map<NetId, std::uint32_t> net_ids;
+          for (const auto& owner : occupancy.clearance_owner_segments) {
+            if (net_ids.size() >= std::numeric_limits<std::uint32_t>::max()) {
+              break;
+            }
+            net_ids.try_emplace(owner.net, 0U);
+          }
+          std::uint32_t next_net_id = 0U;
+          for (auto& [net, net_id] : net_ids) {
+            static_cast<void>(net);
+            net_id = next_net_id++;
+          }
+          std::vector<IndexedClearancePrimitive> primitives;
+          primitives.reserve(occupancy.clearance_owner_segments.size());
+          for (std::size_t index = 0U; index < occupancy.clearance_owner_segments.size(); ++index) {
+            const auto& owner = occupancy.clearance_owner_segments[index];
+            if (index >= std::numeric_limits<std::uint32_t>::max() ||
+                owner.layer >= std::numeric_limits<std::uint32_t>::max()) {
+              primitives.clear();
+              break;
+            }
+            primitives.push_back(IndexedClearancePrimitive{
+                owner.start.x.value(), owner.start.y.value(), owner.end.x.value(),
+                owner.end.y.value(), static_cast<std::uint32_t>(index + 1U),
+                net_ids.contains(owner.net)
+                    ? std::optional<std::uint32_t>{net_ids.at(owner.net)}
+                    : std::optional<std::uint32_t>{},
+                static_cast<std::uint32_t>(owner.layer), owner.occupied_radius_nm});
+          }
+          if (!primitives.empty()) {
+            IndexedClearanceMapConfig owner_index_config;
+            owner_index_config.origin_x_nm = 0;
+            owner_index_config.origin_y_nm = 0;
+            owner_index_config.pitch_nm = 1;
+            owner_index_config.width = 1U;
+            owner_index_config.height = 1U;
+            static std::atomic<std::uint64_t> next_owner_index_revision{0U};
+            owner_index_config.geometry_revision =
+                next_owner_index_revision.fetch_add(1U, std::memory_order_relaxed) + 1U;
+            owner_index_config.maximum_bytes = owner_index_maximum_bytes;
+            owner_index_config.materialize_cells = false;
+            const auto built =
+                build_indexed_clearance_map(std::move(owner_index_config), std::move(primitives));
+            if (built.status == IndexedClearanceBuildStatus::ok && built.map) {
+              cache.owner_index = std::move(built.map);
+            }
+          }
+        }
+      }
+      std::vector<std::uint32_t> owner_indices;
+      if (cache.owner_index && layer < std::numeric_limits<std::uint32_t>::max()) {
+        owner_indices = cache.owner_index->segment_candidates(
+            static_cast<long double>(start.x.value()), static_cast<long double>(start.y.value()),
+            static_cast<long double>(end.x.value()), static_cast<long double>(end.y.value()),
+            occupancy.clearance_max_candidate_radius_nm, occupancy.clearance_max_clearance_nm,
+            static_cast<std::uint32_t>(layer));
+      }
+      const auto exact_owner = [&](const ClearanceShadowOwnerSegment& owner) {
+        if (owner.layer != layer) {
+          return;
+        }
+        const auto envelope = owner.occupied_radius_nm +
+                              occupancy.clearance_max_candidate_radius_nm +
+                              occupancy.clearance_max_clearance_nm;
+        if (candidate_max_x + envelope < std::min(owner.start.x.value(), owner.end.x.value()) ||
+            candidate_min_x - envelope > std::max(owner.start.x.value(), owner.end.x.value()) ||
+            candidate_max_y + envelope < std::min(owner.start.y.value(), owner.end.y.value()) ||
+            candidate_min_y - envelope > std::max(owner.start.y.value(), owner.end.y.value())) {
+          return;
+        }
+        const auto available = geometry::segment_distance_nm(start, end, owner.start, owner.end) -
+                               owner.occupied_radius_nm;
+        const auto [certificate, inserted] = certificates.try_emplace(
+            owner.net, ClearanceShadowCertificate{available, owner.owner_edge, owner.owner_node});
+        if (!inserted && available < certificate->second.available_nm) {
+          certificate->second = {available, owner.owner_edge, owner.owner_node};
+        }
+      };
+      auto use_owner_index = cache.owner_index != nullptr &&
+                             layer < std::numeric_limits<std::uint32_t>::max();
+      if (use_owner_index) {
+        for (const auto primitive_index : owner_indices) {
+          // Primitives were built one-for-one in owner-segment order; any unexpected index is a
+          // conservative cache failure and falls back to exhaustive exact qualification below.
+          if (primitive_index >= occupancy.clearance_owner_segments.size()) {
+            use_owner_index = false;
+            break;
+          }
+        }
+      }
+      if (use_owner_index) {
+        for (const auto primitive_index : owner_indices) {
+          exact_owner(occupancy.clearance_owner_segments[primitive_index]);
+        }
+      } else {
+        for (const auto& owner : occupancy.clearance_owner_segments) {
+          exact_owner(owner);
+        }
+      }
+    }
+    cache.complete.insert(edge);
+  }
+  const auto found = cache.certificates.find(edge);
+  return found == cache.certificates.end() ? empty : found->second;
 }
 
 [[nodiscard]] std::optional<std::size_t> exact_grid_node(const Grid& grid, Point point,
@@ -8327,8 +8926,7 @@ void add_path_clearance_occupancy(const GlobalRoutePath& path, Nanometres nomina
       std::optional<std::size_t> owner_node;
       if (exact_nodes[index - 1U] && exact_nodes[index] &&
           exact_nodes[index - 1U] != exact_nodes[index]) {
-        owner_edge =
-            sampled_capacity_edge(grid, Edge{*exact_nodes[index - 1U], *exact_nodes[index]});
+        owner_edge = Edge{*exact_nodes[index - 1U], *exact_nodes[index]};
       } else {
         // A terminal-access polyline is not necessarily on the global lattice. Attribute every
         // part of that stub to its selected portal so history can choose a different escape.
@@ -8358,6 +8956,23 @@ void add_path_occupancy(const NetId& net, const std::vector<std::size_t>& nodes,
                         const std::vector<GlobalRouteSegmentWidthKind>& segment_width_kinds,
                         const SharedVoronoiAllocationGraph& voronoi_allocation,
                         RoutingOccupancy& occupancy) {
+  const auto corridor_for_segment =
+      [&](std::size_t segment_index) -> std::optional<std::pair<bool, std::size_t>> {
+    if (segment_index + 1U >= nodes.size()) {
+      return std::nullopt;
+    }
+    const Edge edge{nodes[segment_index], nodes[segment_index + 1U]};
+    if (voronoi_allocation.direct_resource(edge)) {
+      return std::nullopt;
+    }
+    const bool narrow =
+        segment_width_kinds.size() + 1U == nodes.size() &&
+        segment_width_kinds[segment_index] == GlobalRouteSegmentWidthKind::corridor_neck_down;
+    const auto& graph = narrow ? corridor_neck_downs : corridors;
+    const auto corridor = graph.corridor_for(edge);
+    return corridor ? std::optional<std::pair<bool, std::size_t>>{{narrow, *corridor}}
+                    : std::nullopt;
+  };
   for (std::size_t index = 0U; index < nodes.size(); ++index) {
     const bool follows_direct =
         index + 1U < nodes.size() &&
@@ -8365,7 +8980,25 @@ void add_path_occupancy(const NetId& net, const std::vector<std::size_t>& nodes,
     const bool precedes_direct =
         index > 0U &&
         voronoi_allocation.direct_resource(Edge{nodes[index - 1U], nodes[index]}).has_value();
-    if (!follows_direct && !precedes_direct) {
+    const auto incoming_corridor = index > 0U ? corridor_for_segment(index - 1U) : std::nullopt;
+    const auto outgoing_corridor = corridor_for_segment(index);
+    // A longitudinal sample inside one unchanged physical corridor is not an exclusive routing
+    // site.  Its occupants are lanes whose aggregate demand is already charged to that corridor.
+    // Keep the endpoints and every turn/junction as capacity-one sampled nodes so lane entry,
+    // crossing, terminal access and via attachment cannot be hidden by this abstraction.
+    const bool corridor_interior = [&] {
+      if (!incoming_corridor || !outgoing_corridor ||
+          incoming_corridor->first != outgoing_corridor->first) {
+        return false;
+      }
+      const auto& graph = incoming_corridor->first ? corridor_neck_downs : corridors;
+      const auto& incoming = graph.corridors[incoming_corridor->second];
+      const auto& outgoing = graph.corridors[outgoing_corridor->second];
+      // A capacity neck splits corridor IDs at the cross-section change, but remains one straight
+      // lane bundle. A change of orientation remains an exclusive turn/junction.
+      return incoming.layer == outgoing.layer && incoming.orientation == outgoing.orientation;
+    }();
+    if (!follows_direct && !precedes_direct && !corridor_interior) {
       occupancy.nodes[nodes[index]].insert(net);
     }
   }
@@ -8374,6 +9007,12 @@ void add_path_occupancy(const NetId& net, const std::vector<std::size_t>& nodes,
     const auto sampled_edge =
         voronoi_allocation.direct_resource(edge) ? edge : sampled_capacity_edge(grid, edge);
     occupancy.edges[sampled_edge].insert(net);
+    if (std::get<2>(grid.decode(edge.first)) == std::get<2>(grid.decode(edge.second))) {
+      occupancy.clearance_planar_edges[edge].insert(net);
+    }
+    if (grid.crossing_safe_diagonal_edges && is_diagonal_grid_edge(grid, edge)) {
+      occupancy.crossing_cell_edges[sampled_edge].insert(net);
+    }
     const bool corridor_neck_down =
         segment_width_kinds.size() + 1U == nodes.size() &&
         segment_width_kinds[i - 1U] == GlobalRouteSegmentWidthKind::corridor_neck_down;
@@ -8410,9 +9049,22 @@ void add_path_occupancy(const NetId& net, const std::vector<std::size_t>& nodes,
 }
 
 [[nodiscard]] std::map<NetId, std::size_t> soft_capacity_route_blockers(
-    const NetId& net, const std::vector<std::size_t>& nodes, const Grid& grid,
+    const NetTask& task, const SearchResult& probe, const Grid& grid,
     const CorridorGraph& corridors, const CorridorGraph& corridor_neck_downs,
-    const SharedVoronoiAllocationGraph& allocation, const RoutingOccupancy& occupancy) {
+    const SharedVoronoiAllocationGraph& allocation, const RoutingOccupancy& occupancy,
+    const GlobalRouterConfig& config, std::size_t& legal_shadow_observations) {
+  const auto& net = task.net;
+  const auto& nodes = probe.nodes;
+  const auto required_for_segment = [&](std::size_t index) {
+    const bool via = std::get<2>(grid.decode(nodes[index])) !=
+                     std::get<2>(grid.decode(nodes[index + 1U]));
+    const auto width = probe.segment_widths.size() + 1U == nodes.size() &&
+                               probe.segment_widths[index].value() > 0
+                           ? probe.segment_widths[index]
+                           : task.nominal_track_width;
+    return static_cast<long double>((via ? task.via_diameter : width).value()) / 2.0L +
+           static_cast<long double>(task.physical_clearance.value());
+  };
   std::map<NetId, std::size_t> blockers;
   const auto add_owners = [&blockers, &net](const auto& owners) {
     for (const auto& owner : owners) {
@@ -8421,21 +9073,43 @@ void add_path_occupancy(const NetId& net, const std::vector<std::size_t>& nodes,
       }
     }
   };
-  const auto add_clearance_owners = [&blockers, &net](const auto& owners) {
+  const auto add_clearance_owners = [&](const auto& owners, long double required_nm) {
+    if (!config.reserve_sampled_route_clearance || config.clearance_shadows_advisory_only) {
+      return;
+    }
     for (const auto& [owner, certificate] : owners) {
-      static_cast<void>(certificate);
-      if (owner != net) {
+      if (owner == net) {
+        continue;
+      }
+      // These certificates cover the largest possible candidate (including vias). A nearby
+      // owner is a rip-up blocker only when this probe's actual copper violates its clearance.
+      if (certificate.available_nm < required_nm) {
         blockers[owner] = saturating_count_add(blockers[owner], 1U);
+      } else {
+        legal_shadow_observations = saturating_count_add(legal_shadow_observations, 1U);
       }
     }
   };
-  for (const auto node : nodes) {
+  for (std::size_t index = 0U; index < nodes.size(); ++index) {
+    const auto node = nodes[index];
     if (const auto found = occupancy.nodes.find(node); found != occupancy.nodes.end()) {
-      add_owners(found->second);
+      const auto occupied = found->second.size() - found->second.count(net);
+      if (occupied >= 1U) {
+        add_owners(found->second);
+      }
     }
     if (const auto found = occupancy.clearance_nodes.find(node);
         found != occupancy.clearance_nodes.end()) {
-      add_clearance_owners(found->second);
+      // A junction needs room for both incident tracks, or for the full via diameter.
+      auto required_nm = static_cast<long double>(task.nominal_track_width.value()) / 2.0L +
+                         static_cast<long double>(task.physical_clearance.value());
+      if (nodes.size() > 1U) {
+        required_nm = index == 0U ? required_for_segment(0U) : required_for_segment(index - 1U);
+        if (index + 1U < nodes.size()) {
+          required_nm = std::max(required_nm, required_for_segment(index));
+        }
+      }
+      add_clearance_owners(found->second, required_nm);
     }
   }
   for (std::size_t index = 1U; index < nodes.size(); ++index) {
@@ -8443,21 +9117,30 @@ void add_path_occupancy(const NetId& net, const std::vector<std::size_t>& nodes,
     const auto sampled =
         allocation.direct_resource(edge) ? edge : sampled_capacity_edge(grid, edge);
     if (const auto found = occupancy.edges.find(sampled); found != occupancy.edges.end()) {
-      add_owners(found->second);
+      const auto occupied = found->second.size() - found->second.count(net);
+      const auto capacity =
+          allocation.direct_resource(edge)
+              ? 1U
+              : sampled_planar_edge_capacity(edge, corridors, corridor_neck_downs, &occupancy, 1U);
+      if (occupied >= capacity) {
+        add_owners(found->second);
+      }
     }
-    if (const auto found = occupancy.clearance_edges.find(sampled);
-        found != occupancy.clearance_edges.end()) {
-      add_clearance_owners(found->second);
-    }
+    const auto& shadows = clearance_certificates_for_edge(
+        grid, occupancy, edge, !is_atomic_planar_chord(grid, edge));
+    add_clearance_owners(shadows, required_for_segment(index - 1U));
     if (const auto corridor = corridors.corridor_for(edge)) {
       if (const auto found = occupancy.corridors.find(*corridor);
-          found != occupancy.corridors.end()) {
+          found != occupancy.corridors.end() && found->second.size() - found->second.count(net) >=
+                                                    corridors.corridors[*corridor].capacity) {
         add_owners(found->second);
       }
     }
     if (const auto corridor = corridor_neck_downs.corridor_for(edge)) {
       if (const auto found = occupancy.corridor_neck_downs.find(*corridor);
-          found != occupancy.corridor_neck_downs.end()) {
+          found != occupancy.corridor_neck_downs.end() &&
+          found->second.size() - found->second.count(net) >=
+              corridor_neck_downs.corridors[*corridor].capacity) {
         add_owners(found->second);
       }
     }
@@ -8478,6 +9161,8 @@ void add_path_occupancy(const NetId& net, const std::vector<std::size_t>& nodes,
 
 void populate_resource_usage(GlobalRouteResult& result, const Grid& grid,
                              const SharedVoronoiAllocationGraph& voronoi_allocation,
+                             const CorridorGraph& corridors,
+                             const CorridorGraph& corridor_neck_downs,
                              const RoutingOccupancy& occupancy, std::size_t sampled_capacity,
                              bool single_lane_direct_resources) {
   result.resource_usage.clear();
@@ -8504,7 +9189,11 @@ void populate_resource_usage(GlobalRouteResult& result, const Grid& grid,
     } else {
       const auto kind = first.layer == second.layer ? RoutingResourceKind::planar_edge
                                                     : RoutingResourceKind::via_edge;
-      append(kind, std::move(first), std::move(second), nets, sampled_capacity);
+      const auto capacity = kind == RoutingResourceKind::planar_edge
+                                ? sampled_planar_edge_capacity(edge, corridors, corridor_neck_downs,
+                                                               &occupancy, sampled_capacity)
+                                : sampled_capacity;
+      append(kind, std::move(first), std::move(second), nets, capacity);
     }
   }
   for (const auto& [node, nets] : occupancy.nodes) {
@@ -9726,9 +10415,13 @@ void account_routing_occupancy(GlobalRouteResult& result, const Board& board, co
                                bool charge_shadow_owner_history = false) {
   result.clearance_shadow_conflicts.clear();
   result.clearance_shadow_overflow = 0U;
+  result.clearance_shadow_raster_samples = 0U;
+  result.clearance_shadow_coalesced_samples = 0U;
   result.clearance_shadow_history_increment = 0U;
   result.peak_clearance_shadow_history_increment = 0U;
   result.clearance_shadow_conflict_budget_exhausted = false;
+  result.unresolved_corridor_packing.clear();
+  result.corridor_packing_obligation_budget_exhausted = false;
   std::map<NetId, ResolvedNetRoutingRules> resolved_rules;
   resolved_rules.emplace(NetId{}, resolve_net_routing_rules(board, NetId{}));
   for (const auto& net : board.nets) {
@@ -9739,26 +10432,54 @@ void account_routing_occupancy(GlobalRouteResult& result, const Board& board, co
     return found == resolved_rules.end() ? resolved_rules.at(NetId{}) : found->second;
   };
   if (config.reserve_sampled_route_clearance) {
-    std::set<std::pair<NetId, std::size_t>> via_nodes;
+    // Occupancy capacity keys may alias opposite diagonals, so derive the actual copper envelope
+    // from committed segments before qualifying a shadow witness.  This also preserves selected
+    // neck-down widths at a junction instead of silently reverting to the nominal net width.
+    std::map<std::pair<NetId, Edge>, Nanometres> selected_edge_widths;
+    std::map<std::pair<NetId, std::size_t>, Nanometres> maximum_incident_widths;
+    const auto node_for_route_point = [&grid](const GlobalRoutePoint& point) {
+      const auto layer = std::find(grid.layers.begin(), grid.layers.end(), point.layer);
+      return layer == grid.layers.end()
+                 ? std::optional<std::size_t>{}
+                 : exact_grid_node(grid, point.position,
+                                   static_cast<std::size_t>(layer - grid.layers.begin()));
+    };
+    const auto remember_node_width = [&maximum_incident_widths](const NetId& net,
+                                                                 std::size_t node,
+                                                                 Nanometres width) {
+      auto& retained = maximum_incident_widths[{net, node}];
+      retained = std::max(retained, width);
+    };
     for (const auto& path : result.paths) {
       for (std::size_t index = 1U; index < path.points.size(); ++index) {
-        if (path.points[index - 1U].layer == path.points[index].layer) {
-          continue;
-        }
-        const auto position = path.points[index].position;
-        const auto relative_x = position.x.value() - grid.origin_x;
-        const auto relative_y = position.y.value() - grid.origin_y;
-        if (relative_x < 0 || relative_y < 0 || relative_x % grid.pitch != 0 ||
-            relative_y % grid.pitch != 0) {
-          continue;
-        }
-        const auto x = static_cast<std::size_t>(relative_x / grid.pitch);
-        const auto y = static_cast<std::size_t>(relative_y / grid.pitch);
-        if (!grid.valid(x, y)) {
+        const auto& first = path.points[index - 1U];
+        const auto& second = path.points[index];
+        const auto selected_width =
+            path.segment_widths.size() + 1U == path.points.size() &&
+                    path.segment_widths[index - 1U].value() > 0
+                ? path.segment_widths[index - 1U]
+                : rules_for(path.net).track_width;
+        if (first.layer == second.layer) {
+          const auto first_node = node_for_route_point(first);
+          const auto second_node = node_for_route_point(second);
+          if (first_node) {
+            remember_node_width(path.net, *first_node, selected_width);
+          }
+          if (second_node) {
+            remember_node_width(path.net, *second_node, selected_width);
+          }
+          if (!first_node || !second_node || *first_node == *second_node) {
+            continue;
+          }
+          const Edge edge{*first_node, *second_node};
+          auto& retained = selected_edge_widths[{path.net, edge}];
+          retained = std::max(retained, selected_width);
           continue;
         }
         for (std::size_t layer = 0U; layer < grid.layers.size(); ++layer) {
-          via_nodes.emplace(path.net, grid.node(x, y, layer));
+          if (const auto node = exact_grid_node(grid, second.position, layer)) {
+            remember_node_width(path.net, *node, rules_for(path.net).via_diameter);
+          }
         }
       }
     }
@@ -9766,6 +10487,23 @@ void account_routing_occupancy(GlobalRouteResult& result, const Board& board, co
     using ConflictKey =
         std::tuple<RoutingClearanceShadowResourceKind, std::size_t, std::size_t, NetId, NetId>;
     std::set<ConflictKey> unique;
+    using CorridorPackingObligationKey = std::tuple<bool, std::size_t, NetId, NetId>;
+    std::set<CorridorPackingObligationKey> corridor_packing_obligations;
+    // Shadow raster cells are deliberately not the published unit of physical conflict. A
+    // route pair can overlap dozens of adjacent cells while describing one repair decision.
+    // Collapse those samples by net pair, resource kind, layer, and a deterministic local tile;
+    // retain the deepest witness in each tile. The tile is two sampled pitches, which preserves
+    // separate conflict runs while preventing a finer global lattice from inflating telemetry or
+    // regional problem size.
+    using ShadowWitnessKey =
+        std::tuple<RoutingClearanceShadowResourceKind, LayerId, std::int64_t, std::int64_t, NetId,
+                   NetId>;
+    std::map<ShadowWitnessKey, RoutingClearanceShadowConflict> advisory_witnesses;
+    const auto witness_pitch = std::max<std::int64_t>(1, grid.pitch * 2);
+    const auto witness_coordinate = [witness_pitch](std::int64_t coordinate) {
+      auto quotient = coordinate / witness_pitch;
+      return coordinate % witness_pitch < 0 ? quotient - 1 : quotient;
+    };
     // A single selected owner edge can cast its shadow over several neighbouring resources. The
     // ordinary phase retains the stable candidate-side update. A bounded fallback phase can also
     // make the owner actionable, but coalesces that history to the strongest update for each
@@ -9779,13 +10517,54 @@ void account_routing_occupancy(GlobalRouteResult& result, const Board& board, co
       if (candidate_net == shadow_net) {
         return;
       }
+      std::optional<std::pair<bool, std::size_t>> shared_capacious_corridor;
+      if (kind == RoutingClearanceShadowResourceKind::planar_edge && certificate.owner_edge &&
+          !occupancy.crossing_cell_edges.contains(
+              sampled_capacity_edge(grid, Edge{first_node, second_node}))) {
+        const Edge candidate_edge{first_node, second_node};
+        const auto shares_capacious_corridor = [&](const CorridorGraph& graph,
+                                                   const auto& selected, bool neck_down) {
+          const auto candidate_corridor = graph.corridor_for(candidate_edge);
+          const auto owner_corridor = graph.corridor_for(*certificate.owner_edge);
+          if (!candidate_corridor || !owner_corridor || *candidate_corridor != *owner_corridor) {
+            return std::optional<std::pair<bool, std::size_t>>{};
+          }
+          const auto occupants = selected.find(*candidate_corridor);
+          if (occupants == selected.end() || !occupants->second.contains(candidate_net) ||
+              !occupants->second.contains(shadow_net) ||
+              occupants->second.size() > graph.corridors[*candidate_corridor].capacity) {
+            return std::optional<std::pair<bool, std::size_t>>{};
+          }
+          return std::optional<std::pair<bool, std::size_t>>{
+              {neck_down, *candidate_corridor}};
+        };
+        // Shared-corridor planning centrelines may not have assigned lateral offsets yet.
+        // Keep an explicit obligation only if their selected copper widths
+        // still overlap under the exact clearance certificate below. Cross-corridor and
+        // over-capacity overlaps remain ordinary attributed clearance-shadow conflicts.
+        shared_capacious_corridor = shares_capacious_corridor(corridors, occupancy.corridors,
+                                                              false);
+        if (!shared_capacious_corridor) {
+          shared_capacious_corridor = shares_capacious_corridor(
+              corridor_neck_downs, occupancy.corridor_neck_downs, true);
+        }
+      }
       const auto& candidate_rules = rules_for(candidate_net);
       const auto& shadow_rules = rules_for(shadow_net);
-      const auto candidate_radius =
-          kind == RoutingClearanceShadowResourceKind::terminal_or_via_node &&
-                  via_nodes.contains({candidate_net, first_node})
-              ? static_cast<long double>(candidate_rules.via_diameter.value()) / 2.0L
-              : static_cast<long double>(candidate_rules.track_width.value()) / 2.0L;
+      const auto candidate_width = [&] {
+        if (kind == RoutingClearanceShadowResourceKind::planar_edge) {
+          if (const auto found = selected_edge_widths.find(
+                  {candidate_net, Edge{first_node, second_node}});
+              found != selected_edge_widths.end()) {
+            return found->second;
+          }
+        } else if (const auto found = maximum_incident_widths.find({candidate_net, first_node});
+                   found != maximum_incident_widths.end()) {
+          return found->second;
+        }
+        return candidate_rules.track_width;
+      }();
+      const auto candidate_radius = static_cast<long double>(candidate_width.value()) / 2.0L;
       const auto required =
           candidate_radius +
           static_cast<long double>(
@@ -9795,20 +10574,14 @@ void account_routing_occupancy(GlobalRouteResult& result, const Board& board, co
       }
       const auto first_net = std::min(candidate_net, shadow_net);
       const auto second_net = std::max(candidate_net, shadow_net);
-      const ConflictKey key{kind, std::min(first_node, second_node),
-                            std::max(first_node, second_node), first_net, second_net};
-      if (!unique.insert(key).second) {
-        return;
-      }
-      if (result.clearance_shadow_conflicts.size() >=
-          config.max_clearance_shadow_conflict_resources) {
-        result.clearance_shadow_conflict_budget_exhausted = true;
-        return;
-      }
       const auto [first_x, first_y, first_layer] = grid.decode(first_node);
       const auto [second_x, second_y, second_layer] = grid.decode(second_node);
       if (first_layer >= grid.layers.size() || second_layer >= grid.layers.size()) {
-        result.clearance_shadow_conflict_budget_exhausted = true;
+        if (shared_capacious_corridor) {
+          result.corridor_packing_obligation_budget_exhausted = true;
+        } else {
+          result.clearance_shadow_conflict_budget_exhausted = true;
+        }
         return;
       }
       std::optional<GlobalRoutePoint> shadow_owner_first;
@@ -9821,16 +10594,84 @@ void account_routing_occupancy(GlobalRouteResult& result, const Board& board, co
         shadow_owner_second = shadow_owner_first;
       }
       const auto deficit = required - certificate.available_nm;
+      const GlobalRoutePoint candidate_first{grid.point(first_x, first_y), grid.layers[first_layer]};
+      const GlobalRoutePoint candidate_second{grid.point(second_x, second_y),
+                                              grid.layers[second_layer]};
+      auto conflict = RoutingClearanceShadowConflict{
+          kind, candidate_first, candidate_second, first_net, second_net,
+          Nanometres{static_cast<std::int64_t>(std::ceil(deficit))}, shadow_owner_first,
+          shadow_owner_second};
+      if (shared_capacious_corridor) {
+        const CorridorPackingObligationKey key{shared_capacious_corridor->first,
+                                               shared_capacious_corridor->second, first_net,
+                                               second_net};
+        if (corridor_packing_obligations.contains(key)) {
+          return;
+        }
+        if (result.unresolved_corridor_packing.size() >=
+            config.max_clearance_shadow_conflict_resources) {
+          result.corridor_packing_obligation_budget_exhausted = true;
+          return;
+        }
+        corridor_packing_obligations.insert(key);
+        // Packing consumers join the witness's primary segment to first_net and its owner
+        // segment to second_net. Preserve that relation after normalizing the pair order without
+        // changing the established geometry convention for ordinary shadow conflicts.
+        if (candidate_net != first_net && shadow_owner_first && shadow_owner_second) {
+          conflict.first = *shadow_owner_first;
+          conflict.second = *shadow_owner_second;
+          conflict.shadow_owner_first = candidate_first;
+          conflict.shadow_owner_second = candidate_second;
+        }
+        result.unresolved_corridor_packing.push_back(RoutingCorridorPackingObligation{
+            shared_capacious_corridor->second, shared_capacious_corridor->first,
+            std::move(conflict)});
+        return;
+      }
+      const ConflictKey key{kind, std::min(first_node, second_node),
+                            std::max(first_node, second_node), first_net, second_net};
+      if (!unique.insert(key).second) {
+        return;
+      }
+      const auto retained_conflicts = config.clearance_shadows_advisory_only
+                                          ? advisory_witnesses.size()
+                                          : result.clearance_shadow_conflicts.size();
+      if (retained_conflicts >= config.max_clearance_shadow_conflict_resources) {
+        result.clearance_shadow_conflict_budget_exhausted = true;
+        return;
+      }
+      result.clearance_shadow_raster_samples =
+          saturating_count_add(result.clearance_shadow_raster_samples, 1U);
       const auto quantum = config.clearance_shadow_cost_quantum.value();
       const auto history_increment =
           quantum > 0 ? static_cast<std::size_t>(
                             std::max(1.0L, std::ceil(deficit / static_cast<long double>(quantum))))
                       : 1U;
-      result.clearance_shadow_conflicts.push_back(RoutingClearanceShadowConflict{
-          kind, GlobalRoutePoint{grid.point(first_x, first_y), grid.layers[first_layer]},
-          GlobalRoutePoint{grid.point(second_x, second_y), grid.layers[second_layer]}, first_net,
-          second_net, Nanometres{static_cast<std::int64_t>(std::ceil(deficit))}, shadow_owner_first,
-          shadow_owner_second});
+      if (config.clearance_shadows_advisory_only) {
+        auto center_x = std::midpoint(conflict.first.position.x.value(),
+                                      conflict.second.position.x.value());
+        auto center_y = std::midpoint(conflict.first.position.y.value(),
+                                      conflict.second.position.y.value());
+        if (conflict.shadow_owner_first && conflict.shadow_owner_second) {
+          center_x = std::midpoint(
+              center_x, std::midpoint(conflict.shadow_owner_first->position.x.value(),
+                                      conflict.shadow_owner_second->position.x.value()));
+          center_y = std::midpoint(
+              center_y, std::midpoint(conflict.shadow_owner_first->position.y.value(),
+                                      conflict.shadow_owner_second->position.y.value()));
+        }
+        const ShadowWitnessKey witness_key{kind, grid.layers[first_layer],
+                                           witness_coordinate(center_x),
+                                           witness_coordinate(center_y), first_net, second_net};
+        if (const auto found = advisory_witnesses.find(witness_key);
+            found == advisory_witnesses.end()) {
+          advisory_witnesses.emplace(witness_key, std::move(conflict));
+        } else if (conflict.clearance_deficit > found->second.clearance_deficit) {
+          found->second = std::move(conflict);
+        }
+        return;
+      }
+      result.clearance_shadow_conflicts.push_back(std::move(conflict));
       result.total_overflow = saturating_count_add(result.total_overflow, 1U);
       result.clearance_shadow_overflow = saturating_count_add(result.clearance_shadow_overflow, 1U);
       result.clearance_shadow_history_increment =
@@ -9857,13 +10698,14 @@ void account_routing_occupancy(GlobalRouteResult& result, const Board& board, co
         }
       }
     };
-    for (const auto& [edge, occupants] : occupancy.edges) {
-      const auto shadows = occupancy.clearance_edges.find(edge);
-      if (shadows == occupancy.clearance_edges.end()) {
+    for (const auto& [edge, occupants] : occupancy.clearance_planar_edges) {
+      const auto& shadows = clearance_certificates_for_edge(
+          grid, occupancy, edge, !is_atomic_planar_chord(grid, edge));
+      if (shadows.empty()) {
         continue;
       }
       for (const auto& candidate_net : occupants) {
-        for (const auto& [shadow_net, certificate] : shadows->second) {
+        for (const auto& [shadow_net, certificate] : shadows) {
           append_conflict(RoutingClearanceShadowResourceKind::planar_edge, edge.first, edge.second,
                           candidate_net, shadow_net, certificate);
         }
@@ -9880,6 +10722,20 @@ void account_routing_occupancy(GlobalRouteResult& result, const Board& board, co
                           candidate_net, shadow_net, certificate);
         }
       }
+    }
+    if (config.clearance_shadows_advisory_only) {
+      result.clearance_shadow_conflicts.reserve(advisory_witnesses.size());
+      for (auto& [key, conflict] : advisory_witnesses) {
+        static_cast<void>(key);
+        result.clearance_shadow_conflicts.push_back(std::move(conflict));
+      }
+      result.clearance_shadow_overflow = result.clearance_shadow_conflicts.size();
+      result.clearance_shadow_coalesced_samples =
+          result.clearance_shadow_raster_samples - result.clearance_shadow_conflicts.size();
+      // Exact quantized-copper diagnoses own history in this mode. Keeping these counters at
+      // zero makes it observable that no raster-density-dependent shadow pressure was charged.
+      result.clearance_shadow_history_increment = 0U;
+      result.peak_clearance_shadow_history_increment = 0U;
     }
     if (history != nullptr) {
       for (const auto& [key, increment] : shadow_edge_history_increments) {
@@ -9901,9 +10757,14 @@ void account_routing_occupancy(GlobalRouteResult& result, const Board& board, co
         allocation.direct_resource(edge) && !config.single_lane_direct_voronoi_resources;
     const auto prior =
         history != nullptr && history->edges.contains(edge) ? history->edges.at(edge) : 0U;
+    const auto capacity = exempt
+                              ? nets.size()
+                              : sampled_planar_edge_capacity(edge, corridors, corridor_neck_downs,
+                                                             &occupancy, config.edge_capacity);
     sampled_resources.push_back(RoutingComputeNegotiatedResource{
         static_cast<std::uint32_t>(nets.size()),
-        static_cast<std::uint32_t>(exempt ? nets.size() : config.edge_capacity),
+        static_cast<std::uint32_t>(
+            std::min<std::size_t>(capacity, std::numeric_limits<std::uint32_t>::max())),
         static_cast<std::uint32_t>(
             std::min<std::size_t>(prior, std::numeric_limits<std::uint32_t>::max())),
         1U});
@@ -9975,8 +10836,8 @@ void account_routing_occupancy(GlobalRouteResult& result, const Board& board, co
           saturating_count_add(history->voronoi_resources[resource_id], increment);
     }
   }
-  populate_resource_usage(result, grid, allocation, occupancy, config.edge_capacity,
-                          config.single_lane_direct_voronoi_resources);
+  populate_resource_usage(result, grid, allocation, corridors, corridor_neck_downs, occupancy,
+                          config.edge_capacity, config.single_lane_direct_voronoi_resources);
   populate_corridor_usage(result, grid, corridors, occupancy);
   populate_corridor_usage(result, grid, corridor_neck_downs, occupancy, true);
   populate_voronoi_resource_usage(result, grid, allocation, occupancy, obstacles, config);
@@ -11277,12 +12138,35 @@ prepare_reuse(const GlobalRouteResult& checkpoint, const std::vector<NetId>& req
   for (const auto& task : all_tasks) {
     nominal_width_by_net.emplace(task.net, task.nominal_track_width);
   }
+  const auto sampled_usage_capacity_compatible = [&](const RoutingResourceUsage& usage,
+                                                     const Edge& edge) {
+    if (usage.kind != RoutingResourceKind::planar_edge) {
+      return usage.capacity == config.edge_capacity;
+    }
+    if (usage.capacity == config.edge_capacity) {
+      return true;
+    }
+    const auto nominal = corridors.corridor_for(edge);
+    const auto narrow = corridor_neck_downs.corridor_for(edge);
+    const auto nominal_capacity =
+        nominal ? corridors.corridors[*nominal].capacity : config.edge_capacity;
+    const auto narrow_capacity =
+        narrow ? corridor_neck_downs.corridors[*narrow].capacity : config.edge_capacity;
+    return usage.capacity == nominal_capacity || usage.capacity == narrow_capacity ||
+           (nominal && narrow && usage.capacity == std::min(nominal_capacity, narrow_capacity));
+  };
   std::set<NetId> affected(requested_affected.begin(), requested_affected.end());
-  if (!preserve_unaffected_provisional_congestion &&
-      (!checkpoint.selected_shove_proposals.empty() ||
+  const bool live_copper_terrain_changed =
+      checkpoint.configured_live_copper_terrain != config.live_copper_terrain ||
+      checkpoint.configured_live_copper_terrain_revision != config.live_copper_terrain_revision;
+  if (live_copper_terrain_changed ||
+      checkpoint.configured_board_terrain_guidance != config.board_terrain_guidance ||
+      (!preserve_unaffected_provisional_congestion &&
+       (!checkpoint.selected_shove_proposals.empty() ||
        checkpoint.configured_selected_nets != config.selected_nets ||
        checkpoint.configured_priority_nets != config.priority_nets ||
        checkpoint.configured_grid_pitch != config.grid_pitch ||
+       checkpoint.configured_dense_candidate_grid != config.allow_dense_candidate_grid ||
        checkpoint.configured_via_site_pitch != config.via_site_pitch ||
        checkpoint.configured_via_site_phase_x != config.via_site_phase_x ||
        checkpoint.configured_via_site_phase_y != config.via_site_phase_y ||
@@ -11291,6 +12175,8 @@ prepare_reuse(const GlobalRouteResult& checkpoint, const std::vector<NetId>& req
            config.allow_crossing_safe_diagonal_grid_edges ||
        checkpoint.configured_sampled_route_clearance_reservations !=
            config.reserve_sampled_route_clearance ||
+       checkpoint.configured_clearance_shadows_advisory_only !=
+           config.clearance_shadows_advisory_only ||
        checkpoint.configured_max_clearance_shadow_conflict_resources !=
            config.max_clearance_shadow_conflict_resources ||
        checkpoint.configured_clearance_shadow_cost_quantum !=
@@ -11336,6 +12222,7 @@ prepare_reuse(const GlobalRouteResult& checkpoint, const std::vector<NetId>& req
        checkpoint.configured_navmesh_funnel_spline_seeds !=
            config.use_navmesh_funnel_spline_seeds ||
        checkpoint.configured_global_navmesh_cell_pitch != config.global_navmesh_cell_pitch ||
+       checkpoint.configured_global_navmesh_usped != config.global_navmesh_usped ||
        checkpoint.configured_global_spline_minimum_bend_radius !=
            config.global_spline_minimum_bend_radius ||
        checkpoint.configured_max_global_navmesh_cells_per_seed !=
@@ -11387,7 +12274,7 @@ prepare_reuse(const GlobalRouteResult& checkpoint, const std::vector<NetId>& req
            config.protect_recovered_hard_capacity_ripup_nets ||
        checkpoint.configured_max_hard_capacity_blocker_reuse_invalidations_per_failed_net !=
            config.max_hard_capacity_blocker_reuse_invalidations_per_failed_net ||
-       config.allow_crossing_safe_diagonal_grid_edges)) {
+       config.allow_crossing_safe_diagonal_grid_edges))) {
     for (const auto& task : all_tasks) {
       affected.insert(task.net);
     }
@@ -11467,7 +12354,7 @@ prepare_reuse(const GlobalRouteResult& checkpoint, const std::vector<NetId>& req
              ? direct && usage.capacity == (config.single_lane_direct_voronoi_resources
                                                 ? config.edge_capacity
                                                 : voronoi_allocation.direct_lane_capacity(*direct))
-             : usage.capacity == config.edge_capacity);
+             : sampled_usage_capacity_compatible(usage, Edge{*first, *second}));
     if (!compatible && !preserve_unaffected_provisional_congestion) {
       mapping_invalid.insert(relevant.begin(), relevant.end());
     } else {
@@ -11492,6 +12379,7 @@ prepare_reuse(const GlobalRouteResult& checkpoint, const std::vector<NetId>& req
   }
 
   std::set<std::pair<Edge, NetId>> checkpoint_corridor_neck_down_edges;
+  std::set<std::pair<Edge, NetId>> checkpoint_crossing_cell_edges;
   std::map<std::pair<Edge, NetId>, Nanometres> checkpoint_selected_widths;
   for (const auto& path : checkpoint.paths) {
     if (!reusable.contains(path.net)) {
@@ -11506,6 +12394,9 @@ prepare_reuse(const GlobalRouteResult& checkpoint, const std::vector<NetId>& req
         width = std::max(width, path.segment_widths[index]);
         if (path.segment_width_kinds[index] == GlobalRouteSegmentWidthKind::corridor_neck_down) {
           checkpoint_corridor_neck_down_edges.emplace(edge, path.net);
+        }
+        if (grid.crossing_safe_diagonal_edges && is_diagonal_grid_edge(grid, edge)) {
+          checkpoint_crossing_cell_edges.emplace(sampled_capacity_edge(grid, edge), path.net);
         }
       }
     }
@@ -11522,7 +12413,7 @@ prepare_reuse(const GlobalRouteResult& checkpoint, const std::vector<NetId>& req
              ? direct && usage.capacity == (config.single_lane_direct_voronoi_resources
                                                 ? config.edge_capacity
                                                 : voronoi_allocation.direct_lane_capacity(*direct))
-             : usage.capacity == config.edge_capacity);
+             : sampled_usage_capacity_compatible(usage, Edge{*first, *second}));
     if (!compatible) {
       continue;
     }
@@ -11538,6 +12429,9 @@ prepare_reuse(const GlobalRouteResult& checkpoint, const std::vector<NetId>& req
         const auto selected_width =
             selected == checkpoint_selected_widths.end() ? Nanometres{0} : selected->second;
         result.occupancy.edges[edge].insert(net);
+        if (checkpoint_crossing_cell_edges.contains({edge, net})) {
+          result.occupancy.crossing_cell_edges[edge].insert(net);
+        }
         const bool corridor_neck_down = checkpoint_corridor_neck_down_edges.contains({edge, net});
         if (corridor_neck_down) {
           result.occupancy.corridor_neck_down_edges[edge].insert(net);
@@ -11629,6 +12523,19 @@ prepare_reuse(const GlobalRouteResult& checkpoint, const std::vector<NetId>& req
     if (reusable.contains(path.net)) {
       result.paths.push_back(path);
       const auto rules = resolve_net_routing_rules(board, path.net);
+      for (std::size_t index = 1U; index < path.points.size(); ++index) {
+        const auto& first = path.points[index - 1U];
+        const auto& second = path.points[index];
+        if (first.layer != second.layer) {
+          continue;
+        }
+        const auto first_node = route_node(grid, first);
+        const auto second_node = route_node(grid, second);
+        if (first_node && second_node && *first_node != *second_node) {
+          result.occupancy.clearance_planar_edges[Edge{*first_node, *second_node}].insert(
+              path.net);
+        }
+      }
       if (config.reserve_sampled_route_clearance) {
         add_path_clearance_occupancy(path, rules.track_width, rules.via_diameter, obstacles, grid,
                                      result.occupancy);
@@ -11656,6 +12563,114 @@ prepare_reuse(const GlobalRouteResult& checkpoint, const std::vector<NetId>& req
     if (!reusable.contains(task.net)) {
       result.rerouted_nets.push_back(task.net);
     }
+  }
+  return result;
+}
+
+[[nodiscard]] std::vector<BoardTerrainGuidanceLayerInput>
+make_board_terrain_inputs(const Board& board, const Grid& grid, const GlobalRouterConfig& config,
+                          std::stop_token stop_token, std::string& diagnostic) {
+  std::vector<BoardTerrainGuidanceLayerInput> result;
+  const auto unavailable = [&](std::string reason) {
+    diagnostic = std::move(reason);
+    return std::vector<BoardTerrainGuidanceLayerInput>{};
+  };
+  if (!config.board_terrain_guidance.enabled || grid.width == 0U || grid.height == 0U ||
+      grid.width > config.board_terrain_guidance.maximum_cells / grid.height)
+    return unavailable("board terrain disabled, empty, or beyond cell limit");
+  const auto cells_per_layer = grid.width * grid.height;
+  if (grid.layers.size() > config.board_terrain_guidance.maximum_layers ||
+      (grid.layers.size() != 0U &&
+       cells_per_layer > config.board_terrain_guidance.maximum_cells / grid.layers.size()) ||
+      grid.width > std::numeric_limits<std::uint32_t>::max() ||
+      grid.height > std::numeric_limits<std::uint32_t>::max()) {
+    return unavailable("board terrain exceeds layer, total-cell, or coordinate limit");
+  }
+  for (const auto& layer : grid.layers) {
+    if (stop_token.stop_requested()) return unavailable("board terrain extraction cancelled");
+    // Empty routed-net identity intentionally retains every source copper object as a board
+    // obstacle. Per-net extraction below remains the only exact legal map for a candidate.
+    const auto extracted = extract_polygonal_board_free_space(
+        board, BoardFreeSpaceExtractionConfig{layer, NetId{}, config.respect_existing_copper,
+                                               false, !config.treat_saved_zone_fills_as_refillable});
+    if (!extracted.complete())
+      return unavailable("board terrain extraction: " + extracted.diagnostic);
+    const auto offset = offset_polygonal_free_space(extracted.domain, FreeSpaceOffsetConfig{Nanometres{0}, 1'000'000U});
+    if (!offset.ok()) return unavailable("board terrain offset: " + offset.diagnostic);
+    std::vector<IndexedClearancePrimitive> primitives;
+    primitives.reserve(offset.output_vertices);
+    bool cancelled = false;
+    const auto append_boundary = [&](const Polygon& polygon) {
+      if (polygon.vertices.size() < 3U) return;
+      for (std::size_t index = 0U; index < polygon.vertices.size(); ++index) {
+        if ((index & 1023U) == 0U && stop_token.stop_requested()) {
+          cancelled = true;
+          return;
+        }
+        const auto first = polygon.vertices[index];
+        const auto second = polygon.vertices[(index + 1U) % polygon.vertices.size()];
+        primitives.push_back({first.x.value(), first.y.value(), second.x.value(), second.y.value(),
+                              0U, std::nullopt, std::nullopt, 0.0L});
+      }
+    };
+    for (const auto& region : offset.regions) {
+      append_boundary(region.area);
+      for (const auto& hole : region.holes) append_boundary(hole);
+    }
+    if (cancelled) return unavailable("board terrain contour preparation cancelled");
+    IndexedClearanceMapConfig index_config;
+    index_config.origin_x_nm = grid.origin_x;
+    index_config.origin_y_nm = grid.origin_y;
+    index_config.pitch_nm = grid.pitch;
+    index_config.width = static_cast<std::uint32_t>(grid.width);
+    index_config.height = static_cast<std::uint32_t>(grid.height);
+    index_config.maximum_cells = cells_per_layer;
+    index_config.materialize_cells = false;
+    index_config.cancellation_requested = [&stop_token] { return stop_token.stop_requested(); };
+    const auto indexed = build_indexed_clearance_map(std::move(index_config), std::move(primitives));
+    if (indexed.status != IndexedClearanceBuildStatus::ok || !indexed.map)
+      return unavailable("board terrain index: " + indexed.diagnostic);
+    BoardTerrainGuidanceLayerInput input;
+    input.layer = layer;
+    input.origin = Point{Nanometres{grid.origin_x}, Nanometres{grid.origin_y}};
+    input.cell_pitch = Nanometres{grid.pitch}; input.width = grid.width; input.height = grid.height;
+    input.walkable.assign(cells_per_layer, 0U); input.clearance.assign(cells_per_layer, 0U);
+    for (std::size_t y = 0U; y < grid.height; ++y) for (std::size_t x = 0U; x < grid.width; ++x) {
+      if (((y * grid.width + x) & 1023U) == 0U && stop_token.stop_requested())
+        return unavailable("board terrain raster cancelled");
+      const Point sample{Nanometres{grid.origin_x + static_cast<std::int64_t>(x) * grid.pitch},
+                         Nanometres{grid.origin_y + static_cast<std::int64_t>(y) * grid.pitch}};
+      const auto cell = y * grid.width + x;
+      const auto query = indexed.map->exact_query(sample.x.value(), sample.y.value());
+      if (query.inside) {
+        input.walkable[cell] = 1U;
+        input.clearance[cell] = static_cast<std::uint32_t>(std::min<long double>(
+            std::numeric_limits<std::uint32_t>::max(),
+            std::max(1.0L, query.boundary_distance_nm / grid.pitch)));
+      }
+    }
+    result.push_back(std::move(input));
+  }
+  return result;
+}
+
+[[nodiscard]] std::vector<BoardTerrainGuidanceDemand>
+make_board_terrain_demands(const std::vector<NetTask>& tasks, const Grid& grid) {
+  std::vector<BoardTerrainGuidanceDemand> result;
+  for (const auto& task : tasks) {
+    std::map<std::size_t, std::vector<std::size_t>> terminals_by_layer;
+    // One deterministic representative per physical terminal/layer: candidate access nodes are
+    // alternatives for that terminal, not independent endpoints in the demand tree.
+    for (const auto& terminal : task.terminals) {
+      std::map<std::size_t, std::size_t> representative;
+      for (const auto node : terminal.grid_nodes) {
+        const auto [x, y, layer] = grid.decode(node); static_cast<void>(x); static_cast<void>(y);
+        representative.try_emplace(layer, node % grid.layer_size());
+      }
+      for (const auto& [layer, cell] : representative) terminals_by_layer[layer].push_back(cell);
+    }
+    for (const auto& [layer, cells] : terminals_by_layer)
+      if (cells.size() >= 2U) result.push_back(BoardTerrainGuidanceDemand{grid.layers[layer], cells, 1U});
   }
   return result;
 }
@@ -11736,6 +12751,45 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
     return invalid;
   }
   auto tasks = make_tasks(board, *grid, config);
+  std::shared_ptr<const BoardTerrainGuidance> board_terrain_guidance;
+  BoardTerrainGuidanceStats board_terrain_stats;
+  if (!tasks.empty() && config.board_terrain_guidance.enabled && config.board_terrain_guidance_cache) {
+    const auto preparation_start = std::chrono::steady_clock::now();
+    RouterTelemetryEvent progress;
+    progress.kind = RouterTelemetryEventKind::search_summary;
+    progress.progress_phase = "board-terrain-map";
+    progress.stable_id = "board-terrain-preparation";
+    progress.detail = "Preparing shared board/layer terrain";
+    emit_telemetry(progress);
+    std::string terrain_input_diagnostic;
+    const auto terrain_inputs = make_board_terrain_inputs(
+        board, *grid, config, stop_token, terrain_input_diagnostic);
+    const auto raster_time = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - preparation_start).count();
+    progress.progress_phase = "board-terrain-erosion-pressure";
+    progress.progress_work_units = terrain_inputs.size();
+    progress.progress_elapsed_us = static_cast<std::uint64_t>(raster_time);
+    emit_telemetry(progress);
+    const auto geometry = config.board_terrain_guidance_cache->prepare(
+        terrain_inputs, config.board_terrain_guidance, std::hash<std::string>{}(board.source_revision), stop_token);
+    board_terrain_guidance = config.board_terrain_guidance_cache->refresh_pressure(
+        geometry, make_board_terrain_demands(tasks, *grid), stop_token);
+    if (board_terrain_guidance) board_terrain_stats = board_terrain_guidance->stats();
+    if (terrain_inputs.empty() && board_terrain_stats.diagnostic.empty())
+      board_terrain_stats.diagnostic = terrain_input_diagnostic.empty()
+          ? "board terrain raster unavailable" : terrain_input_diagnostic;
+    board_terrain_stats.raster_time_us = static_cast<std::uint64_t>(raster_time);
+    board_terrain_stats.preparation_time_us = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - preparation_start).count());
+    invalid.board_terrain_guidance_stats = board_terrain_stats;
+    progress.progress_phase = "board-terrain-ready";
+    progress.progress_work_units = board_terrain_stats.cells + board_terrain_stats.pressure_search_expansions;
+    progress.progress_elapsed_us = board_terrain_stats.preparation_time_us;
+    progress.detail = board_terrain_stats.diagnostic.empty()
+                          ? "Shared board/layer terrain ready" : board_terrain_stats.diagnostic;
+    emit_telemetry(std::move(progress));
+  }
   RouterTelemetryEvent started;
   started.kind = RouterTelemetryEventKind::global_routing_started;
   started.total_nets = tasks.size();
@@ -11747,6 +12801,7 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
     invalid.configured_selected_nets = config.selected_nets;
     invalid.configured_priority_nets = config.priority_nets;
     invalid.configured_grid_pitch = config.grid_pitch;
+    invalid.configured_dense_candidate_grid = config.allow_dense_candidate_grid;
     invalid.configured_via_site_pitch = config.via_site_pitch;
     invalid.configured_via_site_phase_x = config.via_site_phase_x;
     invalid.configured_via_site_phase_y = config.via_site_phase_y;
@@ -11755,6 +12810,8 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
         config.allow_crossing_safe_diagonal_grid_edges;
     invalid.configured_sampled_route_clearance_reservations =
         config.reserve_sampled_route_clearance;
+    invalid.configured_clearance_shadows_advisory_only =
+        config.clearance_shadows_advisory_only;
     invalid.configured_max_clearance_shadow_conflict_resources =
         config.max_clearance_shadow_conflict_resources;
     invalid.configured_clearance_shadow_cost_quantum = config.clearance_shadow_cost_quantum;
@@ -11774,6 +12831,9 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
     invalid.configured_max_static_seed_hydraulic_candidates =
         config.max_static_seed_hydraulic_candidates;
     invalid.configured_static_seed_hydraulic_flow = config.static_seed_hydraulic_flow;
+    invalid.configured_live_copper_terrain = config.live_copper_terrain;
+    invalid.configured_live_copper_terrain_revision = config.live_copper_terrain_revision;
+    invalid.configured_board_terrain_guidance = config.board_terrain_guidance;
     invalid.configured_max_static_seed_workers = config.max_static_seed_workers;
     invalid.configured_static_seed_alternative_edge_penalty =
         config.static_seed_alternative_edge_penalty;
@@ -11797,6 +12857,7 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
     invalid.configured_global_spline_shove_step = config.global_spline_shove_step;
     invalid.configured_navmesh_funnel_spline_seeds = config.use_navmesh_funnel_spline_seeds;
     invalid.configured_global_navmesh_cell_pitch = config.global_navmesh_cell_pitch;
+    invalid.configured_global_navmesh_usped = config.global_navmesh_usped;
     invalid.configured_global_spline_minimum_bend_radius = config.global_spline_minimum_bend_radius;
     invalid.configured_max_global_navmesh_cells_per_seed = config.max_global_navmesh_cells_per_seed;
     invalid.configured_max_global_navmesh_search_expansions_per_seed =
@@ -11936,37 +12997,43 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
       filter_pin_access(tasks, *grid, obstacles, corridor_neck_downs, *voronoi_allocation, config);
   const auto prepared_routability_history =
       prepare_routability_history(*grid, *voronoi_allocation, config);
-  const auto static_seed_plan = build_static_hybrid_seed_plan(
-      board, *grid, tasks, *corridors, corridor_neck_downs, *voronoi_allocation, obstacles, config,
-      prepared_routability_history.history, stop_token);
-  if (stop_token.stop_requested()) {
-    invalid.stop_reason = GlobalRouterStopReason::cancelled;
-    invalid.diagnostic = "global routing cancelled during static seed corridor planning";
-    return invalid;
-  }
-  // Publish every retained coarse alternative, not only the eventual winner.  Diagnostic
-  // consumers can therefore inspect long/RRT fallbacks that remain available for later
-  // congestion resolution; the event stream is non-authoritative and cannot affect selection.
-  for (const auto& candidate : static_seed_plan.candidates) {
+  std::mutex publication_mutex;
+  std::set<std::string> published_seed_ids;
+  const auto seed_publication_id = [](const GlobalSeedCandidate& candidate) {
+    return std::string(global_seed_family_name(candidate.family)) + ':' +
+        candidate.net.value() + ':' + std::to_string(candidate.connection_index) + ':' +
+        std::to_string(candidate.tree_candidate_index);
+  };
+  const auto publish_seed = [&](const GlobalSeedCandidate& candidate, bool retained) {
+    if (telemetry == nullptr || !telemetry->accepts(RouterTelemetryLevel::normal)) return;
+    const auto publication_id = seed_publication_id(candidate);
+    {
+      std::lock_guard lock(publication_mutex);
+      if (!retained && !published_seed_ids.insert(publication_id).second) return;
+    }
     const auto task = std::find_if(tasks.begin(), tasks.end(),
                                    [&](const auto& value) { return value.net == candidate.net; });
     if (task == tasks.end()) {
-      continue;
+      return;
     }
     const auto path =
         convert_path(*grid, *task, candidate.terminal_index, candidate.connected_terminals,
                      candidate.route, *voronoi_allocation);
     RouterTelemetryEvent route;
     route.kind = RouterTelemetryEventKind::route_candidate_selected;
-    route.minimum_level = RouterTelemetryLevel::diagnostic;
+    // The retained topology portfolio is the principal explanation of what the global planner
+    // can still try.  Keep these bounded route records in normal telemetry so the default viewer
+    // does not misleadingly show only the sparse selected solution.  Per-cell hydraulic fields
+    // remain diagnostic because they dominate trace volume.
+    route.minimum_level = RouterTelemetryLevel::normal;
     route.stable_id = "coarse:" + std::string(global_seed_family_name(candidate.family)) + ':' +
                       candidate.net.value() + ':' + std::to_string(candidate.connection_index) +
                       ':' + std::to_string(candidate.tree_candidate_index);
     route.net = candidate.net;
-    route.route_revision = 0U;
+    route.route_revision = retained ? 1U : 0U;
     route.candidate_cost = candidate.route.cost;
     route.route_family = std::string(global_seed_family_name(candidate.family));
-    route.route_lifecycle = "retained_fallback";
+    route.route_lifecycle = retained ? "retained_fallback" : "provisional";
     route.route_width_nm = static_cast<std::uint64_t>(std::max<std::int64_t>(
         0, resolve_net_routing_rules(board, candidate.net).track_width.value()));
     route.route_points.reserve(path.points.size());
@@ -11974,8 +13041,45 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
       route.route_points.push_back(RouterTelemetryPathPoint{point.position.x.value(),
                                                             point.position.y.value(), point.layer});
     }
-    route.detail = "retained coarse route alternative; family=" + route.route_family +
-                   ", lifecycle=retained_fallback";
+    // Carry the actual mixed-size adaptive leaves used as topology guards only at diagnostic
+    // level. The route polyline belongs in normal telemetry, but copying thousands of leaves for
+    // every retained alternative would defeat its low-overhead default.
+    std::set<std::tuple<std::int64_t, std::int64_t, std::int64_t, std::int64_t, std::string,
+                        std::uint32_t>>
+        emitted_navmesh_cells;
+    if (telemetry != nullptr && telemetry->accepts(RouterTelemetryLevel::diagnostic)) {
+      for (const auto& corridor : candidate.geometric_corridors) {
+        for (std::size_t cell_index = 0U; cell_index < corridor.topology_cells.size();
+             ++cell_index) {
+          const auto& cell = corridor.topology_cells[cell_index];
+          if (cell.vertices.empty()) {
+            continue;
+          }
+          auto minimum = cell.vertices.front();
+          auto maximum = cell.vertices.front();
+          for (const auto point : cell.vertices) {
+            minimum = Point{std::min(minimum.x, point.x), std::min(minimum.y, point.y)};
+            maximum = Point{std::max(maximum.x, point.x), std::max(maximum.y, point.y)};
+          }
+          const auto refinement_level = static_cast<std::uint32_t>(
+              std::min<std::size_t>(cell_index < corridor.topology_cell_refinement_levels.size()
+                                        ? corridor.topology_cell_refinement_levels[cell_index]
+                                        : 0U,
+                                    std::numeric_limits<std::uint32_t>::max()));
+          const auto key = std::tuple{minimum.x.value(), minimum.y.value(),      maximum.x.value(),
+                                      maximum.y.value(), corridor.layer.value(), refinement_level};
+          if (!emitted_navmesh_cells.insert(key).second) {
+            continue;
+          }
+          route.navmesh_cells.push_back(
+              RouterTelemetryNavMeshCell{minimum.x.value(), minimum.y.value(), maximum.x.value(),
+                                         maximum.y.value(), corridor.layer, refinement_level});
+        }
+      }
+    }
+    route.detail = "coarse route alternative; family=" + route.route_family +
+                   ", lifecycle=" + route.route_lifecycle + ", navmesh_leaves=" +
+                   std::to_string(route.navmesh_cells.size());
     emit_telemetry(std::move(route));
     for (std::size_t field_index = 0U; field_index < candidate.hydraulic_fields.size();
          ++field_index) {
@@ -12007,12 +13111,41 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
       field.hydraulic_free_space_field = evidence.free_space;
       field.hydraulic_downstream_pressure_field = evidence.downstream_pressure;
       field.hydraulic_success_prior_field = evidence.success_prior;
-      field.detail = "direct-polygon per-layer hydraulic discovery terrain; connection=" +
+      field.detail = std::string(evidence.height_evolution
+                                     ? (evidence.height_evolution_gpu
+                                            ? "LittlePlanets-style GPU height evolution; connection="
+                                            : "LittlePlanets-style CPU height evolution; connection=")
+                                     : "direct-polygon per-layer hydraulic discovery terrain; connection=") +
                      std::to_string(candidate.connection_index) +
                      ", tree=" + std::to_string(candidate.tree_candidate_index) +
                      ", field=" + std::to_string(field_index);
       emit_telemetry(std::move(field));
     }
+  };
+  const auto static_seed_plan = build_static_hybrid_seed_plan(
+      board, *grid, tasks, *corridors, corridor_neck_downs, *voronoi_allocation, obstacles, config,
+      prepared_routability_history.history, stop_token, board_terrain_guidance,
+      [&](const GlobalSeedCandidate& candidate) { publish_seed(candidate, false); });
+  if (stop_token.stop_requested()) {
+    invalid.stop_reason = GlobalRouterStopReason::cancelled;
+    invalid.diagnostic = "global routing cancelled during static seed corridor planning";
+    return invalid;
+  }
+  // Early-return planning paths may bypass the refinement worker callback.
+  std::set<std::string> retained_seed_ids;
+  for (const auto& candidate : static_seed_plan.candidates) {
+    retained_seed_ids.insert(seed_publication_id(candidate));
+    publish_seed(candidate, true);
+  }
+  for (const auto& id : published_seed_ids) {
+    if (retained_seed_ids.contains(id)) continue;
+    RouterTelemetryEvent removed;
+    removed.kind = RouterTelemetryEventKind::route_removed;
+    removed.minimum_level = RouterTelemetryLevel::normal;
+    removed.stable_id = "coarse:" + id;
+    removed.route_revision = 1U;
+    removed.detail = "provisional alternative rejected by portfolio filtering";
+    emit_telemetry(std::move(removed));
   }
   const auto physical_envelope_metrics =
       pathfinder_physical_envelope_metrics(board, tasks, *voronoi_allocation);
@@ -12229,6 +13362,7 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
   std::size_t hard_capacity_soft_cut_probes = 0U;
   std::size_t hard_capacity_soft_cut_routes = 0U;
   std::size_t hard_capacity_soft_cut_blockers = 0U;
+  std::size_t hard_capacity_soft_cut_legal_shadow_observations = 0U;
   std::size_t hard_capacity_failed_retry_rollbacks = 0U;
   std::size_t hard_capacity_tail_deferred_victims = 0U;
   std::size_t hard_capacity_protected_recoveries = 0U;
@@ -12284,9 +13418,11 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
   std::vector<NetId> initial_pathfinder_order;
   RoutingHistory history = prepared_routability_history.history;
   const auto finalize = [&](GlobalRouteResult result) {
+    result.board_terrain_guidance_stats = board_terrain_stats;
     result.configured_selected_nets = config.selected_nets;
     result.configured_priority_nets = config.priority_nets;
     result.configured_grid_pitch = config.grid_pitch;
+    result.configured_dense_candidate_grid = config.allow_dense_candidate_grid;
     result.configured_via_site_pitch = config.via_site_pitch;
     result.configured_via_site_phase_x = config.via_site_phase_x;
     result.configured_via_site_phase_y = config.via_site_phase_y;
@@ -12294,6 +13430,7 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
     result.configured_crossing_safe_diagonal_grid_edges =
         config.allow_crossing_safe_diagonal_grid_edges;
     result.configured_sampled_route_clearance_reservations = config.reserve_sampled_route_clearance;
+    result.configured_clearance_shadows_advisory_only = config.clearance_shadows_advisory_only;
     result.configured_max_clearance_shadow_conflict_resources =
         config.max_clearance_shadow_conflict_resources;
     result.configured_clearance_shadow_cost_quantum = config.clearance_shadow_cost_quantum;
@@ -12326,6 +13463,9 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
     result.configured_max_static_seed_hydraulic_candidates =
         config.max_static_seed_hydraulic_candidates;
     result.configured_static_seed_hydraulic_flow = config.static_seed_hydraulic_flow;
+    result.configured_live_copper_terrain = config.live_copper_terrain;
+    result.configured_live_copper_terrain_revision = config.live_copper_terrain_revision;
+    result.configured_board_terrain_guidance = config.board_terrain_guidance;
     result.configured_max_static_seed_workers = config.max_static_seed_workers;
     result.configured_static_seed_alternative_edge_penalty =
         config.static_seed_alternative_edge_penalty;
@@ -12368,6 +13508,7 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
     result.configured_global_spline_shove_step = config.global_spline_shove_step;
     result.configured_navmesh_funnel_spline_seeds = config.use_navmesh_funnel_spline_seeds;
     result.configured_global_navmesh_cell_pitch = config.global_navmesh_cell_pitch;
+    result.configured_global_navmesh_usped = config.global_navmesh_usped;
     result.configured_global_spline_minimum_bend_radius = config.global_spline_minimum_bend_radius;
     result.configured_max_global_navmesh_cells_per_seed = config.max_global_navmesh_cells_per_seed;
     result.configured_max_global_navmesh_search_expansions_per_seed =
@@ -12404,9 +13545,15 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
     result.static_seed_corridor_nodes = static_seed_plan.stats.corridor_nodes;
     result.static_seed_spline_samples = static_seed_plan.stats.spline_samples;
     result.static_seed_navmesh_domains = static_seed_plan.stats.navmesh_domains;
+    if (config.navmesh_preparation_cache) {
+      const auto cache_stats = config.navmesh_preparation_cache->stats();
+      result.session_navmesh_cache_hits = cache_stats.hits;
+      result.session_navmesh_cache_misses = cache_stats.misses;
+    }
     result.static_seed_navmesh_routes = static_seed_plan.stats.navmesh_routes;
     result.static_seed_navmesh_cells = static_seed_plan.stats.navmesh_cells;
     result.static_seed_navmesh_refined_parents = static_seed_plan.stats.navmesh_refined_parents;
+    result.static_seed_usped_refined_parents = static_seed_plan.stats.usped_refined_parents;
     result.static_seed_navmesh_refined_leaves = static_seed_plan.stats.navmesh_refined_leaves;
     result.static_seed_navmesh_rejected_leaves = static_seed_plan.stats.navmesh_rejected_leaves;
     result.static_seed_navmesh_gpu_wavefront_routes =
@@ -12423,6 +13570,38 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
     result.static_seed_rrt_connect_iterations = static_seed_plan.stats.rrt_connect_iterations;
     result.static_seed_hydraulic_attempts = static_seed_plan.stats.hydraulic_attempts;
     result.static_seed_hydraulic_accepted = static_seed_plan.stats.hydraulic_accepted;
+    result.static_seed_height_evolution_attempts = static_seed_plan.stats.height_evolution_attempts;
+    result.static_seed_height_evolution_invoked = static_seed_plan.stats.height_evolution_invoked;
+    result.static_seed_height_evolution_gpu_invoked =
+        static_seed_plan.stats.height_evolution_gpu_invoked;
+    result.static_seed_height_evolution_gpu_dispatches =
+        static_seed_plan.stats.height_evolution_gpu_dispatches;
+    result.static_seed_height_evolution_gpu_mask_uploads =
+        static_seed_plan.stats.height_evolution_gpu_mask_uploads;
+    result.static_seed_height_evolution_gpu_mask_upload_reuses =
+        static_seed_plan.stats.height_evolution_gpu_mask_upload_reuses;
+    result.static_seed_height_evolution_gpu_mask_cross_pipeline_reuses =
+        static_seed_plan.stats.height_evolution_gpu_mask_cross_pipeline_reuses;
+    result.static_seed_height_evolution_field_us =
+        static_seed_plan.stats.height_evolution_field_us;
+    result.static_seed_height_evolution_extraction_us =
+        static_seed_plan.stats.height_evolution_extraction_us;
+    result.static_seed_height_evolution_accepted = static_seed_plan.stats.height_evolution_accepted;
+    result.static_seed_height_evolution_iterations = static_seed_plan.stats.height_evolution_iterations;
+    result.static_seed_height_evolution_changed_cells = static_seed_plan.stats.height_evolution_changed_cells;
+    result.static_seed_height_evolution_expanded_nodes = static_seed_plan.stats.height_evolution_expanded_nodes;
+    result.static_seed_indexed_clearance_map_builds =
+        static_seed_plan.stats.indexed_clearance_map_builds;
+    result.static_seed_indexed_clearance_map_reuses =
+        static_seed_plan.stats.indexed_clearance_map_reuses;
+    result.static_seed_indexed_clearance_map_cells =
+        static_seed_plan.stats.indexed_clearance_map_cells;
+    result.static_seed_indexed_clearance_map_records =
+        static_seed_plan.stats.indexed_clearance_map_records;
+    result.static_seed_indexed_clearance_map_references =
+        static_seed_plan.stats.indexed_clearance_map_references;
+    result.static_seed_indexed_clearance_map_fallbacks =
+        static_seed_plan.stats.indexed_clearance_map_fallbacks;
     result.static_seed_hydraulic_failures = static_seed_plan.stats.hydraulic_failures;
     result.static_seed_hydraulic_gpu_routes = static_seed_plan.stats.hydraulic_gpu_routes;
     result.static_seed_hydraulic_gpu_clearance_cache_hits =
@@ -12433,6 +13612,12 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
         static_seed_plan.stats.hydraulic_gpu_buffer_reuses;
     result.static_seed_hydraulic_gpu_buffer_growths =
         static_seed_plan.stats.hydraulic_gpu_buffer_growths;
+    result.static_seed_hydraulic_gpu_mask_uploads =
+        static_seed_plan.stats.hydraulic_gpu_mask_uploads;
+    result.static_seed_hydraulic_gpu_mask_upload_reuses =
+        static_seed_plan.stats.hydraulic_gpu_mask_upload_reuses;
+    result.static_seed_hydraulic_gpu_mask_cross_pipeline_reuses =
+        static_seed_plan.stats.hydraulic_gpu_mask_cross_pipeline_reuses;
     result.static_seed_hydraulic_cpu_fallbacks = static_seed_plan.stats.hydraulic_cpu_fallbacks;
     result.static_seed_hydraulic_relaxation_passes =
         static_seed_plan.stats.hydraulic_relaxation_passes;
@@ -12458,6 +13643,9 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
     result.static_seed_reprojection_searches = static_seed_plan.stats.reprojection_searches;
     result.static_seed_reprojections_accepted = static_seed_plan.stats.reprojections_accepted;
     result.static_seed_reprojections_reverted = static_seed_plan.stats.reprojections_reverted;
+    result.static_seed_tree_attachment_nodes = static_seed_plan.stats.tree_attachment_nodes;
+    result.static_seed_attachment_reprojections_reverted =
+        static_seed_plan.stats.attachment_reprojections_reverted;
     result.static_seed_corridor_departures = static_seed_plan.stats.corridor_departures;
     result.static_seed_complete_trees = static_seed_plan.stats.complete_trees;
     result.static_seed_partial_trees = static_seed_plan.stats.partial_trees;
@@ -12596,6 +13784,8 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
     result.hard_capacity_soft_cut_probes = hard_capacity_soft_cut_probes;
     result.hard_capacity_soft_cut_routes = hard_capacity_soft_cut_routes;
     result.hard_capacity_soft_cut_blockers = hard_capacity_soft_cut_blockers;
+    result.hard_capacity_soft_cut_legal_shadow_observations =
+        hard_capacity_soft_cut_legal_shadow_observations;
     result.hard_capacity_conflict_set_states = hard_capacity_conflict_set_states;
     result.hard_capacity_joint_ripup_attempts = hard_capacity_joint_ripup_attempts;
     result.hard_capacity_conflict_sets_withheld = hard_capacity_conflict_sets_withheld;
@@ -12871,6 +14061,9 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
     finished.corridor_overflow = result.corridor_overflow;
     finished.physical_overflow_nm = result.total_voronoi_overflow_nm;
     finished.clearance_shadow_conflicts = result.clearance_shadow_conflicts.size();
+    finished.unresolved_packing_obligations = result.unresolved_corridor_packing.size();
+    finished.packing_obligation_budget_exhausted =
+        result.corridor_packing_obligation_budget_exhausted;
     finished.ripup_count = result.hard_capacity_ripped_nets;
     finished.route_cost = result.total_cost;
     finished.search_expansions = result.path_search_expansions;
@@ -13088,9 +14281,11 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
                   found != occupancy_aware.occupancy.nodes.end()) {
                 pressure = saturating_count_add(pressure, found->second.size());
               }
-              if (const auto found = occupancy_aware.occupancy.clearance_nodes.find(node);
-                  found != occupancy_aware.occupancy.clearance_nodes.end()) {
-                pressure = saturating_count_add(pressure, found->second.size());
+              if (!config.clearance_shadows_advisory_only) {
+                if (const auto found = occupancy_aware.occupancy.clearance_nodes.find(node);
+                    found != occupancy_aware.occupancy.clearance_nodes.end()) {
+                  pressure = saturating_count_add(pressure, found->second.size());
+                }
               }
             }
             for (std::size_t edge = 1U; edge < candidate->route.nodes.size(); ++edge) {
@@ -13101,9 +14296,11 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
                   found != occupancy_aware.occupancy.edges.end()) {
                 pressure = saturating_count_add(pressure, found->second.size());
               }
-              if (const auto found = occupancy_aware.occupancy.clearance_edges.find(route_edge);
-                  found != occupancy_aware.occupancy.clearance_edges.end()) {
-                pressure = saturating_count_add(pressure, found->second.size());
+              if (!config.clearance_shadows_advisory_only) {
+                const auto& shadows = clearance_certificates_for_edge(
+                    *grid, occupancy_aware.occupancy, route_edge,
+                    !is_atomic_planar_chord(*grid, route_edge));
+                pressure = saturating_count_add(pressure, shadows.size());
               }
               if (const auto corridor = corridors->corridor_for(route_edge)) {
                 if (const auto found = occupancy_aware.occupancy.corridors.find(*corridor);
@@ -13146,7 +14343,8 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
                     pressure = saturating_count_add(pressure, 4U);
                   }
                 }
-              } else if (physical_alternative_rescoring && first_x == second_x &&
+              } else if (!config.clearance_shadows_advisory_only &&
+                         physical_alternative_rescoring && first_x == second_x &&
                          first_y == second_y) {
                 for (std::size_t layer = 0U; layer < grid->layers.size(); ++layer) {
                   const auto via_node = grid->node(first_x, first_y, layer);
@@ -13388,15 +14586,17 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
         !global_route_checkpoint_better(baseline_occupancy_aware.result,
                                         staged_occupancy_aware.result,
                                         config.checkpoint_objective) &&
-        staged_occupancy_aware.result.clearance_shadow_conflicts.size() <=
-            baseline_occupancy_aware.result.clearance_shadow_conflicts.size();
+        (config.clearance_shadows_advisory_only ||
+         staged_occupancy_aware.result.clearance_shadow_conflicts.size() <=
+             baseline_occupancy_aware.result.clearance_shadow_conflicts.size());
     const auto staged_changes_small_checkpoint =
         staged_occupancy_aware.result.unrouted_nets.size() !=
             baseline_occupancy_aware.result.unrouted_nets.size() ||
         staged_occupancy_aware.result.total_overflow !=
             baseline_occupancy_aware.result.total_overflow ||
-        staged_occupancy_aware.result.clearance_shadow_conflicts.size() !=
-            baseline_occupancy_aware.result.clearance_shadow_conflicts.size() ||
+        (!config.clearance_shadows_advisory_only &&
+         staged_occupancy_aware.result.clearance_shadow_conflicts.size() !=
+             baseline_occupancy_aware.result.clearance_shadow_conflicts.size()) ||
         staged_occupancy_aware.result.total_cost != baseline_occupancy_aware.result.total_cost;
     // Until the owned 4-20 component gate proves end-to-end negotiation parity, a changed small
     // seed is only qualified when it already completes. This is the measured baseline fallback,
@@ -13503,6 +14703,7 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
   std::uint64_t present_congestion_scale_per_mille = 1'000U;
 
   for (std::size_t iteration = 1; iteration <= config.max_iterations; ++iteration) {
+    routing_kernel_checkpoint();
     // The staged order is the initial allocation decision, not an in-pass reprioritization.
     // Later changes retain the existing pressure-driven policy and occur only between incomplete
     // PathFinder passes.  This keeps paired/bus members contiguous while ensuring the terminal,
@@ -13558,6 +14759,7 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
     current.configured_selected_nets = config.selected_nets;
     current.configured_priority_nets = config.priority_nets;
     current.configured_grid_pitch = config.grid_pitch;
+    current.configured_dense_candidate_grid = config.allow_dense_candidate_grid;
     current.configured_via_site_pitch = config.via_site_pitch;
     current.configured_via_site_phase_x = config.via_site_phase_x;
     current.configured_via_site_phase_y = config.via_site_phase_y;
@@ -13566,6 +14768,7 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
         config.allow_crossing_safe_diagonal_grid_edges;
     current.configured_sampled_route_clearance_reservations =
         config.reserve_sampled_route_clearance;
+    current.configured_clearance_shadows_advisory_only = config.clearance_shadows_advisory_only;
     current.configured_max_clearance_shadow_conflict_resources =
         config.max_clearance_shadow_conflict_resources;
     current.configured_clearance_shadow_cost_quantum = config.clearance_shadow_cost_quantum;
@@ -13587,6 +14790,9 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
     current.configured_max_static_seed_hydraulic_candidates =
         config.max_static_seed_hydraulic_candidates;
     current.configured_static_seed_hydraulic_flow = config.static_seed_hydraulic_flow;
+    current.configured_live_copper_terrain = config.live_copper_terrain;
+    current.configured_live_copper_terrain_revision = config.live_copper_terrain_revision;
+    current.configured_board_terrain_guidance = config.board_terrain_guidance;
     current.configured_max_static_seed_workers = config.max_static_seed_workers;
     current.configured_static_seed_alternative_edge_penalty =
         config.static_seed_alternative_edge_penalty;
@@ -13606,6 +14812,7 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
     current.configured_global_spline_shove_step = config.global_spline_shove_step;
     current.configured_navmesh_funnel_spline_seeds = config.use_navmesh_funnel_spline_seeds;
     current.configured_global_navmesh_cell_pitch = config.global_navmesh_cell_pitch;
+    current.configured_global_navmesh_usped = config.global_navmesh_usped;
     current.configured_global_spline_minimum_bend_radius = config.global_spline_minimum_bend_radius;
     current.configured_max_global_navmesh_cells_per_seed = config.max_global_navmesh_cells_per_seed;
     current.configured_max_global_navmesh_search_expansions_per_seed =
@@ -13684,6 +14891,7 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
     std::optional<PendingHardRipupRollback> pending_hard_ripup_rollback;
     std::size_t pass_hard_ripup_attempts = 0U;
     while (!pending_tasks.empty()) {
+      routing_kernel_checkpoint();
       auto task = std::move(pending_tasks.front());
       pending_tasks.pop_front();
       if (stop_token.stop_requested()) {
@@ -14162,9 +15370,11 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
               }
               if (!probe.cancelled && !probe.nodes.empty()) {
                 ++hard_capacity_soft_cut_routes;
-                const auto cut = soft_capacity_route_blockers(task.net, probe.nodes, *grid,
-                                                              *corridors, corridor_neck_downs,
-                                                              *voronoi_allocation, occupancy);
+                const auto legal_observations_before =
+                    hard_capacity_soft_cut_legal_shadow_observations;
+                const auto cut = soft_capacity_route_blockers(
+                    task, probe, *grid, *corridors, corridor_neck_downs, *voronoi_allocation,
+                    occupancy, probe_config, hard_capacity_soft_cut_legal_shadow_observations);
                 hard_capacity_soft_cut_blockers =
                     saturating_count_add(hard_capacity_soft_cut_blockers, cut.size());
                 std::vector<NetId> cut_set;
@@ -14188,7 +15398,10 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
                   cut_event.search_expansions = probe.expansions;
                   cut_event.detail = "non-committing soft-capacity cut probe found " +
                                      std::to_string(cut.size()) +
-                                     " routed blockers for progressive rip-up";
+                                     " routed blockers for progressive rip-up; legally separated "
+                                     "shadow observations excluded=" +
+                                     std::to_string(hard_capacity_soft_cut_legal_shadow_observations -
+                                                    legal_observations_before);
                   emit_telemetry(std::move(cut_event));
                 }
               }
@@ -14894,6 +16107,9 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
     iteration_completed.corridor_overflow = current.corridor_overflow;
     iteration_completed.physical_overflow_nm = current.total_voronoi_overflow_nm;
     iteration_completed.clearance_shadow_conflicts = current.clearance_shadow_conflicts.size();
+    iteration_completed.unresolved_packing_obligations = current.unresolved_corridor_packing.size();
+    iteration_completed.packing_obligation_budget_exhausted =
+        current.corridor_packing_obligation_budget_exhausted;
     iteration_completed.ripup_count = hard_capacity_ripped_nets;
     iteration_completed.route_cost = current.total_cost;
     iteration_completed.search_expansions = current.path_search_expansions;
@@ -14958,6 +16174,9 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
       checkpoint_updated.corridor_overflow = best.corridor_overflow;
       checkpoint_updated.physical_overflow_nm = best.total_voronoi_overflow_nm;
       checkpoint_updated.clearance_shadow_conflicts = best.clearance_shadow_conflicts.size();
+      checkpoint_updated.unresolved_packing_obligations = best.unresolved_corridor_packing.size();
+      checkpoint_updated.packing_obligation_budget_exhausted =
+          best.corridor_packing_obligation_budget_exhausted;
       checkpoint_updated.ripup_count = hard_capacity_ripped_nets;
       checkpoint_updated.route_cost = best.total_cost;
       checkpoint_updated.search_expansions = best.path_search_expansions;
@@ -15170,7 +16389,8 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
     if (!enforce_hard_capacity && !hard_capacity_phase_pending &&
         !pending_lane_conflict_negotiation && unchanged_iterations >= stagnation_limit) {
       const bool owner_history_fallback_available =
-          config.reserve_sampled_route_clearance && !current.clearance_shadow_conflicts.empty() &&
+          config.reserve_sampled_route_clearance && !config.clearance_shadows_advisory_only &&
+          !current.clearance_shadow_conflicts.empty() &&
           !clearance_shadow_owner_history_phase && iteration < config.max_iterations;
       if (owner_history_fallback_available) {
         // Preserve the ordinary best checkpoint, then give attributed shadow owners one bounded
@@ -15306,6 +16526,49 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
 }
 
 } // namespace
+
+std::optional<Nanometres> minimum_legal_planar_grid_pitch(const Board& board,
+                                                        const GlobalRouterConfig& config) {
+  long double minimum_pitch = 0.0L;
+  const auto account_rules = [&minimum_pitch](const ResolvedNetRoutingRules& rules,
+                                             bool pair_member) {
+    const auto clearance = static_cast<long double>(
+        (pair_member ? std::max(rules.clearance, rules.differential_pair_gap) : rules.clearance)
+            .value());
+    minimum_pitch = std::max(
+        minimum_pitch, static_cast<long double>(rules.track_width.value()) + clearance);
+  };
+  if (board.nets.empty()) {
+    account_rules(resolve_net_routing_rules(board, NetId{}), false);
+  } else {
+    const std::set<NetId> selected(config.selected_nets.begin(), config.selected_nets.end());
+    std::map<NetId, std::size_t> open_connections;
+    if (selected.empty()) {
+      for (const auto& connectivity : analyze_connectivity(board).nets)
+        open_connections.emplace(connectivity.net, connectivity.open_connections);
+    }
+    for (const auto& net : board.nets) {
+      const auto open = open_connections.find(net.id);
+      const bool planned = !selected.empty() ? selected.contains(net.id)
+                                             : open != open_connections.end() && open->second > 0U;
+      if (!planned || net.name.empty())
+        continue;
+      const bool pair_member = std::any_of(
+          board.differential_pairs.begin(), board.differential_pairs.end(),
+          [&net](const DifferentialPair& pair) {
+            return pair.positive_net == net.id || pair.negative_net == net.id;
+          });
+      account_rules(resolve_net_routing_rules(board, net.id), pair_member);
+    }
+  }
+  if (config.allow_diagonal_grid_edges || config.allow_crossing_safe_diagonal_grid_edges)
+    minimum_pitch *= std::sqrt(2.0L);
+  minimum_pitch = std::ceil(minimum_pitch);
+  if (!std::isfinite(minimum_pitch) ||
+      minimum_pitch > static_cast<long double>(std::numeric_limits<std::int64_t>::max()))
+    return std::nullopt;
+  return Nanometres{static_cast<std::int64_t>(minimum_pitch)};
+}
 
 std::vector<RoutingNetPressure> collect_global_route_net_pressure(const GlobalRouteResult& result) {
   std::map<NetId, RoutingNetPressure> pressure;

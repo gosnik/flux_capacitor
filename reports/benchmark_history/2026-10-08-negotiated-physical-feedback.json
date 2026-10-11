@@ -1,0 +1,175 @@
+{
+  "schema": 1,
+  "experiment": "V71 negotiated checkpoint physical feedback",
+  "status": "normal Tier1 P24 completed; unqualified",
+  "baseline": "reports/benchmark_history/2026-10-08-retained-routing-fixes.json",
+  "hypothesis": "Assess actual copper once only after global negotiation clears topology, sampled, corridor and lane-transition gates; avoid V70 invalid-seed feedback.",
+  "bound": "One non-final full straight assessment with zero scope expansions; normal final scope unchanged.",
+  "selection": "Fresh eligible checkpoint, else first eligible retained checkpoint.",
+  "success_criterion": "Observed one eligible pre-final assessment and better final copper than V69; no Tier0 regression.",
+  "research": [
+    "https://openroad.readthedocs.io/en/latest/main/src/grt/README.html",
+    "https://openroad.readthedocs.io/en/latest/main/src/drt/README.html",
+    "https://github.com/cuhk-eda/cu-gr"
+  ],
+  "decision": "Reject early scheduling for final candidate: improvement disappears after removing unsupported search-effort pressure; retain research result for future explicit diversification.",
+  "validation": {
+    "release": "PASS",
+    "focused": "1/1 PASS",
+    "core": "54/54 PASS",
+    "auxiliary": "12/12 PASS",
+    "tier0": "external KiCad DRC PASS"
+  },
+  "binary_sha256": "7c82ccaa73846156d9a2f2fc37e88180fdbb82986fafb975d16eee7abf46f020",
+  "source_hashes": {
+    "src/regional_router.cpp": "ff8a829597f58adff15f5505121ea718c9c8d05b931329b6dd8766d185b14d6c",
+    "include/flux/core/regional_router.hpp": "98d3f630d436f7d5afc6af7de98daae4aec680068835232d6e7811ab43e35df0",
+    "apps/flux-cli/main.cpp": "dc162ea5c2d31f9716aeb64c47363614150c5300b8d1bdb9f5336bedd429b524",
+    "tests/unit/core_tests.cpp": "222c9dbf7d601c82deb755158fb060ca01b6d3f485c88fdfd44c1dc10b3929f7"
+  },
+  "review": "No material implementation issue; unit controls cover eligibility/defer/scope, actual nontrivial scene and retained fallback require board evidence.",
+  "red_proof": {
+    "artifact": "build/negotiated-physical-feedback-20261008/red-proof",
+    "method": "Current test object and ABI, current library with regional object replaced by saved verified pre-V71 source.",
+    "result": "Expected failure: one clean negotiated straight checkpoint must receive exactly one bounded assembled assessment without consuming additional PathFinder iterations or scope expansion."
+  },
+  "live_mechanism": {
+    "dirty_initial_seed": "deferred (sampled25,corridor1,unacceptedlanes7)",
+    "first_eligible_epoch": 2,
+    "straight_realization_enabled": true,
+    "scene_result": "not evaluated: one of33 assignments exhausted bounded bundle search"
+  },
+  "result": {
+    "qualified": false,
+    "duration_seconds": 2508.5273635569974,
+    "straight_evaluated": true,
+    "straight_violations": 710,
+    "opens": 0,
+    "native_conflicts": 434,
+    "coarse_oracle": {
+      "configured_grid_pitch_nm": 1,
+      "diagnoses": 170,
+      "drc_violation_counts": {
+        "hole_clearance": 34,
+        "track_clearance": 362,
+        "track_via_clearance": 131
+      },
+      "drc_violations": 527,
+      "elapsed_us": 128161,
+      "feasible": false,
+      "malformed_paths": 0,
+      "open_connections": 0,
+      "paths_examined": 78,
+      "paths_materialized": 78,
+      "reused_transitions": 4,
+      "tracks": 1318,
+      "unrouted_nets": 0,
+      "vias": 45
+    },
+    "scope_attempts": [
+      {
+        "incomplete_assignments": 31,
+        "native_complete": true,
+        "native_evaluated": true,
+        "opens": 0,
+        "physical_errors": 794,
+        "retry": 0,
+        "selected": false,
+        "straight_evaluated": true
+      },
+      {
+        "incomplete_assignments": 29,
+        "native_complete": true,
+        "native_evaluated": true,
+        "opens": 0,
+        "physical_errors": 776,
+        "retry": 1,
+        "selected": false,
+        "straight_evaluated": true
+      },
+      {
+        "incomplete_assignments": 28,
+        "native_complete": true,
+        "native_evaluated": true,
+        "opens": 0,
+        "physical_errors": 710,
+        "retry": 2,
+        "selected": true,
+        "straight_evaluated": true
+      }
+    ],
+    "max_rss_kib": 632108,
+    "wall_seconds": 2519.49,
+    "routed_paths": 78,
+    "unrouted_nets": 0,
+    "global_overflow": 0,
+    "route_length_nm": null
+  },
+  "early_probe": {
+    "candidates": [
+      {
+        "coarse_topology_complete": true,
+        "exact_promotion_attempted": false,
+        "exact_promotion_succeeded": false,
+        "feedback_affected_nets": 25,
+        "feedback_fell_back_to_full_global": true,
+        "global_clearance_shadow_conflicts": 247,
+        "global_corridor_overflow": 0,
+        "global_rerouted_nets": 25,
+        "global_reused_nets": 0,
+        "global_sampled_overflow": 0,
+        "global_total_overflow": 0,
+        "global_unaccepted_lane_transitions": 0,
+        "global_unrouted_nets": 0,
+        "history_informed_global": true,
+        "incremental_global": false,
+        "plan_complete": false,
+        "provisional_plan_complete": false,
+        "regional_consulted": true,
+        "regional_diagnoses": 2,
+        "regional_incomplete_bundle_assignments": 1,
+        "regional_spline_candidates_evaluated": 0,
+        "regional_spline_realization_enabled": false,
+        "regional_straight_realization_enabled": true,
+        "regional_straight_scene_evaluated": false,
+        "regional_straight_scene_violations": 0
+      }
+    ],
+    "cumulative_global_iterations": 5,
+    "global_diagnoses": 398,
+    "global_epoch_iterations": 8,
+    "history_entries_after_global": 572,
+    "history_entries_after_regional": 574,
+    "history_entries_before": 342,
+    "history_pressure_after_global": 5212,
+    "history_pressure_after_regional": 15803,
+    "history_pressure_before": 3983,
+    "intermediate_regional_probe": false,
+    "next_feedback_affected_nets": 22,
+    "next_feedback_uses_repair_branch": false,
+    "pass": 1,
+    "quantized_copper_oracle_diagnoses": 232,
+    "quantized_copper_oracle_evaluated": true,
+    "quantized_copper_oracle_feasible": false,
+    "quantized_copper_oracle_opens": 0,
+    "quantized_copper_oracle_us": 129210,
+    "quantized_copper_oracle_violations": 613,
+    "retained_global_portfolios": 2
+  },
+  "harness_note": "exit0 and selected boards passed indicate expected probe behavior; qualified=false is authoritative",
+  "git_revision": "94aa691ad89576d1c0ac07a5346020da21fc9d06",
+  "working_tree": "pre-existing dirty work preserved; exact experimental source hashes recorded",
+  "date": "2026-10-08",
+  "last_recorded_utc": "2026-10-08T06:48:25.676127+00:00",
+  "configuration": {
+    "track_geometry": "straight",
+    "max_straight_portfolio_checks": 24,
+    "tier": 1,
+    "manifest": "tests/fixtures/routing-corpus/manifest.json",
+    "global_iteration_budget": 30,
+    "search_expansion_budget": 50000,
+    "feedback_retries": 4,
+    "rule_changes": false,
+    "routing_order_diversification_seed": "5700357408180847315"
+  }
+}

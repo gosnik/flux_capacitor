@@ -1,0 +1,100 @@
+{
+  "schema": 1,
+  "experiment": "bundle-resource-forward-checking-v17-replay",
+  "date": "2026-09-06",
+  "git_revision": "d1a06aa",
+  "dirty_worktree": true,
+  "board": "bm_svf",
+  "tier": 1,
+  "context": {
+    "telemetry": "build/tier1-forward-check-v16b-20260906/tier-1-bm_svf/telemetry/bm_svf-global.jsonl",
+    "group": "regional-bundle-context:residual:0",
+    "occurrence": 1,
+    "templates": 268,
+    "domains": 59
+  },
+  "replay_binary_sha256": "5140033e2d2df6eb0d74c52121ea5c8beb351ef30ac7fbe6148c8d0566bab465",
+  "control": {
+    "states": 100000,
+    "raw_choices": 87447,
+    "access_screened": false,
+    "exhausted": true,
+    "elapsed_us": 678792
+  },
+  "access_only": {
+    "states": 100000,
+    "choices": 0,
+    "exhausted": true,
+    "elapsed_us": 292622,
+    "access_pruned": 5,
+    "lane_capacity_pruned": 21422
+  },
+  "resources": [
+    {
+      "authoritative": false,
+      "window": 0,
+      "forward_checking": true,
+      "resource_forward_checking": true,
+      "choice_semantics": "access_and_coupling_screened_unknowns_retained",
+      "states": 100000,
+      "choices": 48550,
+      "exhausted": true,
+      "elapsed_us": 22902003,
+      "access_pruned": 85,
+      "terminal_pair_pruned": 0,
+      "via_pair_pruned": 85,
+      "terminal_via_pruned": 0,
+      "lane_capacity_pruned": 7,
+      "run_layer_pruned": 0,
+      "coupled_pruned": 0,
+      "forward_wipeouts": 2,
+      "pairwise_access_checks": 3733,
+      "forward_capacity_rejections": 152,
+      "forward_via_identity_rejections": 0,
+      "access_states": 1105266,
+      "access_exhaustions": 0
+    }
+  ],
+  "verification": {
+    "capacity_micro": "pass: bounded trap escaped; all 2048 feasible combinations retained",
+    "via_identity_micro": "pass: bounded trap escaped; all 2048 feasible combinations retained",
+    "full_core": "34/34 pass with resource propagation enabled",
+    "tier0": "historical default-rule pass invalidated by project-context audit: unchanged copper has 208 original-project DRC errors; see 2026-09-06-tier0-project-rule-context.json",
+    "tier1": "timed out at 1800 seconds; no accepted final copper or KiCad DRC"
+  },
+  "interpretation": "Forward capacity support escapes the access-only search's capacity dead end under the same state bound. Replayed choices have passed existing access and aggregate capacity constraints but not full lane packing, spline realization or KiCad DRC.",
+  "default_enabled": false,
+  "tier1_result": {
+    "quantized_checkpoint_violations": [764, 1297, 2216],
+    "quantized_checkpoint_opens": [0, 0, 0],
+    "ordinary_portfolio_completed_seconds": 639.911047,
+    "ordinary_splines_completed_seconds": 995.788463,
+    "residual_cone0_started_seconds": 1023.957358,
+    "residual_cone0_portfolio_seconds": 159.840652,
+    "residual_cone0_bundle_search_seconds": 23.29231,
+    "residual_cone0_generated_screened_choices": 48550,
+    "residual_cone0_retained_access_and_lane_states": 584,
+    "residual_cone0_active_native_illegal_routes": [20, 24, 24, 22, 23, 22, 24, 24],
+    "residual_cone0_active_native_total_routes": [24, 29, 27, 26, 27, 26, 28, 28],
+    "residual_cone0_completed_native_evaluations": 21,
+    "residual_cone0_minimum_illegal_native_routes": 20,
+    "later_residual_cones_reached": 0,
+    "outcome": "planning_timeout",
+    "limit_seconds": 1800,
+    "rule_caveat": "This controlled search comparison predates minimum-rule import. It is not a qualification run under corrected project rules."
+  },
+  "decision": "Leave resource forward checking disabled. It escapes the discrete dead prefix but supplies physically illegal states, consumes the remaining time in cone 0, and prevents later cones from being reached. No physical benchmark gain demonstrated.",
+  "enabled_benchmark_variant": {
+    "binary": "build/resource-forward-v17-bin/flux-cli",
+    "sha256": "205a54a904c6cb98d61239fda1d613710f749ccf3a365787aa1fb49c7af80445",
+    "tier0_artifact": "build/tier0-resource-forward-v17-20260906",
+    "tier0_global_seconds": 261.6193332829862,
+    "tier0_detail_seconds": 356.4729627009947,
+    "tier0_copper_sha256": "459bffc8258348a89eafcc275a35decdfc59e8afb1278b0731a58e0fd9df35ac",
+    "tier0_tracks": 75,
+    "tier0_arcs": 299,
+    "tier0_vias": 5,
+    "tier1_artifact": "build/tier1-resource-forward-v17-20260906"
+  },
+  "tier_promoted": false
+}

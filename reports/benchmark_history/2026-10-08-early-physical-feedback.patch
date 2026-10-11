@@ -1,0 +1,116 @@
+--- a/src/regional_router.cpp
++++ b/src/regional_router.cpp
+@@ -17669,10 +17669,14 @@
+     feedback_probe.retained_global_portfolios = retained_global_portfolios.size();
+ 
+     std::vector<std::pair<GlobalRouteResult, bool>> regional_inputs;
++    const bool initial_straight_physical_probe =
++        full_strength_epoch && !config.curved_tracks && pass == 0U && !final_epoch;
+     const bool fresh_feedback_checkpoint_first =
+         config.regional.prioritize_frozen_scope_expansion && pass > 0U && !final_epoch;
+-    const auto regional_portfolio_limit = fresh_feedback_checkpoint_first ? 1U :
++    const auto regional_portfolio_limit =
++        (initial_straight_physical_probe || fresh_feedback_checkpoint_first) ? 1U :
+         full_strength_epoch ? config.retained_global_portfolios : config.intermediate_regional_portfolios;
++    if (initial_straight_physical_probe) regional_inputs.emplace_back(probed_global, false);
+     if (fresh_feedback_checkpoint_first) {
+       // Learn from the newly negotiated topology now. Historical fallbacks remain retained and
+       // receive full physical search in the final epoch, after global feedback has matured.
+@@ -17706,7 +17710,7 @@
+     }
+     retained_global_portfolios_evaluated += regional_inputs.size();
+     const bool intermediate_regional_probe =
+-        config.interleave_routability_feedback && !final_epoch &&
++        config.interleave_routability_feedback && !final_epoch && !initial_straight_physical_probe &&
+         (!full_strength_epoch || !config.curved_tracks);
+     feedback_probe.intermediate_regional_probe = intermediate_regional_probe;
+     if (intermediate_regional_probe) {
+@@ -17739,11 +17743,14 @@
+         regional_attempt_config.enable_xpbd_feedback = true;
+         regional_attempt_config.frozen_copper_context = true;
+         regional_attempt_config.expand_frozen_copper_scope = true;
+-        // Certify the initial seed with the same scope budget as a one-iteration run.
+-        // Otherwise increasing the global budget can discard physically realizable topology
+-        // before it gets the local ownership expansion needed to demonstrate legality.
+-        // Intermediate retries still return failures upstream before rebuilding local scope.
++        // Curved seed certification retains the one-iteration scope budget so a larger
++        // global budget cannot discard topology before ownership expansion establishes
++        // legality. Intermediate retries return failures upstream before rebuilding scope.
+         if (pass > 0U && !final_epoch) regional_attempt_config.max_physical_scope_retries = 0U;
++        // Straight copper must supply assembled lane/via evidence while global retries
++        // remain. Assess one initial ownership scope, then let that evidence change the
++        // topology before spending the configured expanded-scope budget in the final epoch.
++        if (initial_straight_physical_probe) regional_attempt_config.max_physical_scope_retries = 0U;
+         // A colliding straight scaffold is a seed failure, not proof that PH/shove cannot
+         // construct legal copper. This broad experiment lets those operators try; assembled
+         // native-scene, quantization and final DRC acceptance remain unchanged.
+@@ -17901,6 +17908,12 @@
+           std::count_if(regional_candidate.regional.bundle_assignments.begin(),
+                         regional_candidate.regional.bundle_assignments.end(),
+                         [](const auto& assignment) { return !assignment.complete(); }));
++      feedback_candidate.regional_straight_realization_enabled =
++          regional_attempt_config.enable_straight_realization;
++      feedback_candidate.regional_straight_scene_evaluated =
++          regional_candidate.regional.straight_scene_evaluated;
++      feedback_candidate.regional_straight_scene_violations =
++          regional_candidate.regional.straight_scene_drc_violations;
+       feedback_candidate.regional_spline_candidates_evaluated =
+           regional_candidate.regional.joint_spline_candidates_evaluated;
+       feedback_candidate.regional_diagnoses = regional_diagnoses.size();
+--- a/include/flux/core/regional_router.hpp
++++ b/include/flux/core/regional_router.hpp
+@@ -1282,6 +1282,9 @@
+   bool coarse_topology_complete{false};
+   bool regional_consulted{false};
+   bool regional_spline_realization_enabled{false};
++  bool regional_straight_realization_enabled{false};
++  bool regional_straight_scene_evaluated{false};
++  std::size_t regional_straight_scene_violations{0U};
+   // A discrete-only regional probe may establish a plausible lane/escape/layer/via assignment,
+   // but it is not authoritative physical completion.  The planner immediately promotes such a
+   // state through the ordinary PH/copper-aware regional transaction before it can terminate an
+--- a/apps/flux-cli/main.cpp
++++ b/apps/flux-cli/main.cpp
+@@ -3664,6 +3664,12 @@
+                   << ",\"regional_consulted\":" << (candidate.regional_consulted ? "true" : "false")
+                   << ",\"regional_spline_realization_enabled\":"
+                   << (candidate.regional_spline_realization_enabled ? "true" : "false")
++                  << ",\"regional_straight_realization_enabled\":"
++                  << (candidate.regional_straight_realization_enabled ? "true" : "false")
++                  << ",\"regional_straight_scene_evaluated\":"
++                  << (candidate.regional_straight_scene_evaluated ? "true" : "false")
++                  << ",\"regional_straight_scene_violations\":"
++                  << candidate.regional_straight_scene_violations
+                   << ",\"provisional_plan_complete\":"
+                   << (candidate.provisional_plan_complete ? "true" : "false")
+                   << ",\"exact_promotion_attempted\":"
+--- a/tests/unit/core_tests.cpp
++++ b/tests/unit/core_tests.cpp
+@@ -5442,9 +5442,17 @@
+   }
+   auto straight_feedback_config = repeated_physics_config;
+   straight_feedback_config.curved_tracks = false;
++  straight_feedback_config.regional.max_nets_per_window = 2U;
+   const auto straight_feedback = flux::plan_routes(crossing, straight_feedback_config);
+   require(!straight_feedback.feedback_probes.empty() &&
+-              straight_feedback.feedback_probes.front().intermediate_regional_probe &&
++              !straight_feedback.feedback_probes.front().intermediate_regional_probe &&
++              straight_feedback.feedback_probes.front().candidates.size() == 1U &&
++              straight_feedback.feedback_probes.front().candidates.front().regional_consulted &&
++              straight_feedback.feedback_probes.front().candidates.front().regional_straight_realization_enabled &&
++              straight_feedback.feedback_probes.front().candidates.front().regional_straight_scene_evaluated &&
++              straight_feedback.feedback_probes.front().candidates.front().regional_straight_scene_violations == 0U &&
++              straight_feedback.feedback_probes.front().candidates.front().plan_complete &&
++              straight_feedback.feedback_probes.front().next_feedback_affected_nets == 0U &&
+               straight_feedback.cumulative_global_iterations <= 3U &&
+               std::all_of(straight_feedback.feedback_probes.begin(),
+                           straight_feedback.feedback_probes.end(), [](const auto& epoch) {
+@@ -5455,7 +5463,7 @@
+                            candidate.global_sampled_overflow == 0U || !candidate.regional_consulted);
+                     });
+               }),
+-          "straight conflicts must return to negotiation before expensive regional portfolios");
++          "the first straight scene must be assessed as complete before retries are considered");
+   repeated_physics_config.global.max_iterations = 6U;
+   const auto distributed_physics = flux::plan_routes(crossing, repeated_physics_config);
+   require(!distributed_physics.complete() && distributed_physics.feedback_probes.size() == 3U &&

@@ -1,0 +1,922 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-05",
+  "git_revision": "25e3b884be9b359d9c5bf0cc4fbb6cc836fd4f82",
+  "initial_dirty_patch_sha256": "fa59877733377287237343cb1d61b332d1401824a8a77b897539845f6108d9f2",
+  "worktree_was_dirty_before_task": true,
+  "source_boards_unchanged": true,
+  "reference": {
+    "project": "KiCadRoutingTools",
+    "url": "https://github.com/drandyhaas/KiCadRoutingTools",
+    "revision": "ec2bf0e1021c0ed95c45b14664d02c56777a0974",
+    "comparison": "reports/krt_bm_svf_comparison_2026-09-05.md"
+  },
+  "promotion": "All five tiers require detailed_complete; no tier promoted. Tier 0 fresh baseline was already failing.",
+  "tiers": [
+    {
+      "id": "pt2399_delay",
+      "tier": 0,
+      "status": "qualified",
+      "qualification": "detailed_complete",
+      "current_verified_pass": false,
+      "note": "Fresh attempts failed or awaiting exact acceptance."
+    },
+    {
+      "id": "bm_svf",
+      "tier": 1,
+      "status": "unlocked",
+      "qualification": "detailed_complete",
+      "current_verified_pass": false,
+      "note": "Fresh attempts failed or awaiting exact acceptance."
+    },
+    {
+      "id": "zigbee_sensor",
+      "tier": 2,
+      "status": "locked",
+      "qualification": "detailed_complete",
+      "current_verified_pass": false,
+      "note": "Not attempted beyond strict import/provenance preflight; lower-tier frontier unresolved."
+    },
+    {
+      "id": "ch32v003_usb",
+      "tier": 3,
+      "status": "locked",
+      "qualification": "detailed_complete",
+      "current_verified_pass": false,
+      "note": "Not attempted beyond strict import/provenance preflight; lower-tier frontier unresolved."
+    },
+    {
+      "id": "usbgpib",
+      "tier": 4,
+      "status": "locked",
+      "qualification": "detailed_complete",
+      "current_verified_pass": false,
+      "note": "Not attempted beyond strict import/provenance preflight; lower-tier frontier unresolved."
+    }
+  ],
+  "measurement_notes": [
+    "Concurrent benchmarks: timings are not isolated performance measurements.",
+    "Null metrics are unavailable, never inferred zero.",
+    "Core and CLI regression results do not establish corpus DRC correctness.",
+    "Incomplete provisional snapshots are diagnostic evidence, not routed copper."
+  ],
+  "runs": [
+    {
+      "id": "baseline",
+      "board": "pt2399_delay",
+      "tier": 0,
+      "phase": "planning",
+      "duration_seconds": 453.9267569959993,
+      "configuration": {
+        "max_expansions": 50000,
+        "max_router_iterations": 1,
+        "max_static_seed_workers": 2,
+        "router_args": [],
+        "search_diversification": true,
+        "telemetry_level": "diagnostic"
+      },
+      "outcome": "not_detailed_complete",
+      "metrics": {
+        "complete": false,
+        "stop_reason": "iteration_limit",
+        "paths": 50,
+        "unrouted_nets": 0,
+        "total_overflow": 16,
+        "sampled_overflow": 0,
+        "corridor_overflow": 0,
+        "clearance_shadow_overflow": 16,
+        "via_count": null,
+        "route_length_nm": null,
+        "routing_plan_complete": false,
+        "regional_failed_spline_bundle_assignments": 1,
+        "regional_joint_spline_candidates_evaluated": 12,
+        "regional_spline_topology_seed_gate_rejections": 1120,
+        "regional_native_scene_conflicts": 0,
+        "regional_native_scene_fixed_conflicts": 0,
+        "regional_conflict_edges": 5,
+        "regional_conflict_components": null,
+        "open_connections": null,
+        "added_tracks": null,
+        "added_track_arcs": null,
+        "added_vias": null,
+        "copper_violations": null,
+        "copper_violation_counts": null,
+        "unrounded_non_junction_bends": null,
+        "validation_errors": null,
+        "final_routability_feedback_passes": null,
+        "final_routability_feedback_improvements": null
+      },
+      "final_kicad_drc": null,
+      "artifacts": "build/frontier-20260905/baseline/tier-0-pt2399_delay"
+    },
+    {
+      "id": "seed-diagnostic",
+      "board": "pt2399_delay",
+      "tier": 0,
+      "phase": "planning",
+      "duration_seconds": 466.6462624159976,
+      "configuration": {
+        "max_expansions": 50000,
+        "max_router_iterations": 1,
+        "max_static_seed_workers": 2,
+        "router_args": [],
+        "search_diversification": true,
+        "telemetry_level": "diagnostic"
+      },
+      "outcome": "not_detailed_complete",
+      "metrics": {
+        "complete": false,
+        "stop_reason": "iteration_limit",
+        "paths": 50,
+        "unrouted_nets": 0,
+        "total_overflow": 16,
+        "sampled_overflow": 0,
+        "corridor_overflow": 0,
+        "clearance_shadow_overflow": 16,
+        "via_count": null,
+        "route_length_nm": null,
+        "routing_plan_complete": false,
+        "regional_failed_spline_bundle_assignments": 1,
+        "regional_joint_spline_candidates_evaluated": 12,
+        "regional_spline_topology_seed_gate_rejections": 1120,
+        "regional_native_scene_conflicts": 0,
+        "regional_native_scene_fixed_conflicts": 0,
+        "regional_conflict_edges": 5,
+        "regional_conflict_components": null,
+        "open_connections": null,
+        "added_tracks": null,
+        "added_track_arcs": null,
+        "added_vias": null,
+        "copper_violations": null,
+        "copper_violation_counts": null,
+        "unrounded_non_junction_bends": null,
+        "validation_errors": null,
+        "final_routability_feedback_passes": null,
+        "final_routability_feedback_improvements": null
+      },
+      "final_kicad_drc": null,
+      "artifacts": "build/frontier-20260905/seed-diagnostic/tier-0-pt2399_delay"
+    },
+    {
+      "id": "gate-diagnostic",
+      "board": "pt2399_delay",
+      "tier": 0,
+      "phase": "planning",
+      "duration_seconds": 481.29798966999806,
+      "configuration": {
+        "max_expansions": 50000,
+        "max_router_iterations": 1,
+        "max_static_seed_workers": 2,
+        "router_args": [],
+        "search_diversification": true,
+        "telemetry_level": "diagnostic"
+      },
+      "outcome": "not_detailed_complete",
+      "metrics": {
+        "complete": false,
+        "stop_reason": "iteration_limit",
+        "paths": 50,
+        "unrouted_nets": 0,
+        "total_overflow": 16,
+        "sampled_overflow": 0,
+        "corridor_overflow": 0,
+        "clearance_shadow_overflow": 16,
+        "via_count": null,
+        "route_length_nm": null,
+        "routing_plan_complete": false,
+        "regional_failed_spline_bundle_assignments": 1,
+        "regional_joint_spline_candidates_evaluated": 12,
+        "regional_spline_topology_seed_gate_rejections": 1120,
+        "regional_native_scene_conflicts": 0,
+        "regional_native_scene_fixed_conflicts": 0,
+        "regional_conflict_edges": 5,
+        "regional_conflict_components": null,
+        "open_connections": null,
+        "added_tracks": null,
+        "added_track_arcs": null,
+        "added_vias": null,
+        "copper_violations": null,
+        "copper_violation_counts": null,
+        "unrounded_non_junction_bends": null,
+        "validation_errors": null,
+        "final_routability_feedback_passes": null,
+        "final_routability_feedback_improvements": null
+      },
+      "final_kicad_drc": null,
+      "artifacts": "build/frontier-20260905/gate-diagnostic/tier-0-pt2399_delay"
+    },
+    {
+      "id": "portal-normal",
+      "board": "pt2399_delay",
+      "tier": 0,
+      "phase": "planning",
+      "duration_seconds": 483.6098159470057,
+      "configuration": {
+        "max_expansions": 50000,
+        "max_router_iterations": 1,
+        "max_static_seed_workers": 2,
+        "router_args": [],
+        "search_diversification": true,
+        "telemetry_level": "diagnostic"
+      },
+      "outcome": "not_detailed_complete",
+      "metrics": {
+        "complete": false,
+        "stop_reason": "iteration_limit",
+        "paths": 50,
+        "unrouted_nets": 0,
+        "total_overflow": 16,
+        "sampled_overflow": 0,
+        "corridor_overflow": 0,
+        "clearance_shadow_overflow": 16,
+        "via_count": null,
+        "route_length_nm": null,
+        "routing_plan_complete": false,
+        "regional_failed_spline_bundle_assignments": 1,
+        "regional_joint_spline_candidates_evaluated": 12,
+        "regional_spline_topology_seed_gate_rejections": 1120,
+        "regional_native_scene_conflicts": 0,
+        "regional_native_scene_fixed_conflicts": 0,
+        "regional_conflict_edges": 5,
+        "regional_conflict_components": null,
+        "open_connections": null,
+        "added_tracks": null,
+        "added_track_arcs": null,
+        "added_vias": null,
+        "copper_violations": null,
+        "copper_violation_counts": null,
+        "unrounded_non_junction_bends": null,
+        "validation_errors": null,
+        "final_routability_feedback_passes": null,
+        "final_routability_feedback_improvements": null
+      },
+      "final_kicad_drc": null,
+      "artifacts": "build/frontier-20260905/portal-normal/tier-0-pt2399_delay"
+    },
+    {
+      "id": "channel-isolation",
+      "board": "pt2399_delay",
+      "tier": 0,
+      "phase": "planning",
+      "duration_seconds": 277.060834306998,
+      "configuration": {
+        "max_expansions": 50000,
+        "max_router_iterations": 1,
+        "max_static_seed_workers": 2,
+        "router_args": [],
+        "search_diversification": true,
+        "telemetry_level": "diagnostic"
+      },
+      "outcome": "not_detailed_complete",
+      "metrics": {
+        "complete": false,
+        "stop_reason": "iteration_limit",
+        "paths": 50,
+        "unrouted_nets": 0,
+        "total_overflow": 16,
+        "sampled_overflow": 0,
+        "corridor_overflow": 0,
+        "clearance_shadow_overflow": 16,
+        "via_count": null,
+        "route_length_nm": null,
+        "routing_plan_complete": true,
+        "regional_failed_spline_bundle_assignments": 0,
+        "regional_joint_spline_candidates_evaluated": 5,
+        "regional_spline_topology_seed_gate_rejections": 115,
+        "regional_native_scene_conflicts": 36,
+        "regional_native_scene_fixed_conflicts": 0,
+        "regional_conflict_edges": 5,
+        "regional_conflict_components": null,
+        "open_connections": null,
+        "added_tracks": null,
+        "added_track_arcs": null,
+        "added_vias": null,
+        "copper_violations": null,
+        "copper_violation_counts": null,
+        "unrounded_non_junction_bends": null,
+        "validation_errors": null,
+        "final_routability_feedback_passes": null,
+        "final_routability_feedback_improvements": null
+      },
+      "final_kicad_drc": null,
+      "artifacts": "build/frontier-20260905/channel-isolation/tier-0-pt2399_delay"
+    },
+    {
+      "id": "channel-isolation-detail-one",
+      "board": "pt2399_delay",
+      "tier": 0,
+      "phase": "detailed",
+      "outcome": "copper_violations",
+      "duration_seconds": 876.57,
+      "peak_rss_kib": 503552,
+      "metrics": {
+        "complete": false,
+        "stop_reason": "copper_violations",
+        "paths": null,
+        "unrouted_nets": null,
+        "total_overflow": null,
+        "sampled_overflow": null,
+        "corridor_overflow": null,
+        "clearance_shadow_overflow": null,
+        "via_count": null,
+        "route_length_nm": null,
+        "routing_plan_complete": null,
+        "regional_failed_spline_bundle_assignments": null,
+        "regional_joint_spline_candidates_evaluated": null,
+        "regional_spline_topology_seed_gate_rejections": null,
+        "regional_native_scene_conflicts": null,
+        "regional_native_scene_fixed_conflicts": null,
+        "regional_conflict_edges": null,
+        "regional_conflict_components": null,
+        "open_connections": 0,
+        "added_tracks": 255,
+        "added_track_arcs": 110,
+        "added_vias": 5,
+        "copper_violations": 16,
+        "copper_violation_counts": {
+          "track_track_arc_clearance": 16
+        },
+        "unrounded_non_junction_bends": 160,
+        "validation_errors": 0,
+        "final_routability_feedback_passes": 2,
+        "final_routability_feedback_improvements": 0
+      },
+      "routability_diagnoses": [
+        {
+          "kind": "packing_capacity_exceeded",
+          "stage": "final_validation",
+          "resource": "routability:packing_capacity_exceeded:B.Cu:25:53",
+          "severity": 23,
+          "nets": [
+            "kicad-net-1",
+            "kicad-net-17"
+          ]
+        },
+        {
+          "kind": "packing_capacity_exceeded",
+          "stage": "final_validation",
+          "resource": "routability:packing_capacity_exceeded:B.Cu:29:42",
+          "severity": 5,
+          "nets": [
+            "kicad-net-3",
+            "kicad-net-4"
+          ]
+        },
+        {
+          "kind": "packing_capacity_exceeded",
+          "stage": "final_validation",
+          "resource": "routability:packing_capacity_exceeded:B.Cu:29:43",
+          "severity": 10,
+          "nets": [
+            "kicad-net-3",
+            "kicad-net-4"
+          ]
+        },
+        {
+          "kind": "packing_capacity_exceeded",
+          "stage": "final_validation",
+          "resource": "routability:packing_capacity_exceeded:B.Cu:30:42",
+          "severity": 9,
+          "nets": [
+            "kicad-net-3",
+            "kicad-net-4"
+          ]
+        },
+        {
+          "kind": "packing_capacity_exceeded",
+          "stage": "final_validation",
+          "resource": "routability:packing_capacity_exceeded:B.Cu:34:29",
+          "severity": 3,
+          "nets": [
+            "kicad-net-10",
+            "kicad-net-11"
+          ]
+        },
+        {
+          "kind": "packing_capacity_exceeded",
+          "stage": "final_validation",
+          "resource": "routability:packing_capacity_exceeded:B.Cu:34:30",
+          "severity": 10,
+          "nets": [
+            "kicad-net-10",
+            "kicad-net-11"
+          ]
+        },
+        {
+          "kind": "packing_capacity_exceeded",
+          "stage": "final_validation",
+          "resource": "routability:packing_capacity_exceeded:B.Cu:44:32",
+          "severity": 10,
+          "nets": [
+            "kicad-net-7",
+            "kicad-net-8"
+          ]
+        },
+        {
+          "kind": "packing_capacity_exceeded",
+          "stage": "final_validation",
+          "resource": "routability:packing_capacity_exceeded:B.Cu:45:32",
+          "severity": 11,
+          "nets": [
+            "kicad-net-7",
+            "kicad-net-8"
+          ]
+        },
+        {
+          "kind": "packing_capacity_exceeded",
+          "stage": "final_validation",
+          "resource": "routability:packing_capacity_exceeded:B.Cu:50:32",
+          "severity": 11,
+          "nets": [
+            "kicad-net-11",
+            "kicad-net-8"
+          ]
+        },
+        {
+          "kind": "packing_capacity_exceeded",
+          "stage": "final_validation",
+          "resource": "routability:packing_capacity_exceeded:B.Cu:51:32",
+          "severity": 15,
+          "nets": [
+            "kicad-net-11",
+            "kicad-net-8"
+          ]
+        }
+      ],
+      "final_kicad_drc": null,
+      "candidate_exported": false,
+      "artifacts": "build/frontier-20260905/channel-isolation-detail-one"
+    },
+    {
+      "id": "corrected-tier1",
+      "board": "bm_svf",
+      "tier": 1,
+      "phase": "planning",
+      "attempt": {
+        "command": [
+          "build/dev/flux-cli",
+          "route-kicad",
+          "tests/fixtures/routing-corpus/bm_svf.kicad_pcb",
+          "--max-router-iterations",
+          "30",
+          "--max-expansions",
+          "50000",
+          "--max-static-seed-workers",
+          "2",
+          "--search-diversification",
+          "--crossing-safe-diagonal-grid",
+          "--direct-medial",
+          "--grid-pitch-nm",
+          "650000",
+          "--xpbd-relaxation",
+          "--xpbd-feedback",
+          "--atomic-net-trees",
+          "--hard-capacity-start-iteration",
+          "4",
+          "--max-hard-capacity-ripup-attempts-per-pass",
+          "8",
+          "--max-hard-capacity-ripup-nets-per-attempt",
+          "8",
+          "--max-hard-capacity-conflict-set-states-per-attempt",
+          "256",
+          "--terminal-escape-proximity-cost",
+          "500",
+          "--rollback-failed-hard-capacity-ripup",
+          "--defer-hard-capacity-ripup-victims-to-pass-tail",
+          "--protect-recovered-hard-capacity-ripup-nets",
+          "--telemetry-level",
+          "diagnostic",
+          "--telemetry-record",
+          "build/frontier-20260905/corrected-tier1/routing.jsonl"
+        ],
+        "source_sha256_before": "308ce5513cb6b2b33820648a0062a54f548f6b3c13d856cdcd9b7c3ac8a20d2a",
+        "cli_sha256": "8b75b54243b4c0df243348d2189d5b38ec9e6f30e0912a82b02d3ff951dfd327",
+        "timeout_seconds": 900,
+        "started_at": "2026-09-05T19:42:09+0800",
+        "qualification": "detailed_complete",
+        "diagnostic_budget_override": true,
+        "returncode": null,
+        "timed_out": true,
+        "duration_seconds": 900.0892894639983,
+        "peak_rss_kib": 622248,
+        "source_sha256_after": "308ce5513cb6b2b33820648a0062a54f548f6b3c13d856cdcd9b7c3ac8a20d2a"
+      },
+      "outcome": "timeout",
+      "metrics": {
+        "complete": null,
+        "stop_reason": null,
+        "paths": null,
+        "unrouted_nets": null,
+        "total_overflow": null,
+        "sampled_overflow": null,
+        "corridor_overflow": null,
+        "clearance_shadow_overflow": null,
+        "via_count": null,
+        "route_length_nm": null,
+        "routing_plan_complete": null,
+        "regional_failed_spline_bundle_assignments": null,
+        "regional_joint_spline_candidates_evaluated": null,
+        "regional_spline_topology_seed_gate_rejections": null,
+        "regional_native_scene_conflicts": null,
+        "regional_native_scene_fixed_conflicts": null,
+        "regional_conflict_edges": null,
+        "regional_conflict_components": null,
+        "open_connections": null,
+        "added_tracks": null,
+        "added_track_arcs": null,
+        "added_vias": null,
+        "copper_violations": null,
+        "copper_violation_counts": null,
+        "unrounded_non_junction_bends": null,
+        "validation_errors": null,
+        "final_routability_feedback_passes": null,
+        "final_routability_feedback_improvements": null
+      },
+      "latest_telemetry_metrics": {
+        "iteration": 1,
+        "total_nets": 25,
+        "routed_nets": 25,
+        "unrouted_nets": 0,
+        "total_groups": 0,
+        "routed_groups": 0,
+        "unrouted_groups": 0,
+        "sampled_overflow": 0,
+        "corridor_overflow": 0,
+        "physical_overflow_nm": 0,
+        "clearance_shadow_conflicts": 238,
+        "regional_conflicts": 0,
+        "route_cost": 515668,
+        "vias": 0,
+        "rip_ups": 0,
+        "search_expansions": 0,
+        "selected_checkpoint": 0,
+        "best_checkpoint": 0,
+        "selected_is_best": false
+      },
+      "latest_search_summaries": [
+        {
+          "seconds": 733.773252,
+          "message": "non-committing soft-capacity cut probe found 3 routed blockers for progressive rip-up"
+        },
+        {
+          "seconds": 736.840153,
+          "message": "non-committing soft-capacity cut probe found 3 routed blockers for progressive rip-up"
+        },
+        {
+          "seconds": 744.441694,
+          "message": "global route selected; releasing obstacle query caches: edge_entries=1102100, access_entries=26324"
+        },
+        {
+          "seconds": 744.519114,
+          "message": "global obstacle query caches released"
+        },
+        {
+          "seconds": 744.533355,
+          "message": "global routing stage completed: all global connections allocated through free-space corridors without overflow"
+        },
+        {
+          "seconds": 745.824678,
+          "message": "regional PH/XPBD deferred: remaining PathFinder/rip-up budget owns sampled=0, corridor=0, unaccepted_lane_transitions=2"
+        },
+        {
+          "seconds": 746.436772,
+          "message": "regional PH/XPBD deferred: remaining PathFinder/rip-up budget owns sampled=0, corridor=0, unaccepted_lane_transitions=2"
+        },
+        {
+          "seconds": 746.441347,
+          "message": "interleaved routing epoch completed: regional_candidates=2, history_entries=1021, history_pressure=5981, quantized_oracle_violations=885, quantized_oracle_opens=4"
+        }
+      ],
+      "final_kicad_drc": null,
+      "artifacts": "build/frontier-20260905/corrected-tier1"
+    },
+    {
+      "id": "witness-scope",
+      "board": "pt2399_delay",
+      "tier": 0,
+      "phase": "detailed",
+      "attempt": {
+        "command": [
+          "build/dev/flux-cli",
+          "detail-kicad",
+          "tests/fixtures/routing-corpus/pt2399_delay.kicad_pcb",
+          "--max-router-iterations",
+          "1",
+          "--max-expansions",
+          "50000",
+          "--max-static-seed-workers",
+          "2",
+          "--search-diversification",
+          "--telemetry-level",
+          "diagnostic",
+          "--telemetry-record",
+          "build/frontier-20260905/witness-scope/routing.jsonl",
+          "--arcs",
+          "build/frontier-20260905/witness-scope/pt2399_delay.kicad_pcb"
+        ],
+        "source_sha256_before": "c48693b458eb28ae11f2ef099acf33ee9a797d87f430457c6961b41e2f2c4cab",
+        "cli_sha256": "f3255e5d669d8f52a56c621d3dcd1edb2884d852e90fdd9d0afda7ac58595473",
+        "timeout_seconds": 1200,
+        "started_at": "2026-09-05T19:54:47+0800"
+      },
+      "outcome": "running",
+      "metrics": {
+        "complete": null,
+        "stop_reason": null,
+        "paths": null,
+        "unrouted_nets": null,
+        "total_overflow": null,
+        "sampled_overflow": null,
+        "corridor_overflow": null,
+        "clearance_shadow_overflow": null,
+        "via_count": null,
+        "route_length_nm": null,
+        "routing_plan_complete": null,
+        "regional_failed_spline_bundle_assignments": null,
+        "regional_joint_spline_candidates_evaluated": null,
+        "regional_spline_topology_seed_gate_rejections": null,
+        "regional_native_scene_conflicts": null,
+        "regional_native_scene_fixed_conflicts": null,
+        "regional_conflict_edges": null,
+        "regional_conflict_components": null,
+        "open_connections": null,
+        "added_tracks": null,
+        "added_track_arcs": null,
+        "added_vias": null,
+        "copper_violations": null,
+        "copper_violation_counts": null,
+        "unrounded_non_junction_bends": null,
+        "validation_errors": null,
+        "final_routability_feedback_passes": null,
+        "final_routability_feedback_improvements": null
+      },
+      "latest_telemetry_metrics": {
+        "iteration": 1,
+        "total_nets": 20,
+        "routed_nets": 20,
+        "unrouted_nets": 0,
+        "total_groups": 0,
+        "routed_groups": 0,
+        "unrouted_groups": 0,
+        "sampled_overflow": 0,
+        "corridor_overflow": 0,
+        "physical_overflow_nm": 0,
+        "clearance_shadow_conflicts": 16,
+        "regional_conflicts": 0,
+        "route_cost": 179633,
+        "vias": 0,
+        "rip_ups": 0,
+        "search_expansions": 0,
+        "selected_checkpoint": 0,
+        "best_checkpoint": 0,
+        "selected_is_best": false
+      },
+      "latest_search_summaries": [
+        {
+          "seconds": 232.283842,
+          "message": "regional spline realization started: window=1, assignment=3/8"
+        },
+        {
+          "seconds": 241.973056,
+          "message": "PH seed portfolio rejected; owned=yes, construction=0, containment=23, gates=41, shape=0 (51000000,29000000) (44998223,28748223) (44685723,26560723) (43748223,24748223) (42998223,24498223) (41998223,24748223) (41560723,26185723) (41000000,27600000) (41123223,27373223) (40873223,27123223) (41123223,26873223) (41060723,26623223) (41123223,26623223) (41185723,26498223) (41248223,26498223) (41310723,26373223) (41373223,26373223) (41435723,26248223) (41498223,26248223) (41560723,26123223) (41623223,26123223) (41873223,25873223) (41685723,25623223) (41748223,25560723) (41685723,25498223) (41748223,25435723) (41685723,25373223) (41873223,25123223) (41623223,24935723) (41623223,24873223) (41498223,24810723) (41498223,24748223) (41373223,24685723) (41373223,24623223) (41248223,24560723) (41248223,24498223) (41123223,24435723) (41123223,24373223) (40873223,24123223) (40623223,24310723) (40560723,24248223) (40498223,24310723) (40435723,24248223) (40373223,24310723) (40123223,24123223) (39935723,24373223) (39873223,24435723) (39748223,24373223) (39623223,24373223) (39373223,24623223) (39498223,24748223) (39435723,24873223) (39373223,24935723) (39123223,24873223) (38873223,25123223) (38623223,24873223) (38373223,25123223) (38123223,24873223) (37873223,25123223) (37623223,24873223) (37373223,25123223) (37623223,25373223) (37373223,25623223) (37623223,25873223) (37373223,26123223) (37623223,26373223) (37373223,26623223) (37623223,26873223) (37373223,27123223) (37623223,27373223) (37373223,27623223) (37623223,27873223) (37373223,28123223) (37623223,28373223) (37373223,28623223) (37500000,29000000); raw_seed=candidate crossed selected NavMesh gate more than once: 27; gates= [0,50873223,28873223,50873223,29123223,50998223,28998223,50748223,28998223] [1,50623223,28873223,50623223,29123223,50748223,28998223,50498223,28998223] [2,50373223,28873223,50373223,29123223,50498223,28998223,50248223,28998223] [3,50123223,28873223,50123223,29123223,50248223,28998223,49998223,28998223] [4,49873223,28873223,49873223,29123223,49998223,28998223,49748223,28998223] [5,49623223,28873223,49623223,29123223,49748223,28998223,49498223,28998223] [6,49373223,28873223,49373223,29123223,49498223,28998223,49248223,28998223] [7,49123223,28873223,49123223,29123223,49248223,28998223,48998223,28998223] [8,48873223,28873223,48873223,29123223,48998223,28998223,48748223,28998223] [9,48623223,28873223,48623223,29123223,48748223,28998223,48498223,28998223] [10,48373223,28873223,48373223,29123223,48498223,28998223,48248223,28998223] [11,48123223,28873223,48123223,29123223,48248223,28998223,47998223,28998223] [12,45123223,28623223,44873223,28623223,44998223,28748223,44998223,28498223] [13,45123223,28373223,44873223,28373223,44998223,28498223,44998223,28248223] [14,45123223,28123223,44873223,28123223,44998223,28248223,44998223,27998223] [15,45123223,27873223,44873223,27873223,44998223,27998223,44998223,27748223] [16,44123223,25373223,43873223,25373223,43998223,25498223,43998223,25248223] [17,44123223,25123223,43873223,25123223,43998223,25248223,43998223,24998223] [18,43873223,24873223,43873223,25123223,43998223,24998223,43748223,24998223] [19,43873223,24873223,43623223,24873223,43748223,24998223,43748223,24748223] [20,43623223,24623223,43623223,24873223,43748223,24748223,43498223,24748223] [21,43623223,24623223,43373223,24623223,43498223,24748223,43498223,24498223] [22,43373223,24373223,43373223,24623223,43498223,24498223,43248223,24498223] [23,43123223,24373223,43123223,24623223,43248223,24498223,42998223,24498223] [24,42873223,24373223,42873223,24623223,42998223,24498223,42748223,24498223] [25,42623223,24373223,42623223,24623223,42748223,24498223,42498223,24498223] [26,41873223,24873223,42123223,24873223,41998223,24748223,41998223,24998223] [27,41873223,25123223,42123223,25123223,41998223,24998223,41998223,25248223] [28,41748223,25560723,41685723,25560723,41716973,25591973,41716973,25529473] [29,41748223,25498223,41685723,25498223,41716973,25529473,41716973,25466973] [30,41748223,25435723,41685723,25435723,41716973,25466973,41716973,25404473] [31,41748223,25373223,41685723,25373223,41716973,25404473,41748223,25248223] [32,41873223,25123223,41623223,25123223,41748223,25248223,41748223,24998223] [33,41623223,24873223,41560723,24873223,41591973,24904473,41560723,24810723] [34,41498223,24748223,41435723,24748223,41466973,24779473,41435723,24685723] [35,41373223,24623223,41310723,24623223,41341973,24654473,41310723,24560723] [36,41248223,24498223,41185723,24498223,41216973,24529473,41185723,24435723] [37,41123223,24373223,41060723,24373223,41091973,24404473,40998223,24248223] [38,40873223,24123223,40873223,24373223,40998223,24248223,40748223,24248223] [39,40123223,24123223,40123223,24373223,40248223,24248223,39998223,24248223] [40,39623223,24373223,39623223,24498223,39685723,24435723,39498223,24498223] [41,38623223,24873223,38623223,25123223,38748223,24998223,38498223,24998223] [42,38373223,24873223,38373223,25123223,38498223,24998223,38248223,24998223] [43,37373223,25623223,37623223,25623223,37498223,25498223,37498223,25748223] [44,37373223,25873223,37623223,25873223,37498223,25748223,37498223,25998223] [45,37373223,26123223,37623223,26123223,37498223,25998223,37498223,26248223] [46,37373223,26373223,37623223,26373223,37498223,26248223,37498223,26498223] [47,37373223,26623223,37623223,26623223,37498223,26498223,37498223,26748223] [48,37373223,26873223,37623223,26873223,37498223,26748223,37498223,26998223] [49,37373223,27123223,37623223,27123223,37498223,26998223,37498223,27248223] [50,37373223,27373223,37623223,27373223,37498223,27248223,37498223,27498223] [51,37373223,27623223,37623223,27623223,37498223,27498223,37498223,27748223] [52,37373223,27873223,37623223,27873223,37498223,27748223,37498223,27998223] [53,37373223,28123223,37623223,28123223,37498223,27998223,37498223,28248223] [54,37373223,28373223,37623223,28373223,37498223,28248223,37498223,28498223] [55,37373223,28623223,37623223,28623223,37498223,28498223,37498223,28748223] [56,37373223,28873223,37623223,28873223,37498223,28748223,37498223,28998223]"
+        },
+        {
+          "seconds": 241.973128,
+          "message": "regional spline realization started: window=1, assignment=4/8"
+        },
+        {
+          "seconds": 252.040695,
+          "message": "PH seed portfolio rejected; owned=yes, construction=0, containment=28, gates=33, shape=3 (51000000,29000000) (44998223,28748223) (44685723,26560723) (43748223,24748223) (42998223,24498223) (41998223,24748223) (40998223,27998223) (41000000,28300000) (41123223,28123223) (40873223,27873223) (41123223,27623223) (40873223,27373223) (41123223,27123223) (40873223,26873223) (41060723,26623223) (41123223,26623223) (41185723,26498223) (41248223,26498223) (41310723,26373223) (41373223,26373223) (41435723,26248223) (41498223,26248223) (41560723,26123223) (41623223,26123223) (41873223,25873223) (41685723,25623223) (41748223,25560723) (41685723,25498223) (41748223,25435723) (41685723,25373223) (41873223,25123223) (41623223,24935723) (41623223,24873223) (41498223,24810723) (41498223,24748223) (41373223,24685723) (41373223,24623223) (41248223,24560723) (41248223,24498223) (41123223,24435723) (41123223,24373223) (40873223,24123223) (40623223,24310723) (40560723,24248223) (40498223,24310723) (40435723,24248223) (40373223,24310723) (40123223,24123223) (39935723,24373223) (39873223,24435723) (39748223,24373223) (39623223,24373223) (39373223,24623223) (39498223,24748223) (39435723,24873223) (39373223,24935723) (39123223,24873223) (38873223,25123223) (38623223,24873223) (38373223,25123223) (38123223,24873223) (37873223,25123223) (37623223,24873223) (37373223,25123223) (37623223,25373223) (37373223,25623223) (37623223,25873223) (37373223,26123223) (37623223,26373223) (37373223,26623223) (37623223,26873223) (37373223,27123223) (37623223,27373223) (37373223,27623223) (37623223,27873223) (37373223,28123223) (37623223,28373223) (37373223,28623223) (37500000,29000000); raw_seed=candidate crossed selected NavMesh gate more than once: 27; gates= [0,50873223,28873223,50873223,29123223,50998223,28998223,50748223,28998223] [1,50623223,28873223,50623223,29123223,50748223,28998223,50498223,28998223] [2,50373223,28873223,50373223,29123223,50498223,28998223,50248223,28998223] [3,50123223,28873223,50123223,29123223,50248223,28998223,49998223,28998223] [4,49873223,28873223,49873223,29123223,49998223,28998223,49748223,28998223] [5,49623223,28873223,49623223,29123223,49748223,28998223,49498223,28998223] [6,49373223,28873223,49373223,29123223,49498223,28998223,49248223,28998223] [7,49123223,28873223,49123223,29123223,49248223,28998223,48998223,28998223] [8,48873223,28873223,48873223,29123223,48998223,28998223,48748223,28998223] [9,48623223,28873223,48623223,29123223,48748223,28998223,48498223,28998223] [10,48373223,28873223,48373223,29123223,48498223,28998223,48248223,28998223] [11,48123223,28873223,48123223,29123223,48248223,28998223,47998223,28998223] [12,45123223,28623223,44873223,28623223,44998223,28748223,44998223,28498223] [13,45123223,28373223,44873223,28373223,44998223,28498223,44998223,28248223] [14,45123223,28123223,44873223,28123223,44998223,28248223,44998223,27998223] [15,45123223,27873223,44873223,27873223,44998223,27998223,44998223,27748223] [16,44123223,25373223,43873223,25373223,43998223,25498223,43998223,25248223] [17,44123223,25123223,43873223,25123223,43998223,25248223,43998223,24998223] [18,43873223,24873223,43873223,25123223,43998223,24998223,43748223,24998223] [19,43873223,24873223,43623223,24873223,43748223,24998223,43748223,24748223] [20,43623223,24623223,43623223,24873223,43748223,24748223,43498223,24748223] [21,43623223,24623223,43373223,24623223,43498223,24748223,43498223,24498223] [22,43373223,24373223,43373223,24623223,43498223,24498223,43248223,24498223] [23,43123223,24373223,43123223,24623223,43248223,24498223,42998223,24498223] [24,42873223,24373223,42873223,24623223,42998223,24498223,42748223,24498223] [25,42623223,24373223,42623223,24623223,42748223,24498223,42498223,24498223] [26,41873223,24873223,42123223,24873223,41998223,24748223,41998223,24998223] [27,41873223,25123223,42123223,25123223,41998223,24998223,41998223,25248223] [28,41623223,26123223,41623223,26060723,41591973,26091973,41748223,25998223] [29,41748223,25498223,41685723,25498223,41716973,25529473,41716973,25466973] [30,41748223,25435723,41685723,25435723,41716973,25466973,41716973,25404473] [31,41748223,25373223,41685723,25373223,41716973,25404473,41748223,25248223] [32,41873223,25123223,41623223,25123223,41748223,25248223,41748223,24998223] [33,41623223,24873223,41560723,24873223,41591973,24904473,41560723,24810723] [34,41498223,24748223,41435723,24748223,41466973,24779473,41435723,24685723] [35,41373223,24623223,41310723,24623223,41341973,24654473,41310723,24560723] [36,41248223,24498223,41185723,24498223,41216973,24529473,41185723,24435723] [37,41123223,24373223,41060723,24373223,41091973,24404473,40998223,24248223] [38,40873223,24123223,40873223,24373223,40998223,24248223,40748223,24248223] [39,40123223,24123223,40123223,24373223,40248223,24248223,39998223,24248223] [40,39623223,24373223,39623223,24498223,39685723,24435723,39498223,24498223] [41,38623223,24873223,38623223,25123223,38748223,24998223,38498223,24998223] [42,38373223,24873223,38373223,25123223,38498223,24998223,38248223,24998223] [43,37373223,25623223,37623223,25623223,37498223,25498223,37498223,25748223] [44,37373223,25873223,37623223,25873223,37498223,25748223,37498223,25998223] [45,37373223,26123223,37623223,26123223,37498223,25998223,37498223,26248223] [46,37373223,26373223,37623223,26373223,37498223,26248223,37498223,26498223] [47,37373223,26623223,37623223,26623223,37498223,26498223,37498223,26748223] [48,37373223,26873223,37623223,26873223,37498223,26748223,37498223,26998223] [49,37373223,27123223,37623223,27123223,37498223,26998223,37498223,27248223] [50,37373223,27373223,37623223,27373223,37498223,27248223,37498223,27498223] [51,37373223,27623223,37623223,27623223,37498223,27498223,37498223,27748223] [52,37373223,27873223,37623223,27873223,37498223,27748223,37498223,27998223] [53,37373223,28123223,37623223,28123223,37498223,27998223,37498223,28248223] [54,37373223,28373223,37623223,28373223,37498223,28248223,37498223,28498223] [55,37373223,28623223,37623223,28623223,37498223,28498223,37498223,28748223] [56,37373223,28873223,37623223,28873223,37498223,28748223,37498223,28998223]"
+        },
+        {
+          "seconds": 252.040798,
+          "message": "regional spline realization started: window=1, assignment=5/8"
+        },
+        {
+          "seconds": 254.564643,
+          "message": "initial spline/PNS realization repaired after curvature_infeasible; xpbd_attempted=no, xpbd_topology_escape=no; selected state has realizations=3, topology=0, shape=0, mutual=0, quantization=0, short=0, locally_resolved=yes"
+        },
+        {
+          "seconds": 254.564655,
+          "message": "residual cone spline realization completed: window=1, splines=3"
+        },
+        {
+          "seconds": 254.89153,
+          "message": "interleaved routing epoch completed: regional_candidates=1, history_entries=28, history_pressure=236, quantized_oracle_violations=32, quantized_oracle_opens=0"
+        }
+      ],
+      "final_kicad_drc": null,
+      "artifacts": "build/frontier-20260905/witness-scope"
+    },
+    {
+      "id": "rule-bound",
+      "board": "teensy_cnc_controller",
+      "tier": null,
+      "phase": "planning",
+      "attempt": {
+        "command": [
+          "build/dev/flux-cli",
+          "route-kicad",
+          "/home/adam/qtbits/teensy_cnc/teensy_cnc_controller/teensy_cnc_controller.kicad_pcb",
+          "--netclasses",
+          "build/verification/teensy_cnc/frontier-20260905/project.flux_netclasses",
+          "--grid-pitch-nm",
+          "1300000",
+          "--sampled-clearance-reservations",
+          "--max-router-iterations",
+          "1",
+          "--max-expansions",
+          "50000",
+          "--max-static-seed-workers",
+          "2",
+          "--search-diversification",
+          "--telemetry-level",
+          "diagnostic",
+          "--telemetry-record",
+          "build/verification/teensy_cnc/frontier-20260905/rule-bound/routing.jsonl"
+        ],
+        "source_sha256_before": "38856ea2c4e6030125727a5933e77f882ef66b4b96e469cbce7df305321f26dc",
+        "project_sha256_before": "d5a729cb8bf02c192f9bcab7f988cc71b56f641811d1c97ffd984b601fa4d58b",
+        "snapshot_sha256": "461766720f2864d2a4f7b90cd60d89822bd42820883447e246d316ee1263720a",
+        "cli_sha256": "8b75b54243b4c0df243348d2189d5b38ec9e6f30e0912a82b02d3ff951dfd327",
+        "timeout_seconds": 1200,
+        "started_at": "2026-09-05T19:38:13+0800",
+        "returncode": null,
+        "timed_out": true,
+        "duration_seconds": 1200.1728865900004,
+        "peak_rss_kib": 1305132,
+        "source_sha256_after": "38856ea2c4e6030125727a5933e77f882ef66b4b96e469cbce7df305321f26dc",
+        "project_sha256_after": "d5a729cb8bf02c192f9bcab7f988cc71b56f641811d1c97ffd984b601fa4d58b"
+      },
+      "outcome": "timeout",
+      "metrics": {
+        "complete": null,
+        "stop_reason": null,
+        "paths": null,
+        "unrouted_nets": null,
+        "total_overflow": null,
+        "sampled_overflow": null,
+        "corridor_overflow": null,
+        "clearance_shadow_overflow": null,
+        "via_count": null,
+        "route_length_nm": null,
+        "routing_plan_complete": null,
+        "regional_failed_spline_bundle_assignments": null,
+        "regional_joint_spline_candidates_evaluated": null,
+        "regional_spline_topology_seed_gate_rejections": null,
+        "regional_native_scene_conflicts": null,
+        "regional_native_scene_fixed_conflicts": null,
+        "regional_conflict_edges": null,
+        "regional_conflict_components": null,
+        "open_connections": null,
+        "added_tracks": null,
+        "added_track_arcs": null,
+        "added_vias": null,
+        "copper_violations": null,
+        "copper_violation_counts": null,
+        "unrounded_non_junction_bends": null,
+        "validation_errors": null,
+        "final_routability_feedback_passes": null,
+        "final_routability_feedback_improvements": null
+      },
+      "latest_telemetry_metrics": {
+        "iteration": 0,
+        "total_nets": 0,
+        "routed_nets": 0,
+        "unrouted_nets": 0,
+        "total_groups": 0,
+        "routed_groups": 0,
+        "unrouted_groups": 0,
+        "sampled_overflow": 0,
+        "corridor_overflow": 0,
+        "physical_overflow_nm": 0,
+        "clearance_shadow_conflicts": 0,
+        "regional_conflicts": 0,
+        "route_cost": 0,
+        "vias": 0,
+        "rip_ups": 0,
+        "search_expansions": 0,
+        "selected_checkpoint": 0,
+        "best_checkpoint": 0,
+        "selected_is_best": false
+      },
+      "latest_search_summaries": [
+        {
+          "seconds": 0.003691,
+          "message": "interleaved routing epoch started: pathfinder_budget=1, retained_portfolios=0, physical_history_entries=0"
+        }
+      ],
+      "final_kicad_drc": null,
+      "artifacts": "build/verification/teensy_cnc/frontier-20260905/rule-bound"
+    },
+    {
+      "id": "rule-sized-search",
+      "board": "teensy_cnc_controller",
+      "tier": null,
+      "phase": "planning_without_project_netclasses",
+      "attempt": {
+        "command": [
+          "build/dev/flux-cli",
+          "route-kicad",
+          "/home/adam/qtbits/teensy_cnc/teensy_cnc_controller/teensy_cnc_controller.kicad_pcb",
+          "--grid-pitch-nm",
+          "1300000",
+          "--sampled-clearance-reservations",
+          "--max-router-iterations",
+          "1",
+          "--max-expansions",
+          "50000",
+          "--max-static-seed-workers",
+          "2",
+          "--search-diversification",
+          "--telemetry-level",
+          "diagnostic",
+          "--telemetry-record",
+          "build/verification/teensy_cnc/frontier-20260905/rule-sized-search/routing.jsonl"
+        ],
+        "source_sha256_before": "38856ea2c4e6030125727a5933e77f882ef66b4b96e469cbce7df305321f26dc",
+        "cli_sha256": "c39b6eb728159bd43f2a1e017b83cd5fd35a1b10d21f582eb78f16f157519766",
+        "timeout_seconds": 1200,
+        "started_at": "2026-09-05T19:14:40+0800",
+        "returncode": null,
+        "timed_out": true,
+        "duration_seconds": 1200.1246858630038,
+        "peak_rss_kib": 1199860,
+        "source_sha256_after": "38856ea2c4e6030125727a5933e77f882ef66b4b96e469cbce7df305321f26dc"
+      },
+      "outcome": "timeout",
+      "metrics": {
+        "complete": null,
+        "stop_reason": null,
+        "paths": null,
+        "unrouted_nets": null,
+        "total_overflow": null,
+        "sampled_overflow": null,
+        "corridor_overflow": null,
+        "clearance_shadow_overflow": null,
+        "via_count": null,
+        "route_length_nm": null,
+        "routing_plan_complete": null,
+        "regional_failed_spline_bundle_assignments": null,
+        "regional_joint_spline_candidates_evaluated": null,
+        "regional_spline_topology_seed_gate_rejections": null,
+        "regional_native_scene_conflicts": null,
+        "regional_native_scene_fixed_conflicts": null,
+        "regional_conflict_edges": null,
+        "regional_conflict_components": null,
+        "open_connections": null,
+        "added_tracks": null,
+        "added_track_arcs": null,
+        "added_vias": null,
+        "copper_violations": null,
+        "copper_violation_counts": null,
+        "unrounded_non_junction_bends": null,
+        "validation_errors": null,
+        "final_routability_feedback_passes": null,
+        "final_routability_feedback_improvements": null
+      },
+      "latest_telemetry_metrics": {
+        "iteration": 0,
+        "total_nets": 0,
+        "routed_nets": 0,
+        "unrouted_nets": 0,
+        "total_groups": 0,
+        "routed_groups": 0,
+        "unrouted_groups": 0,
+        "sampled_overflow": 0,
+        "corridor_overflow": 0,
+        "physical_overflow_nm": 0,
+        "clearance_shadow_conflicts": 0,
+        "regional_conflicts": 0,
+        "route_cost": 0,
+        "vias": 0,
+        "rip_ups": 0,
+        "search_expansions": 0,
+        "selected_checkpoint": 0,
+        "best_checkpoint": 0,
+        "selected_is_best": false
+      },
+      "latest_search_summaries": [
+        {
+          "seconds": 0.003623,
+          "message": "interleaved routing epoch started: pathfinder_budget=1, retained_portfolios=0, physical_history_entries=0"
+        }
+      ],
+      "final_kicad_drc": null,
+      "artifacts": "build/verification/teensy_cnc/frontier-20260905/rule-sized-search"
+    }
+  ],
+  "tests": {
+    "full_non_corpus": {
+      "passed": 116,
+      "total": 123,
+      "same_failure_categories_as_initial_worktree": true,
+      "log": "build/frontier-20260905/channel-isolation/regressions.log"
+    },
+    "external_drc_export_regressions": {
+      "passed": 9,
+      "total": 9,
+      "log": "build/frontier-20260905/channel-isolation/export-drc.log"
+    }
+  }
+}

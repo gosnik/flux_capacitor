@@ -1,0 +1,102 @@
+{
+  "schema": 1,
+  "source_corpus": {
+    "repository": "drandyhaas/KiCadRoutingTools",
+    "commit": "661c88b3c3b0ebc9ade65eab63d30b1cde217fb4",
+    "discussion": "https://github.com/drandyhaas/KiCadRoutingTools/discussions/117",
+    "stress_directory": "https://github.com/drandyhaas/KiCadRoutingTools/tree/main/tests/stress"
+  },
+  "preparation": {
+    "method": "KiCadRoutingTools tests/stress/prep_set2.py",
+    "kicad_version": "9.0.8",
+    "compatibility_change": "Passed null OUTLINE_ERROR_HANDLER before the allow-arcs boolean to match the KiCad 9 GetBoardPolygonOutlines overload.",
+    "result": "Normalized with pcbnew, removed tracks/vias/copper zones, retained rule areas, rebuilt Edge.Cuts, removed non-routing graphics, and retained a normalized routed reference."
+  },
+  "boards": [
+    {
+      "id": "zigbee_sensor",
+      "level": 2,
+      "status": "locked",
+      "qualification": "detailed_complete",
+      "kicad_routing_tools_set": "set9",
+      "repo": "Zektopic/universal-zigbee-sensor-kicad",
+      "commit": "793c4e9c6c12577c5f5b8c876ba353c3d4410c9d",
+      "path": "zigbee-universal-sensor-kicad.kicad_pcb",
+      "source_url": "https://raw.githubusercontent.com/Zektopic/universal-zigbee-sensor-kicad/793c4e9c6c12577c5f5b8c876ba353c3d4410c9d/zigbee-universal-sensor-kicad.kicad_pcb",
+      "license": "MIT",
+      "license_file": "licenses/zigbee_sensor.txt",
+      "source_sha256": "99db5df795994c118c9795b47b785bbdfac583d86cc4c9f4a1ea14a68cfcc324",
+      "board_sha256": "ca97fd068e25318a0aeb650f72eec30a7c7ca8a30766d15e91b5f8c93a11c390",
+      "reference_sha256": "2f7d5bb837efdc0e07f3b43518c3969b9febc449ec213bde0cede43d7d1b73e0",
+      "project_sha256": "4d5d3ae08d6f944cf8186fa326869d3485af5a811fe0ca7e7d05d6e488722334",
+      "license_sha256": "f3b968658e1c7db3ca9a5eeecfeb239f5d9f567bfd775ce1c3e0cc0218d5f924",
+      "expected": {
+        "footprints": 25,
+        "nets": 29,
+        "tracks": 0,
+        "vias": 0,
+        "zones": 0,
+        "max_core_validation_errors": 8,
+        "max_track_arcs": 0
+      },
+      "note": "ESP32-H2 Zigbee sensor with circular courtyard proxies and RF-oriented geometry."
+    },
+    {
+      "id": "ch32v003_usb",
+      "level": 3,
+      "status": "locked",
+      "qualification": "detailed_complete",
+      "kicad_routing_tools_set": "set6",
+      "repo": "AlexanderMandera/CH32V003-USB-DevBoard",
+      "commit": "9b4265b8d1ed3585bf91e9c1dcd9d60b6ae63412",
+      "path": "CH32V003-USB-DevBoard.kicad_pcb",
+      "source_url": "https://raw.githubusercontent.com/AlexanderMandera/CH32V003-USB-DevBoard/9b4265b8d1ed3585bf91e9c1dcd9d60b6ae63412/CH32V003-USB-DevBoard.kicad_pcb",
+      "license": "CERN-OHL-W-2.0",
+      "license_file": "licenses/ch32v003_usb.txt",
+      "source_sha256": "1f124ae435d7b8198d3e0224555a0ab96881f39148e4b42a84761be1d323b988",
+      "board_sha256": "72d62b839467119b5d3addbe78c5ec27698fa79f2be1f11eef548949a7af6f05",
+      "reference_sha256": "be5e7830488746e2506c484611c32d24872b11537a4700ed0e457b29d0078c17",
+      "project_sha256": "d54291f8eee461a1e6e44a7c5ecb03f7fab3e6aa5a014118f5e773278aa19456",
+      "license_sha256": "4b6a7717ef4fcd145eabb577de44d84ffdc893532177b67479dad42f6c4e355e",
+      "expected": {
+        "footprints": 25,
+        "nets": 33,
+        "tracks": 0,
+        "vias": 0,
+        "zones": 0,
+        "max_core_validation_errors": 7,
+        "max_track_arcs": 0
+      },
+      "note": "USB development board; oval/offset pad drills are exact while placement-envelope and source-placement blockers remain."
+    },
+    {
+      "id": "usbgpib",
+      "level": 4,
+      "status": "locked",
+      "qualification": "detailed_complete",
+      "kicad_routing_tools_set": "set5",
+      "repo": "xyphro/UsbGpib",
+      "commit": "88a13830eea3e2d8bf9f6e33123cc1523f42c70a",
+      "path": "HW/REV1/VQFN-kicad-version/xyp-gpib.kicad_pcb",
+      "source_url": "https://raw.githubusercontent.com/xyphro/UsbGpib/88a13830eea3e2d8bf9f6e33123cc1523f42c70a/HW/REV1/VQFN-kicad-version/xyp-gpib.kicad_pcb",
+      "license": "MIT",
+      "license_file": "licenses/usbgpib.txt",
+      "source_sha256": "857e7f0e7058c6a70b5cf0675662b722c1e815f4d6d517726bc9e14908c37962",
+      "board_sha256": "c4dcec9c91c54ea67b068ca1ec91ff227909e2e236a32b3a117073c3d7294c27",
+      "reference_sha256": "0a9c40057ce6cecde503d87eb376f3932fd956040fafeeaa4acffe28c6016507",
+      "project_sha256": "b88f7c102e75d96afd8309c5e7d111897916c076fe3a24fe5e76450a647570c6",
+      "license_sha256": "01b4e69d81c0e3298c4825ae5169f9bdba445e88fa2ed3e2ff304ee0e8283661",
+      "expected": {
+        "footprints": 19,
+        "nets": 40,
+        "tracks": 0,
+        "vias": 0,
+        "zones": 0,
+        "max_core_validation_errors": 17,
+        "max_track_arcs": 0
+      },
+      "note": "Fine-pitch ATmega32U4 VQFN and dense connector fanout."
+    }
+  ],
+  "purpose": "Retained source-compatibility regression boards; replaced in the routing ladder by vetted KRT inputs. Existing structural-error allowances are unchanged."
+}

@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "experiment": "V66 invocation-local frozenvia predicate memoization",
+  "status": "replayperf supported; core53/53; nofrontierimprovementclaim",
+  "hypothesis": "Repeated DFS/forwardchecking baselegal queries rescan identical immutable fragments for samecandidate; invocationlocal memoization saves work withoutchangingchoices/prunes. Extraownershipscope work is separate.",
+  "cache_scope": "one select_access_geometry invocation only; board/window/fragments/candidates immutable",
+  "key": "RegionalViaChoice::id unique inderivedarray",
+  "preserved": "firstblocker order, copper/drill clearance formula, selectedvariable searchstates, clear and conflicting results",
+  "baseline_source": "build/tier-resolution-20261001-v65-source",
+  "normal_prior_experiment": "build/tier-resolution-20261001-v64/tier1-normal uses original immutableV64, notthisoptimization",
+  "source_sha256": "c7c35e7f63097b6ace0ee4656379907246d6897fc77ce6d501bfb1b66bb5e351",
+  "success_criterion": "All non-timing replayfields identical across18variants; speed measurable across3pairedrepeats; fullcorepasses. No routingqualityclaim.",
+  "validation": {
+    "core": "53/53",
+    "all_discrete_fields_equal": true,
+    "variants": 18,
+    "repeats": 3,
+    "median_before_s": 1.95,
+    "median_after_s": 0.71,
+    "improvement_fraction": 0.6358974358974359,
+    "artifact": "build/tier-resolution-20261001-v66/compare/comparison.json",
+    "exact_times": {
+      "before": [
+        1.95,
+        1.95,
+        1.95
+      ],
+      "after": [
+        0.7,
+        0.72,
+        0.71
+      ]
+    }
+  }
+}

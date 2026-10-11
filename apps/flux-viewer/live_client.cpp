@@ -100,6 +100,7 @@ void LiveClient::disconnect() {
   }
   std::lock_guard lock(mutex_);
   pending_.clear();
+  pending_bytes_ = 0U;
   status_.state = ConnectionState::disconnected;
   status_.message = "Disconnected";
 }
@@ -112,6 +113,7 @@ std::vector<telemetry::Event> LiveClient::drain() {
     drained.push_back(std::move(pending_.front()));
     pending_.pop_front();
   }
+  pending_bytes_ = 0U;
   return drained;
 }
 
@@ -128,13 +130,20 @@ void LiveClient::set_status(ConnectionState state, std::string message) {
 
 void LiveClient::mark_connected() {
   std::lock_guard lock(mutex_);
+  // A server recovery snapshot is the authoritative replacement for this queue.
+  // Never replay incremental events from a prior connection into its new generation.
   pending_.clear();
+  pending_bytes_ = 0U;
   ++status_.connection_generation;
   status_.state = ConnectionState::connected;
   status_.message = "Live telemetry connected";
 }
 
 bool LiveClient::accept_message(std::string_view message, std::string& error) {
+  if (message.size() > maximum_message_bytes) {
+    error = "Telemetry message exceeds the viewer's 8 MiB safety limit";
+    return false;
+  }
   telemetry::DecodeResult decoded = telemetry::decode_events(message);
   if (!decoded) {
     error = "Telemetry decode failed: " + decoded.error;
@@ -142,14 +151,28 @@ bool LiveClient::accept_message(std::string_view message, std::string& error) {
   }
 
   std::lock_guard lock(mutex_);
-  constexpr std::size_t maximum_pending_events = 16'384;
   for (telemetry::Event& event : decoded.events) {
-    if (pending_.size() == maximum_pending_events) {
+    const std::size_t event_bytes = telemetry::estimated_event_bytes(event);
+    ++status_.received_events;
+    if (event_bytes > maximum_pending_bytes) {
+      if (event.type == telemetry::EventType::snapshot) {
+        error = "Telemetry recovery snapshot exceeds the viewer's 32 MiB queue limit";
+        return false;
+      }
+      ++status_.viewer_dropped_events;
+      continue;
+    }
+    // Source and dynamic recovery snapshots are independent. Neither can discard the
+    // other, or the milestones needed by recorded history, merely by arriving later.
+    while (!pending_.empty() &&
+           (pending_.size() >= maximum_pending_events ||
+            pending_bytes_ > maximum_pending_bytes - event_bytes)) {
+      pending_bytes_ -= telemetry::estimated_event_bytes(pending_.front());
       pending_.pop_front();
       ++status_.viewer_dropped_events;
     }
     pending_.push_back(std::move(event));
-    ++status_.received_events;
+    pending_bytes_ += event_bytes;
   }
   return true;
 }
@@ -196,6 +219,7 @@ void LiveClient::run(std::stop_token stop, std::string endpoint, telemetry::Leve
       reconnecting = true;
 
       beast::flat_buffer buffer;
+      buffer.max_size(maximum_message_bytes);
       bool read_pending = false;
       bool read_failed = false;
       std::function<void()> begin_read;
@@ -208,7 +232,9 @@ void LiveClient::run(std::stop_token stop, std::string endpoint, telemetry::Leve
           read_pending = false;
           if (error) {
             if (error != websocket::error::closed && !stop.stop_requested()) {
-              retry_reason = error.message();
+              retry_reason = error == websocket::error::buffer_overflow
+                                 ? "Telemetry message exceeds the viewer's 8 MiB safety limit"
+                                 : error.message();
             }
             read_failed = true;
             return;

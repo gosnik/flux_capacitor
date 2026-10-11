@@ -1,0 +1,207 @@
+{
+  "schema": 1,
+  "experiment": "V72 keep bounded regional search effort out of physical congestion history",
+  "status": "normal Tier1 P24 completed; unqualified",
+  "hypothesis": "Repeated candidate rejection counts are search effort, not additional independent physical conflicts; using them as window-wide physical severity poisons global history.",
+  "evidence": {
+    "packing": "packing_rejected_states used as history severity for no_fitting_lane_order and state_budget_exhausted, including zero observed packing failures",
+    "access": "blocker.observations counts repeated search encounters but creates broad window-wide physical pressure"
+  },
+  "change_scope": "Retain diagnostics; exclude unlocalized search-derived summaries from physical history. Preserve exact localized conflict history.",
+  "baseline": "V71 immutable benchmark running; V69 verified fallback available",
+  "success_criterion": "Search count invariance in physical history; exact physical feedback preserved; no Tier0 regression; assess Tier1 outcome without claiming diagnostic count reduction as board success.",
+  "decision": "Retain semantic history correction; remove early scheduling pending V73 final validation",
+  "binary_sha256": "89d1072d679f1c8a5226bb51fc65096c95b0d3cd4a6e3c5f54433b6096b8dbf3",
+  "runtime_caveat": "Overlaps V71; quality comparable but no runtime improvement claim.",
+  "source_hashes": {
+    "src/regional_router.cpp": "ff8a829597f58adff15f5505121ea718c9c8d05b931329b6dd8766d185b14d6c",
+    "src/routability_knowledge.cpp": "db5384975daf14d146e013090ee5af7a6e56aca69078c8a89a8fa24b049524a3",
+    "include/flux/core/regional_router.hpp": "98d3f630d436f7d5afc6af7de98daae4aec680068835232d6e7811ab43e35df0",
+    "apps/flux-cli/main.cpp": "dc162ea5c2d31f9716aeb64c47363614150c5300b8d1bdb9f5336bedd429b524",
+    "tests/unit/core_tests.cpp": "5195d0b493b832b01dcdbc9321f15efe6077518c57b12a6c9c1c3e02ab99e216"
+  },
+  "red_proof": {
+    "artifact": "build/search-evidence-feedback-20261008/red-proof",
+    "result": "expected focused failure with pre-fix routability object and current tests; compile/archive/link passed"
+  },
+  "validation": {
+    "release": "PASS",
+    "focused": "PASS with old-object failure proof",
+    "core": "54/54 PASS",
+    "auxiliary": "12/12 PASS",
+    "tier0": "external KiCad DRC PASS"
+  },
+  "live_failure_witness": {
+    "board": "bm_svf",
+    "tier": 1,
+    "epoch": 2,
+    "window": 0,
+    "stage": "regional discrete assignment before assembled copper",
+    "stop": "state_budget_exhausted",
+    "bundle_states": 100000,
+    "templates": 97,
+    "via_pair_pruned": 11513,
+    "packing_rejected": 0,
+    "complete_states": 0,
+    "artifact": "build/search-evidence-feedback-20261008/v71-search-failure-witness.json"
+  },
+  "review": "No implementation defect; exact coexistence pressure==3 assertion added and focused rerun PASS.",
+  "live_feedback_comparison": {
+    "epoch": 2,
+    "V71_history_entries": 574,
+    "V72_history_entries": 572,
+    "V71_history_pressure": 15803,
+    "V72_history_pressure": 5212,
+    "removed_pressure": 10591,
+    "coarse_oracle_violations_both": 613,
+    "later_V72_coarse_violations": [
+      499,
+      540
+    ],
+    "interpretation": "Search-derived pressure removed; final board qualification pending."
+  },
+  "research": [
+    {
+      "source": "https://developers.google.com/optimization/cp/cp_solver",
+      "principle": "Separate unknown bounded-search outcome from proven infeasibility; supports diagnostic semantics, not a guarantee of better routing."
+    }
+  ],
+  "git_revision": "94aa691ad89576d1c0ac07a5346020da21fc9d06",
+  "working_tree": "pre-existing dirty work preserved; exact experimental source hashes recorded",
+  "date": "2026-10-08",
+  "last_recorded_utc": "2026-10-08T06:48:25.676313+00:00",
+  "configuration": {
+    "track_geometry": "straight",
+    "max_straight_portfolio_checks": 24,
+    "tier": 1,
+    "manifest": "tests/fixtures/routing-corpus/manifest.json",
+    "global_iteration_budget": 30,
+    "search_expansion_budget": 50000,
+    "feedback_retries": 4,
+    "rule_changes": false,
+    "routing_order_diversification_seed": "5700357408180847315"
+  },
+  "result": {
+    "qualified": false,
+    "duration_seconds": 2768.8370297699985,
+    "straight_evaluated": true,
+    "straight_violations": 751,
+    "opens": 0,
+    "native_conflicts": 434,
+    "coarse_oracle": {
+      "configured_grid_pitch_nm": 1,
+      "diagnoses": 176,
+      "drc_violation_counts": {
+        "hole_clearance": 29,
+        "track_clearance": 386,
+        "track_via_clearance": 123,
+        "via_clearance": 2
+      },
+      "drc_violations": 540,
+      "elapsed_us": 115169,
+      "feasible": false,
+      "malformed_paths": 0,
+      "open_connections": 0,
+      "paths_examined": 78,
+      "paths_materialized": 78,
+      "reused_transitions": 0,
+      "tracks": 1291,
+      "unrouted_nets": 0,
+      "vias": 46
+    },
+    "scope_attempts": [
+      {
+        "incomplete_assignments": 35,
+        "native_complete": true,
+        "native_evaluated": true,
+        "opens": 0,
+        "physical_errors": 793,
+        "retry": 0,
+        "selected": false,
+        "straight_evaluated": true
+      },
+      {
+        "incomplete_assignments": 33,
+        "native_complete": true,
+        "native_evaluated": true,
+        "opens": 0,
+        "physical_errors": 751,
+        "retry": 1,
+        "selected": true,
+        "straight_evaluated": true
+      },
+      {
+        "incomplete_assignments": 33,
+        "native_complete": true,
+        "native_evaluated": true,
+        "opens": 0,
+        "physical_errors": 861,
+        "retry": 2,
+        "selected": false,
+        "straight_evaluated": true
+      }
+    ],
+    "categories": {
+      "hole_clearance": 60,
+      "hole_to_hole_clearance": 2,
+      "track_clearance": 536,
+      "track_edge_clearance": 5,
+      "track_pad_clearance": 4,
+      "track_via_clearance": 138,
+      "via_clearance": 4,
+      "via_edge_clearance": 2
+    },
+    "max_rss_kib": 599136
+  },
+  "early_probe": {
+    "candidates": [
+      {
+        "coarse_topology_complete": true,
+        "exact_promotion_attempted": false,
+        "exact_promotion_succeeded": false,
+        "feedback_affected_nets": 25,
+        "feedback_fell_back_to_full_global": true,
+        "global_clearance_shadow_conflicts": 247,
+        "global_corridor_overflow": 0,
+        "global_rerouted_nets": 25,
+        "global_reused_nets": 0,
+        "global_sampled_overflow": 0,
+        "global_total_overflow": 0,
+        "global_unaccepted_lane_transitions": 0,
+        "global_unrouted_nets": 0,
+        "history_informed_global": true,
+        "incremental_global": false,
+        "plan_complete": false,
+        "provisional_plan_complete": false,
+        "regional_consulted": true,
+        "regional_diagnoses": 2,
+        "regional_incomplete_bundle_assignments": 1,
+        "regional_spline_candidates_evaluated": 0,
+        "regional_spline_realization_enabled": false,
+        "regional_straight_realization_enabled": true,
+        "regional_straight_scene_evaluated": false,
+        "regional_straight_scene_violations": 0
+      }
+    ],
+    "cumulative_global_iterations": 5,
+    "global_diagnoses": 398,
+    "global_epoch_iterations": 8,
+    "history_entries_after_global": 572,
+    "history_entries_after_regional": 572,
+    "history_entries_before": 342,
+    "history_pressure_after_global": 5212,
+    "history_pressure_after_regional": 5212,
+    "history_pressure_before": 3983,
+    "intermediate_regional_probe": false,
+    "next_feedback_affected_nets": 22,
+    "next_feedback_uses_repair_branch": false,
+    "pass": 1,
+    "quantized_copper_oracle_diagnoses": 232,
+    "quantized_copper_oracle_evaluated": true,
+    "quantized_copper_oracle_feasible": false,
+    "quantized_copper_oracle_opens": 0,
+    "quantized_copper_oracle_us": 127788,
+    "quantized_copper_oracle_violations": 613,
+    "retained_global_portfolios": 2
+  }
+}

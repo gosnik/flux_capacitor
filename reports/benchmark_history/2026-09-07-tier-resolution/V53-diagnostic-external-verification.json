@@ -1,0 +1,39 @@
+{
+  "authoritative": false,
+  "qualified": false,
+  "internal": {
+    "authoritative": false,
+    "snapshot_sequence": 1,
+    "paths": 78,
+    "detail_complete": false,
+    "tracks": 615,
+    "arcs": 0,
+    "vias": 49,
+    "validation_errors": 0,
+    "opens": 0,
+    "drc_violations": 219,
+    "diagnostic": "materialized route violates represented copper rules",
+    "preview_written": true
+  },
+  "kicad_error_categories": {
+    "solder_mask_bridge": 26,
+    "hole_to_hole": 2,
+    "tracks_crossing": 53,
+    "shorting_items": 63,
+    "clearance": 65
+  },
+  "kicad_error_reports": 209,
+  "kicad_unconnected_items": 9,
+  "straight_angle_audit": {
+    "tracks": 615,
+    "angles": {
+      "horizontal": 189,
+      "vertical": 210,
+      "diagonal_45": 211,
+      "other": 5
+    },
+    "arcs": 0,
+    "passed": false
+  },
+  "decision": "Do not promote: fewer provisional reports did not produce legal detailed copper."
+}

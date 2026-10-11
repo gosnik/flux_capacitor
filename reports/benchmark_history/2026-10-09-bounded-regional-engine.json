@@ -1,0 +1,195 @@
+{
+  "experiment": "bounded-regional-engine",
+  "date_utc": "2026-10-09T12:57:12.309379+00:00",
+  "git_revision": "94aa691ad89576d1c0ac07a5346020da21fc9d06",
+  "working_tree": "pre-existing uncommitted work preserved",
+  "implementation": [
+    "semantic regional decisions with retained continuations",
+    "typed diagnosis ordering and common physical quality",
+    "exact-board-bound reusable preparation",
+    "one optional CPU speculation worker with bounded eight-source prewarm"
+  ],
+  "verification": {
+    "core_regressions": "64/64 passed before zero-work-counter correction",
+    "focused_kernel": "passed",
+    "focused_policy": "passed",
+    "focused_preparation": "passed",
+    "independent_review": "Final review found no material issues, including work-bearing stagnation and early scene terrain feedback",
+    "post_correction": "Debug and Release builds passed. Four focused engine tests plus policy, kernel and preparation tests passed after typed search-boundary correction, including telemetry/speculation/slice equivalence."
+  },
+  "control": {
+    "tier": 0,
+    "board": "pt2399_delay",
+    "duration_seconds": 290.60619179700734,
+    "qualified": false,
+    "stage": "planning",
+    "reason": "zero-work skipped candidate boundaries incorrectly consumed stagnation budget",
+    "counters": {
+      "routing_engine_decision_points": 192,
+      "routing_engine_outcome": "exhausted",
+      "routing_engine_preparation_reuses": 5,
+      "routing_engine_regional_action_switches": 6,
+      "routing_engine_regional_continuations_resumed": 186,
+      "routing_engine_speculative_preparations_discarded": 0,
+      "routing_engine_speculative_preparations_started": 1,
+      "routing_engine_speculative_preparations_used": 1
+    },
+    "attempts": [
+      {
+        "accepted": true,
+        "action": "global",
+        "diagnostic": "split global checkpoint",
+        "elapsed_microseconds": 17481576,
+        "interrupted_at_decision": false,
+        "live_copper_terrain_features": 0,
+        "live_copper_terrain_provisional": false,
+        "live_copper_terrain_revision": 0,
+        "quality_after": 3,
+        "quality_before": 18446744073709551615,
+        "work_units": 7715
+      },
+      {
+        "accepted": true,
+        "action": "quantized-probe",
+        "diagnostic": "split global checkpoint",
+        "elapsed_microseconds": 109752,
+        "interrupted_at_decision": false,
+        "live_copper_terrain_features": 575,
+        "live_copper_terrain_provisional": true,
+        "live_copper_terrain_revision": 1,
+        "quality_after": 8,
+        "quality_before": 18446744073709551615,
+        "work_units": 0
+      },
+      {
+        "accepted": false,
+        "action": "regional",
+        "diagnostic": "regional decision budget reached",
+        "elapsed_microseconds": 45347895,
+        "interrupted_at_decision": true,
+        "live_copper_terrain_features": 0,
+        "live_copper_terrain_provisional": false,
+        "live_copper_terrain_revision": 0,
+        "quality_after": 18446744073709551615,
+        "quality_before": 18446744073709551615,
+        "work_units": 32653
+      },
+      {
+        "accepted": false,
+        "action": "xpbd",
+        "diagnostic": "regional decision budget reached",
+        "elapsed_microseconds": 45891266,
+        "interrupted_at_decision": true,
+        "live_copper_terrain_features": 0,
+        "live_copper_terrain_provisional": false,
+        "live_copper_terrain_revision": 0,
+        "quality_after": 18446744073709551615,
+        "quality_before": 18446744073709551615,
+        "work_units": 14678
+      },
+      {
+        "accepted": false,
+        "action": "erosion",
+        "diagnostic": "regional decision budget reached",
+        "elapsed_microseconds": 44989998,
+        "interrupted_at_decision": true,
+        "live_copper_terrain_features": 0,
+        "live_copper_terrain_provisional": false,
+        "live_copper_terrain_revision": 0,
+        "quality_after": 18446744073709551615,
+        "quality_before": 18446744073709551615,
+        "work_units": 289
+      },
+      {
+        "accepted": false,
+        "action": "xpbd",
+        "diagnostic": "regional decision budget reached",
+        "elapsed_microseconds": 45429058,
+        "interrupted_at_decision": true,
+        "live_copper_terrain_features": 0,
+        "live_copper_terrain_provisional": false,
+        "live_copper_terrain_revision": 0,
+        "quality_after": 18446744073709551615,
+        "quality_before": 18446744073709551615,
+        "work_units": 289
+      },
+      {
+        "accepted": false,
+        "action": "erosion",
+        "diagnostic": "regional decision budget reached",
+        "elapsed_microseconds": 45273357,
+        "interrupted_at_decision": true,
+        "live_copper_terrain_features": 0,
+        "live_copper_terrain_provisional": false,
+        "live_copper_terrain_revision": 0,
+        "quality_after": 18446744073709551615,
+        "quality_before": 18446744073709551615,
+        "work_units": 289
+      },
+      {
+        "accepted": false,
+        "action": "xpbd",
+        "diagnostic": "regional decision budget reached",
+        "elapsed_microseconds": 45927114,
+        "interrupted_at_decision": true,
+        "live_copper_terrain_features": 0,
+        "live_copper_terrain_provisional": false,
+        "live_copper_terrain_revision": 0,
+        "quality_after": 18446744073709551615,
+        "quality_before": 18446744073709551615,
+        "work_units": 289
+      }
+    ],
+    "artifacts": "build/bounded-engine-tiers-20261009T125118Z"
+  },
+  "correction": "Stagnation counts completed spline candidates and bounded lane-search batches explicitly. Candidate starts and phase announcements do not consume it. Removed decision hook from generic telemetry publication. Constants unchanged.",
+  "numeric_counter_control": {
+    "status": "interrupted for typed search-chunk correction",
+    "artifacts": "build/bounded-engine-tiers-20261009T125909Z",
+    "executable_frozen": true,
+    "tier0_planning": {
+      "duration_seconds": 62.490811394003686,
+      "routing_plan_complete": true,
+      "native_scene_conflicts": 0,
+      "decisions": 38,
+      "attempts": [
+        {
+          "action": "global",
+          "work_units": 7715,
+          "elapsed_microseconds": 17415383,
+          "interrupted_at_decision": false
+        },
+        {
+          "action": "quantized-probe",
+          "work_units": 0,
+          "elapsed_microseconds": 105600,
+          "interrupted_at_decision": false
+        },
+        {
+          "action": "regional",
+          "work_units": 32653,
+          "elapsed_microseconds": 44830128,
+          "interrupted_at_decision": true
+        }
+      ]
+    }
+  },
+  "final_suite": {
+    "status": "running",
+    "status_recorded_utc": "2026-10-09T13:11:10.760440+00:00",
+    "artifacts": "build/bounded-engine-tiers-20261009T131008Z",
+    "live_summary": "build/bounded-engine-tiers-20261009T131008Z/suite-summary.json",
+    "routing_tiers": [
+      0,
+      1
+    ],
+    "locked_tier_preflight": [
+      2,
+      3,
+      4
+    ],
+    "routing_timeout_seconds_per_invocation": 7200,
+    "telemetry_endpoint": "ws://127.0.0.1:8765/telemetry",
+    "executable_frozen": true
+  }
+}

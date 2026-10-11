@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import decimal
 import hashlib
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -88,6 +90,16 @@ def run_json(
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise RuntimeError(message)
+
+
+def kicad_cli_command(executable: Path) -> list[str]:
+    # The official KiCad 10 AppImage is a multi-call launcher. Its bare invocation reports the
+    # launcher version and interprets `pcb` as an embedded executable name; select `kicad-cli`
+    # explicitly before forwarding normal CLI arguments.
+    command = [str(executable)]
+    if executable.name.lower().endswith(".appimage"):
+        command.append("kicad-cli")
+    return command
 
 
 def verify_hash(path: Path, expected: str, label: str) -> None:
@@ -201,7 +213,7 @@ def require_kicad_drc(board: Path, report: Path, kicad_cli: Path, source: Path) 
     })
     completed = subprocess.run(
         [
-            str(kicad_cli),
+            *kicad_cli_command(kicad_cli),
             "pcb",
             "drc",
             "--format",
@@ -224,6 +236,46 @@ def require_kicad_drc(board: Path, report: Path, kicad_cli: Path, source: Path) 
         )
 
 
+def audit_straight_copper_angles(candidate: Path) -> dict:
+    """Audit exact decimal coordinates in exported KiCad segment records, independent of Flux."""
+    source = candidate.read_text(encoding="utf-8")
+    records = re.findall(r"\(segment\b((?:[^()]|\([^()]*\))*)\)", source)
+    require(len(records) == len(re.findall(r"\(segment\s", source)),
+            "cannot audit every exported track segment")
+    counts = {"horizontal": 0, "vertical": 0, "diagonal_45": 0, "other": 0}
+    for record in records:
+        start = re.search(r"\(start\s+([^\s()]+)\s+([^\s()]+)\)", record)
+        end = re.search(r"\(end\s+([^\s()]+)\s+([^\s()]+)\)", record)
+        require(start is not None and end is not None, "track angle audit needs exact endpoints")
+        x, y = map(decimal.Decimal, start.groups())
+        xx, yy = map(decimal.Decimal, end.groups())
+        dx, dy = abs(xx - x), abs(yy - y)
+        kind = "horizontal" if dy == 0 else "vertical" if dx == 0 else "diagonal_45" if dx == dy else "other"
+        counts[kind] += 1
+    arcs = len(re.findall(r"\(arc\s", source))
+    return {"tracks": len(records), "angles": counts, "arcs": arcs,
+            "beziers": len(re.findall(r"\(gr_curve\s", source)),
+            "passed": counts["other"] == 0 and arcs == 0 and not re.search(r"\(gr_curve\s", source)}
+
+
+def detailed_copper_ready_for_final_drc(detailed: dict, expected: dict, candidate: Path) -> bool:
+    # A written diagnostic preview is not evidence of detailed completion.
+    return (
+        detailed.get("complete") is True
+        and detailed.get("validation_errors") == 0
+        and detailed.get("open_connections") == 0
+        and detailed.get("copper_violations") == 0
+        and detailed.get("added_track_arcs", 0) >= expected.get("min_track_arcs", 0)
+        and detailed.get("added_track_beziers", 0) >= expected.get("min_track_beziers", 0)
+        and detailed.get("added_track_beziers", 0) <= expected.get("max_track_beziers", sys.maxsize)
+        and detailed.get("added_track_arcs", 0) <= expected.get("max_track_arcs", sys.maxsize)
+        and detailed.get("unrounded_non_junction_bends", sys.maxsize)
+        <= expected.get("max_unrounded_non_junction_bends", sys.maxsize)
+        and detailed.get("artifact_written") is True
+        and candidate.is_file()
+    )
+
+
 def verify_board(
     flux_cli: Path,
     corpus: Path,
@@ -236,6 +288,7 @@ def verify_board(
     failed_route_png_dir: Path | None,
     failed_route_png_mode: str,
     max_failed_route_png_results: int,
+    detailed_timeout_seconds: int,
     preflight_only: bool,
 ) -> dict:
     board_id = board["id"]
@@ -269,7 +322,9 @@ def verify_board(
     board_result = {
         "id": board_id,
         "level": board["level"],
-        "declared_status": board["status"],
+        "declared_status": board.get("manifest_status", board["status"]),
+        "effective_status": board["status"],
+        "route_locked_diagnostic": board.get("route_locked_diagnostic", False),
         "qualification": board.get("qualification"),
         "source_revision": inspected.get("source_revision"),
         "source_sha256": before,
@@ -326,6 +381,12 @@ def verify_board(
             route_telemetry_args.extend(
                 ["--telemetry-record", str(route_telemetry_record)]
             )
+        routing_timeout_args: list[str] = []
+        if board.get("routing_timeout_seconds") is not None:
+            routing_timeout_args = [
+                "--routing-timeout-ms",
+                str(board["routing_timeout_seconds"] * 1000),
+            ]
         global_started = time.monotonic()
         try:
             routed = run_json(
@@ -340,6 +401,7 @@ def verify_board(
                     "--max-static-seed-workers",
                     "2",
                     "--search-diversification",
+                    *routing_timeout_args,
                     *router_args,
                     *route_telemetry_args,
                 ],
@@ -347,7 +409,10 @@ def verify_board(
                 # route-kicad uses 3 for a structured invalid-input result. An
                 # unlocked tier still has to report that result so its blocker is
                 # visible; a qualified tier remains strict about exit status.
-                allowed_returncodes=(0, 3) if board["status"] == "unlocked" else (0,),
+                # Exit 3 is a structured incomplete/invalid routing result. Always parse it so
+                # mandatory analysis PNGs are exported before the qualification gate reports the
+                # regression. The strict qualified-tier failure remains enforced below.
+                allowed_returncodes=(0, 3),
             )
         except subprocess.TimeoutExpired:
             if (
@@ -372,6 +437,7 @@ def verify_board(
                 "max_expansions": 50000,
                 "max_static_seed_workers": 2,
                 "search_diversification": True,
+                "routing_timeout_seconds": board.get("routing_timeout_seconds"),
                 "router_args": router_args,
                 "telemetry_level": effective_telemetry_level,
             },
@@ -462,15 +528,17 @@ def verify_board(
                             "--max-static-seed-workers",
                             "2",
                             "--search-diversification",
+                            *routing_timeout_args,
                             *router_args,
                             *detail_telemetry_args,
-                            "--arcs",
+                            *(["--arcs"] if board.get("track_geometry") == "curved" else []),
+                            "--write-incomplete-preview",
                             str(candidate_board),
                         ],
-                        timeout=2400,
-                        allowed_returncodes=(0, 3, 5)
-                        if board["status"] == "unlocked"
-                        else (0,),
+                        timeout=detailed_timeout_seconds,
+                        # Failed qualified-board detail still emits useful structured metrics.
+                        # Record them before the unchanged qualification gates reject the run.
+                        allowed_returncodes=(0, 3, 5, 7),
                     )
                 except subprocess.TimeoutExpired:
                     if (
@@ -497,26 +565,19 @@ def verify_board(
                         "max_expansions": 50000,
                         "max_static_seed_workers": 2,
                         "search_diversification": True,
+                        "routing_timeout_seconds": board.get("routing_timeout_seconds"),
+                        "outer_timeout_seconds": detailed_timeout_seconds,
                         "router_args": router_args,
                         "telemetry_level": effective_telemetry_level,
-                        "arcs": True,
+                        "arcs": board.get("track_geometry") == "curved",
+                        "write_incomplete_preview": True,
                     },
                     "result": detailed,
                 }
                 write_json_once(tier_dir / "detail-result.json", detailed_record)
                 board_result["detailed"] = detailed_record
-                detailed_qualified = (
-                    detailed.get("complete") is True
-                    and detailed.get("validation_errors") == 0
-                    and detailed.get("open_connections") == 0
-                    and detailed.get("copper_violations") == 0
-                    and detailed.get("added_track_arcs", 0)
-                    >= expected.get("min_track_arcs", 0)
-                    and detailed.get("unrounded_non_junction_bends", sys.maxsize)
-                    <= expected.get("max_unrounded_non_junction_bends", sys.maxsize)
-                    and detailed.get("artifact_written") is True
-                    and candidate_board.is_file()
-                )
+                detailed_qualified = detailed_copper_ready_for_final_drc(
+                    detailed, expected, candidate_board)
                 if detail_telemetry_record is not None and detail_telemetry_record.is_file():
                     render_failed_route_previews(
                         source,
@@ -527,6 +588,11 @@ def verify_board(
                         failed_route_png_mode,
                         max_failed_route_png_results,
                     )
+                if candidate_board.is_file() and board.get("track_geometry") == "straight":
+                    angle_audit = audit_straight_copper_angles(candidate_board)
+                    write_json_once(tier_dir / "straight-angle-audit.json", angle_audit)
+                    board_result["straight_angle_audit"] = angle_audit
+                    detailed_qualified = detailed_qualified and angle_audit["passed"]
                 if detailed_qualified:
                     try:
                         require_kicad_drc(candidate_board, tier_dir / "kicad-drc.json",
@@ -544,6 +610,25 @@ def verify_board(
                     stage_kicad_rule_context(source, final_board)
                     render_copper_layers(final_board, tier_dir / "copper", kicad_cli, inkscape)
                     print(f"RENDER {board_id}: final copper PNGs in {tier_dir / 'copper'}")
+                elif candidate_board.is_file():
+                    # Preserve the actual rejected candidate, not a reconstruction from spline
+                    # telemetry. A diagnostic DRC pass cannot override the curve/completion gate.
+                    rejected = analysis_dir / "detailed-rejected"
+                    rejected.mkdir(parents=True, exist_ok=False)
+                    rejected_board = rejected / candidate_board.name
+                    shutil.copy2(candidate_board, rejected_board)
+                    render_copper_layers(
+                        rejected_board, rejected / "copper", kicad_cli, inkscape
+                    )
+                    diagnostic_drc = {"authoritative": False, "tier_qualified": False,
+                                      "reason": detailed.get("diagnostic"), "passed": False}
+                    try:
+                        require_kicad_drc(rejected_board, rejected / "kicad-drc.json",
+                                          kicad_cli, source)
+                        diagnostic_drc["passed"] = True
+                    except (RuntimeError, subprocess.TimeoutExpired) as error:
+                        diagnostic_drc["error"] = str(error)
+                    write_json_once(rejected / "diagnostic-status.json", diagnostic_drc)
 
         qualified = global_qualified if qualification == "global_complete" else detailed_qualified
         board_result["qualified"] = qualified
@@ -554,17 +639,24 @@ def verify_board(
                 suffix = "exact copper and external KiCad DRC"
             print(f"PASS {board_id}: {routed['paths']} paths, {suffix}")
         else:
-            require(
-                not qualified,
-                f"{board_id}: unlocked tier now qualifies; permanently promote it to qualified "
-                "and activate the next locked tier in manifest.json",
-            )
-            require(routed.get("diagnostic"), f"{board_id}: incomplete probe has no diagnosis")
-            print(
-                f"PROBE {board_id}: incomplete as expected; "
-                f"stop={routed.get('stop_reason')}, paths={routed.get('paths')}, "
-                f"unrouted={routed.get('unrouted_nets')}, overflow={routed.get('total_overflow')}"
-            )
+            if board.get("route_locked_diagnostic", False):
+                print(
+                    f"DIAGNOSTIC {board_id}: qualified={qualified}; "
+                    f"stop={routed.get('stop_reason')}, paths={routed.get('paths')}, "
+                    f"unrouted={routed.get('unrouted_nets')}, overflow={routed.get('total_overflow')}"
+                )
+            else:
+                require(
+                    not qualified,
+                    f"{board_id}: unlocked tier now qualifies; permanently promote it to qualified "
+                    "and activate the next locked tier in manifest.json",
+                )
+                require(routed.get("diagnostic"), f"{board_id}: incomplete probe has no diagnosis")
+                print(
+                    f"PROBE {board_id}: incomplete as expected; "
+                    f"stop={routed.get('stop_reason')}, paths={routed.get('paths')}, "
+                    f"unrouted={routed.get('unrouted_nets')}, overflow={routed.get('total_overflow')}"
+                )
     else:
         print(
             f"PASS {board_id}: strict import gate "
@@ -585,6 +677,12 @@ def main() -> int:
         "--level", default="unlocked", help="maximum inspection level, 'all', or 'unlocked'"
     )
     parser.add_argument("--board", action="append", default=[])
+    parser.add_argument(
+        "--route-locked",
+        action="store_true",
+        help="diagnostically route selected locked boards without changing manifest promotion status",
+    )
+    parser.add_argument("--track-geometry", choices=("straight", "curved"), default="curved")
     parser.add_argument("--artifacts", type=Path, default=Path("build/routing-corpus-artifacts"))
     parser.add_argument("--kicad-cli", type=Path)
     parser.add_argument("--inkscape", type=Path)
@@ -592,6 +690,10 @@ def main() -> int:
         "--telemetry-level", choices=("normal", "diagnostic", "trace")
     )
     parser.add_argument("--telemetry-record-dir", type=Path)
+    parser.add_argument(
+        "--telemetry-listen",
+        help="optional telemetry listener ADDRESS:PORT forwarded to routing commands",
+    )
     parser.add_argument(
         "--failed-route-png-dir",
         type=Path,
@@ -608,7 +710,70 @@ def main() -> int:
         action="store_true",
         help="verify identities and emit run manifests without starting routing",
     )
+    parser.add_argument(
+        "--iteration-budget", type=int,
+        help="experimental override for both planning and detailed routing iterations; leaves the corpus manifest unchanged",
+    )
+    parser.add_argument("--physical-feedback-retries", type=int)
+    parser.add_argument("--feedback-shadow-policy", choices=("enforced", "advisory"))
+    parser.add_argument("--oracle-first-feedback", action="store_true")
+    parser.add_argument("--sampled-control", action="store_true",
+                        help="diagnostic sampled-graph control; removes medial topology flags but keeps dimensions and DRC rules")
+    parser.add_argument("--strict-medial-control", action="store_true",
+                        help="diagnostic backend control: replace direct-medial with strict-medial while retaining physical resources, pitch, rules and repair policy")
+    parser.add_argument("--grid-pitch-nm-control", type=int,
+                        help="diagnostic sampling-pitch override; keeps copper dimensions and source rules unchanged")
+    parser.add_argument("--dense-candidate-grid", action="store_true",
+                        help="experimental dense planar samples; requires enforced physical clearance conflicts")
+    strength_policy = parser.add_mutually_exclusive_group()
+    strength_policy.add_argument("--full-strength-first-pass", action="store_true")
+    strength_policy.add_argument("--no-full-strength-first-pass", action="store_true",
+                                 help="use legacy scheduling for controlled comparisons")
+    parser.add_argument("--frozen-copper-context", action="store_true")
+    parser.add_argument("--local-channel-occupancy", action="store_true")
+    parser.add_argument("--shared-channel-copper", action="store_true")
+    parser.add_argument("--centerline-channel-cuts", action="store_true")
+    parser.add_argument("--max-regional-bundle-states", type=int)
+    parser.add_argument("--max-straight-portfolio-checks", type=int,
+                        help="experimental bound on physical checks of retained straight bundle alternatives; leaves the corpus manifest unchanged")
+    parser.add_argument("--expand-frozen-copper-scope", action="store_true")
+    parser.add_argument("--prioritize-frozen-scope-expansion", action="store_true")
+    parser.add_argument("--planning-timeout-seconds", type=int,
+                        help="diagnostic planning timeout override (1..86400); does not change the corpus manifest or qualify its normal runtime budget")
+    parser.add_argument(
+        "--detailed-timeout-seconds",
+        type=int,
+        help="diagnostic detailed-routing harness timeout (1..86400; default: 2400)",
+    )
+    parser.add_argument(
+        "--routing-timeout-seconds",
+        type=int,
+        help="route-kicad/detail-kicad internal timeout (1..86400), forwarded as milliseconds",
+    )
     args = parser.parse_args()
+    if args.sampled_control and args.strict_medial_control:
+        parser.error("sampled and strict-medial controls are mutually exclusive")
+    if args.max_regional_bundle_states is not None and not 1 <= args.max_regional_bundle_states <= 1000000:
+        parser.error("--max-regional-bundle-states must be in 1..1000000")
+    if args.max_straight_portfolio_checks is not None and not 0 <= args.max_straight_portfolio_checks <= 4096:
+        parser.error("--max-straight-portfolio-checks must be in 0..4096")
+    if args.iteration_budget is not None and args.iteration_budget < 1:
+        parser.error("--iteration-budget must be positive")
+    if args.grid_pitch_nm_control is not None and args.grid_pitch_nm_control < 1:
+        parser.error("--grid-pitch-nm-control must be positive")
+    if args.planning_timeout_seconds is not None and not 1 <= args.planning_timeout_seconds <= 86400:
+        parser.error("--planning-timeout-seconds must be 1..86400")
+    if args.detailed_timeout_seconds is not None and not 1 <= args.detailed_timeout_seconds <= 86400:
+        parser.error("--detailed-timeout-seconds must be 1..86400")
+    if args.routing_timeout_seconds is not None and not 1 <= args.routing_timeout_seconds <= 86400:
+        parser.error("--routing-timeout-seconds must be 1..86400")
+    if args.oracle_first_feedback and args.full_strength_first_pass:
+        parser.error("oracle-first and full-strength first-pass are alternative scheduling experiments")
+    if args.physical_feedback_retries is not None and (
+        args.iteration_budget is None or not 0 <= args.physical_feedback_retries < args.iteration_budget
+        or args.physical_feedback_retries > 64
+    ):
+        parser.error("feedback retries must be 0..64 and smaller than an explicit iteration budget")
 
     flux_cli = args.flux_cli.resolve()
     corpus = args.corpus.resolve()
@@ -670,6 +835,103 @@ def main() -> int:
             )
         selected = [board for board in boards if board["level"] <= maximum]
     require(selected, "no corpus boards selected")
+    if args.iteration_budget is not None:
+        selected = [dict(board, probe_iterations=args.iteration_budget,
+                         detail_iterations=args.iteration_budget) for board in selected]
+    selected = [
+        dict(
+            board,
+            manifest_status=board["status"],
+            expected=dict(board["expected"]),
+            track_geometry=args.track_geometry,
+        )
+        for board in selected
+    ]
+    if args.route_locked:
+        selected = [
+            dict(board, status="unlocked", route_locked_diagnostic=True)
+            if board["manifest_status"] == "locked"
+            else board
+            for board in selected
+        ]
+    for board in selected:
+        if args.track_geometry == "curved":
+            board["expected"].pop("max_track_arcs", None)
+            board["expected"].update(board.get("curved_expected", {}))
+            if "min_track_arcs" in board["expected"]:
+                board["expected"]["min_track_beziers"] = board["expected"].pop("min_track_arcs")
+    experiment_args = ["--curved-tracks"] if args.track_geometry == "curved" else ["--straight-tracks"]
+    if args.local_channel_occupancy:
+        experiment_args += ["--local-channel-occupancy"]
+    if args.shared_channel_copper:
+        experiment_args += ["--shared-channel-copper"]
+    if args.centerline_channel_cuts:
+        experiment_args += ["--centerline-channel-cuts"]
+    if args.max_regional_bundle_states is not None:
+        experiment_args += ["--max-regional-bundle-states", str(args.max_regional_bundle_states)]
+    if args.max_straight_portfolio_checks is not None:
+        experiment_args += ["--max-straight-portfolio-checks", str(args.max_straight_portfolio_checks)]
+    if args.dense_candidate_grid:
+        experiment_args += ["--dense-candidate-grid"]
+    if args.sampled_control:
+        medial_flags = {"--direct-medial", "--strict-medial", "--negotiate-lane-conflicts",
+                        "--physical-overflow-objective", "--physical-overflow-history",
+                        "--physical-envelope-ordering", "--rollback-failed-hard-capacity-ripup",
+                        "--defer-hard-capacity-ripup-victims-to-pass-tail",
+                        "--protect-recovered-hard-capacity-ripup-nets"}
+        medial_values = {"--hard-capacity-start-iteration",
+                         "--max-hard-capacity-ripup-attempts-per-pass",
+                         "--max-hard-capacity-ripup-nets-per-attempt",
+                         "--max-hard-capacity-conflict-set-states-per-attempt",
+                         "--max-hard-capacity-blocker-reuse-invalidations-per-failed-net"}
+        for board in selected:
+            kept = []
+            iterator = iter(board.get("router_args", []))
+            for arg in iterator:
+                if arg in medial_values:
+                    next(iterator)
+                elif arg not in medial_flags:
+                    kept.append(arg)
+            board["router_args"] = kept
+    if args.strict_medial_control:
+        selected = [dict(board, router_args=["--strict-medial" if arg == "--direct-medial"
+                                            else arg for arg in board.get("router_args", [])])
+                    for board in selected]
+    if args.grid_pitch_nm_control is not None:
+        for board in selected:
+            router_args = list(board.get("router_args", []))
+            if "--grid-pitch-nm" in router_args:
+                router_args[router_args.index("--grid-pitch-nm") + 1] = str(args.grid_pitch_nm_control)
+            else:
+                router_args += ["--grid-pitch-nm", str(args.grid_pitch_nm_control)]
+            board["router_args"] = router_args
+    if args.planning_timeout_seconds is not None:
+        selected = [dict(board, probe_timeout_seconds=args.planning_timeout_seconds)
+                    for board in selected]
+    if args.routing_timeout_seconds is not None:
+        selected = [dict(board, routing_timeout_seconds=args.routing_timeout_seconds)
+                    for board in selected]
+    detailed_timeout_seconds = args.detailed_timeout_seconds or 2400
+    if args.physical_feedback_retries is not None:
+        experiment_args += ["--physical-feedback-retries", str(args.physical_feedback_retries)]
+    if args.feedback_shadow_policy is not None:
+        experiment_args += ["--feedback-shadow-policy", args.feedback_shadow_policy]
+    if args.oracle_first_feedback:
+        experiment_args += ["--oracle-first-feedback"]
+    if args.full_strength_first_pass:
+        experiment_args += ["--full-strength-first-pass"]
+    if args.no_full_strength_first_pass:
+        experiment_args += ["--no-full-strength-first-pass"]
+    if args.frozen_copper_context:
+        experiment_args += ["--frozen-copper-context"]
+    if args.expand_frozen_copper_scope:
+        experiment_args += ["--expand-frozen-copper-scope"]
+    if args.prioritize_frozen_scope_expansion:
+        experiment_args += ["--prioritize-frozen-scope-expansion"]
+    if args.telemetry_listen is not None:
+        experiment_args += ["--telemetry-listen", args.telemetry_listen]
+    selected = [dict(board, router_args=[*board.get("router_args", []), *experiment_args])
+                for board in selected]
 
     artifacts.mkdir(parents=True, exist_ok=True)
     system_info = run_json([str(flux_cli), "system-info", "--json"], timeout=30)
@@ -679,13 +941,14 @@ def main() -> int:
         "schema_version": 1,
         "created_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "mode": "preflight" if args.preflight_only else "routing",
+        "git_revision": command_identity(["git", "-C", str(Path(__file__).resolve().parents[2]), "rev-parse", "HEAD"]),
         "invocation": [str(Path(sys.argv[0]).resolve()), *sys.argv[1:]],
         "environment": {
             "platform": platform.platform(),
             "python": sys.version,
             "flux_vulkan_device_override": os.environ.get("FLUX_VULKAN_DEVICE"),
             "flux": system_info,
-            "kicad_cli": command_identity([str(kicad_cli), "--version"])
+            "kicad_cli": command_identity([*kicad_cli_command(kicad_cli), "--version"])
             if kicad_cli.is_file()
             else {"available": False},
             "inkscape": command_identity([str(inkscape), "--version"])
@@ -712,16 +975,33 @@ def main() -> int:
         "selection": {
             "level": args.level,
             "explicit_boards": args.board,
+            "iteration_budget_override": args.iteration_budget,
+            "track_geometry": args.track_geometry,
+            "sampled_control_override": args.sampled_control,
+            "strict_medial_control_override": args.strict_medial_control,
+            "grid_pitch_nm_control_override": args.grid_pitch_nm_control,
+            "planning_timeout_override_seconds": args.planning_timeout_seconds,
+            "detailed_timeout_override_seconds": args.detailed_timeout_seconds,
+            "effective_detailed_timeout_seconds": detailed_timeout_seconds,
+            "routing_timeout_override_seconds": args.routing_timeout_seconds,
+            "route_locked_override": args.route_locked,
+            "telemetry_listen_override": args.telemetry_listen,
+            "max_straight_portfolio_checks_override": args.max_straight_portfolio_checks,
             "boards": [
                 {
                     "id": board["id"],
                     "level": board["level"],
-                    "status": board["status"],
+                    "status": board["manifest_status"],
+                    "effective_status": board["status"],
+                    "route_locked_diagnostic": board.get("route_locked_diagnostic", False),
                     "qualification": board.get("qualification"),
                     "source_sha256": board["board_sha256"],
                     "project_sha256": board["project_sha256"],
                     "reference_sha256": board["reference_sha256"],
                     "router_args": board.get("router_args", []),
+                    "effective_planning_timeout_seconds": board.get("probe_timeout_seconds", 180),
+                    "effective_detailed_timeout_seconds": detailed_timeout_seconds,
+                    "effective_routing_timeout_seconds": board.get("routing_timeout_seconds"),
                 }
                 for board in selected
             ],
@@ -754,6 +1034,7 @@ def main() -> int:
                     failed_route_png_dir,
                     args.failed_route_png_mode,
                     args.max_failed_route_png_results,
+                    detailed_timeout_seconds,
                     args.preflight_only,
                 )
             )
@@ -781,7 +1062,17 @@ def main() -> int:
             "artifacts": artifact_inventory(artifacts),
         },
     )
-    print(f"{len(selected)}/{len(selected)} selected corpus boards passed")
+    assessed = sum(result["qualified"] is not None for result in board_results)
+    qualified = sum(result["qualified"] is True for result in board_results)
+    qualification_summary = (
+        f"{qualified}/{assessed} assessed boards qualified"
+        if assessed
+        else "routing qualification not assessed"
+    )
+    print(
+        f"{len(selected)}/{len(selected)} selected corpus checks passed; "
+        f"{qualification_summary}"
+    )
     return 0
 
 

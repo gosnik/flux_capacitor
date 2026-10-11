@@ -54,9 +54,9 @@ The target control architecture consists of three nested loops:
 
 All loops exchange `RoutabilityDiagnosis` evidence. The evidence carries a typed failure, stage, stable resource identity, physical bounds/layer, affected nets, severity, optional planned versus observed capacity, and suggested relaxation. `RoutabilityKnowledge` accumulates repeated evidence deterministically with saturation. It is a search cost and diagnostic record only: it cannot make an illegal transition legal, suppress connectivity/DRC, or become canonical board state.
 
-The current implementation interleaves all three loops. The caller's existing PathFinder iteration budget is divided across deterministic physical-feedback epochs rather than consumed by one long global wave. Each epoch rebuilds mandatory per-layer hydraulic alternatives from the latest failure/success terrain, runs PathFinder with the prior physical checkpoint as an affected-cone transaction, probes exact copper-envelope pressure, and performs a bounded regional lane/terminal/via/PH realization on the best retained topologies. Later epochs start directly in the mature bidirectional/congestion/hard-capacity policies instead of replaying the soft warm-up.
+The current implementation interleaves all three loops. The caller's existing PathFinder iteration budget is divided across deterministic physical-feedback epochs rather than consumed by one long global wave. Each epoch rebuilds mandatory per-layer hydraulic alternatives from the latest failure/success terrain, runs PathFinder with the prior physical checkpoint as an affected-cone transaction, and probes exact copper-envelope pressure. Sampled/corridor overflow and unaccepted lane transitions remain with PathFinder and rip-up; an intermediate regional corridor/packing/terminal/lane/layer/via probe is started only after those global resources are negotiated. Clearance-shadow and true physical-width pressure do not block that handoff because they are regional evidence. Intermediate probes deliberately do not invoke PH realization, XPBD/PNS, residual-cone retry, quantization, or detailed copper. Those continuous and exact stages run after a plausible discrete regional state or against the retained final checkpoint. Later epochs therefore consume fresh physical evidence and start directly in the mature bidirectional/congestion/hard-capacity policies instead of replaying the soft warm-up.
 
-The planner keeps a bounded beam of distinct global topologies across epochs in addition to the global router's pass-local beam. Repeated failure expands the next affected set through recorded hard-capacity blockers and touched residual conflict groups; stagnation rotates through retained topologies and cannot stop the search while another configured epoch remains. Intermediate regional probes use smaller search/transaction bounds, while the final epoch applies the complete configured regional budgets to the best two retained physical candidates. The regional handoff is still feasibility-first by connectivity, incomplete assignments, overflow, then cost—not simply the most recent probe. Every epoch and retained-portfolio count is exposed through telemetry and CLI JSON.
+The planner keeps a bounded beam of distinct global topologies across epochs in addition to the global router's pass-local beam. Repeated failure expands the next affected set through recorded hard-capacity blockers and touched residual conflict groups; stagnation rotates through retained topologies and cannot stop the search while another configured epoch remains. Intermediate regional probes publish that spline realization is disabled and report zero evaluated spline candidates; the final epoch applies the complete configured regional and continuous budgets to the best two retained physical candidates. The regional handoff is still feasibility-first by connectivity, incomplete assignments, overflow, then cost—not simply the most recent probe. Every epoch, retained-portfolio count, and probe realization mode is exposed through telemetry and CLI JSON.
 
 History coalescing retains failure stage, suggested corrective action, participating net set, layer and physical bounds. Corridor/lane/layer diagnoses become major-axis hydraulic deposits; via/terminal diagnoses remain localized. This prevents a lane-order failure and a corridor-change failure in the same spatial bin from degenerating into one actionless scalar. Inside a regional window, failed shortlist states continue to select among topology-template, via, and lane-order alternatives. Resolved local diagnoses are observable but never become global history.
 
@@ -238,6 +238,8 @@ The mandatory hydraulic family adapts the integer, batch-synchronous compute pat
 
 Bounded feedback retries also rasterize downstream routing knowledge into that per-net/per-layer terrain. PathFinder and corridor overflow deposit slowly increasing pressure; terminal, PH, XPBD/PNS, and via failures receive progressively stronger local pressure; and a collision rejected at final quantized-copper validation receives the strongest pressure. Resource bounds preserve the bottleneck's longitudinal extent rather than charging an entire layer. Conversely, each clean quantized track or arc contributes one unit of separately stored success evidence. Repeated clean evidence initializes a capped erosion prior on the next hydraulic attempt. Positive evidence never subtracts PathFinder history or authorizes illegal cells, and all additions are saturating and bounded by the ordinary knowledge and erosion limits.
 
+After exact PH or quantized-copper separation identifies a residual regional conflict, the conflict-directed master may invoke a separately bounded anisotropic erosion phase. The failed route run supplies a longitudinal raster axis; transverse potential steps and bank diffusion receive a larger integer cost, and two deterministic success priors displaced along opposite normals expose both blocker sides. Attributed route envelopes are pressure barriers for topology preservation but never alter polygon-derived walkability. Only blocker-clearing, exact-chord-certified proposals become new same-layer columns in the joint lane/layer/via master, and all downstream copper gates remain unchanged.
+
 The riverbed is exact-chord-certified and visibility-pulled in polygonal free space before it is projected into coarse NavMesh cells. It then opens a bounded coarse tube used by the ordinary reverse flood, funnel, topology signature, graph reprojection, connectivity, and DRC gates. Consequently erosion discovers free-space topology while the NavMesh remains a coarse occupancy/resource and certificate projection. A multi-layer candidate consists of distinct layer-specific riverbeds joined only by explicit validated via choices. The family remains retained fallback evidence if it is not selected. Telemetry publishes the fine discovery field at its own origin/pitch plus projection/certificate metrics; it never presents NavMesh pixels as the discovery authority.
 
 Vulkan acceleration is a build and production-routing prerequisite. Requested hydraulic work never falls back after device initialization, allocation, or dispatch failure; such a candidate fails closed. The deterministic CPU implementation remains only for equivalence tests and isolated oracles and must produce identical integer fields.
@@ -265,6 +267,14 @@ Hydraulic erosion now shares the Vulkan-capable execution boundary with the othe
 The combined compute shader uses compact relative-coordinate buffers and fixed-order dispatches. Work below an explicit arithmetic threshold remains on the CPU so dispatch and synchronization do not dominate small regional windows. Wavefront dispatch depth is also bounded geometrically; an incomplete field falls through to the ordinary exact CPU queue. Large candidate-pair arrays are bounded before allocation and disable their broad phase on exhaustion rather than dropping pairs.
 
 GPU floating-point geometry is never route authority. Physical envelopes include a numeric guard; a reported possible collision is re-evaluated by the existing long-double geometry, while only a conservatively separated pair may skip that exact loop. GPU PH Bézier positions are used only for the clearance broad phase; CPU spline shape, topology, curvature, quantization, connectivity, and DRC checks remain mandatory. Likewise, GPU scores only order work inside already bounded waves and do not replace feasibility-first comparison. Every entry point retains a deterministic CPU reference for equivalence and exact follow-up work. Small auxiliary workloads may deliberately remain on the CPU when dispatch would dominate, but a working Vulkan compute device is required before routing begins. Mandatory hydraulic discovery never silently falls back when Vulkan creation, packing, compilation, or dispatch fails.
+
+Every regional PH portfolio now enters through candidate-major GPU batch ranking. This includes the
+initial topology-seed fit, corner-guard refinements, and the later mutual-clearance interpolation
+sweeps. The device ranks approximate quantized copper interaction and length; it does not prune the
+portfolio. CPU exact checks examine the ranked prefix first and retain every unselected candidate as
+a stable fallback if the device result is unavailable, incomplete, topologically invalid, or
+shape-invalid. Separate topology-seed batch/fallback/candidate/exact counters make the default path
+observable without weakening corridor, PH, quantization, connectivity, or DRC authority.
 
 ### 7.4 Early NavMesh/PH/PNS refinement
 
@@ -302,9 +312,9 @@ If a refined seed collides with movable existing copper, the early PNS pass can 
 
 The continuous implementation is a chain of planar quintic PH Bézier segments. A segment is generated from the square of a quadratic complex Bernstein preimage. Hermite interpolation ranks all formal square-root/quadratic branches by loop, inflection, absolute-rotation, length, and control-hull evidence; it does not accept the first algebraic root. Centripetal parameter selection is the default. Adjacent segments share one nodal derivative and account for non-uniform parameter spans, giving C1 continuity with respect to the route parameter. An explicit higher-order mode relaxes shared derivatives and fails closed unless C2 mismatch reaches its tolerance.
 
-The PH state stores the quadratic preimage, six Bézier controls, quartic speed, and exact quintic arc-length polynomial. Rebuilding a span also computes immutable power-basis coefficients for `w`, `w^2`, position, speed, arc length, and the curvature numerator. Hot position and differential evaluation uses Horner form; regularity and differential operations work on quadratic `w` rather than reconstructing the quintic. Real roots of the cached hodograph components give exact positional bounds, and cusp, inflection, and curvature-extremum parameters are cached for DRC and contact broadphase. Curvature extrema are roots of the degree-five derivative numerator and inflections are isolated roots of the quadratic curvature numerator. Exact signed offsets are homogeneous rational degree-nine Bézier curves; bounded rational subdivision plus Newton refinement detects their intersections at the final regional envelope gate. Arbitrary Bézier control motion is forbidden because it would destroy the PH invariant. XPBD and elastic shove move interpolation nodes, then rebuild every affected PH segment before the candidate is assessed. A single-node polishing proposal reconstructs only its at-most-four-segment interpolation support before the unchanged whole-chain certificates run; merely attaching immutable corridor metadata does not invalidate or rebuild any PH geometry cache.
+The PH state stores the quadratic preimage, six Bézier controls, quartic speed, and exact quintic arc-length polynomial. Rebuilding a span also computes immutable power-basis coefficients for `w`, `w^2`, position, speed, arc length, and the curvature numerator. Hot position and differential evaluation uses Horner form; regularity and differential operations work on quadratic `w` rather than reconstructing the quintic. Real roots of the cached hodograph components give exact positional bounds, and cusp, inflection, and curvature-extremum parameters are cached for DRC and contact broadphase. Curvature extrema are roots of the degree-five derivative numerator and inflections are isolated roots of the quadratic curvature numerator. Exact signed offsets are homogeneous rational degree-nine Bézier curves; bounded rational subdivision plus Newton refinement detects their intersections at the final regional envelope gate. Arbitrary Bézier control motion is forbidden because it would destroy the PH invariant. XPBD and elastic shove move interpolation nodes, then rebuild every affected PH segment before the candidate is assessed. A single-node polishing proposal reconstructs only its at-most-four-segment interpolation support before the unchanged whole-chain certificates run; merely attaching immutable corridor metadata does not invalidate or rebuild any PH geometry cache. The selected guard union is prepared once as immutable polygons plus cached bounds and shared by all candidate copies. Exact hull queries reject unrelated guard cells by bounds before constructing coverage intervals.
 
-Eligible detailed chains first receive an advisory whole-chain Vulkan XPBD precondition. Fixed pad/junction endpoints have zero inverse mass; intermediate PH interpolation nodes are particles; route spans supply stretch constraints; a route-local Laplacian supplies bending tension; and the selected corridor anchors bound displacement. All iterations for one chain remain resident in one device dispatch. The returned node vector occupies the original stable chain slot and is accepted only when the CPU feasibility-first shape plus continuous-corridor assessment improves. Vulkan failure falls back to the existing CPU optimizer, and the CPU remains authoritative for PH cache rebuild, homotopy, adaptive convex-hull certification, primitive fitting, connectivity, DRC, and transaction commit. Results expose attempts, device dispatches, CPU fallbacks, accepted GPU preconditions, and device solve time.
+Eligible detailed chains first receive an advisory whole-chain Vulkan XPBD precondition. Fixed pad/junction endpoints have zero inverse mass; intermediate PH interpolation nodes are particles; route spans supply stretch constraints; a route-local Laplacian supplies bending tension; and the selected corridor anchors bound displacement. All iterations for one chain remain resident in one device dispatch. The returned node vector occupies the original stable chain slot and is accepted only when the CPU feasibility-first shape plus continuous-corridor assessment improves and the route still crosses every selected topology gate in order with unchanged obstacle winding. The same route-class predicate gates multistart and CPU-shortlisted candidates, so a clear curve in another homotopy can never displace the current search state. Vulkan failure falls back to the existing CPU optimizer, and the CPU remains authoritative for PH cache rebuild, homotopy, adaptive convex-hull certification, primitive fitting, connectivity, DRC, and transaction commit. Results expose attempts, device dispatches, CPU fallbacks, accepted GPU preconditions, and device solve time.
 
 The subsequent coordinate-polishing loop is GPU-shortlisted as well. For each interpolation node, all axis, diagonal, shortening, Laplacian, biharmonic, and obstacle-normal proposals are rebuilt as PH candidates and packed candidate-major into one Vulkan spline-evaluation dispatch. Device samples provide a stable approximate ordering by represented legality, length, and turning cost. Only the best bounded four proposals receive the irregular long-double shape and adaptive convex- hull certificates. These fine-grained checks stay serial: measured recursive long-tail imbalance left most workers waiting and regressed wall time. Parallelism is instead applied after the full polyline board exists. Each complete same-layer degree-two route chain independently prepares its NavMesh, optimizes its PH trajectory, certifies it, fits native arcs, and tries bounded PNS against the same immutable board snapshot. Workers publish compact copper deltas to stable task slots. Original route-order reduction applies each delta to a disposable current-board transaction and rechecks structural validity, touched-copper DRC, and connectivity before the sole commit. If the device batch is unavailable, every proposal follows the original CPU path. Candidate-generation budgets and stable proposal-index tie breaks are unchanged; GPU ranking and parallel completion order cannot authorize a candidate.
 
@@ -325,7 +335,7 @@ Control-coordinate descent uses a weighted objective containing:
 - elastic distance from corridor anchors;
 - unnecessary control complexity.
 
-Candidates are compared lexicographically by represented violation count and then objective, so a shorter illegal curve cannot beat a legal curve. Moves are clamped to the configured control corridor and, when supplied, the NavMesh topology guard. Analytical derivatives provide tangent, curvature, and bend radius.
+Candidates are compared lexicographically by represented violation count, exact worst-clearance improvement on a violation-count plateau, and then objective, so a shorter illegal curve cannot beat a legal curve and a necessary clearance-improving move is not rejected merely because one bounded step has not yet removed a complete violation. Exact continuous collision normals are projected onto nearby interpolation nodes according to their parameter support. Moves are clamped to the configured control corridor and, when supplied, the NavMesh topology and obstacle-winding guard. Analytical derivatives provide tangent, curvature, and bend radius.
 
 Collision-local elastic deformation uses compact nodal influence:
 
@@ -492,7 +502,7 @@ selected global/NavMesh corridor
 
 Adaptive tessellation bounds deviation from the spline. Arc fitting groups samples only while a native circular arc remains within tolerance; other pieces remain straight. Each arc is stored as quantized start, middle, and end points, and analytic arc geometry participates in length, connectivity, clearance, obstacle attribution, pair gap/skew, and round-trip checks.
 
-Each retained NavMesh guard cell is certified in free space after expanding obstacles by the full track radius and resolved clearance. Convex containment of a subdivided PH Bézier hull in one of those cells—or in their exactly covered union—is therefore the continuous copper-envelope certificate. The detailed grid defaults to 0.25 mm, independently of the coarser global lattice. Once union coverage is certified, a second sampled cell-mask lookup is not permitted to veto the same curve at a quantized cell boundary; ordered obstacle-winding evidence still guards homotopy. Point clearance remains an optimization/repulsion signal, but the envelope checker must not subtract the same clearance from that already-offset cell boundary a second time. The quantized transaction is still rechecked by whole-board analytic copper DRC.
+Each retained NavMesh guard cell is certified in free space after expanding obstacles by the full track radius and resolved clearance. Convex containment of a subdivided PH Bézier hull in one of those cells—or in their exactly covered union—is therefore the normal continuous copper-envelope certificate. Whole-cell certification can conservatively omit a legal sub-cell sliver along a clearance boundary. A sufficiently subdivided hull may recover that sliver only when its midpoint-to-offset-boundary distance encloses the complete hull and its distance from the selected guard union remains bounded by the hull diameter plus subdivision tolerance. Ordered topology gates and obstacle winding remain mandatory, so this recovery cannot select another homotopy. The detailed grid defaults to 0.25 mm, independently of the coarser global lattice. Once continuous coverage is certified, a sampled cell-mask lookup is not permitted to veto the same curve at a quantized cell boundary. The quantized transaction is still rechecked by whole-board analytic copper DRC.
 
 PH interpolation branch selection treats a cusp as a dominant invalidity before comparing loop, inflection, length, or tangent quality. A completely straight optimized PH chain is a successful two-sample realization and becomes one native track segment. During mixed line/arc fitting, a span whose samples fit one chord within the configured tolerance is emitted as that chord in preference to a numerically shallow circle. This prevents nearly collinear three-point arcs from acquiring a remote centre when KiCad reconstructs them while retaining genuine curved spans as native arcs.
 
@@ -748,6 +758,8 @@ Regional templates retain the selected global terminal access, topology channels
 
 Before spending the per-region exact-site budget, up to 4,224 deterministic lattice proposals are assessed in one regional compute batch. Each proposal carries its complete 64-layer span, via and run-up radii, up to two attached run-up origins, net ownership, and local corridor pressure. The GPU compares the via disk and run-up chords against immutable tracks/vias/pads plus already planned vias, returning obstacle/run-up/layer rejection bits, conservative margin, approximate conflict count, run-up length, score, and a stable top-K. Rejected sites remain at the tail when the top-K has spare capacity, so the filter does not silently erase the bounded fallback space. Exact `via_site_legal` and run-up predicates still accept or reject every shortlisted site. For selected-global topology, a relocated via candidate must pass the via envelope and every attached planar run-up against board boundaries, represented copper, pads, zones, and keepouts. The access assignment may choose that retained site, but realization moves its attached PH chain endpoint and the later via transaction together. Alternate-layer templates remain fixed to the entry/exit via sites used by their prepared NavMesh centerline. Shared via-region site mismatches are pruned during bounded partial template construction before expensive access validation. Missing corridor topology, an unfittable lane order, and state exhaustion are explicit bundle outcomes. A complete lane assignment initializes actual quintic PH chains with laterally displaced interpolation nodes. Bounded joint sweeps use analytical spline optimization, selected-corridor membership, and route-to-route clearance barriers, then publish quantized centerlines only when topology and mutual spacing remain legal. These candidate paths stay separate from the immutable coarse paths.
 
+When the finite master finds a discrete selection but PH or quantized copper rejects its physical realization, regional repair uses lazy constraint generation rather than weakening the physical gate. A stable no-good key records the selected template geometry, layer sequence, physical via sites/spans, and ordered packed cross sections; it deliberately excludes retry-local ordinals. The failure core expands each implicated fragment to its complete in-window route run, then grants only those runs bounded new homotopy/corridor/layer/via columns. The same deterministic CSP reruns with the accumulated no-goods and its ordinary coupled-layer, terminal continuity, via/run-up, channel-capacity, lane-precedence, and template-conflict predicates. PH realization is the separation oracle outside that discrete state. Bounded exhaustion escalates to residual-cone and global feedback; only a complete exact-realized regional replacement can be merged atomically.
+
 Before a regional spline candidate becomes eligible for detailed materialization, Flux derives an explicit end-to-end `RegionalMultilayerRoutePlan` for every via-dependent connection. This is an ordered sequence of planar layer runs separated by physical via transitions; its cardinality is not limited to a pair by the data model and is bounded only by route/search budgets. A conventional surface-to-inner-to-surface excursion therefore has three runs and two vias, while a route may continue through further layers and further via sites. Consecutive layer points at one coordinate are collapsed into one complete via span, but transitions separated by a planar run remain distinct physical vias. Malformed layer changes, unknown spans, stale plan/path mismatches, or an incomplete run/transition chain discard the complete regional candidate. The detailed-router entry point independently reconstructs and compares this plan before generating copper; final structural validation, connectivity, and copper DRC remain authoritative.
 
 A single-conflict window also has an independent local-layer-overpass portfolio. The conflict bounds are projected onto the owned source fragment and bounded via pairs are placed before and after that interval. Original-layer run-ups stay fixed outside the pair; only the middle run uses an alternate-layer prepared NavMesh, micromouse flood, funnel, and quintic PH chain. This follow-up runs after the established endpoint portfolio and owns separate board-wide/per-fragment bounds, so it cannot reduce a previously feasible template set. The same via-span, static geometry, mutual spline, connectivity, and DRC gates apply.
@@ -808,6 +820,8 @@ Once PathFinder selects its final checkpoint, the global router emits one bounde
 Every complete regional window may also publish its adaptively tessellated PH chain realization, even when another window remains unresolved. Those records use separate stable `regional-spline:*` IDs and explicitly remain diagnostic planning geometry. They improve live and recorded incomplete-layout inspection but cannot enter `build_regional_spline_candidate()` unless every regional assignment completes. The current ESC trace reconstructs 357 such splines plus 320 global polylines with zero dropped events.
 
 The route record also carries an optional geometry kind, cubic degree, and final optimized control points. Regional spline events retain the adaptive quantized centreline used by physical checks as their fallback, while the viewer independently evaluates the flattened six-control PH Bézier spans and draws the actual spline curve. A default-on PH chain overlay distinguishes these curves from global polylines; a separate control-polygon overlay exposes local-control movement. State-only rip-up/removal observations preserve this geometry, and periodic snapshots recover it. These fields are diagnostic copies and cannot become a routing or acceptance input.
+
+All board-layer-specific viewer overlays share a stable base hue, with semantic state represented as a tint, opacity, marker, or dash pattern rather than replacing the layer colour. F.Cu and B.Cu retain conventional red/blue identities; inner and non-copper layers use stable deterministic palettes. The legend is generated from immutable source-layer metadata plus any dynamic telemetry-only layers and shows the principal copper, PH, alternative, clearance, and overflow variants. Hydraulic terrain retains its height/pressure/success heat map while mixing in a restrained layer tint; a via uses its centre and outer ring to show the first and last layer. This is strictly observer-side presentation state.
 
 A selected regional via publishes each attached exact-static-checked run-up as a separate `regional-via-runup:<choice>:<runup>` provisional route. The run-up carries its physical layer, resolved trace width, stable net and via-region identity, and straight or dogleg centreline. This lets the viewer draw the real local connection used by the regional PH chain seed instead of an isolated via marker. It remains non-authoritative and is emitted only after regional analysis, not while access candidates are searched.
 
@@ -893,15 +907,20 @@ The CPU reference and dedicated Vulkan compute backend apply compliant stretch, 
 
 The relaxed controls are accepted only when adaptive whole-window assessment is feasibility-first better and does not regress the selected NavMesh gate sequence. Existing spline envelope, quantization, connectivity, copper DRC, and transactional fallback remain unchanged. Unresolved constraint stress is rasterized and diffused into bounded physical-pressure cells; those cells enter the existing typed routability-history loop and can influence the next PathFinder allocation without becoming a legality representation.
 
-The feature is experimental and disabled by default. `--xpbd-relaxation` enables geometry only, `--xpbd-feedback` also publishes spatial history, and `--xpbd-cpu` selects the reference backend. See `reports/vulkan_xpbd_iteration.md` for benchmark evidence.
+The feature is enabled by default. `--no-xpbd-relaxation` disables geometry and feedback,
+`--no-xpbd-feedback` retains geometry without publishing spatial history, and `--xpbd-cpu`
+selects the reference backend. The positive `--xpbd-relaxation` and `--xpbd-feedback` switches
+remain accepted for explicit run manifests. See `reports/vulkan_xpbd_iteration.md` for benchmark
+evidence.
 
 ## 18. Important implementation limits
 
 The following boundaries are intentional and should not be mistaken for implemented capability.
 
-- The NavMesh is a bounded adaptive rectilinear decomposition. It is not a full exact constrained triangulation of all KiCad geometry, and refinement occurs only at clearance-clipped cells under explicit depth/pitch/cell budgets.
+- The NavMesh is a bounded adaptive rectilinear decomposition. It defaults to two recursive refinement levels, with any caller override still bounded by explicit depth, pitch, and cell budgets. It is not a full exact constrained triangulation of all KiCad geometry, and refinement occurs only at clearance-clipped cells. Diagnostic route telemetry retains the exact mixed-size topology-guard leaves, and the viewer's NavMesh-grid overlay draws those cells rather than inventing a zoom-dependent drafting grid.
 - PathFinder remains a sampled/hybrid polyline allocator. It carries spline-corridor identity and physical capacity, but does not store PH chain controls or circular arcs.
 - PH chain controls are transient optimization state. Canonical saved copper is made of straight tracks and native circular arcs.
+- A final regional PH candidate is fitted once to native track pieces before it may advance. Exact DRC over the complete fitted window is the regional physical-legality authority. Continuous PH envelopes and rational degree-nine offsets remain fail-closed diagnostics for rejected native scenes; final whole-board materialization, connectivity, represented-copper DRC, and external KiCad DRC still have the last word.
 - Shared-lane packing is authoritative only after topology-locked detailed materialization and whole-board acceptance. Much of its global output remains advisory.
 - The first multilayer joint wave chooses a bounded finite set of topology/layer/via templates and per-channel lane orders. For at most eight pressure-ranked conflict windows it retains at most four complete atomic states—the scalar-best state plus a deterministic maximally template-diverse subset from a 32-state pool—and passes them through the actual joint PH chain/elastic-PNS feasibility boundary. The first completely legal window is retained; otherwise only the least-illegal diagnostic state survives. It does not yet continuously optimize via regions or synchronized lane order across several channels.
 - PNS moves unlocked straight tracks and vias with attached straight segments. Pads, native arcs, locked copper, and unsupported attachments are hard obstacles.
@@ -912,7 +931,48 @@ The following boundaries are intentional and should not be mistaken for implemen
 - Unsupported custom/trapezoid pad geometry, ambiguous fills, custom-rule semantics, and other unrepresented physical objects fail closed or remain conservative blockers.
 - External KiCad DRC and human placement review remain required acceptance boundaries.
 
-## 19. Source map
+## 19. Persistent nested routing session
+
+Direct detailed routing and WorkPlan routing enter one `run_persistent_routing_session`
+transaction. The immutable planning board, materialization source, selected global checkpoint,
+regional assignment, typed routability knowledge, and best exact copper checkpoint remain live
+until success or bounded exhaustion. A conventional zero-overflow polyline fallback and final
+physical feedback are part of this coordinator rather than independently reconstructed by every
+caller.
+
+An intermediate regional pass is explicitly provisional. If its discrete lane, terminal, via,
+layer, and corridor assignment appears complete, the planner immediately re-runs that topology
+with full PH realization enabled. Only the promoted result may terminate an interleaved planning
+epoch. Exact materialization remains the next authority and whole-board connectivity/DRC remains
+the commit gate.
+
+Feedback is dispatched to the nearest loop capable of changing the failed decision:
+
+- clearance-margin and quantization pressure first re-enter continuous/regional realization;
+- terminal ordering, lane order, via site, layer sequence, and regional corridor failures re-enter
+  the regional exact master with PH/PNS enabled;
+- an explicit topology diagnosis re-enters PathFinder;
+- an identical local or regional failure observed again escalates one level.
+
+Affected nets are rebuilt from the current diagnosis on every pass. They no longer grow as an
+unbounded union of stale failures. A newly explored routing state remains the working checkpoint
+even when it is not yet the best exact board, preventing the next pass from replaying the state
+which produced an obsolete diagnosis. Externally selectable output still changes only on a strict
+exact-quality improvement or a complete transaction.
+
+Regional diagnoses are portfolio-local. Each retained global topology receives a private copy of
+the shared global knowledge, and only the selected portfolio contributes its regional failures to
+the next epoch. This prevents a failed homotopy from depositing lane/via/PH pressure into a
+different retained homotopy. Counts for discarded diagnoses and provisional exact promotion are
+published in route JSON.
+
+Incremental detailed materialization accepts a complete `RoutingPlanResult`, not only a coarse
+global path set. It verifies all regional bundles and ordered multilayer via plans, rematerializes
+the selected PH paths, reuses clean unaffected copper from the prior exact checkpoint, and then
+checks the combined board transactionally. Full integrated-placement shortlist evaluations use the
+same feedback coordinator; cheap incremental placement screens do not.
+
+## 20. Source map
 
 | Area | Main implementation |
 | --- | --- |
@@ -937,3 +997,67 @@ The following boundaries are intentional and should not be mistaken for implemen
 | Source-bound policies | `src/*_constraints.cpp`, `src/kicad_netclass_snapshot.cpp` |
 | Command-line orchestration | `apps/flux-cli/main.cpp` |
 | KiCad application boundary | `plugins/kicad/route_board.py`, `apply_candidate.py`, `export_netclasses.py`, `refill_zones.py` |
+
+## Resumable routing engine
+
+The routing coordinator is `RoutingEngine` (`include/flux/core/routing_engine.hpp`). It owns an
+immutable planning board and materialization source, a working route, best partial checkpoints,
+and internally accepted copper awaiting external validation. `plan_routes` and persistent routing
+sessions enter this coordinator; `plan_routes_legacy` remains an explicit comparison control.
+
+The lifecycle distinguishes active search, a plan awaiting materialization, copper awaiting external
+validation, completed routing, exhausted action budget, shared deadline expiry, and caller
+cancellation. Exhausting a search budget is not proof that the board is unroutable. A plan-only
+command cannot claim final copper completion. External DRC acknowledgement is tied to the exact
+engine generation and a rejection revokes the corresponding internal acceptance.
+
+The adaptive policy chooses actions from measured state:
+
+| Evidence | Action | Acceptance authority |
+| --- | --- | --- |
+| Missing connections or allocation overflow | Global or affected-net reallocation | Global connectivity/resources, followed by physical checks |
+| Connected allocation with physical conflicts | Regional realization/repair | Native and quantized copper gates |
+| Local packing failure with usable curved topology | Bounded XPBD repair | Existing topology, clearance and complete copper checks |
+| Exhausted local alternatives or repeated physical conflicts | Confined erosion alternatives | Immutable obstacle geometry and exact downstream validation |
+| Repeated topology/navigation failure | USPED-informed navigation and reallocation | Ordinary routing and downstream copper validation |
+| Internally legal candidate | External validation handoff | KiCad DRC and benchmark rule set |
+
+Erosion, XPBD and USPED remain advisory search/geometry mechanisms. They cannot change design
+rules or promote a partially connected scene. Confined erosion and regional XPBD currently require
+the curved realization path; a straight-only run must not advertise those actions as executed when
+its kernel cannot invoke them. Hydraulic topology generation remains available through the global
+router. USPED refines navigation guidance, not physical corridor capacity.
+
+`RoutingKernel` provides an in-memory stack-preserving continuation. It executes a kernel on one
+managed worker, parking at cooperative checkpoints when its work quota or time slice is consumed.
+The stack, frontier, prepared geometry and caches survive a yield. Calling `advance` resumes that
+same invocation. Existing synchronous callers see checkpoint hooks as no-ops. The controller never
+reads a transaction while its worker is running, and commits its result only after the invocation
+finishes. Cancellation unwinds the transaction and retains prior checkpoints. Destruction cancels,
+wakes and joins a parked worker.
+
+The deadline is monotonic and shared across all actions. It requests cancellation inside an active
+kernel rather than being checked only between pipeline stages. CPU search loops contain suspension
+points; GPU submissions and unsliced geometry operations remain cooperative boundaries rather than
+hard real-time preemption. Child worker-pool tasks retain their existing cancellation contracts.
+
+Policy ordering is deterministic. Wall time is recorded for diagnosis; it must not determine route
+ordering. Action selection combines eligibility, measured gain per deterministic work unit, warm-up
+of eligible actions, bounded exploration and repeated-state suppression. Fingerprints bind failures
+to routing geometry and typed regional evidence. Working exploration may become worse temporarily;
+selected copper cannot improve its score by silently losing required connections.
+
+Telemetry reports action start, progress/yield, end, work and time, allowing the viewer to distinguish
+an active long search from a stopped session. CLI controls include `--routing-timeout-ms`,
+`--routing-slice-ms`, `--routing-slice-work`, `--routing-max-actions`, and
+`--routing-engine-policy adaptive|legacy`. In-memory continuation is supported; serializing live
+thread stacks or continuing across process restarts is outside this implementation.
+
+Verification requires continuation/cancellation tests, slice-invariance tests, stale/rejected external
+validation tests, existing core regressions, Tier 0 and frontier benchmarks. Compare time to valid
+copper, physical conflicts, opens and DRC categories as well as final outcomes. Algorithm activation
+alone is not evidence of a routing improvement.
+
+Curved routing is the default for the planner, engine, persistent session, integrated optimizer,
+CLI and corpus runner. Use `--straight-tracks` (CLI) or `--track-geometry straight` (corpus)
+for explicit straight routing. Low-level detailed materialization retains its independent defaults.

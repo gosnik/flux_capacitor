@@ -1,0 +1,150 @@
+--- a/src/regional_router.cpp
++++ b/src/regional_router.cpp
+@@ -3847,6 +3847,12 @@
+             {runup.second, site},
+             {runup.second, Point{site.x, runup.second.y}, site},
+             {runup.second, Point{runup.second.x, site.y}, site}};
++        if (!result.configured.enable_spline_realization) {
++          // Screen the same H/V/45 copper that the straight realizer will use.
++          // An arbitrary-angle shortest chord can falsely block a jointly legal
++          // access pair, or clear an obstacle that its later elbow would hit.
++          candidates = geometry::octilinear_connector_candidates(runup.second, site);
++        }
+         for (auto& candidate : candidates) {
+           candidate.erase(std::unique(candidate.begin(), candidate.end()), candidate.end());
+         }
+--- a/src/geometry.cpp
++++ b/src/geometry.cpp
+@@ -174,6 +174,28 @@
+ };
+ 
+ } // namespace
++
++std::vector<std::vector<Point>> octilinear_connector_candidates(Point start, Point end) {
++  if (start == end) return {};
++  const auto dx = end.x.value() - start.x.value();
++  const auto dy = end.y.value() - start.y.value();
++  const auto diagonal = std::min(std::abs(dx), std::abs(dy));
++  const auto sx = dx < 0 ? -diagonal : diagonal;
++  const auto sy = dy < 0 ? -diagonal : diagonal;
++  const std::array<Point, 4> elbows{
++      Point{Nanometres{start.x.value() + sx}, Nanometres{start.y.value() + sy}},
++      Point{Nanometres{end.x.value() - sx}, Nanometres{end.y.value() - sy}},
++      Point{end.x, start.y}, Point{start.x, end.y}};
++  std::vector<std::vector<Point>> result;
++  for (const auto elbow : elbows) {
++    std::vector<Point> path{start};
++    if (elbow != start && elbow != end) path.push_back(elbow);
++    path.push_back(end);
++    if (std::find(result.begin(), result.end(), path) == result.end())
++      result.push_back(std::move(path));
++  }
++  return result;
++}
+ 
+ bool AxisAlignedBounds::contains(Point point) const {
+   return minimum.x <= point.x && point.x <= maximum.x && minimum.y <= point.y &&
+--- a/include/flux/core/geometry.hpp
++++ b/include/flux/core/geometry.hpp
+@@ -10,6 +10,11 @@
+ namespace flux::geometry {
+ 
+ enum class PointLocation { outside, boundary, inside };
++
++// Both 45-degree bend postures and the two orthogonal elbows, with duplicate
++// paths removed. Endpoints are exact; callers must check obstacle clearance.
++[[nodiscard]] std::vector<std::vector<Point>> octilinear_connector_candidates(Point start,
++                                                                            Point end);
+ 
+ struct CircularArcParameters {
+   long double center_x_nm{0.0L};
+--- a/tests/unit/core_tests.cpp
++++ b/tests/unit/core_tests.cpp
+@@ -3824,6 +3824,78 @@
+   }
+ }
+ 
++void octilinear_via_runups_avoid_false_access_collisions() {
++  // A short frozen branch meets the middle of a long via approach. Its direct
++  // chord collides, while the diagonal-first elbow can pass on the other side.
++  // Translation/reflection keep the mechanism independent of board coordinates.
++  for (const auto sign : {-1, 1}) {
++    const auto place = [&](double x, double y) { return mm(20 + sign * x, 20 + y); };
++    const auto anchor = place(0, 0);
++    const auto site = place(-1, 3.4);
++    const auto blocker_start = place(0, 1.3);
++    const auto blocker_end = place(0.65, 0.65);
++    const auto required = 450'000.0L;
++    require(flux::geometry::segment_distance_nm(anchor, site, blocker_start, blocker_end) < required,
++            "the source chord must reproduce the approach-track collision");
++    const auto paths = flux::geometry::octilinear_connector_candidates(anchor, site);
++    std::size_t legal = 0;
++    for (const auto& path : paths) {
++      require(path.front() == anchor && path.back() == site,
++              "approach alternatives must preserve both physical anchors");
++      bool clear = true;
++      for (std::size_t i = 1; i < path.size(); ++i) {
++        const auto dx = std::abs(path[i].x.value() - path[i - 1].x.value());
++        const auto dy = std::abs(path[i].y.value() - path[i - 1].y.value());
++        require((dx || dy) && (!dx || !dy || dx == dy),
++                "access candidates must already use nonzero H/V/45 segments");
++        clear &= flux::geometry::segment_distance_nm(path[i - 1], path[i], blocker_start,
++                                                     blocker_end) >= required;
++      }
++      legal += clear;
++    }
++    require(legal > 0 && legal < paths.size(),
++            "the approach portfolio must expose both the legal detour and blocked posture");
++  }
++  Board board;
++  board.outline = rectangle(0, 0, 40, 40);
++  board.layers = {{LayerId{"F.Cu"}, "F.Cu", LayerKind::copper, 0},
++                  {LayerId{"B.Cu"}, "B.Cu", LayerKind::copper, 1}};
++  board.nets = {{NetId{"approach-a"}, "a"}, {NetId{"approach-b"}, "b"}};
++  flux::GlobalRouteResult global;
++  global.paths = {
++      flux::GlobalRoutePath{NetId{"approach-a"}, 0U,
++          {{mm(20, 19.35), LayerId{"B.Cu"}}, {mm(20, 20), LayerId{"B.Cu"}},
++           {mm(20, 20), LayerId{"F.Cu"}}, {mm(20, 21.335), LayerId{"F.Cu"}}}},
++      flux::GlobalRoutePath{NetId{"approach-b"}, 0U,
++          {{mm(20.65, 16.385), LayerId{"F.Cu"}}, {mm(20.65, 20), LayerId{"F.Cu"}},
++           {mm(20.65, 20), LayerId{"B.Cu"}}, {mm(20, 20.60), LayerId{"B.Cu"}}}}};
++  flux::RegionalRouterConfig config;
++  config.enable_spline_realization = false;
++  config.max_bundle_search_states = 8;
++  config.max_alternative_template_checks = 1;
++  config.max_joint_alternative_template_checks = 1;
++  config.max_same_layer_detour_checks = 0;
++  config.max_physical_scope_retries = 0;
++  config.physical_conflict_witnesses = flux::probe_quantized_copper_feasibility(board, global).diagnoses;
++  const auto regional = flux::analyze_regional_conflicts(board, global, config);
++  std::size_t relocated_segments = 0;
++  for (const auto& via : regional.via_choices) {
++    if (via.selected_global_site) continue;
++    for (const auto& runup : via.attached_runups) {
++      for (std::size_t i = 1; i < runup.centerline.size(); ++i) {
++        const auto dx = std::abs(runup.centerline[i].x.value() - runup.centerline[i - 1].x.value());
++        const auto dy = std::abs(runup.centerline[i].y.value() - runup.centerline[i - 1].y.value());
++        require((dx || dy) && (!dx || !dy || dx == dy),
++                "production straight access screening must not retain an arbitrary-angle surrogate");
++        ++relocated_segments;
++      }
++    }
++  }
++  require(relocated_segments > 0, "the production microcase must exercise relocated via approaches");
++  require(flux::geometry::octilinear_connector_candidates(mm(1, 1), mm(1, 1)).empty(),
++          "coincident access anchors must not manufacture zero-length copper");
++}
++
+ void regional_bundle_forward_checking_preserves_access_solutions() {
+   Board board;
+   board.outline = rectangle(0, 0, 100, 100);
+@@ -9068,6 +9140,8 @@
+        exact_copper_witnesses_create_missing_regional_scope},
+       {"regional_spline_tiers_are_selected_breadth_first",
+        regional_spline_tiers_are_selected_breadth_first},
++      {"octilinear_via_runups_avoid_false_access_collisions",
++       octilinear_via_runups_avoid_false_access_collisions},
+       {"regional_bundle_forward_checking_preserves_access_solutions",
+        regional_bundle_forward_checking_preserves_access_solutions},
+       {"parallel_spline_workers_shutdown_after_short_optimizations",

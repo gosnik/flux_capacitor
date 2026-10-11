@@ -1,0 +1,36 @@
+{
+  "date": "2026-10-08",
+  "change": "Curved routing enabled by default",
+  "scope": [
+    "planner",
+    "engine",
+    "persistent session",
+    "integrated optimizer",
+    "CLI",
+    "corpus runner"
+  ],
+  "straight_override": {
+    "CLI": "--straight-tracks",
+    "corpus": "--track-geometry straight"
+  },
+  "source_sha256": {
+    "apps/flux-cli/main.cpp": "c54709b52a510403c848dc190389277bd1e73442fea25fd20f497c17645595e5",
+    "include/flux/core/regional_router.hpp": "fc2cd298849722f79a504de20ce72e4b9d914f0599fe4f9487a6adf4fd466f09",
+    "include/flux/core/routing_engine.hpp": "dd74a889b73a592f8fc4c86915129b0429b3ce1ce41478cfe12b0c336a3a0f57",
+    "include/flux/core/routing_feedback.hpp": "ea27f3fa612b5bba376cc32b7d6285cbcc00ee40b49a3fc8baec2adde9db959c",
+    "include/flux/core/integrated_optimizer.hpp": "156f0e875cab132d4d10b45821803182a5e4d69ad1559ce2ce116783411f7dd6",
+    "src/routing_engine.cpp": "d2ac0e8f553038f1dd28a443122b699c5bf7b04f4c571568c77a2f184cba42a2",
+    "tests/unit/core_tests.cpp": "f1db259e5147e63a90e76e7e378f279dbf5bb762c0e5d2ef6f7b15bdd03b474a",
+    "tests/python/verify_routing_corpus.py": "69fd47da41caada1e7784aac7a7b574ac195c37137251233fceae22ad4047f4c"
+  },
+  "verification": {
+    "release_build": "passed",
+    "dev_build": "passed",
+    "core_tests": "64/64 passed",
+    "core_log": "build/routing-engine-20261008/curved-default-tests.log",
+    "CLI_smoke": "Default, explicit curved and explicit straight accepted on route-kicad with 1 ms deadline; conflicting straight/arcs rejected.",
+    "curved_tier0": "Harness timed out after 180 seconds; no final DRC qualification.",
+    "curved_tier0_artifacts": "build/routing-engine-20261008/tier0-curved"
+  },
+  "tier_promotion": false
+}

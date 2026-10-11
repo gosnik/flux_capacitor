@@ -1,0 +1,114 @@
+{
+  "schema": "flux_benchmark_history",
+  "schema_version": 1,
+  "date": "2026-09-05",
+  "git_revision": "25e3b884be9b359d9c5bf0cc4fbb6cc836fd4f82",
+  "working_tree_modified": true,
+  "experiment": "native realization review corrections",
+  "baseline": {
+    "record": "2026-09-05-fair-g2-native-handoff-tier0.json",
+    "qualification": false,
+    "detailed_seconds": 383.15438,
+    "opens": 0,
+    "copper_violations": 19,
+    "comparison_caveat": "Historical dirty-tree comparison, not an isolated clean-commit A/B. Captured Tier-0 commands use one router iteration; the earlier handwritten configuration said 30."
+  },
+  "positional_refinement_trial": {
+    "artifacts": "build/native-review-fixes-tier0",
+    "board": "pt2399_delay",
+    "tier": 0,
+    "max_router_iterations": 1,
+    "max_expansions": 50000,
+    "max_static_seed_workers": 2,
+    "global_seconds": 531.2684588019983,
+    "paths": 50,
+    "unrouted_nets": 0,
+    "total_overflow": 16,
+    "routing_plan_complete": false,
+    "failed_spline_bundles": 3,
+    "joint_candidates_evaluated": 22,
+    "native_windows_checked": 11,
+    "native_legal_windows": 2,
+    "native_pieces_checked": 60,
+    "native_rejections_including_fit_failures": 10,
+    "detailed_run": false,
+    "kicad_drc_run": false,
+    "qualified": false,
+    "decision": "Refine: dense positional fitting alone did not satisfy native tangency."
+  },
+  "diagnostic_replay": {
+    "input": "first eight rejected-realization telemetry events, rounded PH Bezier controls",
+    "geometry_only": true,
+    "previously_unfittable": 6,
+    "recovered_by_initial_biarc_probe": 6,
+    "remaining_join_error_after_eight_positional_refinements_radians": [0.0777979, 0.53147, 0.0522566, 0.349608, 0.0502384, 0.067315],
+    "interpretation": "Construct native endpoint tangents directly instead of relying on denser independent circle fitting. This does not establish copper legality."
+  },
+  "verification_before_final_biarc_refinement": {
+    "core_suite": {"outcome": "pass", "seconds": 220.02},
+    "non_corpus_suite": {
+      "passed": 115,
+      "total": 122,
+      "seconds": 366.34,
+      "timeout_seconds_per_test": 300,
+      "failures_also_present_in_prechange_log": [
+        "flux_cli_incremental_route_demo",
+        "flux_cli_incremental_detail_demo",
+        "flux_cli_optimize_demo",
+        "flux_cli_optimize_demo_pareto",
+        "flux_cli_group_optimize_demo"
+      ],
+      "timed_out": ["flux_cli_constrained_refine_kicad_export"],
+      "dependent_missing_board_failure": ["flux_kicad_constrained_exported_drc"],
+      "prechange_failure_evidence": "build/dev/Testing/Temporary/LastTest.log.tmpbc337",
+      "native_arc_export_and_kicad_drc": "pass",
+      "multilayer_export_and_kicad_drc": "pass"
+    }
+  },
+  "final_verification": {
+    "core_suite": {"outcome": "pass", "seconds": 119.25},
+    "native_and_multilayer_export_suite": {"passed": 9, "total": 9, "seconds": 30.30, "external_kicad_drc": "pass"},
+    "cli_sha256": "c39b6eb728159bd43f2a1e017b83cd5fd35a1b10d21f582eb78f16f157519766",
+    "source_sha256": {
+      "src/board_free_space.cpp": "57cf5ea9b9b93d402b3b3048f3c023927fba9d68b3bddbf51d37f8879a5dd183",
+      "src/ph_route.cpp": "6adc72c7e7729dd56e5d4768aaf4c42fd82941509892013c4115815bbf4898f0",
+      "src/detailed_router.cpp": "3553da940f75fa7df0ed638d3439750e864c82c055abbd66ed2646638d775b67",
+      "src/regional_router.cpp": "d5b88d5275eaafc04c8cae1260f3caac43bf47e40d29fcd070d8a2170d2850e8"
+    },
+    "tier0": {
+      "status": "failed",
+      "artifacts": "build/native-review-biarc-tier0",
+      "global_seconds": 443.08917406499677,
+      "paths": 50,
+      "unrouted_nets": 0,
+      "total_overflow": 16,
+      "routing_plan_complete": false,
+      "failed_spline_bundles": 1,
+      "joint_candidates_evaluated": 12,
+      "native_windows_checked": 5,
+      "native_legal_windows": 4,
+      "native_pieces_checked": 275,
+      "native_fit_failures": 0,
+      "native_copper_violations_across_candidate_checks": 35,
+      "regional_spline_realization_us": 47426409,
+      "detailed_run": false,
+      "final_copper_drc_violations": null,
+      "final_open_connections": null,
+      "kicad_drc_run": false,
+      "qualified": false,
+      "remaining_failure": {
+        "window": 2,
+        "nets": ["kicad-net-11", "kicad-net-8"],
+        "layer": "B.Cu",
+        "conflict_bounds_nm": [42500000, 28500000, 43500000, 29500000],
+        "clearance_deficit_nm": 450000,
+        "stage": "regional construction before native fitting",
+        "candidate_states": 3,
+        "emitted_spline_realizations": 0,
+        "context": "net 11 is immutable articulation context; net 8 owns three corridor templates, including two statically checked alternatives",
+        "root_mechanism": "Not proven; inspect PH construction/guard binding and immutable articulation context before changing the fitter again."
+      }
+    }
+  },
+  "tier_promoted": false
+}

@@ -1,0 +1,309 @@
+{
+  "schema": 1,
+  "experiment": "full-strength-first-pass-fixed",
+  "notes": [
+    "Opt-in bundled algorithm experiment; no final board or KiCad DRC. Primary iteration budget excludes existing bounded cone-repair subsearches."
+  ],
+  "runs": [
+    {
+      "root": "build/full-strength-first-pass-fixed-tier0",
+      "metadata": {
+        "artifact_contract": {
+          "analysis_pngs_required_for_routing": true,
+          "failed_route_png_mode": "both",
+          "files_write_once": true,
+          "max_failed_route_png_results": 8,
+          "source_boards_immutable": true,
+          "telemetry_level": null,
+          "telemetry_required_for_routing": true
+        },
+        "capability_contract": {
+          "reference": {
+            "commit": "e239e067c204870b4ac570fc9e931a374bdfd5b4",
+            "project": "KiCadRoutingTools",
+            "repository": "https://github.com/drandyhaas/KiCadRoutingTools",
+            "version": "0.21.5"
+          },
+          "schema": "flux_parity_manifest",
+          "schema_version": 1,
+          "sha256": "d8b57b3e1ba5c761fa2c610ffea1aa2e1f70f845f988ab7e92fbceca36fda5d0"
+        },
+        "corpus": {
+          "manifest_sha256": "e5685277e3917f4a153d29a2214afb717b13b41395bcf48b04f555adb923bede",
+          "path": "/home/adam/qtbits/flux_capacitor/tests/fixtures/routing-corpus",
+          "source_corpus": {
+            "commit": "661c88b3c3b0ebc9ade65eab63d30b1cde217fb4",
+            "discussion": "https://github.com/drandyhaas/KiCadRoutingTools/discussions/117",
+            "repository": "drandyhaas/KiCadRoutingTools",
+            "stress_directory": "https://github.com/drandyhaas/KiCadRoutingTools/tree/main/tests/stress"
+          }
+        },
+        "created_utc": "2026-09-05T14:45:34.072014+00:00",
+        "environment": {
+          "flux": {
+            "board_schema": 21,
+            "engine": "flux_capacitor",
+            "gpu_api_version_raw": 4211017,
+            "gpu_available": true,
+            "gpu_device": "NVIDIA GeForce RTX 5080",
+            "gpu_device_id": 11266,
+            "gpu_device_type": "discrete",
+            "gpu_diagnostic": "",
+            "gpu_driver_version_raw": 2496987136,
+            "gpu_override": null,
+            "gpu_vendor_id": 4318,
+            "production_gpu_required": true,
+            "version": "0.140.0"
+          },
+          "flux_vulkan_device_override": null,
+          "inkscape": {
+            "available": true,
+            "command": [
+              "/snap/bin/inkscape",
+              "--version"
+            ],
+            "returncode": 0,
+            "stderr": "",
+            "stdout": "Inkscape 1.4.4 (dcaf3e7d9e, 2026-05-05)"
+          },
+          "kicad_cli": {
+            "available": true,
+            "command": [
+              "/usr/bin/kicad-cli",
+              "--version"
+            ],
+            "returncode": 0,
+            "stderr": "",
+            "stdout": "9.0.8"
+          },
+          "platform": "Linux-7.0.0-31-generic-x86_64-with-glibc2.43",
+          "python": "3.14.4 (main, Jun 18 2026, 14:25:02) [GCC 15.2.0]"
+        },
+        "executable": {
+          "path": "/home/adam/qtbits/flux_capacitor/build/dev/flux-cli",
+          "sha256": "f256dd3ac2d657831b944fd8919b42cdc0f53f70c02587fead90c68ef774b099"
+        },
+        "invocation": [
+          "/home/adam/qtbits/flux_capacitor/tests/python/verify_routing_corpus.py",
+          "--flux-cli",
+          "build/dev/flux-cli",
+          "--corpus",
+          "tests/fixtures/routing-corpus",
+          "--board",
+          "pt2399_delay",
+          "--artifacts",
+          "build/full-strength-first-pass-fixed-tier0",
+          "--iteration-budget",
+          "8",
+          "--physical-feedback-retries",
+          "2",
+          "--feedback-shadow-policy",
+          "enforced",
+          "--full-strength-first-pass",
+          "--kicad-cli",
+          "/usr/bin/kicad-cli",
+          "--inkscape",
+          "/snap/bin/inkscape"
+        ],
+        "mode": "routing",
+        "schema": "flux_routing_baseline",
+        "schema_version": 1,
+        "selection": {
+          "boards": [
+            {
+              "id": "pt2399_delay",
+              "level": 0,
+              "project_sha256": "ddbcc3d30ca8a4e88f38be0bb5a12f4f29f67048bd503d3e77b2e615196bab8a",
+              "qualification": "detailed_complete",
+              "reference_sha256": "0ffb5710e07ee6f65bb6951a9ca1ebf9d52bb701852b1e9f83696991043d7eb6",
+              "router_args": [
+                "--physical-feedback-retries",
+                "2",
+                "--feedback-shadow-policy",
+                "enforced",
+                "--full-strength-first-pass"
+              ],
+              "source_sha256": "c48693b458eb28ae11f2ef099acf33ee9a797d87f430457c6961b41e2f2c4cab",
+              "status": "qualified"
+            }
+          ],
+          "explicit_boards": [
+            "pt2399_delay"
+          ],
+          "iteration_budget_override": 8,
+          "level": "unlocked"
+        }
+      },
+      "outcome": {
+        "artifacts": [
+          {
+            "bytes": 3915,
+            "path": "run-metadata.json",
+            "sha256": "e76dc9992b018e1de097e1425c4858e938624579bfba2d16b7239c80e9b0c96f"
+          },
+          {
+            "bytes": 3292,
+            "path": "tier-0-pt2399_delay/analysis/global/failed-route-previews.json",
+            "sha256": "e72c6493affda308482e45be981e9563494bf1e92b812d3ce56c2091e26a9450"
+          },
+          {
+            "bytes": 268998,
+            "path": "tier-0-pt2399_delay/analysis/global/near-00-window-1/copper-00-B_Cu.png",
+            "sha256": "ead8dbe990b552f66d806eebd45b792df33fb4e390d86b2ef3fc3f09383d757d"
+          },
+          {
+            "bytes": 277859,
+            "path": "tier-0-pt2399_delay/analysis/global/near-00-window-1/copper-01-F_Cu.png",
+            "sha256": "8762d954fe2034f676ca27de217b6e9d62081ba436af5ecd69e7ec8ee15c0f99"
+          },
+          {
+            "bytes": 378642,
+            "path": "tier-0-pt2399_delay/analysis/global/near-00-window-1/provisional-overview.png",
+            "sha256": "f30a45b6108b750d3657593e89def72e1828b1ab751320d398250db20a64cf02"
+          },
+          {
+            "bytes": 221026,
+            "path": "tier-0-pt2399_delay/analysis/global/near-00-window-1/spline-controls-closeup.png",
+            "sha256": "26965fbead75af84695bc5927e55e991e6cf3f105811244383d8783b28c6551b"
+          },
+          {
+            "bytes": 330197,
+            "path": "tier-0-pt2399_delay/analysis/global/near-00-window-1/spline-controls.png",
+            "sha256": "9ea33b852b468248a1329971e996bd27c8552a0518998959b569cd3e95120a17"
+          },
+          {
+            "bytes": 263430,
+            "path": "tier-0-pt2399_delay/analysis/global/near-01-window-3/copper-00-F_Cu.png",
+            "sha256": "ad1dd0741a12091cbbba4c484f2262a2c6986f609d610b8d58ae6aff2a9645e7"
+          },
+          {
+            "bytes": 270481,
+            "path": "tier-0-pt2399_delay/analysis/global/near-01-window-3/provisional-overview.png",
+            "sha256": "ab62f8312d2c76f1734cb187d11dfcfbd83b98dff68598ed38999d264e8aeab0"
+          },
+          {
+            "bytes": 12702,
+            "path": "tier-0-pt2399_delay/analysis/global/near-01-window-3/spline-controls-closeup.png",
+            "sha256": "9efc0b4951f218357019bb8593013757fb39fc38b0d81385a15b84100e0be742"
+          },
+          {
+            "bytes": 241954,
+            "path": "tier-0-pt2399_delay/analysis/global/near-01-window-3/spline-controls.png",
+            "sha256": "9899dbda8cfade61b052501d5f49a0fdbdc77f0c84099a0571e8fe658af61207"
+          },
+          {
+            "bytes": 270563,
+            "path": "tier-0-pt2399_delay/analysis/global/near-02-window-2/copper-00-F_Cu.png",
+            "sha256": "61bf9e2fb7638c5f3cf3680b310b205da15a0fd5375622b5c0c7514c3d6a05ba"
+          },
+          {
+            "bytes": 283645,
+            "path": "tier-0-pt2399_delay/analysis/global/near-02-window-2/provisional-overview.png",
+            "sha256": "4f9fd7dcf413a794346b65f18f1434be43399440f9d68fbf8cdaaf1f98bfb131"
+          },
+          {
+            "bytes": 48916,
+            "path": "tier-0-pt2399_delay/analysis/global/near-02-window-2/spline-controls-closeup.png",
+            "sha256": "0f6eaf8f922f9fc99771aaac95ac212a7bab60c58e82f8f768e55b14fea0df36"
+          },
+          {
+            "bytes": 255355,
+            "path": "tier-0-pt2399_delay/analysis/global/near-02-window-2/spline-controls.png",
+            "sha256": "e4f9835842558821bdec8cb5bcdedb3c976d29561ecf02b0fb9709004418f667"
+          },
+          {
+            "bytes": 266524,
+            "path": "tier-0-pt2399_delay/analysis/global/near-03-window-1/copper-00-F_Cu.png",
+            "sha256": "52206870eb704f5423004827bba5203a750f01375218163ce52fe2782052d81a"
+          },
+          {
+            "bytes": 277127,
+            "path": "tier-0-pt2399_delay/analysis/global/near-03-window-1/provisional-overview.png",
+            "sha256": "4940aa6ce8d2c834e7cf6ec6e40591124f26e0eb4bef034352b4adcd26e1bf7a"
+          },
+          {
+            "bytes": 20401,
+            "path": "tier-0-pt2399_delay/analysis/global/near-03-window-1/spline-controls-closeup.png",
+            "sha256": "aedccd90fbc06aab1e7a3d18000676fcf31e368322a62b2c3fcca21dd976f38d"
+          },
+          {
+            "bytes": 249508,
+            "path": "tier-0-pt2399_delay/analysis/global/near-03-window-1/spline-controls.png",
+            "sha256": "b739b4b748ee5edfde6f384351b6d8402c7f7d30c94a8ee860f5c7d3b45cfac7"
+          },
+          {
+            "bytes": 153092090,
+            "path": "tier-0-pt2399_delay/telemetry/pt2399_delay-global.jsonl",
+            "sha256": "67ac0f87326638a807c5df46f01d90c29c096d51236255674157ac95fe2bde50"
+          }
+        ],
+        "boards": [],
+        "diagnostic": "Command '['/home/adam/qtbits/flux_capacitor/build/dev/flux-cli', 'route-kicad', '/home/adam/qtbits/flux_capacitor/tests/fixtures/routing-corpus/pt2399_delay.kicad_pcb', '--max-router-iterations', '8', '--max-expansions', '50000', '--max-static-seed-workers', '2', '--search-diversification', '--physical-feedback-retries', '2', '--feedback-shadow-policy', 'enforced', '--full-strength-first-pass', '--telemetry-level', 'diagnostic', '--telemetry-record', '/home/adam/qtbits/flux_capacitor/build/full-strength-first-pass-fixed-tier0/tier-0-pt2399_delay/telemetry/pt2399_delay-global.jsonl']' timed out after 600 seconds",
+        "schema": "flux_routing_baseline_result",
+        "schema_version": 1,
+        "status": "failed"
+      },
+      "planning_records": [],
+      "epoch_telemetry": [
+        {
+          "artifact": "build/full-strength-first-pass-fixed-tier0/tier-0-pt2399_delay/telemetry/pt2399_delay-global.jsonl",
+          "messages": [
+            "interleaved routing epoch started: pathfinder_budget=6, retained_portfolios=0, physical_history_entries=0",
+            "interleaved routing epoch completed: regional_candidates=1, history_entries=19, history_pressure=270, quantized_oracle_violations=32, quantized_oracle_opens=0"
+          ],
+          "events": [
+            {
+              "monotonic_time_us": 2256,
+              "message": "interleaved routing epoch started: pathfinder_budget=6, retained_portfolios=0, physical_history_entries=0"
+            },
+            {
+              "monotonic_time_us": 511083353,
+              "message": "interleaved routing epoch completed: regional_candidates=1, history_entries=19, history_pressure=270, quantized_oracle_violations=32, quantized_oracle_opens=0"
+            }
+          ],
+          "event_counts": {
+            "RoutingStarted": 1,
+            "SearchSummary": 253,
+            "snapshot": 54,
+            "RouteCandidateSelected": 926,
+            "HydraulicFieldUpdated": 141,
+            "NetQueued": 60,
+            "PathFinderIterationStarted": 18,
+            "RouteRippedUp": 1,
+            "PathFinderIterationCompleted": 18,
+            "BestCheckpointUpdated": 6,
+            "NetFailed": 18,
+            "ConflictAdded": 14,
+            "ResidualGroupUpdated": 20,
+            "ViaCandidateGenerated": 162,
+            "CheckpointSelected": 1
+          },
+          "non_authoritative_last_snapshot": {
+            "monotonic_time_us": 511303318,
+            "metrics": {
+              "iteration": 0,
+              "total_nets": 20,
+              "routed_nets": 20,
+              "unrouted_nets": 0,
+              "total_groups": 4,
+              "routed_groups": 0,
+              "unrouted_groups": 0,
+              "sampled_overflow": 0,
+              "corridor_overflow": 0,
+              "physical_overflow_nm": 0,
+              "clearance_shadow_conflicts": 19,
+              "regional_conflicts": 5,
+              "route_cost": 120650,
+              "vias": 0,
+              "rip_ups": 0,
+              "search_expansions": 0,
+              "selected_checkpoint": 0,
+              "best_checkpoint": 0,
+              "selected_is_best": false
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

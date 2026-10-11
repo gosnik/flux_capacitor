@@ -1,0 +1,2726 @@
+{
+  "schema": 1,
+  "date_local": "2026-09-07",
+  "experiment": "V31/V32 local channel support ablation",
+  "board": "bm_svf",
+  "tier": 1,
+  "source_revision": "7cd59fc",
+  "source_dirty": true,
+  "trace": "build/tier1-longitudinal-v31-20260907/tier-1-bm_svf/telemetry/bm_svf-global.jsonl",
+  "context_group": "regional-bundle-context:ordinary:0",
+  "occurrence": 1,
+  "original_project_sha256": "04856904fe9070f7decd33b676d3f58e44676b6c930e65fa8a16f0ddd65d54db",
+  "strip_replay_executable": "build/longitudinal-v31-bin-ORCqDV/flux-replay-regional-bundle",
+  "strip_replay_sha256": "de7a69019be92ae69e4607c74929b5556ae9cbcffa0f347395a1ac7318e635ba",
+  "authoritative": false,
+  "strip_results": [
+    {
+      "authoritative": false,
+      "window": 0,
+      "forward_checking": false,
+      "resource_forward_checking": false,
+      "local_channel_occupancy": false,
+      "demand_scopes": 115,
+      "localized_scopes": 0,
+      "forced_capacity_conflicts": [
+        {
+          "scope": 0,
+          "channel": 0,
+          "localized": false,
+          "sections": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-1",
+              2,
+              0,
+              1
+            ],
+            [
+              "kicad-net-12",
+              2,
+              0,
+              0
+            ],
+            [
+              "kicad-net-12",
+              2,
+              0,
+              1
+            ],
+            [
+              "kicad-net-13",
+              0,
+              0,
+              0
+            ],
+            [
+              "kicad-net-13",
+              0,
+              0,
+              1
+            ],
+            [
+              "kicad-net-13",
+              1,
+              0,
+              0
+            ],
+            [
+              "kicad-net-14",
+              0,
+              0,
+              1
+            ],
+            [
+              "kicad-net-14",
+              1,
+              0,
+              1
+            ],
+            [
+              "kicad-net-16",
+              1,
+              0,
+              0
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              2
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              3
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              4
+            ],
+            [
+              "kicad-net-9",
+              1,
+              0,
+              14
+            ],
+            [
+              "kicad-net-9",
+              1,
+              0,
+              15
+            ],
+            [
+              "kicad-net-9",
+              1,
+              0,
+              16
+            ]
+          ],
+          "demand_nm": 6950000,
+          "maximum_width_nm": 1940000
+        }
+      ],
+      "choice_semantics": "raw_via_identity_and_capacity_leaves",
+      "states": 13,
+      "choices": 0,
+      "exhausted": false,
+      "elapsed_us": 214884,
+      "access_pruned": 0,
+      "terminal_pair_pruned": 0,
+      "via_pair_pruned": 0,
+      "terminal_via_pruned": 0,
+      "lane_capacity_pruned": 1,
+      "run_layer_pruned": 0,
+      "coupled_pruned": 0,
+      "forward_wipeouts": 0,
+      "pairwise_access_checks": 0,
+      "forward_capacity_rejections": 0,
+      "forward_via_identity_rejections": 0,
+      "access_states": 0,
+      "access_exhaustions": 0
+    },
+    {
+      "authoritative": false,
+      "window": 0,
+      "forward_checking": true,
+      "resource_forward_checking": false,
+      "local_channel_occupancy": false,
+      "demand_scopes": 115,
+      "localized_scopes": 0,
+      "forced_capacity_conflicts": [
+        {
+          "scope": 0,
+          "channel": 0,
+          "localized": false,
+          "sections": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-1",
+              2,
+              0,
+              1
+            ],
+            [
+              "kicad-net-12",
+              2,
+              0,
+              0
+            ],
+            [
+              "kicad-net-12",
+              2,
+              0,
+              1
+            ],
+            [
+              "kicad-net-13",
+              0,
+              0,
+              0
+            ],
+            [
+              "kicad-net-13",
+              0,
+              0,
+              1
+            ],
+            [
+              "kicad-net-13",
+              1,
+              0,
+              0
+            ],
+            [
+              "kicad-net-14",
+              0,
+              0,
+              1
+            ],
+            [
+              "kicad-net-14",
+              1,
+              0,
+              1
+            ],
+            [
+              "kicad-net-16",
+              1,
+              0,
+              0
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              2
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              3
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              4
+            ],
+            [
+              "kicad-net-9",
+              1,
+              0,
+              14
+            ],
+            [
+              "kicad-net-9",
+              1,
+              0,
+              15
+            ],
+            [
+              "kicad-net-9",
+              1,
+              0,
+              16
+            ]
+          ],
+          "demand_nm": 6950000,
+          "maximum_width_nm": 1940000
+        }
+      ],
+      "choice_semantics": "access_and_coupling_screened_unknowns_retained",
+      "states": 13,
+      "choices": 0,
+      "exhausted": false,
+      "elapsed_us": 43572,
+      "access_pruned": 0,
+      "terminal_pair_pruned": 0,
+      "via_pair_pruned": 0,
+      "terminal_via_pruned": 0,
+      "lane_capacity_pruned": 1,
+      "run_layer_pruned": 0,
+      "coupled_pruned": 0,
+      "forward_wipeouts": 0,
+      "pairwise_access_checks": 351,
+      "forward_capacity_rejections": 0,
+      "forward_via_identity_rejections": 0,
+      "access_states": 359,
+      "access_exhaustions": 0
+    },
+    {
+      "authoritative": false,
+      "window": 0,
+      "forward_checking": true,
+      "resource_forward_checking": true,
+      "local_channel_occupancy": false,
+      "demand_scopes": 115,
+      "localized_scopes": 0,
+      "forced_capacity_conflicts": [
+        {
+          "scope": 0,
+          "channel": 0,
+          "localized": false,
+          "sections": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-1",
+              2,
+              0,
+              1
+            ],
+            [
+              "kicad-net-12",
+              2,
+              0,
+              0
+            ],
+            [
+              "kicad-net-12",
+              2,
+              0,
+              1
+            ],
+            [
+              "kicad-net-13",
+              0,
+              0,
+              0
+            ],
+            [
+              "kicad-net-13",
+              0,
+              0,
+              1
+            ],
+            [
+              "kicad-net-13",
+              1,
+              0,
+              0
+            ],
+            [
+              "kicad-net-14",
+              0,
+              0,
+              1
+            ],
+            [
+              "kicad-net-14",
+              1,
+              0,
+              1
+            ],
+            [
+              "kicad-net-16",
+              1,
+              0,
+              0
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              2
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              3
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              4
+            ],
+            [
+              "kicad-net-9",
+              1,
+              0,
+              14
+            ],
+            [
+              "kicad-net-9",
+              1,
+              0,
+              15
+            ],
+            [
+              "kicad-net-9",
+              1,
+              0,
+              16
+            ]
+          ],
+          "demand_nm": 6950000,
+          "maximum_width_nm": 1940000
+        }
+      ],
+      "choice_semantics": "access_and_coupling_screened_unknowns_retained",
+      "states": 10,
+      "choices": 0,
+      "exhausted": false,
+      "elapsed_us": 47228,
+      "access_pruned": 0,
+      "terminal_pair_pruned": 0,
+      "via_pair_pruned": 0,
+      "terminal_via_pruned": 0,
+      "lane_capacity_pruned": 0,
+      "run_layer_pruned": 0,
+      "coupled_pruned": 0,
+      "forward_wipeouts": 1,
+      "pairwise_access_checks": 259,
+      "forward_capacity_rejections": 1,
+      "forward_via_identity_rejections": 0,
+      "access_states": 265,
+      "access_exhaustions": 0
+    },
+    {
+      "authoritative": false,
+      "window": 0,
+      "forward_checking": false,
+      "resource_forward_checking": false,
+      "local_channel_occupancy": true,
+      "demand_scopes": 143,
+      "localized_scopes": 33,
+      "forced_capacity_conflicts": [
+        {
+          "scope": 0,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            22
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-1",
+              2,
+              0,
+              1
+            ],
+            [
+              "kicad-net-12",
+              2,
+              0,
+              0
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              2
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              3
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              4
+            ],
+            [
+              "kicad-net-9",
+              1,
+              0,
+              16
+            ]
+          ],
+          "demand_nm": 2900000,
+          "maximum_width_nm": 1495904
+        },
+        {
+          "scope": 1,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            5,
+            7
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-1",
+              2,
+              0,
+              1
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              2
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              3
+            ]
+          ],
+          "demand_nm": 1550000,
+          "maximum_width_nm": 1225904
+        },
+        {
+          "scope": 2,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            0
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-13",
+              0,
+              0,
+              1
+            ],
+            [
+              "kicad-net-14",
+              0,
+              0,
+              1
+            ],
+            [
+              "kicad-net-14",
+              1,
+              0,
+              1
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              4
+            ]
+          ],
+          "demand_nm": 2000000,
+          "maximum_width_nm": 1159900
+        },
+        {
+          "scope": 4,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            15
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-12",
+              2,
+              0,
+              0
+            ],
+            [
+              "kicad-net-12",
+              2,
+              0,
+              1
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              3
+            ]
+          ],
+          "demand_nm": 1550000,
+          "maximum_width_nm": 798000
+        },
+        {
+          "scope": 6,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            3
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-13",
+              0,
+              0,
+              0
+            ],
+            [
+              "kicad-net-13",
+              0,
+              0,
+              1
+            ],
+            [
+              "kicad-net-13",
+              1,
+              0,
+              0
+            ],
+            [
+              "kicad-net-14",
+              0,
+              0,
+              1
+            ],
+            [
+              "kicad-net-14",
+              1,
+              0,
+              1
+            ],
+            [
+              "kicad-net-16",
+              1,
+              0,
+              0
+            ]
+          ],
+          "demand_nm": 2900000,
+          "maximum_width_nm": 1219996
+        },
+        {
+          "scope": 7,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            2,
+            18
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-13",
+              0,
+              0,
+              0
+            ],
+            [
+              "kicad-net-13",
+              0,
+              0,
+              1
+            ],
+            [
+              "kicad-net-14",
+              0,
+              0,
+              1
+            ],
+            [
+              "kicad-net-14",
+              1,
+              0,
+              1
+            ]
+          ],
+          "demand_nm": 2000000,
+          "maximum_width_nm": 1219996
+        },
+        {
+          "scope": 11,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            10
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-13",
+              1,
+              0,
+              0
+            ],
+            [
+              "kicad-net-14",
+              0,
+              0,
+              1
+            ],
+            [
+              "kicad-net-14",
+              1,
+              0,
+              1
+            ]
+          ],
+          "demand_nm": 1550000,
+          "maximum_width_nm": 1220000
+        },
+        {
+          "scope": 14,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            17
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-9",
+              1,
+              0,
+              14
+            ],
+            [
+              "kicad-net-9",
+              1,
+              0,
+              15
+            ]
+          ],
+          "demand_nm": 1100000,
+          "maximum_width_nm": 1006000
+        }
+      ],
+      "choice_semantics": "raw_via_identity_and_capacity_leaves",
+      "states": 10,
+      "choices": 0,
+      "exhausted": false,
+      "elapsed_us": 43177,
+      "access_pruned": 0,
+      "terminal_pair_pruned": 0,
+      "via_pair_pruned": 0,
+      "terminal_via_pruned": 0,
+      "lane_capacity_pruned": 1,
+      "run_layer_pruned": 0,
+      "coupled_pruned": 0,
+      "forward_wipeouts": 0,
+      "pairwise_access_checks": 0,
+      "forward_capacity_rejections": 0,
+      "forward_via_identity_rejections": 0,
+      "access_states": 0,
+      "access_exhaustions": 0
+    },
+    {
+      "authoritative": false,
+      "window": 0,
+      "forward_checking": true,
+      "resource_forward_checking": false,
+      "local_channel_occupancy": true,
+      "demand_scopes": 143,
+      "localized_scopes": 33,
+      "forced_capacity_conflicts": [
+        {
+          "scope": 0,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            22
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-1",
+              2,
+              0,
+              1
+            ],
+            [
+              "kicad-net-12",
+              2,
+              0,
+              0
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              2
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              3
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              4
+            ],
+            [
+              "kicad-net-9",
+              1,
+              0,
+              16
+            ]
+          ],
+          "demand_nm": 2900000,
+          "maximum_width_nm": 1495904
+        },
+        {
+          "scope": 1,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            5,
+            7
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-1",
+              2,
+              0,
+              1
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              2
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              3
+            ]
+          ],
+          "demand_nm": 1550000,
+          "maximum_width_nm": 1225904
+        },
+        {
+          "scope": 2,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            0
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-13",
+              0,
+              0,
+              1
+            ],
+            [
+              "kicad-net-14",
+              0,
+              0,
+              1
+            ],
+            [
+              "kicad-net-14",
+              1,
+              0,
+              1
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              4
+            ]
+          ],
+          "demand_nm": 2000000,
+          "maximum_width_nm": 1159900
+        },
+        {
+          "scope": 4,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            15
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-12",
+              2,
+              0,
+              0
+            ],
+            [
+              "kicad-net-12",
+              2,
+              0,
+              1
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              3
+            ]
+          ],
+          "demand_nm": 1550000,
+          "maximum_width_nm": 798000
+        },
+        {
+          "scope": 6,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            3
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-13",
+              0,
+              0,
+              0
+            ],
+            [
+              "kicad-net-13",
+              0,
+              0,
+              1
+            ],
+            [
+              "kicad-net-13",
+              1,
+              0,
+              0
+            ],
+            [
+              "kicad-net-14",
+              0,
+              0,
+              1
+            ],
+            [
+              "kicad-net-14",
+              1,
+              0,
+              1
+            ],
+            [
+              "kicad-net-16",
+              1,
+              0,
+              0
+            ]
+          ],
+          "demand_nm": 2900000,
+          "maximum_width_nm": 1219996
+        },
+        {
+          "scope": 7,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            2,
+            18
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-13",
+              0,
+              0,
+              0
+            ],
+            [
+              "kicad-net-13",
+              0,
+              0,
+              1
+            ],
+            [
+              "kicad-net-14",
+              0,
+              0,
+              1
+            ],
+            [
+              "kicad-net-14",
+              1,
+              0,
+              1
+            ]
+          ],
+          "demand_nm": 2000000,
+          "maximum_width_nm": 1219996
+        },
+        {
+          "scope": 11,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            10
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-13",
+              1,
+              0,
+              0
+            ],
+            [
+              "kicad-net-14",
+              0,
+              0,
+              1
+            ],
+            [
+              "kicad-net-14",
+              1,
+              0,
+              1
+            ]
+          ],
+          "demand_nm": 1550000,
+          "maximum_width_nm": 1220000
+        },
+        {
+          "scope": 14,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            17
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-9",
+              1,
+              0,
+              14
+            ],
+            [
+              "kicad-net-9",
+              1,
+              0,
+              15
+            ]
+          ],
+          "demand_nm": 1100000,
+          "maximum_width_nm": 1006000
+        }
+      ],
+      "choice_semantics": "access_and_coupling_screened_unknowns_retained",
+      "states": 10,
+      "choices": 0,
+      "exhausted": false,
+      "elapsed_us": 45982,
+      "access_pruned": 0,
+      "terminal_pair_pruned": 0,
+      "via_pair_pruned": 0,
+      "terminal_via_pruned": 0,
+      "lane_capacity_pruned": 1,
+      "run_layer_pruned": 0,
+      "coupled_pruned": 0,
+      "forward_wipeouts": 0,
+      "pairwise_access_checks": 257,
+      "forward_capacity_rejections": 0,
+      "forward_via_identity_rejections": 0,
+      "access_states": 263,
+      "access_exhaustions": 0
+    },
+    {
+      "authoritative": false,
+      "window": 0,
+      "forward_checking": true,
+      "resource_forward_checking": true,
+      "local_channel_occupancy": true,
+      "demand_scopes": 143,
+      "localized_scopes": 33,
+      "forced_capacity_conflicts": [
+        {
+          "scope": 0,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            22
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-1",
+              2,
+              0,
+              1
+            ],
+            [
+              "kicad-net-12",
+              2,
+              0,
+              0
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              2
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              3
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              4
+            ],
+            [
+              "kicad-net-9",
+              1,
+              0,
+              16
+            ]
+          ],
+          "demand_nm": 2900000,
+          "maximum_width_nm": 1495904
+        },
+        {
+          "scope": 1,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            5,
+            7
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-1",
+              2,
+              0,
+              1
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              2
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              3
+            ]
+          ],
+          "demand_nm": 1550000,
+          "maximum_width_nm": 1225904
+        },
+        {
+          "scope": 2,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            0
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-13",
+              0,
+              0,
+              1
+            ],
+            [
+              "kicad-net-14",
+              0,
+              0,
+              1
+            ],
+            [
+              "kicad-net-14",
+              1,
+              0,
+              1
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              4
+            ]
+          ],
+          "demand_nm": 2000000,
+          "maximum_width_nm": 1159900
+        },
+        {
+          "scope": 4,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            15
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-12",
+              2,
+              0,
+              0
+            ],
+            [
+              "kicad-net-12",
+              2,
+              0,
+              1
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              3
+            ]
+          ],
+          "demand_nm": 1550000,
+          "maximum_width_nm": 798000
+        },
+        {
+          "scope": 6,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            3
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-13",
+              0,
+              0,
+              0
+            ],
+            [
+              "kicad-net-13",
+              0,
+              0,
+              1
+            ],
+            [
+              "kicad-net-13",
+              1,
+              0,
+              0
+            ],
+            [
+              "kicad-net-14",
+              0,
+              0,
+              1
+            ],
+            [
+              "kicad-net-14",
+              1,
+              0,
+              1
+            ],
+            [
+              "kicad-net-16",
+              1,
+              0,
+              0
+            ]
+          ],
+          "demand_nm": 2900000,
+          "maximum_width_nm": 1219996
+        },
+        {
+          "scope": 7,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            2,
+            18
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-13",
+              0,
+              0,
+              0
+            ],
+            [
+              "kicad-net-13",
+              0,
+              0,
+              1
+            ],
+            [
+              "kicad-net-14",
+              0,
+              0,
+              1
+            ],
+            [
+              "kicad-net-14",
+              1,
+              0,
+              1
+            ]
+          ],
+          "demand_nm": 2000000,
+          "maximum_width_nm": 1219996
+        },
+        {
+          "scope": 11,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            10
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-13",
+              1,
+              0,
+              0
+            ],
+            [
+              "kicad-net-14",
+              0,
+              0,
+              1
+            ],
+            [
+              "kicad-net-14",
+              1,
+              0,
+              1
+            ]
+          ],
+          "demand_nm": 1550000,
+          "maximum_width_nm": 1220000
+        },
+        {
+          "scope": 14,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            17
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-9",
+              1,
+              0,
+              14
+            ],
+            [
+              "kicad-net-9",
+              1,
+              0,
+              15
+            ]
+          ],
+          "demand_nm": 1100000,
+          "maximum_width_nm": 1006000
+        }
+      ],
+      "choice_semantics": "access_and_coupling_screened_unknowns_retained",
+      "states": 9,
+      "choices": 0,
+      "exhausted": false,
+      "elapsed_us": 46659,
+      "access_pruned": 0,
+      "terminal_pair_pruned": 0,
+      "via_pair_pruned": 0,
+      "terminal_via_pruned": 0,
+      "lane_capacity_pruned": 0,
+      "run_layer_pruned": 0,
+      "coupled_pruned": 0,
+      "forward_wipeouts": 1,
+      "pairwise_access_checks": 213,
+      "forward_capacity_rejections": 1,
+      "forward_via_identity_rejections": 0,
+      "access_states": 219,
+      "access_exhaustions": 0
+    }
+  ],
+  "finite_results": [
+    {
+      "authoritative": false,
+      "window": 0,
+      "forward_checking": false,
+      "resource_forward_checking": false,
+      "local_channel_occupancy": false,
+      "demand_scopes": 115,
+      "localized_scopes": 0,
+      "forced_capacity_conflicts": [
+        {
+          "scope": 0,
+          "channel": 0,
+          "localized": false,
+          "sections": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-1",
+              2,
+              0,
+              1
+            ],
+            [
+              "kicad-net-12",
+              2,
+              0,
+              0
+            ],
+            [
+              "kicad-net-12",
+              2,
+              0,
+              1
+            ],
+            [
+              "kicad-net-13",
+              0,
+              0,
+              0
+            ],
+            [
+              "kicad-net-13",
+              0,
+              0,
+              1
+            ],
+            [
+              "kicad-net-13",
+              1,
+              0,
+              0
+            ],
+            [
+              "kicad-net-14",
+              0,
+              0,
+              1
+            ],
+            [
+              "kicad-net-14",
+              1,
+              0,
+              1
+            ],
+            [
+              "kicad-net-16",
+              1,
+              0,
+              0
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              2
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              3
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              4
+            ],
+            [
+              "kicad-net-9",
+              1,
+              0,
+              14
+            ],
+            [
+              "kicad-net-9",
+              1,
+              0,
+              15
+            ],
+            [
+              "kicad-net-9",
+              1,
+              0,
+              16
+            ]
+          ],
+          "demand_nm": 6950000,
+          "maximum_width_nm": 1940000
+        }
+      ],
+      "choice_semantics": "raw_via_identity_and_capacity_leaves",
+      "states": 13,
+      "choices": 0,
+      "exhausted": false,
+      "elapsed_us": 173385,
+      "access_pruned": 0,
+      "terminal_pair_pruned": 0,
+      "via_pair_pruned": 0,
+      "terminal_via_pruned": 0,
+      "lane_capacity_pruned": 1,
+      "run_layer_pruned": 0,
+      "coupled_pruned": 0,
+      "forward_wipeouts": 0,
+      "pairwise_access_checks": 0,
+      "forward_capacity_rejections": 0,
+      "forward_via_identity_rejections": 0,
+      "access_states": 0,
+      "access_exhaustions": 0
+    },
+    {
+      "authoritative": false,
+      "window": 0,
+      "forward_checking": true,
+      "resource_forward_checking": false,
+      "local_channel_occupancy": false,
+      "demand_scopes": 115,
+      "localized_scopes": 0,
+      "forced_capacity_conflicts": [
+        {
+          "scope": 0,
+          "channel": 0,
+          "localized": false,
+          "sections": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-1",
+              2,
+              0,
+              1
+            ],
+            [
+              "kicad-net-12",
+              2,
+              0,
+              0
+            ],
+            [
+              "kicad-net-12",
+              2,
+              0,
+              1
+            ],
+            [
+              "kicad-net-13",
+              0,
+              0,
+              0
+            ],
+            [
+              "kicad-net-13",
+              0,
+              0,
+              1
+            ],
+            [
+              "kicad-net-13",
+              1,
+              0,
+              0
+            ],
+            [
+              "kicad-net-14",
+              0,
+              0,
+              1
+            ],
+            [
+              "kicad-net-14",
+              1,
+              0,
+              1
+            ],
+            [
+              "kicad-net-16",
+              1,
+              0,
+              0
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              2
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              3
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              4
+            ],
+            [
+              "kicad-net-9",
+              1,
+              0,
+              14
+            ],
+            [
+              "kicad-net-9",
+              1,
+              0,
+              15
+            ],
+            [
+              "kicad-net-9",
+              1,
+              0,
+              16
+            ]
+          ],
+          "demand_nm": 6950000,
+          "maximum_width_nm": 1940000
+        }
+      ],
+      "choice_semantics": "access_and_coupling_screened_unknowns_retained",
+      "states": 13,
+      "choices": 0,
+      "exhausted": false,
+      "elapsed_us": 43661,
+      "access_pruned": 0,
+      "terminal_pair_pruned": 0,
+      "via_pair_pruned": 0,
+      "terminal_via_pruned": 0,
+      "lane_capacity_pruned": 1,
+      "run_layer_pruned": 0,
+      "coupled_pruned": 0,
+      "forward_wipeouts": 0,
+      "pairwise_access_checks": 351,
+      "forward_capacity_rejections": 0,
+      "forward_via_identity_rejections": 0,
+      "access_states": 359,
+      "access_exhaustions": 0
+    },
+    {
+      "authoritative": false,
+      "window": 0,
+      "forward_checking": true,
+      "resource_forward_checking": true,
+      "local_channel_occupancy": false,
+      "demand_scopes": 115,
+      "localized_scopes": 0,
+      "forced_capacity_conflicts": [
+        {
+          "scope": 0,
+          "channel": 0,
+          "localized": false,
+          "sections": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-1",
+              2,
+              0,
+              1
+            ],
+            [
+              "kicad-net-12",
+              2,
+              0,
+              0
+            ],
+            [
+              "kicad-net-12",
+              2,
+              0,
+              1
+            ],
+            [
+              "kicad-net-13",
+              0,
+              0,
+              0
+            ],
+            [
+              "kicad-net-13",
+              0,
+              0,
+              1
+            ],
+            [
+              "kicad-net-13",
+              1,
+              0,
+              0
+            ],
+            [
+              "kicad-net-14",
+              0,
+              0,
+              1
+            ],
+            [
+              "kicad-net-14",
+              1,
+              0,
+              1
+            ],
+            [
+              "kicad-net-16",
+              1,
+              0,
+              0
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              2
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              3
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              4
+            ],
+            [
+              "kicad-net-9",
+              1,
+              0,
+              14
+            ],
+            [
+              "kicad-net-9",
+              1,
+              0,
+              15
+            ],
+            [
+              "kicad-net-9",
+              1,
+              0,
+              16
+            ]
+          ],
+          "demand_nm": 6950000,
+          "maximum_width_nm": 1940000
+        }
+      ],
+      "choice_semantics": "access_and_coupling_screened_unknowns_retained",
+      "states": 10,
+      "choices": 0,
+      "exhausted": false,
+      "elapsed_us": 42848,
+      "access_pruned": 0,
+      "terminal_pair_pruned": 0,
+      "via_pair_pruned": 0,
+      "terminal_via_pruned": 0,
+      "lane_capacity_pruned": 0,
+      "run_layer_pruned": 0,
+      "coupled_pruned": 0,
+      "forward_wipeouts": 1,
+      "pairwise_access_checks": 259,
+      "forward_capacity_rejections": 1,
+      "forward_via_identity_rejections": 0,
+      "access_states": 265,
+      "access_exhaustions": 0
+    },
+    {
+      "authoritative": false,
+      "window": 0,
+      "forward_checking": false,
+      "resource_forward_checking": false,
+      "local_channel_occupancy": true,
+      "demand_scopes": 142,
+      "localized_scopes": 32,
+      "forced_capacity_conflicts": [
+        {
+          "scope": 0,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            5,
+            7
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-1",
+              2,
+              0,
+              1
+            ],
+            [
+              "kicad-net-13",
+              1,
+              0,
+              0
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              2
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              3
+            ]
+          ],
+          "demand_nm": 2000000,
+          "maximum_width_nm": 1225904
+        },
+        {
+          "scope": 1,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            6,
+            16
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-13",
+              1,
+              0,
+              0
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              4
+            ]
+          ],
+          "demand_nm": 1100000,
+          "maximum_width_nm": 965784
+        },
+        {
+          "scope": 2,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            15
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-12",
+              2,
+              0,
+              0
+            ],
+            [
+              "kicad-net-12",
+              2,
+              0,
+              1
+            ],
+            [
+              "kicad-net-13",
+              1,
+              0,
+              0
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              3
+            ]
+          ],
+          "demand_nm": 2000000,
+          "maximum_width_nm": 798000
+        },
+        {
+          "scope": 3,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            2,
+            3
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-13",
+              0,
+              0,
+              0
+            ],
+            [
+              "kicad-net-13",
+              0,
+              0,
+              1
+            ],
+            [
+              "kicad-net-13",
+              1,
+              0,
+              0
+            ],
+            [
+              "kicad-net-14",
+              0,
+              0,
+              1
+            ],
+            [
+              "kicad-net-14",
+              1,
+              0,
+              1
+            ]
+          ],
+          "demand_nm": 2450000,
+          "maximum_width_nm": 1219996
+        },
+        {
+          "scope": 10,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            10
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-13",
+              1,
+              0,
+              0
+            ],
+            [
+              "kicad-net-14",
+              0,
+              0,
+              1
+            ],
+            [
+              "kicad-net-14",
+              1,
+              0,
+              1
+            ]
+          ],
+          "demand_nm": 1550000,
+          "maximum_width_nm": 1220000
+        },
+        {
+          "scope": 11,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            23
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-13",
+              1,
+              0,
+              0
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              2
+            ]
+          ],
+          "demand_nm": 1100000,
+          "maximum_width_nm": 650000
+        },
+        {
+          "scope": 12,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            17
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-13",
+              1,
+              0,
+              0
+            ],
+            [
+              "kicad-net-9",
+              1,
+              0,
+              14
+            ],
+            [
+              "kicad-net-9",
+              1,
+              0,
+              15
+            ]
+          ],
+          "demand_nm": 1550000,
+          "maximum_width_nm": 1006000
+        },
+        {
+          "scope": 14,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            20
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-13",
+              1,
+              0,
+              0
+            ],
+            [
+              "kicad-net-9",
+              1,
+              0,
+              14
+            ]
+          ],
+          "demand_nm": 1100000,
+          "maximum_width_nm": 991904
+        }
+      ],
+      "choice_semantics": "raw_via_identity_and_capacity_leaves",
+      "states": 10,
+      "choices": 0,
+      "exhausted": false,
+      "elapsed_us": 43332,
+      "access_pruned": 0,
+      "terminal_pair_pruned": 0,
+      "via_pair_pruned": 0,
+      "terminal_via_pruned": 0,
+      "lane_capacity_pruned": 1,
+      "run_layer_pruned": 0,
+      "coupled_pruned": 0,
+      "forward_wipeouts": 0,
+      "pairwise_access_checks": 0,
+      "forward_capacity_rejections": 0,
+      "forward_via_identity_rejections": 0,
+      "access_states": 0,
+      "access_exhaustions": 0
+    },
+    {
+      "authoritative": false,
+      "window": 0,
+      "forward_checking": true,
+      "resource_forward_checking": false,
+      "local_channel_occupancy": true,
+      "demand_scopes": 142,
+      "localized_scopes": 32,
+      "forced_capacity_conflicts": [
+        {
+          "scope": 0,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            5,
+            7
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-1",
+              2,
+              0,
+              1
+            ],
+            [
+              "kicad-net-13",
+              1,
+              0,
+              0
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              2
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              3
+            ]
+          ],
+          "demand_nm": 2000000,
+          "maximum_width_nm": 1225904
+        },
+        {
+          "scope": 1,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            6,
+            16
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-13",
+              1,
+              0,
+              0
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              4
+            ]
+          ],
+          "demand_nm": 1100000,
+          "maximum_width_nm": 965784
+        },
+        {
+          "scope": 2,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            15
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-12",
+              2,
+              0,
+              0
+            ],
+            [
+              "kicad-net-12",
+              2,
+              0,
+              1
+            ],
+            [
+              "kicad-net-13",
+              1,
+              0,
+              0
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              3
+            ]
+          ],
+          "demand_nm": 2000000,
+          "maximum_width_nm": 798000
+        },
+        {
+          "scope": 3,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            2,
+            3
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-13",
+              0,
+              0,
+              0
+            ],
+            [
+              "kicad-net-13",
+              0,
+              0,
+              1
+            ],
+            [
+              "kicad-net-13",
+              1,
+              0,
+              0
+            ],
+            [
+              "kicad-net-14",
+              0,
+              0,
+              1
+            ],
+            [
+              "kicad-net-14",
+              1,
+              0,
+              1
+            ]
+          ],
+          "demand_nm": 2450000,
+          "maximum_width_nm": 1219996
+        },
+        {
+          "scope": 10,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            10
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-13",
+              1,
+              0,
+              0
+            ],
+            [
+              "kicad-net-14",
+              0,
+              0,
+              1
+            ],
+            [
+              "kicad-net-14",
+              1,
+              0,
+              1
+            ]
+          ],
+          "demand_nm": 1550000,
+          "maximum_width_nm": 1220000
+        },
+        {
+          "scope": 11,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            23
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-13",
+              1,
+              0,
+              0
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              2
+            ]
+          ],
+          "demand_nm": 1100000,
+          "maximum_width_nm": 650000
+        },
+        {
+          "scope": 12,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            17
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-13",
+              1,
+              0,
+              0
+            ],
+            [
+              "kicad-net-9",
+              1,
+              0,
+              14
+            ],
+            [
+              "kicad-net-9",
+              1,
+              0,
+              15
+            ]
+          ],
+          "demand_nm": 1550000,
+          "maximum_width_nm": 1006000
+        },
+        {
+          "scope": 14,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            20
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-13",
+              1,
+              0,
+              0
+            ],
+            [
+              "kicad-net-9",
+              1,
+              0,
+              14
+            ]
+          ],
+          "demand_nm": 1100000,
+          "maximum_width_nm": 991904
+        }
+      ],
+      "choice_semantics": "access_and_coupling_screened_unknowns_retained",
+      "states": 10,
+      "choices": 0,
+      "exhausted": false,
+      "elapsed_us": 45564,
+      "access_pruned": 0,
+      "terminal_pair_pruned": 0,
+      "via_pair_pruned": 0,
+      "terminal_via_pruned": 0,
+      "lane_capacity_pruned": 1,
+      "run_layer_pruned": 0,
+      "coupled_pruned": 0,
+      "forward_wipeouts": 0,
+      "pairwise_access_checks": 257,
+      "forward_capacity_rejections": 0,
+      "forward_via_identity_rejections": 0,
+      "access_states": 263,
+      "access_exhaustions": 0
+    },
+    {
+      "authoritative": false,
+      "window": 0,
+      "forward_checking": true,
+      "resource_forward_checking": true,
+      "local_channel_occupancy": true,
+      "demand_scopes": 142,
+      "localized_scopes": 32,
+      "forced_capacity_conflicts": [
+        {
+          "scope": 0,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            5,
+            7
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-1",
+              2,
+              0,
+              1
+            ],
+            [
+              "kicad-net-13",
+              1,
+              0,
+              0
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              2
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              3
+            ]
+          ],
+          "demand_nm": 2000000,
+          "maximum_width_nm": 1225904
+        },
+        {
+          "scope": 1,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            6,
+            16
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-13",
+              1,
+              0,
+              0
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              4
+            ]
+          ],
+          "demand_nm": 1100000,
+          "maximum_width_nm": 965784
+        },
+        {
+          "scope": 2,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            15
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-12",
+              2,
+              0,
+              0
+            ],
+            [
+              "kicad-net-12",
+              2,
+              0,
+              1
+            ],
+            [
+              "kicad-net-13",
+              1,
+              0,
+              0
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              3
+            ]
+          ],
+          "demand_nm": 2000000,
+          "maximum_width_nm": 798000
+        },
+        {
+          "scope": 3,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            2,
+            3
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-13",
+              0,
+              0,
+              0
+            ],
+            [
+              "kicad-net-13",
+              0,
+              0,
+              1
+            ],
+            [
+              "kicad-net-13",
+              1,
+              0,
+              0
+            ],
+            [
+              "kicad-net-14",
+              0,
+              0,
+              1
+            ],
+            [
+              "kicad-net-14",
+              1,
+              0,
+              1
+            ]
+          ],
+          "demand_nm": 2450000,
+          "maximum_width_nm": 1219996
+        },
+        {
+          "scope": 10,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            10
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-13",
+              1,
+              0,
+              0
+            ],
+            [
+              "kicad-net-14",
+              0,
+              0,
+              1
+            ],
+            [
+              "kicad-net-14",
+              1,
+              0,
+              1
+            ]
+          ],
+          "demand_nm": 1550000,
+          "maximum_width_nm": 1220000
+        },
+        {
+          "scope": 11,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            23
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-13",
+              1,
+              0,
+              0
+            ],
+            [
+              "kicad-net-5",
+              1,
+              0,
+              2
+            ]
+          ],
+          "demand_nm": 1100000,
+          "maximum_width_nm": 650000
+        },
+        {
+          "scope": 12,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            17
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-13",
+              1,
+              0,
+              0
+            ],
+            [
+              "kicad-net-9",
+              1,
+              0,
+              14
+            ],
+            [
+              "kicad-net-9",
+              1,
+              0,
+              15
+            ]
+          ],
+          "demand_nm": 1550000,
+          "maximum_width_nm": 1006000
+        },
+        {
+          "scope": 14,
+          "channel": 0,
+          "localized": true,
+          "sections": [
+            20
+          ],
+          "forced_fragments": [
+            [
+              "kicad-net-13",
+              1,
+              0,
+              0
+            ],
+            [
+              "kicad-net-9",
+              1,
+              0,
+              14
+            ]
+          ],
+          "demand_nm": 1100000,
+          "maximum_width_nm": 991904
+        }
+      ],
+      "choice_semantics": "access_and_coupling_screened_unknowns_retained",
+      "states": 9,
+      "choices": 0,
+      "exhausted": false,
+      "elapsed_us": 45568,
+      "access_pruned": 0,
+      "terminal_pair_pruned": 0,
+      "via_pair_pruned": 0,
+      "terminal_via_pruned": 0,
+      "lane_capacity_pruned": 0,
+      "run_layer_pruned": 0,
+      "coupled_pruned": 0,
+      "forward_wipeouts": 1,
+      "pairwise_access_checks": 213,
+      "forward_capacity_rejections": 1,
+      "forward_via_identity_rejections": 0,
+      "access_states": 219,
+      "access_exhaustions": 0
+    }
+  ],
+  "interpretation": [
+    "Whole-channel rejection reproduced on exactly the same source-bound domains.",
+    "Finite local support removes remote normal-projection overlaps but first window still has zero leaves.",
+    "Net 13 connection 1 run 0 fragment 0 has no contact with any of channel 0's finite sampled walls. Conservative fallback consequently charges it to every section.",
+    "Original cell-overlap membership suppresses fallback local-section generation. This is missing local resource evidence, not proof the board is unroutable.",
+    "Exact duplicate net-14 branches and adjacent same-net fragments also remain separate packing requests.",
+    "V31 Tier 0 passes with byte-identical copper. V31 Tier 1 times out at 600 seconds; no promotion. V32 finite-only tested by replay and 43 core tests, not a full-board benchmark."
+  ],
+  "next_experiment": "Regenerate local section coverage through existing channel fallback for governed fragments that overlap topology cells but none of their finite sampled walls."
+}

@@ -1,0 +1,27 @@
+[
+  {
+    "board": "pt2399_delay",
+    "identical_pad_geometry": true,
+    "sha256": "7402684fff816749b0694be3dae72cf600e2280af0049c5841a057dff1675856"
+  },
+  {
+    "board": "bm_svf",
+    "identical_pad_geometry": true,
+    "sha256": "6da2b9f1bdfe6ab79fa0b43985d255575b79c930416991ac797fe8b7836fca7a"
+  },
+  {
+    "board": "ft2232h_jtag",
+    "identical_pad_geometry": true,
+    "sha256": "782ed99460bd97b0dae704f00c5d3cbf0856e63fa39011a0e71934bddf726ce7"
+  },
+  {
+    "board": "gb_nintendo_power",
+    "identical_pad_geometry": true,
+    "sha256": "9f74c3a1427ca8fb58103b467c2a240500a1fd2b6f13d7cc6c0ca895347a7de2"
+  },
+  {
+    "board": "nascom_eprom_80bus",
+    "identical_pad_geometry": true,
+    "sha256": "beb7dedd6c5b52313fd6929edccafd80fe1c8668e6129c04c11ae57b1256b48f"
+  }
+]

@@ -1,0 +1,248 @@
+{
+  "date": "2026-10-08",
+  "status": "finished_with_interrupted_runs",
+  "artifact_root": "/home/adam/qtbits/flux_capacitor/build/tiers-curved-extended-release-20261008",
+  "geometry": "curved",
+  "outer_timeout_seconds": 10800,
+  "engine_timeout_seconds": 10740,
+  "concurrent_runtimes": true,
+  "final_drc_qualified_boards": [],
+  "visual_observations": [
+    {
+      "board": "pt2399_delay",
+      "stage": "intermediate detailed telemetry reconstruction",
+      "image": "/home/adam/qtbits/flux_capacitor/build/tiers-curved-extended-release-20261008/pt2399_delay/live-snapshot-02/images/near-01-window-2/spline-controls-closeup.png",
+      "observation": "Local curved detour around a pad is visible, but full-scene preview remains substantially orthogonal. Smooth final copper not established.",
+      "authoritative": false
+    },
+    {
+      "board": "ft2232h_jtag",
+      "stage": "intermediate global telemetry reconstruction",
+      "image": "/home/adam/qtbits/flux_capacitor/build/tiers-curved-extended-release-20261008/ft2232h_jtag/live-snapshot-01/images/near-00-window--1/copper-01-F_Cu.png",
+      "observation": "Long perimeter detours, orthogonal stair steps and apparent same-layer intersections near IC. Not acceptable as a final smooth layout; provisional only.",
+      "authoritative": false
+    },
+    {
+      "board": "bm_svf",
+      "stage": "intermediate global telemetry reconstruction",
+      "image": "/home/adam/qtbits/flux_capacitor/build/tiers-curved-extended-release-20261008/bm_svf/live-snapshot-01/images/near-00-window--1/copper-01-F_Cu.png",
+      "observation": "Predominantly angular 45/90-degree segments and dangling-looking route fragments on this layer; no smooth final curve result. Connectivity across layers not inferred from image.",
+      "authoritative": false
+    },
+    {
+      "board": "nascom_eprom_80bus",
+      "stage": "intermediate global telemetry reconstruction",
+      "image": "/home/adam/qtbits/flux_capacitor/build/tiers-curved-extended-release-20261008/nascom_eprom_80bus/live-snapshot-01/images/near-00-window--1/copper-01-F_Cu.png",
+      "observation": "Snapshot contains pads with no visible routed traces on inspected front layer; insufficient route geometry to assess curve quality.",
+      "authoritative": false
+    },
+    {
+      "board": "gb_nintendo_power-iterations30",
+      "stage": "intermediate global telemetry reconstruction",
+      "image": "/home/adam/qtbits/flux_capacitor/build/tiers-curved-extended-release-20261008/gb_nintendo_power-iterations30/live-snapshot-01/images/near-00-window--1/copper-00-F_Cu.png",
+      "observation": "Snapshot still shows only a small angular route near upper pad and largely bare pad arrays; too little routing to assess final curve quality.",
+      "authoritative": false
+    },
+    {
+      "board": "nascom_eprom_80bus",
+      "stage": "later intermediate global reconstruction",
+      "image": "/home/adam/qtbits/flux_capacitor/build/tiers-curved-extended-release-20261008/nascom_eprom_80bus/live-snapshot-02/images/near-00-window-139/provisional-overview.png",
+      "observation": "Later snapshot has board-wide orthogonal coarse routing. Local spline-control views show small isolated curve fragments; no final board-wide smoothing/legality established. This supersedes the earlier pad-only snapshot as current progress.",
+      "authoritative": false
+    },
+    {
+      "board": "ft2232h_jtag",
+      "stage": "end-of-run diagnostic reconstruction",
+      "image": "/home/adam/qtbits/flux_capacitor/build/tiers-curved-extended-release-20261008/ft2232h_jtag/tier-2-ft2232h_jtag/analysis/global/near-00-window-7/provisional-overview.png",
+      "closeup": "/home/adam/qtbits/flux_capacitor/build/tiers-curved-extended-release-20261008/ft2232h_jtag/tier-2-ft2232h_jtag/analysis/global/near-00-window-7/spline-controls-closeup.png",
+      "observation": "Final diagnostic overview remains dominated by orthogonal stairs and long perimeter detours. A few local U-shaped candidates have rounded bends but do not establish whole-board smoothing or legal copper. Both overview and closeup inspected.",
+      "authoritative": false
+    }
+  ],
+  "intermediate_review_complete": true,
+  "final_review_complete": false,
+  "waiting_for": null,
+  "concurrency": "Five independent board jobs on separate telemetry ports; timings are concurrent.",
+  "completed_results": [
+    {
+      "tier": 3,
+      "board": "gb_nintendo_power",
+      "iterations_budget": 30,
+      "duration_seconds": 422.56765105299564,
+      "outcome": "exhausted",
+      "paths": 1,
+      "unrouted_nets": 64,
+      "routing_plan_complete": false,
+      "final_copper_available": false,
+      "final_drc": "not reached",
+      "visual": "Final diagnostic PNG is byte-identical to already inspected one-iteration result. No meaningful curve quality to certify.",
+      "PNG_sha256": "3b498aabe898eab0431d4d5ef58a6cfd8e4a86eb2a9062f846d1e1960259ac53"
+    },
+    {
+      "tier": 0,
+      "board": "pt2399_delay",
+      "detailed_seconds": 6451.414429486998,
+      "outcome": "exhausted",
+      "qualified": false,
+      "candidate_copper_available": true,
+      "arcs": 142,
+      "unrounded_bends": 6,
+      "external_violations": 0,
+      "external_unconnected_items": 1,
+      "visual": "Final rejected actual copper PNGs byte-identical to inspected control front/back images; no improvement from longer search.",
+      "artifacts": "build/tiers-curved-extended-release-20261008/pt2399_delay/tier-0-pt2399_delay/analysis/detailed-rejected"
+    },
+    {
+      "tier": 2,
+      "board": "ft2232h_jtag",
+      "planning_seconds": 9305.421877743996,
+      "outcome": "exhausted",
+      "qualified": false,
+      "paths": 117,
+      "unrouted_nets": 0,
+      "overflow": 381,
+      "final_copper_available": false
+    }
+  ],
+  "pipeline_observation": {
+    "mechanism": "Cooperative slicing resumes a pending kernel; adaptive action selection occurs only after the complete action returns. Large regional transactions can monopolize shared deadline despite regular yielding.",
+    "source": "src/routing_engine.cpp:RoutingEngine::advance",
+    "evidence": [
+      "Tier0 global candidate obtained in56.8s; detailed session entered repeated regional solve after first materialization",
+      "Tier2 regional generation2 exceeded100million deterministic work units without a final board"
+    ],
+    "interpretation": "Observed scheduling limitation; not proof of geometric impossibility."
+  },
+  "interim_physical_evidence": {
+    "scope": "current telemetry snapshots, not final/accepted copper",
+    "pt2399_delay": {
+      "routed_nets": 20,
+      "unrouted_nets": 0,
+      "regional_conflicts": 20,
+      "clearance_shadow_conflicts": 10
+    },
+    "bm_svf": {
+      "routed_nets": 25,
+      "unrouted_nets": 0,
+      "regional_conflicts": 509,
+      "clearance_shadow_conflicts": 388
+    }
+  },
+  "configuration_findings": [
+    {
+      "finding": "Detailed action score and best-partial ordering omit unrounded non-junction bend count. The control has six rejected bends while materialization action quality remains zero.",
+      "source": [
+        "src/routing_engine.cpp:score(const DetailedRouteResult&)",
+        "src/routing_engine.cpp:detailed_order"
+      ],
+      "impact": "Partial smoothing improvements cannot be ranked by remaining unrounded bend count; curve-only rejection may return to generic routing actions.",
+      "status": "source-confirmed metric omission; causal contribution to long main run not yet isolated"
+    }
+  ],
+  "reference_comparison": {
+    "sources": [
+      "tests/fixtures/routing-corpus/reference/pt2399_delay.kicad_pcb",
+      "tests/fixtures/routing-corpus/reference/bm_svf.kicad_pcb"
+    ],
+    "images_root": "build/tiers-curved-extended-release-20261008/reference-images",
+    "viewed": [
+      "pt2399_delay/00-F_Cu.png",
+      "bm_svf/01-B_Cu.png"
+    ],
+    "observation": "Reference bm_svf back layer uses ordered parallel runs and deliberate via endpoints; provisional Flux preview exhibits many apparent intersections and detours. This supports investigating topology/packing before treating the issue as cosmetic rounding.",
+    "limits": "Reference rendered only; not independently DRC-certified in this comparison. Telemetry reconstruction is not final copper."
+  },
+  "bounded_control": {
+    "artifact_root": "build/tiers-curved-extended-release-20261008/controls/tier0-xpbd-one-iteration",
+    "configuration": "one global iteration; explicit XPBD; 900-second engine budget",
+    "outcome": "exhausted",
+    "complete": false,
+    "arcs": 142,
+    "unrounded_bends": 6,
+    "internal_opens": 0,
+    "external_unconnected_items": 1,
+    "external_violations": 0,
+    "visual_observation": "Actual front/back copper inspected: many smoothly rounded runs, mixed with conspicuous sharp corners and a large U-shaped detour around the upper-left IC pad on back copper. Cannot certify all curves smooth/logical. KiCad endpoint disconnect independently rejects this candidate.",
+    "images": [
+      "build/tiers-curved-extended-release-20261008/controls/tier0-xpbd-one-iteration/copper-pngs/00-F_Cu.png",
+      "build/tiers-curved-extended-release-20261008/controls/tier0-xpbd-one-iteration/copper-pngs/01-B_Cu.png"
+    ],
+    "qualification": false,
+    "endpoint_investigation": {
+      "arc_uuid": "18bd600e-d6ba-41cb-a575-4348bc71c6c0",
+      "arc_start_mm": [
+        27.46,
+        41.0
+      ],
+      "pad": "U2.1",
+      "pad_center_mm": [
+        27.46,
+        41.0
+      ],
+      "net": "+5V",
+      "layer": "B.Cu",
+      "pcbnew_loaded_endpoint_delta_nm": [
+        0,
+        0
+      ],
+      "interpretation": "KiCad parses endpoint as saved; simple export endpoint drift ruled out. Exact cause of external connectivity result remains unresolved."
+    },
+    "duration_seconds": 688.98,
+    "peak_rss_kb": 669372
+  },
+  "configuration_correction": "Earlier suspected CLI XPBD default mismatch disproven: frozen KicadCommandTail.xpbd_relaxation is true, main Tier0 trace includes XPBD. Bounded control differs meaningfully in global iteration budget, not XPBD default.",
+  "tier0_action_seconds": {
+    "global": 10.73,
+    "probe": 0.19,
+    "regional": 1746.19,
+    "materialize": 256.4,
+    "feedback_global": 9.24,
+    "xpbd": 2693.66,
+    "erosion": 1657.51,
+    "usped": 13.19
+  },
+  "next_hypotheses": [
+    "Represent remaining unrounded bends in scheduler quality and typed feedback; prefer targeted curve repair before replacing an otherwise internally legal topology.",
+    "Bound regional transactions by useful progress/work and permit algorithm reselection at smaller checkpoint boundaries.",
+    "Reproduce the exact KiCad arc/pad connectivity discrepancy independently; external validation remains authoritative."
+  ],
+  "extended_run_housekeeping": {
+    "tier0_pt2399_delay": {
+      "status": "completed_failed",
+      "detail_result": "build/tiers-curved-extended-release-20261008/pt2399_delay/tier-0-pt2399_delay/detail-result.json",
+      "duration_seconds": 6451.414429486998,
+      "complete": false,
+      "stop_reason": "invalid_path",
+      "artifact_preview_only": true,
+      "authoritative_final_copper": false,
+      "diagnostic_images": [
+        "build/tiers-curved-extended-release-20261008/pt2399_delay/tier-0-pt2399_delay/analysis/detailed-rejected/copper/00-F_Cu.png",
+        "build/tiers-curved-extended-release-20261008/pt2399_delay/tier-0-pt2399_delay/analysis/detailed-rejected/copper/01-B_Cu.png"
+      ]
+    },
+    "tier1_bm_svf": {
+      "status": "interrupted_without_final_result",
+      "detail_result": null,
+      "authoritative_final_copper": false,
+      "telemetry": "build/tiers-curved-extended-release-20261008/bm_svf/tier-1-bm_svf/telemetry/bm_svf-global.jsonl",
+      "last_observed_sequence": 60577,
+      "last_observed_monotonic_time_us": 9511920186,
+      "diagnostic_images": [
+        "build/tiers-curved-extended-release-20261008/bm_svf/live-snapshot-01/images/near-00-window--1/copper-00-B_Cu.png",
+        "build/tiers-curved-extended-release-20261008/bm_svf/live-snapshot-01/images/near-00-window--1/copper-01-F_Cu.png"
+      ],
+      "evidence": "No runner result or time log was written; process was absent during post-run inspection after the execution session ended."
+    }
+  },
+  "final_review_limitation": "Tiers1/4 interrupted without final results; available diagnostic images inspected. No DRC-qualified board.",
+  "tier4_last_state": {
+    "regional_conflicts": 4463,
+    "windows": 21,
+    "complete_bundles": 9,
+    "spline_candidates_generated": 95264,
+    "interruption_cause": "unknown",
+    "last_sequence": 57816,
+    "viewed_image": "build/tiers-curved-extended-release-20261008/nascom_eprom_80bus/live-snapshot-02/images/near-02-window-40/provisional-overview.png",
+    "visual": "Dense angular coarse scaffolding and only tiny local rounded fragments; insufficient for final curve certification."
+  }
+}

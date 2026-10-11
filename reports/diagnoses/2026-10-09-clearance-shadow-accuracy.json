@@ -1,0 +1,73 @@
+{
+  "board": "bm_svf",
+  "tier": 1,
+  "artifact": "build/paired-final-tier1-20261009",
+  "measured": {
+    "raster_samples": 724,
+    "tile_coalesced_witnesses": 398,
+    "shadow_history_increment": 0,
+    "routing_engine_outcome": "timed-out",
+    "routing_plan_complete": false
+  },
+  "findings": [
+    {
+      "mechanism": "Canonical capacity diagonal identity incorrectly reused for geometric shadow certificates",
+      "source": "src/global_router.cpp:181,8367,10238",
+      "synthetic_example_nm": {
+        "candidate": [
+          [
+            0,
+            0
+          ],
+          [
+            650000,
+            650000
+          ]
+        ],
+        "owner": [
+          [
+            0,
+            650000
+          ],
+          [
+            0,
+            700000
+          ]
+        ],
+        "candidate_width": 250000,
+        "owner_width": 250000,
+        "clearance": 200000,
+        "actual_distance": 459619.4077712559,
+        "required_distance": 450000,
+        "actual_margin": 9619.40777125588,
+        "reported_false_deficit": 450000
+      },
+      "evidence": "Unselected opposite chord is rasterized at zero distance to owner, its certificate overwrites selected chord under shared canonical key. Consumer does not recompute actual chord distance.",
+      "verification": "Compiled public-API regression passes for legal diagonal, true crossing, enforced/advisory modes; independent review."
+    },
+    {
+      "mechanism": "Candidate radius uses nominal net track width rather than selected segment width",
+      "source": "src/global_router.cpp:10133",
+      "effect": "Potential false positives for legal neck-down segments; owner-side construction does use actual selected width.",
+      "verification": "Selected neck-down versus nominal width collision control passes."
+    },
+    {
+      "mechanism": "Published advisory count groups by net pair, kind, layer and 2-pitch tile",
+      "effect": "398 is not 398 distinct physical collisions; one interaction can occupy several tiles."
+    },
+    {
+      "mechanism": "Non-atomic direct chords queried full-edge keys absent from one-pitch raster",
+      "effect": "Missed interior conflicts on long direct Voronoi edges",
+      "fix": "Exact segment-distance certificates cached per occupancy generation, synchronized for parallel seed searches",
+      "verification": "Retained long chord midpoint crossing and legal offset controls pass."
+    },
+    {
+      "mechanism": "Viewer interpreted deficit as a clamped filled-circle radius",
+      "effect": "Severity markers resembled physical clearance envelopes despite telemetry carrying only witness locations",
+      "fix": "Fixed-size hollow diamond markers labelled Shadow witnesses."
+    }
+  ],
+  "scope_limit": "No claim that all398 witnesses are false; no final Tier1 copper DRC was run.",
+  "recommended_fix": "Separate actual segment identity and width from canonical capacity identity; retain exact geometric narrow-phase checks and cluster connected physical contacts for diagnosis.",
+  "diagram": "build/shadow-accuracy-20261009/shadow-regression-geometry.png"
+}

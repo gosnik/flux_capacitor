@@ -7,11 +7,123 @@ target_compile_definitions(
 add_test(NAME flux_unit_tests COMMAND flux_unit_tests)
 set_tests_properties(flux_unit_tests PROPERTIES TIMEOUT 600)
 
+add_executable(flux_layered_navmesh_tests unit/layered_navmesh_tests.cpp)
+target_link_libraries(flux_layered_navmesh_tests PRIVATE flux::core)
+target_compile_features(flux_layered_navmesh_tests PRIVATE cxx_std_20)
+add_test(NAME flux_layered_navmesh_tests COMMAND flux_layered_navmesh_tests)
+set_tests_properties(flux_layered_navmesh_tests PROPERTIES TIMEOUT 30 LABELS "risk;routing")
+
+add_executable(flux_regional_hc_composition_tests unit/regional_hc_composition_tests.cpp)
+target_link_libraries(flux_regional_hc_composition_tests PRIVATE flux::core)
+target_compile_features(flux_regional_hc_composition_tests PRIVATE cxx_std_20)
+add_test(NAME flux_regional_hc_composition_tests COMMAND flux_regional_hc_composition_tests)
+set_tests_properties(flux_regional_hc_composition_tests PROPERTIES LABELS "risk;routing")
+
+add_executable(flux_clearance_shadow_tests unit/clearance_shadow_tests.cpp)
+target_link_libraries(flux_clearance_shadow_tests PRIVATE flux::core)
+target_compile_features(flux_clearance_shadow_tests PRIVATE cxx_std_20)
+add_test(NAME flux_clearance_shadow_tests COMMAND flux_clearance_shadow_tests)
+set_tests_properties(flux_clearance_shadow_tests PROPERTIES LABELS "risk;routing")
+
+add_executable(flux_routing_engine_policy_tests unit/routing_engine_policy_tests.cpp)
+target_link_libraries(flux_routing_engine_policy_tests PRIVATE flux::core)
+target_compile_features(flux_routing_engine_policy_tests PRIVATE cxx_std_20)
+add_test(NAME flux_routing_engine_policy_tests COMMAND flux_routing_engine_policy_tests)
+set_tests_properties(flux_routing_engine_policy_tests PROPERTIES LABELS "risk;routing")
+
+add_executable(flux_routing_engine_experiment_tests unit/routing_engine_experiment_tests.cpp)
+target_link_libraries(flux_routing_engine_experiment_tests PRIVATE flux::core)
+target_compile_features(flux_routing_engine_experiment_tests PRIVATE cxx_std_20)
+add_test(NAME flux_routing_engine_experiment_tests COMMAND flux_routing_engine_experiment_tests)
+set_tests_properties(flux_routing_engine_experiment_tests PROPERTIES TIMEOUT 60 LABELS "risk;routing")
+
+add_executable(flux_cpu_worker_budget_tests unit/cpu_worker_budget_tests.cpp)
+target_link_libraries(flux_cpu_worker_budget_tests PRIVATE flux::core)
+target_compile_features(flux_cpu_worker_budget_tests PRIVATE cxx_std_20)
+add_test(NAME flux_cpu_worker_budget_tests COMMAND flux_cpu_worker_budget_tests)
+set_tests_properties(flux_cpu_worker_budget_tests PROPERTIES LABELS "risk;routing")
+
+add_executable(flux_regional_preparation_tests unit/regional_preparation_tests.cpp)
+target_link_libraries(flux_regional_preparation_tests PRIVATE flux::core)
+target_compile_features(flux_regional_preparation_tests PRIVATE cxx_std_20)
+add_test(NAME flux_regional_preparation_tests COMMAND flux_regional_preparation_tests)
+set_tests_properties(flux_regional_preparation_tests PROPERTIES LABELS "risk;routing")
+
 add_executable(flux_channel_occupancy_tests unit/regional_channel_occupancy_tests.cpp)
 target_link_libraries(flux_channel_occupancy_tests PRIVATE flux::core)
 target_compile_features(flux_channel_occupancy_tests PRIVATE cxx_std_20)
 add_test(NAME flux_channel_occupancy_tests COMMAND flux_channel_occupancy_tests)
 set_tests_properties(flux_channel_occupancy_tests PROPERTIES TIMEOUT 30 LABELS "risk;routing")
+
+add_executable(flux_regional_channel_spatial_index_tests unit/regional_channel_spatial_index_tests.cpp)
+target_link_libraries(flux_regional_channel_spatial_index_tests PRIVATE flux::core)
+target_compile_features(flux_regional_channel_spatial_index_tests PRIVATE cxx_std_20)
+add_test(NAME flux_regional_channel_spatial_index_tests COMMAND flux_regional_channel_spatial_index_tests)
+set_tests_properties(flux_regional_channel_spatial_index_tests PROPERTIES LABELS "risk;routing")
+
+foreach(policy IN ITEMS default local)
+  set(local_demand_args)
+  set(local_demand_expected false)
+  if(policy STREQUAL "local")
+    list(APPEND local_demand_args --local-channel-occupancy)
+    set(local_demand_expected true)
+  endif()
+  add_test(NAME flux_cli_channel_demand_${policy}
+    COMMAND $<TARGET_FILE:flux-cli> route-kicad
+      "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/minimal.kicad_pcb"
+      --max-router-iterations 1 --no-telemetry ${local_demand_args})
+  set_tests_properties(flux_cli_channel_demand_${policy} PROPERTIES TIMEOUT 30
+    PASS_REGULAR_EXPRESSION "\"configured_local_channel_occupancy\": ${local_demand_expected}")
+endforeach()
+
+foreach(policy IN ITEMS default shared)
+  set(shared_demand_args)
+  set(shared_demand_expected false)
+  if(policy STREQUAL "shared")
+    list(APPEND shared_demand_args --shared-channel-copper)
+    set(shared_demand_expected true)
+  endif()
+  add_test(NAME flux_cli_shared_copper_${policy}
+    COMMAND $<TARGET_FILE:flux-cli> route-kicad
+      "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/minimal.kicad_pcb"
+      --max-router-iterations 1 --no-telemetry ${shared_demand_args})
+  set_tests_properties(flux_cli_shared_copper_${policy} PROPERTIES TIMEOUT 30
+    PASS_REGULAR_EXPRESSION "\"configured_shared_channel_copper\": ${shared_demand_expected}")
+endforeach()
+
+foreach(policy IN ITEMS default cuts)
+  set(cut_demand_args)
+  set(cut_demand_expected false)
+  if(policy STREQUAL "cuts")
+    list(APPEND cut_demand_args --centerline-channel-cuts)
+    set(cut_demand_expected true)
+  endif()
+  add_test(NAME flux_cli_cut_demand_${policy}
+    COMMAND $<TARGET_FILE:flux-cli> route-kicad
+      "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/minimal.kicad_pcb"
+      --max-router-iterations 1 --no-telemetry ${cut_demand_args})
+  set_tests_properties(flux_cli_cut_demand_${policy} PROPERTIES TIMEOUT 30
+    PASS_REGULAR_EXPRESSION "\"configured_centerline_channel_cuts\": ${cut_demand_expected}")
+endforeach()
+
+foreach(policy IN ITEMS default bounded)
+  set(bundle_limit_args)
+  set(bundle_limit_expected 100000)
+  if(policy STREQUAL "bounded")
+    list(APPEND bundle_limit_args --max-regional-bundle-states 4096)
+    set(bundle_limit_expected 4096)
+  endif()
+  add_test(NAME flux_cli_bundle_limit_${policy}
+    COMMAND $<TARGET_FILE:flux-cli> route-kicad
+      "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/minimal.kicad_pcb"
+      --max-router-iterations 1 --no-telemetry ${bundle_limit_args})
+  set_tests_properties(flux_cli_bundle_limit_${policy} PROPERTIES TIMEOUT 30
+    PASS_REGULAR_EXPRESSION "\"configured_regional_max_bundle_search_states\": ${bundle_limit_expected}")
+endforeach()
+add_test(NAME flux_cli_bundle_limit_rejects_zero
+  COMMAND $<TARGET_FILE:flux-cli> route-kicad
+    "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/minimal.kicad_pcb" --max-regional-bundle-states 0)
+set_tests_properties(flux_cli_bundle_limit_rejects_zero PROPERTIES TIMEOUT 10 WILL_FAIL TRUE)
 
 add_executable(
   flux_telemetry_viewer_tests
@@ -42,6 +154,24 @@ set_tests_properties(
 
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
+  execute_process(COMMAND "${Python3_EXECUTABLE}" -c "import pcbnew"
+    RESULT_VARIABLE FLUX_KICAD_PYTHON_STATUS OUTPUT_QUIET ERROR_QUIET)
+  if(FLUX_KICAD_PYTHON_STATUS EQUAL 0)
+    # Independent loader parity protects the canonical boundary before routing is attempted.
+    add_dependencies(flux_unit_tests flux-inspect-pad-geometry)
+    add_test(NAME flux_kicad_pad_geometry_parity
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/python/verify_kicad_pad_geometry.py"
+        --inspector $<TARGET_FILE:flux-inspect-pad-geometry>
+        --report "${CMAKE_CURRENT_BINARY_DIR}/pad-geometry-parity.json"
+        "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pad-coordinate-frames.kicad_pcb"
+        "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pad-offset-frames.kicad_pcb"
+        "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/routing-corpus/pt2399_delay.kicad_pcb"
+        "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/routing-corpus/bm_svf.kicad_pcb"
+        "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/routing-corpus/ft2232h_jtag.kicad_pcb"
+        "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/routing-corpus/gb_nintendo_power.kicad_pcb"
+        "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/routing-corpus/nascom_eprom_80bus.kicad_pcb")
+    set_tests_properties(flux_kicad_pad_geometry_parity PROPERTIES TIMEOUT 60 LABELS "risk;import;kicad")
+  endif()
   target_compile_definitions(
     flux_unit_tests PRIVATE FLUX_TEST_PYTHON_EXECUTABLE="${Python3_EXECUTABLE}")
   add_test(
@@ -66,6 +196,10 @@ if(Python3_Interpreter_FOUND)
             --verifier "${CMAKE_CURRENT_SOURCE_DIR}/python/verify_routing_corpus.py")
   set_tests_properties(
     flux_routing_baseline_manifest PROPERTIES LABELS "risk;parity-contract")
+  add_test(
+    NAME flux_benchmark_history_tests
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/python/test_summarize_iteration_sweep.py")
   add_test(
     NAME flux_routing_corpus_rule_context_tests
     COMMAND "${Python3_EXECUTABLE}"
@@ -231,6 +365,22 @@ flux_add_cli_test(
 flux_add_cli_test(
   flux_cli_route_kicad "\"complete\": true"
   route-kicad "${FLUX_FIXTURES}/minimal.kicad_pcb")
+flux_add_cli_test(
+  flux_cli_usped_navmesh "\"configured_usped_navmesh\": true"
+  route-kicad "${FLUX_FIXTURES}/minimal.kicad_pcb" --usped-navmesh)
+flux_add_cli_test(
+  flux_cli_route_kicad_default_full_strength "\"configured_usped_navmesh\": true"
+  route-kicad "${FLUX_FIXTURES}/minimal.kicad_pcb" --max-router-iterations 1)
+flux_add_cli_test(
+  flux_cli_route_kicad_legacy_policy "\"configured_usped_navmesh\": false"
+  route-kicad "${FLUX_FIXTURES}/minimal.kicad_pcb" --no-full-strength-first-pass
+  --max-router-iterations 1)
+add_test(
+  NAME flux_cli_route_kicad_rejects_conflicting_strength_policy
+  COMMAND flux-cli route-kicad "${FLUX_FIXTURES}/minimal.kicad_pcb"
+          --full-strength-first-pass --no-full-strength-first-pass)
+set_tests_properties(
+  flux_cli_route_kicad_rejects_conflicting_strength_policy PROPERTIES WILL_FAIL TRUE)
 flux_add_cli_test(
   flux_cli_route_kicad_unrouted_net_ids "\"unrouted_net_ids\": \\[\\]"
   route-kicad "${FLUX_FIXTURES}/minimal.kicad_pcb")
@@ -782,3 +932,80 @@ if(KICAD_CLI_EXECUTABLE)
     DEPENDS flux_cli_import_ses_kicad
     FIXTURES_REQUIRED specctra_exchange)
 endif()
+
+add_executable(flux_routing_kernel_tests unit/routing_kernel_tests.cpp)
+target_link_libraries(flux_routing_kernel_tests PRIVATE flux::core)
+target_compile_features(flux_routing_kernel_tests PRIVATE cxx_std_20)
+add_test(NAME flux_routing_kernel_tests COMMAND flux_routing_kernel_tests)
+set_tests_properties(flux_routing_kernel_tests PROPERTIES TIMEOUT 30 LABELS "risk;routing")
+
+foreach(name IN ITEMS bezier_copper ph_cubic_fit bezier_io terrain_evolution terrain_evolution_gpu terrain_evolution_integration live_copper_terrain)
+  add_executable(flux_${name}_tests unit/${name}_tests.cpp)
+  target_link_libraries(flux_${name}_tests PRIVATE flux::core)
+  target_compile_features(flux_${name}_tests PRIVATE cxx_std_20)
+  target_compile_definitions(flux_${name}_tests PRIVATE FLUX_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+  add_test(NAME flux_${name}_tests COMMAND flux_${name}_tests)
+  set_tests_properties(flux_${name}_tests PROPERTIES TIMEOUT 120)
+endforeach()
+
+add_executable(flux_board_terrain_guidance_tests unit/board_terrain_guidance_tests.cpp)
+target_link_libraries(flux_board_terrain_guidance_tests PRIVATE flux::core)
+target_compile_features(flux_board_terrain_guidance_tests PRIVATE cxx_std_20)
+add_test(NAME flux_board_terrain_guidance_tests COMMAND flux_board_terrain_guidance_tests)
+set_tests_properties(flux_board_terrain_guidance_tests PROPERTIES TIMEOUT 60)
+set_tests_properties(flux_terrain_evolution_gpu_tests PROPERTIES LABELS "risk;gpu")
+
+# Default selection and the explicit comparison backend must remain distinguishable.
+foreach(terrain_mode IN ITEMS default enabled disabled)
+  set(terrain_args)
+  set(terrain_expected true)
+  if(terrain_mode STREQUAL "enabled")
+    list(APPEND terrain_args --terrain-height-evolution)
+  elseif(terrain_mode STREQUAL "disabled")
+    list(APPEND terrain_args --no-terrain-height-evolution)
+    set(terrain_expected false)
+  endif()
+  add_test(NAME flux_cli_terrain_${terrain_mode}
+    COMMAND $<TARGET_FILE:flux-cli> route-kicad
+      "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/minimal.kicad_pcb"
+      --max-router-iterations 1 --no-telemetry ${terrain_args})
+  set_tests_properties(flux_cli_terrain_${terrain_mode} PROPERTIES TIMEOUT 30
+    PASS_REGULAR_EXPRESSION "\"configured_static_seed_terrain_height_evolution\": ${terrain_expected}")
+endforeach()
+add_test(NAME flux_cli_terrain_rejects_conflicting_flags
+  COMMAND $<TARGET_FILE:flux-cli> route-kicad
+    "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/minimal.kicad_pcb"
+    --terrain-height-evolution --no-terrain-height-evolution)
+set_tests_properties(flux_cli_terrain_rejects_conflicting_flags PROPERTIES TIMEOUT 10 WILL_FAIL TRUE)
+
+add_executable(flux_ph_tightening_tests unit/ph_tightening_tests.cpp)
+target_link_libraries(flux_ph_tightening_tests PRIVATE flux::core)
+target_compile_features(flux_ph_tightening_tests PRIVATE cxx_std_20)
+add_test(NAME flux_ph_tightening_tests COMMAND flux_ph_tightening_tests)
+set_tests_properties(flux_ph_tightening_tests PROPERTIES TIMEOUT 60 LABELS "risk;routing")
+
+add_executable(flux_regional_tightening_tests unit/regional_tightening_tests.cpp)
+target_link_libraries(flux_regional_tightening_tests PRIVATE flux::core)
+target_compile_features(flux_regional_tightening_tests PRIVATE cxx_std_20)
+add_test(NAME flux_regional_tightening_tests COMMAND flux_regional_tightening_tests)
+set_tests_properties(flux_regional_tightening_tests PROPERTIES TIMEOUT 120 LABELS "risk;routing")
+
+foreach(mechanism IN ITEMS regional_candidate_policy repair_subset routing_engine_budget routing_avbd copper_scaffold scaffold_curve scaffold_collision scaffold_joint_displacement)
+  add_executable(flux_${mechanism}_tests unit/${mechanism}_tests.cpp)
+  target_link_libraries(flux_${mechanism}_tests PRIVATE flux::core)
+  target_compile_features(flux_${mechanism}_tests PRIVATE cxx_std_20)
+  add_test(NAME flux_${mechanism}_tests COMMAND flux_${mechanism}_tests)
+  set_tests_properties(flux_${mechanism}_tests PROPERTIES TIMEOUT 60 LABELS "risk;routing")
+endforeach()
+
+add_executable(flux_indexed_clearance_map_tests unit/indexed_clearance_map_tests.cpp)
+target_link_libraries(flux_indexed_clearance_map_tests PRIVATE flux::core)
+target_compile_features(flux_indexed_clearance_map_tests PRIVATE cxx_std_20)
+add_test(NAME flux_indexed_clearance_map_tests COMMAND flux_indexed_clearance_map_tests)
+set_tests_properties(flux_indexed_clearance_map_tests PROPERTIES TIMEOUT 60 LABELS "risk;routing")
+
+add_executable(flux_indexed_terrain_integration_tests unit/indexed_terrain_integration_tests.cpp)
+target_link_libraries(flux_indexed_terrain_integration_tests PRIVATE flux::core)
+target_compile_features(flux_indexed_terrain_integration_tests PRIVATE cxx_std_20)
+add_test(NAME flux_indexed_terrain_integration_tests COMMAND flux_indexed_terrain_integration_tests)
+set_tests_properties(flux_indexed_terrain_integration_tests PROPERTIES TIMEOUT 60 LABELS "risk;routing")

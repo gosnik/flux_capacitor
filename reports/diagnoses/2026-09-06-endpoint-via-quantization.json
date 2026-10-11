@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "git_revision": "25e3b884be9b359d9c5bf0cc4fbb6cc836fd4f82",
+  "board": "bm_svf",
+  "tier": 1,
+  "stage": "provisional-quantized-copper-oracle",
+  "classification": "inconsistent-quantization-of-shared-via-site",
+  "baseline_cli_sha256": "ff4f0e19f1abb1bc4e631df434a0adc2c332a4c7c94ec0eec4d76dba5c231909",
+  "candidate_cli_sha256": "892d1078ace2857b425ef23c1ffd1a67429156ef1f2c817bf00b27f479186ce4",
+  "source": "build/tier1-exact-branch-v4-20260906/tier-1-bm_svf/telemetry/bm_svf-global.jsonl",
+  "last_snapshot_time_us": 457757385,
+  "last_snapshot_paths": 78,
+  "examples": [
+    {"net": "kicad-net-12", "connection": 2, "edge": 5, "source_site_nm": [56740000, 91990000], "snapped_interior_site_nm": [56700000, 92000000]},
+    {"net": "kicad-net-21", "connection": 1, "edge": 5, "source_site_nm": [66490000, 56890000], "snapped_interior_site_nm": [66500000, 56900000]},
+    {"net": "kicad-net-14", "connection": 2, "edge": 10, "source_site_nm": [52190000, 84190000], "snapped_interior_site_nm": [52200000, 84200000]}
+  ],
+  "selected_result_malformed_paths": 2,
+  "caveat": "The last telemetry snapshot and selected result need not be the same portfolio; do not equate three observed examples with two selected malformed paths.",
+  "micro_test": {
+    "source": "off-grid F.Cu/In1.Cu/B.Cu chains at both terminals",
+    "before": {"malformed_paths": 1, "open_connections": 1, "drc_violations": 0},
+    "after": {"malformed_paths": 0, "open_connections": 0, "drc_violations": 0, "vias": 2, "tracks": 1},
+    "negative_control": "A one-nanometre lateral source transition remains malformed even when both sites round to one grid point."
+  },
+  "drc_scope": "Micro-test uses internal exact DRC; real-board KiCad DRC remains required.",
+  "decision": "Verify matched frontier and lower-tier runs; do not infer a tier pass from removing false malformation."
+}

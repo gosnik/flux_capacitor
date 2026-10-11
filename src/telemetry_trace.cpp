@@ -1,7 +1,7 @@
 #include "flux/telemetry/trace.hpp"
 
 #include <algorithm>
-#include <iterator>
+#include <cctype>
 #include <limits>
 #include <sstream>
 #include <system_error>
@@ -9,26 +9,84 @@
 namespace flux::telemetry {
 namespace {
 
+[[nodiscard]] bool append_trace_line(std::string_view line, const std::filesystem::path& path,
+                                     std::size_t line_number, std::vector<Event>& events,
+                                     std::size_t& stored_bytes, std::string& error) {
+  const bool whitespace_only = std::all_of(line.begin(), line.end(), [](unsigned char ch) {
+    return std::isspace(ch) != 0;
+  });
+  if (whitespace_only) {
+    return true;
+  }
+  DecodeResult decoded = decode_events(line);
+  if (!decoded) {
+    error = path.string() + ": telemetry JSON line " + std::to_string(line_number) + ": " +
+            decoded.error;
+    return false;
+  }
+  for (Event& event : decoded.events) {
+    const std::size_t event_bytes = estimated_event_bytes(event);
+    if (event_bytes > Trace::maximum_trace_bytes ||
+        stored_bytes > Trace::maximum_trace_bytes - event_bytes) {
+      error = path.string() + ": telemetry replay exceeds the viewer's 128 MiB storage limit";
+      return false;
+    }
+    stored_bytes += event_bytes;
+    events.push_back(std::move(event));
+  }
+  return true;
+}
+
+[[nodiscard]] bool read_bounded_line(std::istream& input, std::string& line, bool& eof,
+                                     std::string& error, const std::filesystem::path& path,
+                                     std::size_t line_number) {
+  line.clear();
+  eof = false;
+  char character = '\0';
+  while (input.get(character)) {
+    if (character == '\n') {
+      return true;
+    }
+    if (line.size() == Trace::maximum_line_bytes) {
+      error = path.string() + ": telemetry JSON line " + std::to_string(line_number) +
+              " exceeds the viewer's 8 MiB line limit";
+      return false;
+    }
+    line.push_back(character);
+  }
+  if (input.eof()) {
+    eof = true;
+    return !line.empty();
+  }
+  error = "could not read telemetry trace: " + path.string();
+  return false;
+}
+
 [[nodiscard]] bool load_regular_trace(const std::filesystem::path& path,
-                                      std::vector<Event>& events, std::string& error) {
+                                      std::vector<Event>& events, std::size_t& stored_bytes,
+                                      std::string& error) {
   try {
     std::ifstream input(path, std::ios::binary);
     if (!input) {
       error = "could not open telemetry trace: " + path.string();
       return false;
     }
-    const std::string text{std::istreambuf_iterator<char>(input),
-                           std::istreambuf_iterator<char>()};
-    if (!input.eof() && input.fail()) {
-      error = "could not read telemetry trace: " + path.string();
-      return false;
+    std::string line;
+    line.reserve(std::min<std::size_t>(Trace::maximum_line_bytes, 4096U));
+    std::size_t line_number = 0U;
+    bool eof = false;
+    while (!eof) {
+      ++line_number;
+      if (!read_bounded_line(input, line, eof, error, path, line_number)) {
+        if (eof && line.empty()) {
+          break;
+        }
+        return false;
+      }
+      if (!append_trace_line(line, path, line_number, events, stored_bytes, error)) {
+        return false;
+      }
     }
-    DecodeResult decoded = decode_events(text);
-    if (!decoded) {
-      error = path.string() + ": " + decoded.error;
-      return false;
-    }
-    events = std::move(decoded.events);
     return true;
   } catch (const std::exception& exception) {
     error = "could not read telemetry trace " + path.string() + ": " + exception.what();
@@ -58,7 +116,12 @@ bool Trace::load(const std::filesystem::path& path, std::string& error) {
   }
   if (std::filesystem::is_regular_file(status)) {
     std::vector<Event> loaded;
-    if (!load_regular_trace(path, loaded, error)) {
+    std::size_t stored_bytes = 0U;
+    if (!load_regular_trace(path, loaded, stored_bytes, error)) {
+      return false;
+    }
+    if (loaded.empty()) {
+      error = path.string() + ": telemetry input contains no events";
       return false;
     }
     events_ = std::move(loaded);
@@ -104,9 +167,10 @@ bool Trace::load(const std::filesystem::path& path, std::string& error) {
   }
 
   std::vector<Event> combined;
+  std::size_t stored_bytes = 0U;
   for (const auto& file : files) {
     std::vector<Event> part;
-    if (!load_regular_trace(file.path, part, error)) {
+    if (!load_regular_trace(file.path, part, stored_bytes, error)) {
       return false;
     }
     if (part.empty()) {
@@ -144,10 +208,23 @@ bool Trace::load(const std::filesystem::path& path, std::string& error) {
 }
 
 bool Trace::load_text(std::string_view text, std::string& error) {
+  if (text.size() > maximum_line_bytes) {
+    error = "telemetry text exceeds the viewer's 8 MiB input limit; use a JSONL trace file";
+    return false;
+  }
   DecodeResult decoded = decode_events(text);
   if (!decoded) {
     error = std::move(decoded.error);
     return false;
+  }
+  std::size_t stored_bytes = 0U;
+  for (const Event& event : decoded.events) {
+    const std::size_t event_bytes = estimated_event_bytes(event);
+    if (event_bytes > maximum_trace_bytes || stored_bytes > maximum_trace_bytes - event_bytes) {
+      error = "telemetry replay exceeds the viewer's 128 MiB storage limit";
+      return false;
+    }
+    stored_bytes += event_bytes;
   }
   events_ = std::move(decoded.events);
   path_.clear();

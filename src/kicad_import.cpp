@@ -895,7 +895,7 @@ void import_nets(const SExpression& root, Board& board, Importer& importer) {
         names.emplace(*name);
       }
     };
-    for (const auto type : {"segment", "arc", "via", "zone"}) {
+    for (const auto type : {"segment", "arc", "gr_curve", "via", "zone"}) {
       for (const auto* expression : find_children(root, type)) {
         collect(*expression);
       }
@@ -1037,12 +1037,12 @@ void import_outline(const SExpression& root, Board& board, Importer& importer) {
         continue;
       }
     }
-    const auto layer = named_atom(*footprint, "layer");
-    const auto side = layer && *layer == "B.Cu" ? BoardSide::back : BoardSide::front;
+    // Board-file footprint graphics are already mirrored on the back side. They need only
+    // the placed rotation/translation when converted directly to world-space board edges.
     for (const auto& segment : local_segments) {
       segments.push_back(RawSegment{
-          geometry::transform_point(segment.start, *position, rotation, side),
-          geometry::transform_point(segment.end, *position, rotation, side), segment.location});
+          geometry::transform_point(segment.start, *position, rotation, BoardSide::front),
+          geometry::transform_point(segment.end, *position, rotation, BoardSide::front), segment.location});
     }
   }
   if (segments.empty()) {
@@ -1725,6 +1725,10 @@ void import_footprints(const SExpression& root, Board& board, Importer& importer
                                                 std::string(pad_name),
                                             importer)};
       pad.net = pad_net(*pad_expression, importer);
+      // A missing board-file pad angle is zero in the placed board frame, not zero relative
+      // to the footprint. Explicit angles below use this same absolute-to-local conversion.
+      pad.rotation = footprint.side == BoardSide::front
+                         ? Microdegrees{-footprint.rotation.value()} : footprint.rotation;
       if (const auto* pad_at = find_child(*pad_expression, "at")) {
         if (const auto local = parse_point(*pad_at, importer, "pad at")) {
           pad.local_position = *local;
@@ -1787,9 +1791,33 @@ void import_footprints(const SExpression& root, Board& board, Importer& importer
       const auto drill = parse_pad_drill(*pad_expression, importer);
       pad.drill_width = drill.width;
       pad.drill_height = drill.height;
-      pad.drill_offset = drill.offset;
+      // KiCad's serialized drill offset moves copper relative to the hole anchor. Canonical
+      // pads instead anchor copper and store the hole relative to it. Rebase both together so
+      // neither copper nor drill is moved in world coordinates by the representation change.
+      const auto file_local_angle = footprint.side == BoardSide::front
+                                        ? pad.rotation : Microdegrees{-pad.rotation.value()};
+      pad.local_position = geometry::transform_point(
+          drill.offset, pad.local_position, file_local_angle, BoardSide::front);
+      pad.drill_offset = {Nanometres{-drill.offset.x.value()}, Nanometres{-drill.offset.y.value()}};
       pad.plated = atom_at(*pad_expression, 2) != std::optional<std::string_view>{"np_thru_hole"};
       footprint.pads.push_back(std::move(pad));
+    }
+    if (footprint.side == BoardSide::back) {
+      // KiCad serializes already-reflected local coordinates. Canonical footprints retain
+      // front-side local geometry and mirror it on placement, so undo the file reflection
+      // exactly once at this boundary. Do not change the canonical placement transform.
+      const auto unmirror = [](Point& point) { point.x = Nanometres{-point.x.value()}; };
+      for (auto& point : footprint.courtyard.vertices) unmirror(point);
+      for (auto& circle : footprint.courtyard_circles) {
+        unmirror(circle.center);
+        unmirror(circle.edge);
+      }
+      for (auto& keepout : footprint.keepouts)
+        for (auto& point : keepout.area.vertices) unmirror(point);
+      for (auto& pad : footprint.pads) {
+        unmirror(pad.local_position);
+        unmirror(pad.drill_offset);
+      }
     }
     board.footprints.push_back(std::move(footprint));
   }
@@ -1797,6 +1825,28 @@ void import_footprints(const SExpression& root, Board& board, Importer& importer
 
 [[nodiscard]] NetId item_net(const SExpression& item, Importer& importer) {
   return referenced_net(item, importer, "copper item", false);
+}
+
+// KiCad 10 serializes electrical gr_curve nets by name even when the board's ordinary copper
+// items use numeric net ordinals.  Accept both forms so source version syntax does not change the
+// canonical electrical curve identity.
+[[nodiscard]] NetId track_bezier_net(const SExpression& item, Importer& importer) {
+  const auto reference = named_atom(item, "net");
+  if (!reference) {
+    importer.error("missing_item_net", "track bezier has no net reference", item.location);
+    return importer.net_by_ordinal.at("0");
+  }
+  if (const auto named = importer.net_by_name.find(std::string(*reference));
+      named != importer.net_by_name.end()) {
+    return named->second;
+  }
+  if (const auto ordinal = importer.net_by_ordinal.find(std::string(*reference));
+      ordinal != importer.net_by_ordinal.end()) {
+    return ordinal->second;
+  }
+  importer.error("unknown_track_bezier_net", "track bezier references an undeclared net",
+                 item.location);
+  return importer.net_by_ordinal.at("0");
 }
 
 void import_tracks_and_vias(const SExpression& root, Board& board, Importer& importer) {
@@ -1833,6 +1883,55 @@ void import_tracks_and_vias(const SExpression& root, Board& board, Importer& imp
             unique_stable_token(*expression, "track-arc-" + std::to_string(arc_index++), importer)},
         item_net(*expression, importer), LayerId{std::string(*layer)}, *start, *middle, *end,
         Nanometres::from_mm(*width), has_atom(*expression, "locked")});
+  }
+
+  // KiCad 10 permits a board graphic cubic on copper to carry a net.  Keep only that
+  // electrical form in the canonical copper model; unnetted graphics remain source syntax and
+  // must never accidentally become routable copper.
+  std::size_t bezier_index = 0;
+  for (const auto* expression : find_children(root, "gr_curve")) {
+    const auto* points = find_child(*expression, "pts");
+    const auto* stroke = find_child(*expression, "stroke");
+    const auto width = stroke == nullptr ? std::optional<double>{}
+                                         : named_number(*stroke, "width", importer);
+    const auto layer = named_atom(*expression, "layer");
+    const auto* net = find_child(*expression, "net");
+    std::vector<Point> controls;
+    if (points != nullptr) {
+      for (const auto* coordinate : find_children(*points, "xy")) {
+        const auto point = parse_point(*coordinate, importer, "gr_curve point");
+        if (!point) {
+          controls.clear();
+          break;
+        }
+        controls.push_back(*point);
+      }
+    }
+    if (net == nullptr || points == nullptr || controls.size() != 4U || !width || !layer ||
+        *width <= 0.0) {
+      // A graphical curve without a net is intentionally outside Board::track_beziers.
+      const auto board_layer =
+          layer ? std::find_if(board.layers.begin(), board.layers.end(), [&layer](const auto& candidate) {
+            return candidate.id == LayerId{std::string(*layer)};
+          })
+                : board.layers.end();
+      if (net == nullptr && board_layer != board.layers.end() &&
+          board_layer->kind == LayerKind::copper) {
+        importer.error("unsupported_unnetted_copper_curve",
+                       "copper-layer gr_curve without a net cannot be represented safely",
+                       expression->location);
+      } else if (net != nullptr) {
+        importer.error("invalid_track_bezier", "netted gr_curve requires four pts, stroke width, and layer",
+                       expression->location);
+      }
+      continue;
+    }
+    board.track_beziers.push_back(TrackBezier{
+        ObjectId{unique_stable_token(*expression,
+                                     "track-bezier-" + std::to_string(bezier_index++), importer)},
+        track_bezier_net(*expression, importer), LayerId{std::string(*layer)}, controls[0], controls[1],
+        controls[2], controls[3], Nanometres::from_mm(*width),
+        has_atom(*expression, "locked") || find_child(*expression, "locked") != nullptr});
   }
 
   std::size_t via_index = 0;

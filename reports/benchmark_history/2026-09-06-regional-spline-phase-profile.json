@@ -1,0 +1,75 @@
+{
+  "schema": 1,
+  "experiment": "regional-spline-phase-profile",
+  "hypothesis": "The 30-second interval after Tier-1 GPU XPBD is dominated by PH-to-native fitting or exact native DRC.",
+  "binary": {
+    "path": "build/native-phase-v14-release-bin/flux-cli",
+    "sha256": "7db4fe43099c9028be1cea1d6ac8ef882c4407a1efa6f1f5486bcb2fd8114d28"
+  },
+  "artifact": "build/tier1-native-phase-v14-release-20260906",
+  "board": "bm_svf",
+  "tier": 1,
+  "status": "diagnostic_timeout",
+  "timeout_seconds": 780,
+  "control": {
+    "upstream_checkpoints": [
+      {"epoch": 1, "violations": 764, "opens": 0},
+      {"epoch": 2, "violations": 1297, "opens": 0},
+      {"epoch": 3, "violations": 2216, "opens": 0}
+    ],
+    "epoch_4": {"windows": 25, "owned_fragments": 226, "corridors": 89, "alternatives": 649},
+    "portfolio_ready_seconds": 672.583989
+  },
+  "window_1_rank_0_microseconds": {
+    "setup": 4471131,
+    "interpolation": 6010119,
+    "xpbd": 432574,
+    "joint_shove": 13284428,
+    "trajectory_polish": 12313502,
+    "adaptive_pair": 4182190,
+    "post_polish": 31430,
+    "quantization": 1598,
+    "native_fit": 1417,
+    "native_drc": 30744,
+    "elapsed": 40777217
+  },
+  "window_1_rank_1_microseconds": {
+    "setup": 3522585,
+    "interpolation": 8185562,
+    "xpbd": 573202,
+    "joint_shove": 13412383,
+    "trajectory_polish": 12135954,
+    "adaptive_pair": 4291369,
+    "post_polish": 30245,
+    "quantization": 5349,
+    "native_fit": 1749,
+    "native_drc": 39961,
+    "elapsed": 42215786
+  },
+  "native_fit_replay": {
+    "source_trace": "build/tier1-dynamic-via-drc-v13-20260906/tier-1-bm_svf/telemetry/bm_svf-global.jsonl",
+    "window": 1,
+    "rank": 0,
+    "routes": 20,
+    "release_total_microseconds": 1527,
+    "maximum_route_microseconds": 1124,
+    "authoritative": false,
+    "note": "Replay reconstructs the recorded quantized PH Bezier spans and is performance diagnosis only."
+  },
+  "rejected_control": {
+    "artifact": "build/tier1-native-phase-v14-20260906",
+    "binary": "build/native-phase-v14-bin/flux-cli",
+    "reason": "The binary was accidentally frozen from CMAKE_BUILD_TYPE=Debug and took 571.6 seconds for only three global stages versus V13's 322.7 seconds for six. It was interrupted before regional realization and excluded from timing conclusions."
+  },
+  "profiling": {
+    "perf_available": false,
+    "reason": "kernel.perf_event_paranoid=4 denied all recording events"
+  },
+  "interpretation": {
+    "hypothesis_result": "disproven",
+    "dominant_phases": ["joint_shove", "trajectory_polish", "interpolation", "adaptive_pair", "setup"],
+    "decision": "keep_phase_telemetry_and_diagnostic_replay",
+    "reason": "Native fit, quantization and DRC jointly consume less than 0.2 percent of the candidate. Joint shove, trajectory polish and adaptive pair repair all invoke the same exact trajectory-neighborhood evaluator serially.",
+    "next_experiment": "Use the optimizer's existing deterministic exact-candidate worker pool with four workers from regional shove/refit and trajectory-polish calls. Preserve the full candidate set and original-slot reduction."
+  }
+}

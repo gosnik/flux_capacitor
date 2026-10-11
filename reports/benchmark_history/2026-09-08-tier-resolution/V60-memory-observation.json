@@ -1,0 +1,12 @@
+{
+  "observation_utc": "2026-09-07T19:50:50.774286+00:00",
+  "pid": 393265,
+  "run": "V60-frontier-256",
+  "partial_observation": true,
+  "memory": {
+    "VmHWM": "379752 kB",
+    "VmRSS": "379752 kB",
+    "VmPeak": "1326688 kB",
+    "Threads": "9"
+  }
+}

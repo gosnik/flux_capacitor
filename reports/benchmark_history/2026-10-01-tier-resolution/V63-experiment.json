@@ -1,0 +1,102 @@
+{
+  "schema": 1,
+  "experiment": "V63",
+  "date_utc": "2026-10-01T05:11:47.468380+00:00",
+  "git_revision": "94aa691ad89576d1c0ac07a5346020da21fc9d06",
+  "working_tree_dirty": true,
+  "board": "bm_svf",
+  "tier": 1,
+  "failing_stage": "exact copper diagnosis to global corrective action",
+  "failure": {
+    "source": "src/quantized_copper_oracle.cpp classify_violation plus src/global_router.cpp prepare_routability_history",
+    "mechanism": "Fixed source hole/via versus generated trace receives change_via_site, but no generated via exists; planar edges are skipped in history preparation.",
+    "scope": "Does not explain all 491 errors; isolated feedback correctness hole."
+  },
+  "hypothesis": "Classifying fixed source via/hole collisions with generated planar traces as corridor repair will deliver physical pressure to movable planar edges without changing DRC validity.",
+  "research": [
+    {
+      "source": "https://docs.kicad.org/doxygen/pns__shove_8cpp_source.html",
+      "technique": "Walk around immutable solid/hole obstacles; repair the movable line.",
+      "assumptions": "Interactive shove differs from global autorouting, but immutability matches.",
+      "integration": "Exact oracle corrective action only",
+      "complexity": "Constant extra evidence flag per violation; existing history rasterization applies",
+      "licence": "Algorithmic concept only; no copied source"
+    }
+  ],
+  "ranked_alternatives": [
+    {
+      "rank": 1,
+      "change": "Fix corrective action for immutable obstacles",
+      "reason": "Small, directly reproduces lost planar feedback, no extra search"
+    },
+    {
+      "rank": 2,
+      "change": "Apply planar history to every generated-via collision",
+      "reason": "Potential useful runup pressure but much broader and can overpenalize; defer"
+    },
+    {
+      "rank": 3,
+      "change": "Early whole-scene regional feedback",
+      "reason": "Useful upstream decisions but additional regional runtime; defer until feedback semantics correct"
+    }
+  ],
+  "success_criterion": "Single-layer red case gains planar history, original DRC unchanged, true generated-via control preserved, matched Tier1 feedback metrics improve and Tier0 stays green.",
+  "regression_criterion": "Relaxed DRC, misplaced dynamic-via repair, increased opens or lower-tier regression",
+  "status": "focused and full core pass; bounded Tier1 unchanged; broader suite, Tier0, normal full run pending",
+  "baseline_cli": "build/tier-resolution-20261001-v61/flux-cli",
+  "patch_baseline": "build/tier-resolution-20261001-v61-source",
+  "source_hashes": {
+    "src/quantized_copper_oracle.cpp": "5c5516685ea93aeafdbc84c5bb504adb697b1721560ac1374137717e38b86250",
+    "tests/unit/core_tests.cpp": "ce005e1151b3f43fbf7e235d38df2c32ad41cb1e46a2288bf5068ffe7bcc910f"
+  },
+  "review_refinements": [
+    "Resolve immutable source via/drill bounds via drill_shapes inclworldoffset",
+    "Use required clearance expansion for mild gap violations; avoid whole-track union",
+    "Limit added static bounds to newly reclassified cases, preserve dynamicvia behavior",
+    "Legal 0.5mm microcase grid avoids invalid_input"
+  ],
+  "validation": {
+    "core_tests": "52/52",
+    "focused_oracle": "pass including fixedvia, mildclearancegap, transformedNPTH and validgridplanarhistory",
+    "generated_via_control": "pass",
+    "matched_feedback_probe": {
+      "V61_before": {
+        "duration_seconds": 309.674014,
+        "paths": 78,
+        "opens": 0,
+        "malformed": 0,
+        "tracks": 1292,
+        "vias": 46,
+        "errors": 796,
+        "categories": {
+          "track_clearance": 570,
+          "track_via_clearance": 162,
+          "hole_clearance": 58,
+          "via_clearance": 6
+        },
+        "history_edges": 8579,
+        "history_pressure": 3983,
+        "regional_assessment": "unknown; incompleteassignment"
+      },
+      "V63_after": {
+        "duration_seconds": 308.620776,
+        "paths": 78,
+        "opens": 0,
+        "malformed": 0,
+        "tracks": 1292,
+        "vias": 46,
+        "errors": 796,
+        "categories": {
+          "track_clearance": 570,
+          "track_via_clearance": 162,
+          "hole_clearance": 58,
+          "via_clearance": 6
+        },
+        "history_edges": 8579,
+        "history_pressure": 3983,
+        "regional_assessment": "unknown; incompleteassignment"
+      }
+    }
+  },
+  "interpretation": "Typed fixed-obstacle correction passes microcase but does not affect measured frontier scene; no routing improvement claim."
+}

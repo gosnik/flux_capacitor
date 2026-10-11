@@ -1,0 +1,27 @@
+{
+  "core": "48/48",
+  "core_log": "build/tier-resolution-verification/v54-core.log",
+  "focused_before": "FAIL: deferred checkpoint displaced final physical assessment",
+  "focused_before_log": "build/tier-resolution-verification/v54-before-regression.log",
+  "broader_tests": "126/133; same seven known baseline demo failures",
+  "broader_log": "build/tier-resolution-verification/v54-ctest.log",
+  "tier0": {
+    "qualified": true,
+    "artifacts": "build/tier-resolution-v54-tier0",
+    "paths": 50,
+    "tracks": 243,
+    "arcs": 0,
+    "vias": 5,
+    "internal_opens": 0,
+    "kicad_errors": 0,
+    "kicad_unconnected": 0,
+    "ordinary_angle_audit_passed": true,
+    "board_sha256": "e628264d831f83efc7b03db874d6d01c47c01258aabcb2457f093025a10a44bf"
+  },
+  "release_cli_sha256": "455bf0737628a8dc15df3b184e3040a74c85155d10e6b583c9c0567ec296e0bd",
+  "tier1_limit": "Completed full bounded run is V52; V54 selection change verified by reproduced regression and Tier 0, not a relabeled full Tier-1 rerun.",
+  "debug_cli_rebuilt": true,
+  "debug_tier0_qualified": true,
+  "debug_tier0_artifacts": "build/tier-resolution-v54-dev-tier0",
+  "debug_cli_sha256": "7e0f8a56f9c5099d8440985b8afff7bc1c9e44b02f09e1b68bbae02580c4b1b9"
+}

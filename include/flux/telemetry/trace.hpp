@@ -13,6 +13,8 @@ namespace flux::telemetry {
 
 class Trace {
 public:
+  static constexpr std::size_t maximum_trace_bytes = 128U * 1024U * 1024U;
+  static constexpr std::size_t maximum_line_bytes = 8U * 1024U * 1024U;
   [[nodiscard]] bool load(const std::filesystem::path& path, std::string& error);
   [[nodiscard]] bool load_text(std::string_view text, std::string& error);
 

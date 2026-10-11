@@ -1,0 +1,508 @@
+{
+  "schema": 1,
+  "experiment": "tier1-capacity-warmup-control",
+  "notes": [
+    "Both N1/R0 and N4/R0 reached diagnostic 900 s planning cap in residual repair, not their normal 7200 s budget. No KiCad DRC evaluated.",
+    "Both selected identical 78-path geometry SHA b1c1535af4da65f70c943fa1608999ed771aa0355aba1356a149a79390554a43. N4 later iterations lose nets and the original complete seed wins checkpoint selection; do not retain a warm-up policy change."
+  ],
+  "runs": [
+    {
+      "root": "build/curvature-corridor-tier1-seed",
+      "metadata": {
+        "artifact_contract": {
+          "analysis_pngs_required_for_routing": true,
+          "failed_route_png_mode": "both",
+          "files_write_once": true,
+          "max_failed_route_png_results": 1,
+          "source_boards_immutable": true,
+          "telemetry_level": null,
+          "telemetry_required_for_routing": true
+        },
+        "capability_contract": {
+          "reference": {
+            "commit": "e239e067c204870b4ac570fc9e931a374bdfd5b4",
+            "project": "KiCadRoutingTools",
+            "repository": "https://github.com/drandyhaas/KiCadRoutingTools",
+            "version": "0.21.5"
+          },
+          "schema": "flux_parity_manifest",
+          "schema_version": 1,
+          "sha256": "d8b57b3e1ba5c761fa2c610ffea1aa2e1f70f845f988ab7e92fbceca36fda5d0"
+        },
+        "corpus": {
+          "manifest_sha256": "e5685277e3917f4a153d29a2214afb717b13b41395bcf48b04f555adb923bede",
+          "path": "/home/adam/qtbits/flux_capacitor/tests/fixtures/routing-corpus",
+          "source_corpus": {
+            "commit": "661c88b3c3b0ebc9ade65eab63d30b1cde217fb4",
+            "discussion": "https://github.com/drandyhaas/KiCadRoutingTools/discussions/117",
+            "repository": "drandyhaas/KiCadRoutingTools",
+            "stress_directory": "https://github.com/drandyhaas/KiCadRoutingTools/tree/main/tests/stress"
+          }
+        },
+        "created_utc": "2026-09-06T00:55:21.729829+00:00",
+        "environment": {
+          "flux": {
+            "board_schema": 21,
+            "engine": "flux_capacitor",
+            "gpu_api_version_raw": 4211017,
+            "gpu_available": true,
+            "gpu_device": "NVIDIA GeForce RTX 5080",
+            "gpu_device_id": 11266,
+            "gpu_device_type": "discrete",
+            "gpu_diagnostic": "",
+            "gpu_driver_version_raw": 2496987136,
+            "gpu_override": null,
+            "gpu_vendor_id": 4318,
+            "production_gpu_required": true,
+            "version": "0.140.0"
+          },
+          "flux_vulkan_device_override": null,
+          "inkscape": {
+            "available": true,
+            "command": [
+              "/snap/bin/inkscape",
+              "--version"
+            ],
+            "returncode": 0,
+            "stderr": "",
+            "stdout": "Inkscape 1.4.4 (dcaf3e7d9e, 2026-05-05)"
+          },
+          "kicad_cli": {
+            "available": true,
+            "command": [
+              "/usr/bin/kicad-cli",
+              "--version"
+            ],
+            "returncode": 0,
+            "stderr": "",
+            "stdout": "9.0.8"
+          },
+          "platform": "Linux-7.0.0-31-generic-x86_64-with-glibc2.43",
+          "python": "3.14.4 (main, Jun 18 2026, 14:25:02) [GCC 15.2.0]"
+        },
+        "executable": {
+          "path": "/home/adam/qtbits/flux_capacitor/build/release/flux-cli",
+          "sha256": "a207a0253daff3a0e09a663b9b85f86c2cf6b4a94ca054bfbfa5b2822fd0129e"
+        },
+        "invocation": [
+          "/home/adam/qtbits/flux_capacitor/tests/python/verify_routing_corpus.py",
+          "--flux-cli",
+          "build/release/flux-cli",
+          "--corpus",
+          "tests/fixtures/routing-corpus",
+          "--board",
+          "bm_svf",
+          "--artifacts",
+          "build/curvature-corridor-tier1-seed",
+          "--iteration-budget",
+          "1",
+          "--planning-timeout-seconds",
+          "900",
+          "--kicad-cli",
+          "/usr/bin/kicad-cli",
+          "--inkscape",
+          "/snap/bin/inkscape",
+          "--max-failed-route-png-results",
+          "1"
+        ],
+        "mode": "routing",
+        "schema": "flux_routing_baseline",
+        "schema_version": 1,
+        "selection": {
+          "boards": [
+            {
+              "effective_planning_timeout_seconds": 900,
+              "id": "bm_svf",
+              "level": 1,
+              "project_sha256": "04856904fe9070f7decd33b676d3f58e44676b6c930e65fa8a16f0ddd65d54db",
+              "qualification": "detailed_complete",
+              "reference_sha256": "52317a66f7442b3b260f07ff1b7c16dd94f99c088c61533b81698cbda6d4d77b",
+              "router_args": [
+                "--crossing-safe-diagonal-grid",
+                "--direct-medial",
+                "--grid-pitch-nm",
+                "650000",
+                "--xpbd-relaxation",
+                "--xpbd-feedback",
+                "--atomic-net-trees",
+                "--hard-capacity-start-iteration",
+                "4",
+                "--max-hard-capacity-ripup-attempts-per-pass",
+                "8",
+                "--max-hard-capacity-ripup-nets-per-attempt",
+                "8",
+                "--max-hard-capacity-conflict-set-states-per-attempt",
+                "256",
+                "--terminal-escape-proximity-cost",
+                "500",
+                "--rollback-failed-hard-capacity-ripup",
+                "--defer-hard-capacity-ripup-victims-to-pass-tail",
+                "--protect-recovered-hard-capacity-ripup-nets"
+              ],
+              "source_sha256": "308ce5513cb6b2b33820648a0062a54f548f6b3c13d856cdcd9b7c3ac8a20d2a",
+              "status": "unlocked"
+            }
+          ],
+          "explicit_boards": [
+            "bm_svf"
+          ],
+          "iteration_budget_override": 1,
+          "level": "unlocked",
+          "planning_timeout_override_seconds": 900
+        }
+      },
+      "outcome": {
+        "artifacts": [
+          {
+            "bytes": 4536,
+            "path": "run-metadata.json",
+            "sha256": "333b3b24bb3f80c8966cdecec60b87207f27aafd38094e0aa7a3e0077ad56e19"
+          },
+          {
+            "bytes": 1214,
+            "path": "tier-1-bm_svf/analysis/global/failed-route-previews.json",
+            "sha256": "f590dd79b82a12b6717dd4bafe2c337667d2ada4079c541beb4c606f13318ace"
+          },
+          {
+            "bytes": 277870,
+            "path": "tier-1-bm_svf/analysis/global/near-00-window-7/copper-00-B_Cu.png",
+            "sha256": "6d6e61958979a0daf47379872193f90d1b2d28020b7f7533fc698f15f8da2559"
+          },
+          {
+            "bytes": 351352,
+            "path": "tier-1-bm_svf/analysis/global/near-00-window-7/copper-01-F_Cu.png",
+            "sha256": "135ddf73170733e38a5bfa7450a6dd9f5219934ab01d77e09c5d2e1c0918787d"
+          },
+          {
+            "bytes": 431381,
+            "path": "tier-1-bm_svf/analysis/global/near-00-window-7/provisional-overview.png",
+            "sha256": "d2d19d3901db1fb93f04239b982d11eb52ce8f436da39588ad55757fa596a8d2"
+          },
+          {
+            "bytes": 8073,
+            "path": "tier-1-bm_svf/analysis/global/near-00-window-7/spline-controls-closeup.png",
+            "sha256": "2abd0cf25f8faab5cefa050edfa4f7c442956895edcdbc366dccb561945242fc"
+          },
+          {
+            "bytes": 285151,
+            "path": "tier-1-bm_svf/analysis/global/near-00-window-7/spline-controls.png",
+            "sha256": "5b27a3e1911513ffa30e05dd01e31af4547805c0edf75efc277ea539eea7a745"
+          },
+          {
+            "bytes": 460241086,
+            "path": "tier-1-bm_svf/telemetry/bm_svf-global.jsonl",
+            "sha256": "646a580a00d1c94dd5530befcf3d9e198ffd4cd6adb92a66d431abac268015e2"
+          }
+        ],
+        "boards": [],
+        "diagnostic": "Command '['/home/adam/qtbits/flux_capacitor/build/release/flux-cli', 'route-kicad', '/home/adam/qtbits/flux_capacitor/tests/fixtures/routing-corpus/bm_svf.kicad_pcb', '--max-router-iterations', '1', '--max-expansions', '50000', '--max-static-seed-workers', '2', '--search-diversification', '--crossing-safe-diagonal-grid', '--direct-medial', '--grid-pitch-nm', '650000', '--xpbd-relaxation', '--xpbd-feedback', '--atomic-net-trees', '--hard-capacity-start-iteration', '4', '--max-hard-capacity-ripup-attempts-per-pass', '8', '--max-hard-capacity-ripup-nets-per-attempt', '8', '--max-hard-capacity-conflict-set-states-per-attempt', '256', '--terminal-escape-proximity-cost', '500', '--rollback-failed-hard-capacity-ripup', '--defer-hard-capacity-ripup-victims-to-pass-tail', '--protect-recovered-hard-capacity-ripup-nets', '--telemetry-level', 'diagnostic', '--telemetry-record', '/home/adam/qtbits/flux_capacitor/build/curvature-corridor-tier1-seed/tier-1-bm_svf/telemetry/bm_svf-global.jsonl']' timed out after 900 seconds",
+        "schema": "flux_routing_baseline_result",
+        "schema_version": 1,
+        "status": "failed"
+      },
+      "planning_records": [],
+      "detailed_records": [],
+      "epoch_telemetry": [
+        {
+          "artifact": "build/curvature-corridor-tier1-seed/tier-1-bm_svf/telemetry/bm_svf-global.jsonl",
+          "messages": [
+            "interleaved routing epoch started: pathfinder_budget=1, retained_portfolios=0, physical_history_entries=0"
+          ],
+          "events": [
+            {
+              "monotonic_time_us": 1798,
+              "message": "interleaved routing epoch started: pathfinder_budget=1, retained_portfolios=0, physical_history_entries=0"
+            }
+          ],
+          "event_counts": {
+            "RoutingStarted": 1,
+            "snapshot": 199,
+            "SearchSummary": 2308,
+            "RouteCandidateSelected": 1328,
+            "HydraulicFieldUpdated": 51,
+            "NetQueued": 25,
+            "PathFinderIterationStarted": 1,
+            "RouteRippedUp": 11,
+            "PathFinderIterationCompleted": 1,
+            "ConflictAdded": 64
+          },
+          "non_authoritative_last_snapshot": {
+            "monotonic_time_us": 515486623,
+            "metrics": {
+              "iteration": 0,
+              "total_nets": 25,
+              "routed_nets": 25,
+              "unrouted_nets": 0,
+              "total_groups": 0,
+              "routed_groups": 0,
+              "unrouted_groups": 0,
+              "sampled_overflow": 11,
+              "corridor_overflow": 1,
+              "physical_overflow_nm": 3524016,
+              "clearance_shadow_conflicts": 213,
+              "regional_conflicts": 64,
+              "route_cost": 189239,
+              "vias": 0,
+              "rip_ups": 11,
+              "search_expansions": 0,
+              "selected_checkpoint": 0,
+              "best_checkpoint": 0,
+              "selected_is_best": false
+            }
+          }
+        }
+      ]
+    },
+    {
+      "root": "build/curvature-corridor-tier1-capacity4",
+      "metadata": {
+        "artifact_contract": {
+          "analysis_pngs_required_for_routing": true,
+          "failed_route_png_mode": "both",
+          "files_write_once": true,
+          "max_failed_route_png_results": 1,
+          "source_boards_immutable": true,
+          "telemetry_level": null,
+          "telemetry_required_for_routing": true
+        },
+        "capability_contract": {
+          "reference": {
+            "commit": "e239e067c204870b4ac570fc9e931a374bdfd5b4",
+            "project": "KiCadRoutingTools",
+            "repository": "https://github.com/drandyhaas/KiCadRoutingTools",
+            "version": "0.21.5"
+          },
+          "schema": "flux_parity_manifest",
+          "schema_version": 1,
+          "sha256": "d8b57b3e1ba5c761fa2c610ffea1aa2e1f70f845f988ab7e92fbceca36fda5d0"
+        },
+        "corpus": {
+          "manifest_sha256": "e5685277e3917f4a153d29a2214afb717b13b41395bcf48b04f555adb923bede",
+          "path": "/home/adam/qtbits/flux_capacitor/tests/fixtures/routing-corpus",
+          "source_corpus": {
+            "commit": "661c88b3c3b0ebc9ade65eab63d30b1cde217fb4",
+            "discussion": "https://github.com/drandyhaas/KiCadRoutingTools/discussions/117",
+            "repository": "drandyhaas/KiCadRoutingTools",
+            "stress_directory": "https://github.com/drandyhaas/KiCadRoutingTools/tree/main/tests/stress"
+          }
+        },
+        "created_utc": "2026-09-06T00:59:53.846012+00:00",
+        "environment": {
+          "flux": {
+            "board_schema": 21,
+            "engine": "flux_capacitor",
+            "gpu_api_version_raw": 4211017,
+            "gpu_available": true,
+            "gpu_device": "NVIDIA GeForce RTX 5080",
+            "gpu_device_id": 11266,
+            "gpu_device_type": "discrete",
+            "gpu_diagnostic": "",
+            "gpu_driver_version_raw": 2496987136,
+            "gpu_override": null,
+            "gpu_vendor_id": 4318,
+            "production_gpu_required": true,
+            "version": "0.140.0"
+          },
+          "flux_vulkan_device_override": null,
+          "inkscape": {
+            "available": true,
+            "command": [
+              "/snap/bin/inkscape",
+              "--version"
+            ],
+            "returncode": 0,
+            "stderr": "",
+            "stdout": "Inkscape 1.4.4 (dcaf3e7d9e, 2026-05-05)"
+          },
+          "kicad_cli": {
+            "available": true,
+            "command": [
+              "/usr/bin/kicad-cli",
+              "--version"
+            ],
+            "returncode": 0,
+            "stderr": "",
+            "stdout": "9.0.8"
+          },
+          "platform": "Linux-7.0.0-31-generic-x86_64-with-glibc2.43",
+          "python": "3.14.4 (main, Jun 18 2026, 14:25:02) [GCC 15.2.0]"
+        },
+        "executable": {
+          "path": "/home/adam/qtbits/flux_capacitor/build/release/flux-cli",
+          "sha256": "a207a0253daff3a0e09a663b9b85f86c2cf6b4a94ca054bfbfa5b2822fd0129e"
+        },
+        "invocation": [
+          "/home/adam/qtbits/flux_capacitor/tests/python/verify_routing_corpus.py",
+          "--flux-cli",
+          "build/release/flux-cli",
+          "--corpus",
+          "tests/fixtures/routing-corpus",
+          "--board",
+          "bm_svf",
+          "--artifacts",
+          "build/curvature-corridor-tier1-capacity4",
+          "--iteration-budget",
+          "4",
+          "--physical-feedback-retries",
+          "0",
+          "--planning-timeout-seconds",
+          "900",
+          "--kicad-cli",
+          "/usr/bin/kicad-cli",
+          "--inkscape",
+          "/snap/bin/inkscape",
+          "--max-failed-route-png-results",
+          "1"
+        ],
+        "mode": "routing",
+        "schema": "flux_routing_baseline",
+        "schema_version": 1,
+        "selection": {
+          "boards": [
+            {
+              "effective_planning_timeout_seconds": 900,
+              "id": "bm_svf",
+              "level": 1,
+              "project_sha256": "04856904fe9070f7decd33b676d3f58e44676b6c930e65fa8a16f0ddd65d54db",
+              "qualification": "detailed_complete",
+              "reference_sha256": "52317a66f7442b3b260f07ff1b7c16dd94f99c088c61533b81698cbda6d4d77b",
+              "router_args": [
+                "--crossing-safe-diagonal-grid",
+                "--direct-medial",
+                "--grid-pitch-nm",
+                "650000",
+                "--xpbd-relaxation",
+                "--xpbd-feedback",
+                "--atomic-net-trees",
+                "--hard-capacity-start-iteration",
+                "4",
+                "--max-hard-capacity-ripup-attempts-per-pass",
+                "8",
+                "--max-hard-capacity-ripup-nets-per-attempt",
+                "8",
+                "--max-hard-capacity-conflict-set-states-per-attempt",
+                "256",
+                "--terminal-escape-proximity-cost",
+                "500",
+                "--rollback-failed-hard-capacity-ripup",
+                "--defer-hard-capacity-ripup-victims-to-pass-tail",
+                "--protect-recovered-hard-capacity-ripup-nets",
+                "--physical-feedback-retries",
+                "0"
+              ],
+              "source_sha256": "308ce5513cb6b2b33820648a0062a54f548f6b3c13d856cdcd9b7c3ac8a20d2a",
+              "status": "unlocked"
+            }
+          ],
+          "explicit_boards": [
+            "bm_svf"
+          ],
+          "iteration_budget_override": 4,
+          "level": "unlocked",
+          "planning_timeout_override_seconds": 900
+        }
+      },
+      "outcome": {
+        "artifacts": [
+          {
+            "bytes": 4641,
+            "path": "run-metadata.json",
+            "sha256": "659e536468d12018131f0419a865131024e783daa0349235becda389655f6bdd"
+          },
+          {
+            "bytes": 1219,
+            "path": "tier-1-bm_svf/analysis/global/failed-route-previews.json",
+            "sha256": "838afe1d0a2699681fd0cc8cd77cf177de80f42ebca478ab3c2e990b282c1771"
+          },
+          {
+            "bytes": 277870,
+            "path": "tier-1-bm_svf/analysis/global/near-00-window-7/copper-00-B_Cu.png",
+            "sha256": "6d6e61958979a0daf47379872193f90d1b2d28020b7f7533fc698f15f8da2559"
+          },
+          {
+            "bytes": 351352,
+            "path": "tier-1-bm_svf/analysis/global/near-00-window-7/copper-01-F_Cu.png",
+            "sha256": "135ddf73170733e38a5bfa7450a6dd9f5219934ab01d77e09c5d2e1c0918787d"
+          },
+          {
+            "bytes": 431381,
+            "path": "tier-1-bm_svf/analysis/global/near-00-window-7/provisional-overview.png",
+            "sha256": "d2d19d3901db1fb93f04239b982d11eb52ce8f436da39588ad55757fa596a8d2"
+          },
+          {
+            "bytes": 8073,
+            "path": "tier-1-bm_svf/analysis/global/near-00-window-7/spline-controls-closeup.png",
+            "sha256": "2abd0cf25f8faab5cefa050edfa4f7c442956895edcdbc366dccb561945242fc"
+          },
+          {
+            "bytes": 285151,
+            "path": "tier-1-bm_svf/analysis/global/near-00-window-7/spline-controls.png",
+            "sha256": "5b27a3e1911513ffa30e05dd01e31af4547805c0edf75efc277ea539eea7a745"
+          },
+          {
+            "bytes": 482361843,
+            "path": "tier-1-bm_svf/telemetry/bm_svf-global.jsonl",
+            "sha256": "25e2dcdcedfa0fe9fe5638764a7c30ceb340e1c2c3bc75ef2b23e0d2bcea6be3"
+          }
+        ],
+        "boards": [],
+        "diagnostic": "Command '['/home/adam/qtbits/flux_capacitor/build/release/flux-cli', 'route-kicad', '/home/adam/qtbits/flux_capacitor/tests/fixtures/routing-corpus/bm_svf.kicad_pcb', '--max-router-iterations', '4', '--max-expansions', '50000', '--max-static-seed-workers', '2', '--search-diversification', '--crossing-safe-diagonal-grid', '--direct-medial', '--grid-pitch-nm', '650000', '--xpbd-relaxation', '--xpbd-feedback', '--atomic-net-trees', '--hard-capacity-start-iteration', '4', '--max-hard-capacity-ripup-attempts-per-pass', '8', '--max-hard-capacity-ripup-nets-per-attempt', '8', '--max-hard-capacity-conflict-set-states-per-attempt', '256', '--terminal-escape-proximity-cost', '500', '--rollback-failed-hard-capacity-ripup', '--defer-hard-capacity-ripup-victims-to-pass-tail', '--protect-recovered-hard-capacity-ripup-nets', '--physical-feedback-retries', '0', '--telemetry-level', 'diagnostic', '--telemetry-record', '/home/adam/qtbits/flux_capacitor/build/curvature-corridor-tier1-capacity4/tier-1-bm_svf/telemetry/bm_svf-global.jsonl']' timed out after 900 seconds",
+        "schema": "flux_routing_baseline_result",
+        "schema_version": 1,
+        "status": "failed"
+      },
+      "planning_records": [],
+      "detailed_records": [],
+      "epoch_telemetry": [
+        {
+          "artifact": "build/curvature-corridor-tier1-capacity4/tier-1-bm_svf/telemetry/bm_svf-global.jsonl",
+          "messages": [
+            "interleaved routing epoch started: pathfinder_budget=4, retained_portfolios=0, physical_history_entries=0"
+          ],
+          "events": [
+            {
+              "monotonic_time_us": 2416,
+              "message": "interleaved routing epoch started: pathfinder_budget=4, retained_portfolios=0, physical_history_entries=0"
+            }
+          ],
+          "event_counts": {
+            "RoutingStarted": 1,
+            "snapshot": 209,
+            "SearchSummary": 2337,
+            "RouteCandidateSelected": 1328,
+            "HydraulicFieldUpdated": 51,
+            "NetQueued": 25,
+            "PathFinderIterationStarted": 4,
+            "RouteRippedUp": 13,
+            "PathFinderIterationCompleted": 4,
+            "ConflictAdded": 64
+          },
+          "non_authoritative_last_snapshot": {
+            "monotonic_time_us": 558790064,
+            "metrics": {
+              "iteration": 0,
+              "total_nets": 5,
+              "routed_nets": 5,
+              "unrouted_nets": 0,
+              "total_groups": 0,
+              "routed_groups": 0,
+              "unrouted_groups": 0,
+              "sampled_overflow": 11,
+              "corridor_overflow": 1,
+              "physical_overflow_nm": 3524016,
+              "clearance_shadow_conflicts": 213,
+              "regional_conflicts": 64,
+              "route_cost": 189239,
+              "vias": 0,
+              "rip_ups": 13,
+              "search_expansions": 0,
+              "selected_checkpoint": 0,
+              "best_checkpoint": 0,
+              "selected_is_best": false
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

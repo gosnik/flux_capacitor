@@ -564,13 +564,18 @@ classify_routing_chords(const std::vector<RoutingComputeSegment>& chords,
                         std::int64_t required_clearance_nm, std::int64_t numerical_guard_nm,
                         bool prefer_gpu) {
   if (chords.empty() || boundary_segments.empty() || required_clearance_nm < 0 ||
-      numerical_guard_nm < 0)
+      numerical_guard_nm < 0 ||
+      required_clearance_nm > std::numeric_limits<std::int64_t>::max() - numerical_guard_nm)
     return RoutingComputeChordBatchResult{
         {}, false, false, "invalid routing chord classification request"};
 #if FLUX_HAS_VULKAN_HYDRAULIC_PATHS
-  if (prefer_gpu &&
-      chords.size() <= std::numeric_limits<std::size_t>::max() / boundary_segments.size() &&
-      chords.size() * boundary_segments.size() >= 4'096U) {
+  // The Vulkan implementation partitions this product into bounded resident chunks. Avoid
+  // computing it here so a large valid request cannot overflow before it reaches the batcher.
+  const auto minimum_chords_for_gpu =
+      boundary_segments.size() >= 4'096U
+          ? 1U
+          : (4'096U + boundary_segments.size() - 1U) / boundary_segments.size();
+  if (prefer_gpu && chords.size() >= minimum_chords_for_gpu) {
     auto gpu = classify_routing_chords_gpu(chords, boundary_segments, required_clearance_nm,
                                            numerical_guard_nm);
     if (gpu.ok())

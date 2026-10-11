@@ -37,6 +37,7 @@ namespace {
   for (const auto& arc : board.track_arcs) {
     result.insert(arc.id.value());
   }
+  for (const auto& curve : board.track_beziers) result.insert(curve.id.value());
   for (const auto& via : board.vias) {
     result.insert(via.id.value());
   }
@@ -196,6 +197,10 @@ struct AttemptResult {
         return result;
       }
 
+      if (std::any_of(candidate.track_beziers.begin(), candidate.track_beziers.end(), [&](const auto& curve) {
+            return curve.net == via.net &&
+                   (curve.start == original_position || curve.end == original_position);
+          })) return result;
       std::vector<std::size_t> attached_tracks;
       for (std::size_t index = 0U; index < candidate.tracks.size(); ++index) {
         const auto& track = candidate.tracks[index];

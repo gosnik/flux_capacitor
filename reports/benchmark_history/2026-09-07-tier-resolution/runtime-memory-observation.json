@@ -1,0 +1,29 @@
+[
+  {
+    "pid": 203903,
+    "command": "/home/adam/qtbits/flux_capacitor/build/dev/flux-cli route-kicad /home/adam/qtbits/flux_capacitor/tests/fixtures/routing-corpus/bm_svf.kicad_pcb --max-router-iterations 30 --max-expansions 50000 --max-static-seed-workers 2 --search-diversification --crossing-safe-diagonal-grid --direct-medial --grid-pitch-nm 650000 --xpbd-relaxation --xpbd-feedback --atomic-net-trees --hard-capacity-start-iteration 4 --max-hard-capacity-ripup-attempts-per-pass 8 --max-hard-capacity-ripup-nets-per-attempt 8 --max-hard-capacity-conflict-set-states-per-attempt 256 --terminal-escape-proximity-cost 500 --rollback-failed-hard-capacity-ripup --defer-hard-capacity-ripup-victims-to-pass-tail --protect-recovered-hard-capacity-ripup-nets --telemetry-level diagnostic --telemetry-record /home/adam/qtbits/flux_capacitor/build/tier-resolution-v46-tier1-full/tier-1-bm_svf/telemetry/bm_svf-global.jsonl ",
+    "observed_memory": {
+      "VmHWM": "477096 kB",
+      "VmRSS": "465096 kB",
+      "Threads": "10"
+    }
+  },
+  {
+    "pid": 205978,
+    "command": "/home/adam/qtbits/flux_capacitor/build/release/flux-cli route-kicad /home/adam/qtbits/flux_capacitor/tests/fixtures/routing-corpus/bm_svf.kicad_pcb --max-router-iterations 30 --max-expansions 50000 --max-static-seed-workers 2 --search-diversification --crossing-safe-diagonal-grid --direct-medial --grid-pitch-nm 650000 --xpbd-relaxation --xpbd-feedback --atomic-net-trees --hard-capacity-start-iteration 4 --max-hard-capacity-ripup-attempts-per-pass 8 --max-hard-capacity-ripup-nets-per-attempt 8 --max-hard-capacity-conflict-set-states-per-attempt 256 --terminal-escape-proximity-cost 500 --rollback-failed-hard-capacity-ripup --defer-hard-capacity-ripup-victims-to-pass-tail --protect-recovered-hard-capacity-ripup-nets --telemetry-level diagnostic --telemetry-record /home/adam/qtbits/flux_capacitor/build/tier-resolution-v47-release-tier1/tier-1-bm_svf/telemetry/bm_svf-global.jsonl ",
+    "observed_memory": {
+      "VmHWM": "469528 kB",
+      "VmRSS": "458636 kB",
+      "Threads": "9"
+    }
+  },
+  {
+    "pid": 209894,
+    "command": "/home/adam/qtbits/flux_capacitor/build/release/flux-cli route-kicad /home/adam/qtbits/flux_capacitor/tests/fixtures/routing-corpus/bm_svf.kicad_pcb --max-router-iterations 30 --max-expansions 50000 --max-static-seed-workers 2 --search-diversification --crossing-safe-diagonal-grid --grid-pitch-nm 250000 --xpbd-relaxation --xpbd-feedback --atomic-net-trees --terminal-escape-proximity-cost 500 --dense-candidate-grid --physical-feedback-retries 0 --feedback-shadow-policy enforced --no-full-strength-first-pass --telemetry-level diagnostic --telemetry-record /home/adam/qtbits/flux_capacitor/build/tier-resolution-v47-release-dense250/tier-1-bm_svf/telemetry/bm_svf-global.jsonl ",
+    "observed_memory": {
+      "VmHWM": "1725600 kB",
+      "VmRSS": "1725600 kB",
+      "Threads": "9"
+    }
+  }
+]

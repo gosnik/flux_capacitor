@@ -1,0 +1,107 @@
+{
+    "$schema": "https://schemas.kicad.org/drc.v1.json",
+    "coordinate_units": "mm",
+    "date": "2026-09-07T19:00:17+0800",
+    "included_severities": [
+        "error"
+    ],
+    "kicad_version": "9.0.8",
+    "schematic_parity": [],
+    "source": "gb_nintendo_power.kicad_pcb",
+    "unconnected_items": [
+        {
+            "description": "Missing connection between items",
+            "items": [
+                {
+                    "description": "Pad 1 [/GND] of C3 on F.Cu",
+                    "pos": {
+                        "x": 112.7,
+                        "y": 104.56
+                    },
+                    "uuid": "01e07d4f-a4b6-4f89-a6c9-bae0053bd2dd"
+                },
+                {
+                    "description": "Zone [/GND] on F.Cu and B.Cu, priority 0",
+                    "pos": {
+                        "x": 100.0,
+                        "y": 60.0
+                    },
+                    "uuid": "a368cdca-60ff-4bde-94c9-cebb33313bd6"
+                }
+            ],
+            "severity": "error",
+            "type": "unconnected_items"
+        }
+    ],
+    "violations": [
+        {
+            "description": "Thermal relief connection to zone incomplete (layer F.Cu; zone min spoke count 2; actual 1)",
+            "items": [
+                {
+                    "description": "Zone [/GND] on F.Cu and B.Cu, priority 0",
+                    "pos": {
+                        "x": 100.0,
+                        "y": 60.0
+                    },
+                    "uuid": "a368cdca-60ff-4bde-94c9-cebb33313bd6"
+                },
+                {
+                    "description": "Pad 2 [/GND] of C2 on F.Cu",
+                    "pos": {
+                        "x": 112.5,
+                        "y": 83.31
+                    },
+                    "uuid": "7217883a-d127-4b3f-852b-9524b9ff9b30"
+                }
+            ],
+            "severity": "error",
+            "type": "starved_thermal"
+        },
+        {
+            "description": "Board edge clearance violation (board setup constraints edge clearance 0.5000 mm; actual 0.4983 mm)",
+            "items": [
+                {
+                    "description": "Arc on Edge.Cuts",
+                    "pos": {
+                        "x": 102.0,
+                        "y": 119.25
+                    },
+                    "uuid": "a73d8f35-4ad8-40b6-a09c-950d6d9edf94"
+                },
+                {
+                    "description": "Pad 1 [/VCC] of J1 on F.Cu",
+                    "pos": {
+                        "x": 102.0,
+                        "y": 116.25
+                    },
+                    "uuid": "4f19edf3-662d-49c1-b93f-eeb099989616"
+                }
+            ],
+            "severity": "error",
+            "type": "copper_edge_clearance"
+        },
+        {
+            "description": "Board edge clearance violation (board setup constraints edge clearance 0.5000 mm; actual 0.4983 mm)",
+            "items": [
+                {
+                    "description": "Arc on Edge.Cuts",
+                    "pos": {
+                        "x": 149.0,
+                        "y": 119.25
+                    },
+                    "uuid": "ab330ac3-4dab-4300-9e1e-26799419515e"
+                },
+                {
+                    "description": "Pad 32 [/GND] of J1 on F.Cu",
+                    "pos": {
+                        "x": 149.0,
+                        "y": 116.25
+                    },
+                    "uuid": "3561531f-8660-4e2f-9e4d-54ff914cc2d3"
+                }
+            ],
+            "severity": "error",
+            "type": "copper_edge_clearance"
+        }
+    ]
+}

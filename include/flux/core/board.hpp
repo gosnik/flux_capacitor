@@ -11,7 +11,7 @@
 
 namespace flux {
 
-inline constexpr std::uint32_t board_schema_version = 21;
+inline constexpr std::uint32_t board_schema_version = 22;
 inline constexpr std::int64_t max_abs_coordinate_nm = 1'000'000'000;
 
 struct Point {
@@ -305,6 +305,22 @@ struct TrackArc {
   bool operator==(const TrackArc&) const = default;
 };
 
+// A cubic Bezier copper centreline.  The four integer-nanometre control points are canonical;
+// tessellations are deliberately derived views and must not replace this source geometry.
+struct TrackBezier {
+  ObjectId id;
+  NetId net;
+  LayerId layer;
+  Point start;
+  Point control1;
+  Point control2;
+  Point end;
+  Nanometres width;
+  bool locked{false};
+
+  bool operator==(const TrackBezier&) const = default;
+};
+
 struct Via {
   ObjectId id;
   NetId net;
@@ -386,9 +402,12 @@ struct Board {
   std::vector<Footprint> footprints;
   std::vector<TrackSegment> tracks;
   std::vector<TrackArc> track_arcs;
+  std::vector<TrackBezier> track_beziers;
   std::vector<Via> vias;
   std::vector<CopperZone> zones;
   std::vector<Keepout> keepouts;
+
+  bool operator==(const Board&) const = default;
 };
 
 } // namespace flux

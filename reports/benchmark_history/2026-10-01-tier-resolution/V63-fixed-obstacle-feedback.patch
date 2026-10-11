@@ -1,0 +1,273 @@
+--- a/src/quantized_copper_oracle.cpp
++++ b/src/quantized_copper_oracle.cpp
+@@ -5,6 +5,7 @@
+ 
+ #include <algorithm>
+ #include <chrono>
++#include <cmath>
+ #include <cstdint>
+ #include <limits>
+ #include <map>
+@@ -27,6 +28,14 @@
+   std::vector<RoutabilitySourceSegment> via_access_segments{};
+ };
+ 
++// Dynamic copper is the repair owner.  Static drill/via geometry is nevertheless required to
++// localize a diagnosis caused by that immutable obstacle; otherwise the generated trace's full
++// AABB becomes feedback terrain.
++struct StaticObstacleEvidence {
++  std::optional<geometry::AxisAlignedBounds> copper_bounds;
++  std::optional<geometry::AxisAlignedBounds> drill_bounds;
++};
++
+ [[nodiscard]] Point quantize(Point point, Nanometres pitch) {
+   const auto snap = [step = pitch.value()](std::int64_t value) {
+     auto quotient = value / step;
+@@ -57,6 +66,18 @@
+       Point{Nanometres{point.x.value() + radius}, Nanometres{point.y.value() + radius}}};
+ }
+ 
++[[nodiscard]] geometry::AxisAlignedBounds conservative_drill_bounds(const DrillShape& drill) {
++  // drill_shapes() owns the pad drill-offset and front/back rotation transform.  Its clearance
++  // shape also supplies the conservative radius for arbitrary oval drill orientation.
++  const auto shape = drill_clearance_shape(drill);
++  const auto radius = static_cast<std::int64_t>(std::ceil(shape.conservative_radius_nm));
++  return geometry::AxisAlignedBounds{
++      Point{Nanometres{shape.position.x.value() - radius},
++            Nanometres{shape.position.y.value() - radius}},
++      Point{Nanometres{shape.position.x.value() + radius},
++            Nanometres{shape.position.y.value() + radius}}};
++}
++
+ [[nodiscard]] geometry::AxisAlignedBounds
+ union_bounds(const geometry::AxisAlignedBounds& first, const geometry::AxisAlignedBounds& second) {
+   return geometry::AxisAlignedBounds{
+@@ -318,6 +339,13 @@
+   }
+ 
+   std::map<std::string, PrimitiveEvidence> evidence;
++  std::map<std::string, StaticObstacleEvidence> static_obstacles;
++  for (const auto& via : board.vias) {
++    static_obstacles[via.id.value()].copper_bounds = disc_bounds(via.position, via.diameter);
++  }
++  for (const auto& drill : drill_shapes(board)) {
++    static_obstacles[drill.id.value()].drill_bounds = conservative_drill_bounds(drill);
++  }
+   std::map<NetId, geometry::AxisAlignedBounds> route_bounds;
+   std::vector<ObjectId> dynamic_ids;
+   for (const auto& path : global.paths) {
+@@ -505,12 +533,29 @@
+     std::set<std::string> route_runs;
+     LayerId layer;
+     std::vector<geometry::AxisAlignedBounds> object_bounds;
++    std::vector<geometry::AxisAlignedBounds> immutable_obstacle_bounds;
+     bool involves_generated_via = false;
++    bool involves_generated_planar_trace = false;
++    bool has_immutable_obstacle_geometry = false;
++    std::vector<std::string> immutable_obstacles;
+     std::vector<RoutabilitySourceSegment> source_segments;
+     std::vector<const PrimitiveEvidence*> via_owners;
+     for (const auto& object : violation.object_ids) {
+       const auto found = evidence.find(object);
+       if (found == evidence.end()) {
++        const auto static_found = static_obstacles.find(object);
++        if (static_found != static_obstacles.end()) {
++          const auto use_drill_geometry =
++              violation.kind == CopperViolationKind::hole_clearance ||
++              violation.kind == CopperViolationKind::hole_to_hole_clearance;
++          const auto& bounds = use_drill_geometry ? static_found->second.drill_bounds
++                                                   : static_found->second.copper_bounds;
++          if (bounds) {
++            immutable_obstacle_bounds.push_back(*bounds);
++            immutable_obstacles.push_back(object);
++            has_immutable_obstacle_geometry = true;
++          }
++        }
+         continue;
+       }
+       nets.push_back(found->second.net);
+@@ -518,6 +563,9 @@
+                         std::to_string(found->second.connection_index) +
+                         (found->second.via ? "/via" : "/run"));
+       involves_generated_via = involves_generated_via || found->second.via;
++      involves_generated_planar_trace =
++          involves_generated_planar_trace ||
++          (!found->second.via && found->second.source_segment.has_value());
+       if (layer.empty()) {
+         layer = found->second.layer;
+       }
+@@ -557,9 +605,18 @@
+       continue;
+     }
+     auto [kind, relaxation] = classify_violation(violation.kind);
++    bool reclassified_immutable_planar_obstacle = false;
+     if (involves_generated_via) {
+       kind = RoutabilityFailureKind::via_site_exhausted;
+       relaxation = RoutabilityRelaxation::change_via_site;
++    } else if (kind == RoutabilityFailureKind::via_site_exhausted &&
++               involves_generated_planar_trace && has_immutable_obstacle_geometry) {
++      // The source hole/via is immutable.  A generated planar trace which collides with it
++      // must walk around the fixed obstacle; asking the allocator to move a nonexistent
++      // generated via makes prepare_routability_history discard every eligible planar edge.
++      kind = RoutabilityFailureKind::quantization_clearance;
++      relaxation = RoutabilityRelaxation::change_corridor;
++      reclassified_immutable_planar_obstacle = true;
+     } else if (route_runs.size() > 1U && nets.size() > 1U &&
+                (violation.kind == CopperViolationKind::track_clearance ||
+                 violation.kind == CopperViolationKind::differential_pair_gap ||
+@@ -573,6 +630,16 @@
+     for (const auto& run : route_runs) {
+       stable_id += ':' + run;
+     }
++    if (reclassified_immutable_planar_obstacle) {
++      object_bounds.insert(object_bounds.end(), immutable_obstacle_bounds.begin(),
++                           immutable_obstacle_bounds.end());
++      std::sort(immutable_obstacles.begin(), immutable_obstacles.end());
++      immutable_obstacles.erase(std::unique(immutable_obstacles.begin(), immutable_obstacles.end()),
++                                immutable_obstacles.end());
++      for (const auto& object : immutable_obstacles) {
++        stable_id += ":immutable:" + object;
++      }
++    }
+     const auto actual = std::max(0.0L, violation.actual_distance_nm);
+     const auto required = static_cast<long double>(violation.required_clearance.value());
+     const auto deficit_value = required > actual
+@@ -583,8 +650,13 @@
+                                    : 0;
+     auto bounds = object_bounds.front();
+     if (object_bounds.size() >= 2U) {
++      // For a fixed obstacle, even a small clearance shortfall must produce a local witness.
++      // Expanding only by the deficit can leave the two copper bounds disjoint and trigger
++      // the whole-track union fallback when their gap is close to the required clearance.
+       bounds = localized_overlap_bounds(object_bounds[0], object_bounds[1],
+-                                        Nanometres{deficit_value});
++                                        reclassified_immutable_planar_obstacle
++                                            ? violation.required_clearance
++                                            : Nanometres{deficit_value});
+       for (std::size_t index = 2U; index < object_bounds.size(); ++index) {
+         bounds = union_bounds(bounds, object_bounds[index]);
+       }
+--- a/tests/unit/core_tests.cpp
++++ b/tests/unit/core_tests.cpp
+@@ -328,6 +328,112 @@
+       }
+     }
+   }
++
++  // A foreign source via is an immutable obstacle.  This deliberately uses one copper layer:
++  // before the planar reclassification, via-site feedback can only charge layer-transition
++  // edges, so no history edge is prepared at all.
++  auto fixed_via_board = two_pad_board();
++  fixed_via_board.layers.resize(1U);
++  fixed_via_board.nets.push_back({NetId{"fixed-via-net"}, "FIXED_VIA", 0});
++  fixed_via_board.vias.push_back(
++      {ObjectId{"fixed-source-via"}, NetId{"fixed-via-net"}, mm(50.0, 40.5),
++       Nanometres::from_mm(0.6), Nanometres::from_mm(0.3), {LayerId{"F.Cu"}}, true});
++  flux::GlobalRouteResult fixed_via_trace;
++  fixed_via_trace.paths = {flux::GlobalRoutePath{NetId{"net-1"}, 0U,
++      {{mm(20.0, 40.0), LayerId{"F.Cu"}}, {mm(80.0, 40.0), LayerId{"F.Cu"}}}}};
++  const auto fixed_via_rejected =
++      flux::probe_quantized_copper_feasibility(fixed_via_board, fixed_via_trace);
++  const auto fixed_via_diagnosis = std::find_if(
++      fixed_via_rejected.diagnoses.begin(), fixed_via_rejected.diagnoses.end(), [](const auto& diagnosis) {
++        return diagnosis.kind == flux::RoutabilityFailureKind::quantization_clearance &&
++               diagnosis.suggested_relaxation == flux::RoutabilityRelaxation::change_corridor &&
++               diagnosis.resource.nets == std::vector<NetId>{NetId{"net-1"}};
++      });
++  require(!fixed_via_rejected.feasible() && fixed_via_rejected.generated_tracks == 1U &&
++              fixed_via_rejected.generated_vias == 0U &&
++              fixed_via_rejected.drc_violation_counts.contains("track_via_clearance") &&
++              fixed_via_diagnosis != fixed_via_rejected.diagnoses.end() &&
++              fixed_via_diagnosis->resource.bounds.minimum.x > Nanometres::from_mm(49.0) &&
++              fixed_via_diagnosis->resource.bounds.maximum.x < Nanometres::from_mm(51.0) &&
++              fixed_via_diagnosis->resource.bounds.minimum.y > Nanometres::from_mm(39.0) &&
++              fixed_via_diagnosis->resource.bounds.maximum.y < Nanometres::from_mm(41.0) &&
++              !fixed_via_diagnosis->resource.bounds.contains(mm(20.0, 40.0)),
++          "a generated trace blocked by an immutable source via must retain its DRC rejection "
++          "while localizing a planar corridor change to the fixed obstacle");
++  auto nearly_clear_via_board = fixed_via_board;
++  nearly_clear_via_board.vias.front().position = mm(50.0, 40.624);
++  const auto nearly_clear_via =
++      flux::probe_quantized_copper_feasibility(nearly_clear_via_board, fixed_via_trace);
++  require(nearly_clear_via.drc_violation_counts.contains("track_via_clearance") &&
++              std::any_of(nearly_clear_via.diagnoses.begin(), nearly_clear_via.diagnoses.end(),
++                          [](const auto& diagnosis) {
++                            return diagnosis.kind == flux::RoutabilityFailureKind::quantization_clearance &&
++                                diagnosis.suggested_relaxation == flux::RoutabilityRelaxation::change_corridor &&
++                                diagnosis.resource.bounds.maximum.x - diagnosis.resource.bounds.minimum.x <
++                                    Nanometres::from_mm(2.0);
++                          }),
++          "a small fixed-via clearance shortfall must not fall back to the whole trace bounds");
++  flux::RoutabilityKnowledge fixed_via_knowledge;
++  flux::accumulate_routability_knowledge(fixed_via_knowledge, fixed_via_rejected.diagnoses);
++  GlobalRouterConfig fixed_via_feedback;
++  // The default 0.25 mm trace plus 0.20 mm clearance requires at least a 0.45 mm
++  // planar grid.  This 0.50 mm lattice also has edges crossing the localized witness.
++  fixed_via_feedback.grid_pitch = Nanometres::from_mm(0.5);
++  fixed_via_feedback.max_iterations = 1U;
++  fixed_via_feedback.routability_history = fixed_via_knowledge.history;
++  const auto fixed_via_feedback_route = flux::route_global(fixed_via_board, fixed_via_feedback);
++  require(std::any_of(fixed_via_knowledge.history.begin(), fixed_via_knowledge.history.end(),
++                      [](const auto& entry) {
++                        return entry.kind == flux::RoutabilityFailureKind::quantization_clearance &&
++                               entry.suggested_relaxation ==
++                                   flux::RoutabilityRelaxation::change_corridor;
++                      }) &&
++              fixed_via_feedback_route.stop_reason != flux::GlobalRouterStopReason::invalid_input &&
++              fixed_via_feedback_route.configured_grid_pitch == Nanometres::from_mm(0.5) &&
++              fixed_via_feedback_route.routability_history_edges > 0U,
++          "immutable source-via trace conflicts must accumulate onto planar routing edges");
++
++  // DrillShape applies pad-local drill offsets and the placed footprint transform.  The
++  // non-plated source hole must therefore use that world-space geometry when it localizes the
++  // generated trace's hole-clearance feedback.
++  auto fixed_hole_board = two_pad_board();
++  fixed_hole_board.layers.resize(1U);
++  fixed_hole_board.rules.hole_clearance = Nanometres::from_mm(0.2);
++  fixed_hole_board.nets.push_back({NetId{"fixed-hole-net"}, "FIXED_HOLE", 0});
++  Footprint fixed_hole;
++  fixed_hole.id = ObjectId{"fixed-drilled-pad"};
++  fixed_hole.reference = "FIXED_HOLE";
++  fixed_hole.position = mm(50.0, 40.0);
++  fixed_hole.rotation = Microdegrees::from_degrees(90.0);
++  fixed_hole.pads = {{ObjectId{"fixed-drilled-pad-hole"}, NetId{"fixed-hole-net"},
++                      mm(0.2, -0.1), {LayerId{"F.Cu"}}, flux::PadShape::circle,
++                      Nanometres::from_mm(1.0), Nanometres::from_mm(1.0), Nanometres{0},
++                      Microdegrees::from_degrees(90.0), Nanometres::from_mm(0.6),
++                      Nanometres::from_mm(0.6), mm(0.1, 0.0), false}};
++  const auto fixed_hole_position =
++      flux::pad_drill_world_position(fixed_hole, fixed_hole.pads.front());
++  fixed_hole_board.footprints.push_back(fixed_hole);
++  flux::GlobalRouteResult fixed_hole_trace;
++  fixed_hole_trace.paths = {flux::GlobalRoutePath{NetId{"net-1"}, 0U,
++      {{Point{Nanometres::from_mm(20.0), fixed_hole_position.y}, LayerId{"F.Cu"}},
++       {Point{Nanometres::from_mm(80.0), fixed_hole_position.y}, LayerId{"F.Cu"}}}}};
++  const auto fixed_hole_rejected =
++      flux::probe_quantized_copper_feasibility(fixed_hole_board, fixed_hole_trace);
++  const auto fixed_hole_diagnosis = std::find_if(
++      fixed_hole_rejected.diagnoses.begin(), fixed_hole_rejected.diagnoses.end(), [](const auto& diagnosis) {
++        return diagnosis.kind == flux::RoutabilityFailureKind::quantization_clearance &&
++               diagnosis.suggested_relaxation == flux::RoutabilityRelaxation::change_corridor &&
++               diagnosis.detail.find("hole_clearance") != std::string::npos;
++      });
++  require(!fixed_hole_rejected.feasible() && fixed_hole_rejected.generated_tracks == 1U &&
++              fixed_hole_rejected.generated_vias == 0U &&
++              fixed_hole_rejected.drc_violation_counts.contains("hole_clearance") &&
++              fixed_hole_diagnosis != fixed_hole_rejected.diagnoses.end() &&
++              fixed_hole_diagnosis->resource.bounds.contains(fixed_hole_position) &&
++              !fixed_hole_diagnosis->resource.bounds.contains(
++                  Point{Nanometres::from_mm(20.0), fixed_hole_position.y}),
++          "a generated trace blocked by a transformed fixed drill must request a local planar "
++          "corridor change");
+ }
+ 
+ void straight_regional_lanes_require_exact_copper_proof() {
+@@ -3904,6 +4010,8 @@
+               std::all_of(config.physical_conflict_witnesses.begin(),
+                           config.physical_conflict_witnesses.end(), [](const auto& witness) {
+                 return witness.kind == flux::RoutabilityFailureKind::via_site_exhausted &&
++                       witness.suggested_relaxation ==
++                           flux::RoutabilityRelaxation::change_via_site &&
+                        witness.source_segment_pairs.size() == 1U;
+               }), "the microcase must isolate exact via failures without track-track conflicts");
+   require(regional.source_exact_copper_witnesses == 2U &&

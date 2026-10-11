@@ -6,7 +6,7 @@ endif()
 
 project(
   flux_capacitor
-  VERSION 0.139.0
+  VERSION 0.140.0
   DESCRIPTION "Integrated PCB placement and routing engine"
   LANGUAGES CXX)
 
@@ -41,6 +41,17 @@ set(FLUX_ROUTING_XPBD_SHADER_SPV
     "${CMAKE_CURRENT_BINARY_DIR}/shaders/flux_routing_xpbd.comp.spv")
 set(FLUX_ROUTING_XPBD_BROADPHASE_SHADER_SPV
     "${CMAKE_CURRENT_BINARY_DIR}/shaders/flux_routing_xpbd_broadphase.comp.spv")
+set(FLUX_TERRAIN_EVOLUTION_SHADER_SPV
+    "${CMAKE_CURRENT_BINARY_DIR}/shaders/flux_terrain_evolution.comp.spv")
+add_custom_command(
+  OUTPUT "${FLUX_TERRAIN_EVOLUTION_SHADER_SPV}"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/shaders"
+  COMMAND "${FLUX_GLSLC_EXECUTABLE}"
+          "${CMAKE_CURRENT_SOURCE_DIR}/shaders/flux_terrain_evolution.comp"
+          -o "${FLUX_TERRAIN_EVOLUTION_SHADER_SPV}"
+  DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/flux_terrain_evolution.comp"
+  VERBATIM)
+add_custom_target(flux_terrain_evolution_shaders DEPENDS "${FLUX_TERRAIN_EVOLUTION_SHADER_SPV}")
 add_custom_command(
   OUTPUT "${FLUX_HYDRAULIC_SHADER_SPV}"
   COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/shaders"
@@ -83,6 +94,7 @@ add_library(flux_core
   src/board_free_space.cpp
   src/connectivity.cpp
   src/copper_geometry.cpp
+  src/cpu_worker_budget.cpp
   src/detailed_router.cpp
   src/differential_pair_constraints.cpp
   src/drc.cpp
@@ -92,19 +104,33 @@ add_library(flux_core
   src/geometry.cpp
   src/global_placer.cpp
   src/global_router.cpp
+  src/indexed_clearance_map.cpp
+  src/scaffold_access.cpp
+  src/copper_scaffold.cpp
+  src/scaffold_joint_displacement.cpp
+  src/scaffold_collision.cpp
   src/hydraulic_path.cpp
   src/integrated_optimizer.cpp
+  src/layered_navmesh.cpp
   src/navmesh_route.cpp
+  src/terrain_evolution.cpp
+  src/board_terrain_guidance.cpp
+  src/usped.cpp
   src/keepout_geometry.cpp
   src/kicad_export.cpp
   src/kicad_import.cpp
   src/kicad_refill.cpp
   src/kicad_netclass_snapshot.cpp
+  src/live_copper_terrain.cpp
   src/orientation_constraints.cpp
   src/placement_move_priorities.cpp
   src/placement_group_constraints.cpp
   src/placement_region_constraints.cpp
   src/pns_router.cpp
+  src/quantized_copper_oracle.cpp
+  src/regional_candidate_policy.cpp
+  src/regional_candidate_ranker.cpp
+  src/regional_hc_composition.cpp
   src/regional_router.cpp
   src/regional_channel_occupancy.cpp
   src/relative_placement_constraints.cpp
@@ -116,25 +142,32 @@ add_library(flux_core
   src/routing_compute.cpp
   src/routing_compute_advanced.cpp
   src/routing_feedback.cpp
+  src/routing_kernel.cpp
+  src/routing_engine.cpp
+  src/routing_engine_policy.cpp
+  src/routing_avbd.cpp
   src/routing_xpbd.cpp
   src/sexpr.cpp
   src/specctra.cpp
   src/routing_preset.cpp
+  src/bezier_copper.cpp
+  src/ph_cubic_fit.cpp
   src/ph_route.cpp
   src/validation.cpp)
 target_sources(flux_core PRIVATE src/work_plan.cpp src/work_plan_executor.cpp src/work_plan_policy.cpp
                                  src/work_plan_router.cpp)
 add_library(flux::core ALIAS flux_core)
 
-target_sources(flux_core PRIVATE src/vulkan_runtime.cpp src/hydraulic_path_vulkan.cpp src/routing_compute_vulkan.cpp
+target_sources(flux_core PRIVATE src/vulkan_runtime.cpp src/hydraulic_path_vulkan.cpp src/routing_compute_vulkan.cpp src/terrain_evolution_vulkan.cpp
                                  src/routing_xpbd_vulkan.cpp)
 if(NOT MSVC)
   set_source_files_properties(
-    src/vulkan_runtime.cpp src/hydraulic_path_vulkan.cpp src/routing_compute_vulkan.cpp src/routing_xpbd_vulkan.cpp PROPERTIES
+    src/vulkan_runtime.cpp src/hydraulic_path_vulkan.cpp src/routing_compute_vulkan.cpp src/routing_xpbd_vulkan.cpp src/terrain_evolution_vulkan.cpp PROPERTIES
     COMPILE_OPTIONS "-Wno-missing-field-initializers")
 endif()
 add_dependencies(flux_core flux_hydraulic_shaders flux_routing_compute_shaders
                            flux_routing_xpbd_shaders flux_routing_xpbd_broadphase_shaders)
+add_dependencies(flux_core flux_terrain_evolution_shaders)
 target_link_libraries(flux_core PRIVATE Vulkan::Vulkan)
 target_compile_definitions(
   flux_core PRIVATE
@@ -142,6 +175,7 @@ target_compile_definitions(
     FLUX_HYDRAULIC_SHADER_PATH="${FLUX_HYDRAULIC_SHADER_SPV}"
     FLUX_ROUTING_COMPUTE_SHADER_PATH="${FLUX_ROUTING_COMPUTE_SHADER_SPV}"
     FLUX_ROUTING_XPBD_SHADER_PATH="${FLUX_ROUTING_XPBD_SHADER_SPV}"
+    FLUX_TERRAIN_EVOLUTION_SHADER_PATH="${FLUX_TERRAIN_EVOLUTION_SHADER_SPV}"
     FLUX_ROUTING_XPBD_BROADPHASE_SHADER_PATH="${FLUX_ROUTING_XPBD_BROADPHASE_SHADER_SPV}")
 
 target_compile_features(flux_core PUBLIC cxx_std_20)
@@ -201,6 +235,18 @@ endif()
 
 add_executable(flux-cli apps/flux-cli/main.cpp)
 target_link_libraries(flux-cli PRIVATE flux::core)
+
+# Diagnostic-only local reproduction; deliberately excluded from normal builds.
+add_executable(flux-replay-detailed-chain EXCLUDE_FROM_ALL tools/replay_detailed_chain.cpp)
+target_link_libraries(flux-replay-detailed-chain PRIVATE flux::core flux::telemetry Boost::headers)
+add_executable(flux-replay-native-fit EXCLUDE_FROM_ALL tools/replay_native_fit.cpp)
+target_link_libraries(flux-replay-native-fit PRIVATE flux::core flux::telemetry)
+add_executable(flux-replay-regional-bundle EXCLUDE_FROM_ALL tools/replay_regional_bundle.cpp)
+target_link_libraries(flux-replay-regional-bundle PRIVATE flux::core Boost::json)
+add_executable(flux-replay-quantized-copper EXCLUDE_FROM_ALL tools/replay_quantized_copper.cpp)
+target_link_libraries(flux-replay-quantized-copper PRIVATE flux::core Boost::json)
+add_executable(flux-inspect-pad-geometry EXCLUDE_FROM_ALL tools/inspect_pad_geometry.cpp)
+target_link_libraries(flux-inspect-pad-geometry PRIVATE flux::core Boost::json)
 target_compile_features(flux-cli PRIVATE cxx_std_20)
 target_include_directories(flux-cli PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_compile_definitions(

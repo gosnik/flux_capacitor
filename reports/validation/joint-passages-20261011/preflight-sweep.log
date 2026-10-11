@@ -1,0 +1,20 @@
+=== CAP 16384 ===
+request=67 particles=201 obstacles=0 budget=1 xpbd=0 avbd=0 avbd_contacts=0 refinement= cap=16384 proposal=0 violations=0 diagnostic=joint XPBD obstacle work budget exhausted
+request=69 particles=164 obstacles=0 budget=1 xpbd=0 avbd=0 avbd_contacts=0 refinement= cap=16384 proposal=0 violations=0 diagnostic=joint XPBD obstacle work budget exhausted
+runtime_seconds=0.02 exit=0
+runner_exit=0
+=== CAP 32768 ===
+request=67 particles=201 obstacles=687 budget=0 xpbd=32 avbd=1 avbd_contacts=117 refinement= cap=32768 proposal=0 violations=0 diagnostic=joint displacement exceeded topology deformation envelope
+request=69 particles=164 obstacles=750 budget=0 xpbd=32 avbd=1 avbd_contacts=241 refinement= cap=32768 proposal=1 violations=27 diagnostic=
+runtime_seconds=0.44 exit=0
+runner_exit=0
+=== CAP 65536 ===
+request=67 particles=201 obstacles=687 budget=0 xpbd=32 avbd=1 avbd_contacts=117 refinement= cap=65536 proposal=0 violations=0 diagnostic=joint displacement exceeded topology deformation envelope
+request=69 particles=164 obstacles=750 budget=0 xpbd=32 avbd=1 avbd_contacts=241 refinement= cap=65536 proposal=1 violations=27 diagnostic=
+runtime_seconds=0.44 exit=0
+runner_exit=0
+=== CAP 131072 ===
+request=67 particles=201 obstacles=687 budget=0 xpbd=32 avbd=1 avbd_contacts=117 refinement= cap=131072 proposal=0 violations=0 diagnostic=joint displacement exceeded topology deformation envelope
+request=69 particles=164 obstacles=750 budget=0 xpbd=32 avbd=1 avbd_contacts=241 refinement= cap=131072 proposal=1 violations=27 diagnostic=
+runtime_seconds=0.44 exit=0
+runner_exit=0

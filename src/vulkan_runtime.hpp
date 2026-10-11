@@ -5,10 +5,41 @@
 #include <array>
 #include <condition_variable>
 #include <cstdint>
+#include <deque>
+#include <memory>
 #include <mutex>
 #include <string>
+#include <vector>
 
 namespace flux::vulkan {
+
+enum class MaskConsumer : std::uint8_t { terrain, hydraulic };
+
+// An immutable, device-local normalized u32 walkability field.  A lease keeps its buffer alive
+// while a client has recorded or submitted commands that reference it.
+class ImmutableMaskLease {
+public:
+  ~ImmutableMaskLease();
+  [[nodiscard]] VkBuffer buffer() const { return buffer_; }
+  [[nodiscard]] VkDeviceSize size() const { return size_; }
+  [[nodiscard]] std::size_t width() const { return width_; }
+  [[nodiscard]] std::size_t height() const { return height_; }
+
+private:
+  friend class Runtime;
+  ImmutableMaskLease() = default;
+
+  VkDevice device_{VK_NULL_HANDLE};
+  VkBuffer buffer_{VK_NULL_HANDLE};
+  VkDeviceMemory memory_{VK_NULL_HANDLE};
+  VkDeviceSize size_{0U};
+  VkDeviceSize allocation_size_{0U};
+  std::size_t width_{0U};
+  std::size_t height_{0U};
+  std::vector<std::uint32_t> contents_;
+  MaskConsumer last_consumer_{MaskConsumer::terrain};
+  std::uint64_t last_use_{0U};
+};
 
 // Process-wide compute runtime. Vulkan queue operations require external synchronization, but a
 // queue need not be idle before the next independent submission is enqueued. submit_and_wait()
@@ -43,6 +74,15 @@ public:
   [[nodiscard]] bool allocate_host_buffer(VkDeviceSize size, VkBuffer& buffer,
                                           VkDeviceMemory& memory, void*& mapped) const;
   void release_buffer(VkBuffer& buffer, VkDeviceMemory& memory, void*& mapped) const;
+  // Publishes a normalized immutable mask through a fenced transfer submission. Exact dimensions
+  // and every normalized u32 are part of its identity. A cache hit may be shared across terrain
+  // and hydraulic pipelines; `cross_pipeline_reuse` reports that case.
+  [[nodiscard]] bool acquire_immutable_mask(std::size_t width, std::size_t height,
+                                             const std::vector<std::uint8_t>& walkable,
+                                             MaskConsumer consumer,
+                                             std::shared_ptr<const ImmutableMaskLease>& lease,
+                                             bool& cache_hit, bool& cross_pipeline_reuse,
+                                             std::string& error);
   [[nodiscard]] VkResult create_compute_pipeline(const VkComputePipelineCreateInfo& info,
                                                  VkPipeline& pipeline);
 
@@ -62,6 +102,7 @@ private:
   std::array<bool, in_flight_count> fence_busy_{};
   std::mutex queue_mutex_;
   std::mutex pipeline_cache_mutex_;
+  std::mutex mask_cache_mutex_;
   std::mutex fence_mutex_;
   std::condition_variable fence_available_;
   std::string device_name_;
@@ -71,6 +112,11 @@ private:
   std::uint32_t api_version_{0U};
   std::uint32_t driver_version_{0U};
   std::string diagnostic_;
+  std::deque<std::shared_ptr<ImmutableMaskLease>> immutable_masks_;
+  std::uint64_t immutable_mask_use_{0U};
+  std::size_t immutable_mask_bytes_{0U};
+  static constexpr std::size_t maximum_immutable_mask_entries = 16U;
+  static constexpr std::size_t maximum_immutable_mask_bytes = 64U * 1024U * 1024U;
 };
 
 } // namespace flux::vulkan

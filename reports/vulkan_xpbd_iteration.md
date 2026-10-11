@@ -54,13 +54,18 @@ rejection, obstacle-budget, pressure-cell, and peak-pressure metrics.
 ```text
 --xpbd-relaxation
 --xpbd-feedback
+--no-xpbd-relaxation
+--no-xpbd-feedback
 --xpbd-iterations N
 --xpbd-max-step-nm NM
 --xpbd-cpu
 ```
 
-The feature is disabled by default to preserve direct baseline comparisons. `--xpbd-feedback`
-also enables relaxation. `--xpbd-cpu` selects the deterministic reference implementation.
+Relaxation and feedback are enabled by default. `--no-xpbd-relaxation` disables both;
+`--no-xpbd-feedback` retains relaxation without exporting unresolved pressure into routability
+history. `--xpbd-feedback` also enables relaxation, and `--xpbd-cpu` selects the deterministic
+reference implementation. Every proposal remains non-authoritative until the unchanged topology,
+continuous-envelope, quantized-copper, connectivity, and DRC gates accept it.
 
 ## Verification
 

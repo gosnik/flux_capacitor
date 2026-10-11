@@ -1,0 +1,56 @@
+{
+  "schema": 1,
+  "kicad_version": "9.0.8+dfsg-1",
+  "passed": true,
+  "boards": [
+    {
+      "board": "tests/fixtures/pad-coordinate-frames.kicad_pcb",
+      "source_revision": "kicad-20241229:pcbnew:804c37aed22d3bc9",
+      "pads_compared": 16,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "board": "tests/fixtures/pad-offset-frames.kicad_pcb",
+      "source_revision": "kicad-20241229:pcbnew:80a696a6543713cf",
+      "pads_compared": 16,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "board": "tests/fixtures/routing-corpus/pt2399_delay.kicad_pcb",
+      "source_revision": "kicad-20241229:pcbnew:e8578b52adc129c7",
+      "pads_compared": 77,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "board": "tests/fixtures/routing-corpus/bm_svf.kicad_pcb",
+      "source_revision": "kicad-20241229:pcbnew:61194dd059bfb26a",
+      "pads_compared": 114,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "board": "tests/fixtures/routing-corpus/ft2232h_jtag.kicad_pcb",
+      "source_revision": "kicad-20241229:pcbnew:231006a6c2923670",
+      "pads_compared": 178,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "board": "tests/fixtures/routing-corpus/gb_nintendo_power.kicad_pcb",
+      "source_revision": "kicad-20241229:pcbnew:5fe0b3fbc6278186",
+      "pads_compared": 220,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "board": "tests/fixtures/routing-corpus/nascom_eprom_80bus.kicad_pcb",
+      "source_revision": "kicad-20241229:pcbnew:13c87d88f6f3779d",
+      "pads_compared": 574,
+      "passed": true,
+      "mismatches": []
+    }
+  ]
+}

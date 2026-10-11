@@ -32,14 +32,28 @@ bounded without copying the complete PCB geometry for every event. Disable `Foll
 to inspect an earlier overlay while new events continue accumulating; returning to the current
 source position resumes following. Timeline state is viewer-only and cannot affect the router.
 
-Committed, current, provisional, ripped-up, and removed routes have distinct rendering. Via
-candidates, selected vias, contested sites, and rejected sites also remain separate. Congestion
-resources show demand/capacity utilization, while clearance-shadow conflicts retain their own
-physical-deficit overlay rather than being presented as ordinary congestion.
+Every overlay retains a stable board-layer colour family: F.Cu is red, B.Cu is blue, inner copper
+layers use a stable high-contrast sequence, and other layers use a deterministic fallback. Shade
+and line style then sub-code committed/current/provisional/removed routes, PH geometry, retained
+river/RRT/hydraulic alternatives, congestion, clearance shadows, controls, and via state without
+discarding the layer identity. Selected via fill and outer ring show their first and last layers.
+The right-hand layer/overlay legend reports copper, PH, alternative, clearance, and overflow
+swatches for every layer present in the immutable board or dynamic telemetry.
 
-Regional quintic PH chains are rendered as smooth magenta curves by default. The PH curve and its
-Bezier control polygons have separate overlay switches; enabling the control polygons adds the six
-ordered controls for every degree-five span without joining unrelated segment control nets.
+`Retained / resulting copper` displays the latest checked scaffold while routing runs, including
+straight tracks, arcs, native Beziers and vias. Updates replace one scene instead of accumulating
+old copper across revisions. Intermediate publication is throttled to four updates per second;
+completion and cancellation flush the retained checkpoint. Retained partial copper is not a
+whole-board routing certificate. The final detailed result replaces this scene when available.
+
+`Shadow witnesses` displays fixed-size hollow diamonds at planning clearance witness locations.
+These markers do not depict the physical copper clearance envelope, and the metric is not a
+KiCad DRC violation count. Several witnesses can describe the same physical interaction.
+
+Regional quintic PH chains are rendered as smooth, layer-coloured curves with a consistent violet
+tint by default. The PH curve and its Bezier control polygons have separate overlay switches;
+enabling the control polygons adds the six ordered, layer-tinted controls for every degree-five
+span without joining unrelated segment control nets.
 
 Diagnostic routing also publishes the latest bounded direct-polygon hydraulic discovery terrain
 independently for each copper layer: complete eroded height, free-space coverage, accumulated flow,
@@ -48,7 +62,8 @@ separate obstacle-clearance field, while the published origin and
 fine pitch are independent of the later coarse NavMesh projection. Enable
 `Hydraulic erosion fields` to render the target valley through uphill terrain while leaving pads,
 vias, keepouts, and board exterior unpainted. High-flow riverbeds brighten the terrain, downstream
-pressure is tinted red/magenta, and the bounded success prior adds green. Use the
+pressure is tinted red/magenta, and the bounded success prior adds green. A restrained layer tint
+keeps simultaneous fields attributable without obscuring those terrain values. Use the
 ordinary layer controls to isolate F.Cu, inner layers, or B.Cu. The extracted riverbed has a
 separate green route-family overlay. Each event retains its net/candidate
 attribution in timeline history, while recovery snapshots coalesce to the newest field per layer
@@ -96,9 +111,13 @@ bounded priority, via-candidate, resource, and conflict evidence, or `trace` exp
 expensive search debugging, then reconnect to renegotiate the subscription.
 
 The live connection remains active while the producer is absent. The viewer retries automatically,
-detects when Flux stops, reconnects when another Flux instance starts on the endpoint, and resets
-the displayed live state before consuming the new instance's snapshot and events. Use Disconnect
-or `--no-connect` when automatic connection is not wanted.
+detects when Flux stops, and reconnects when another Flux instance starts on the endpoint. A socket
+reconnect does not itself discard a route in progress. The first authoritative source identity from
+the replacement producer decides the boundary: the same identity continues the current board,
+while a different identity atomically clears the previous board's source scenes, routes, vias,
+conflicts, hydraulic fields, metrics, activity rows, and live overlay timeline before fitting and
+displaying the new board. Saved scale, layer and overlay preferences are deliberately retained. Use
+Disconnect or `--no-connect` when automatic connection is not wanted.
 
 Each KiCad CLI run first publishes an immutable source scene. The viewer shows its path, revision,
 schema and object counts plus represented physical-stackup layer/dielectric counts and board
@@ -198,3 +217,70 @@ remain accepted. Snapshot or incremental records may additionally contain these 
 Snapshot records replace those bounded collections. Incremental records merge or remove the named
 stable entities. A rip-up event without repeated geometry changes the retained route's state, which
 lets replay show what was removed without requiring a second representation.
+
+## Live progress, regional areas, and retention
+
+Engine actions publish elapsed time and completed checkpoint work at most twice per second,
+including while an operation is waiting for its next cooperative checkpoint. These are activity
+observations, not percentages or evidence that copper is legal. The metrics panel distinguishes
+phase progress from the age of the last changed metrics and geometry. Numeric `key=value`
+diagnostics from older search-summary messages are also exposed in a bounded table.
+
+Global seed workers publish provisional alternatives as they finish. Portfolio filtering then
+upgrades retained alternatives and removes rejected ones. Regional geometry is refreshed at safe
+algorithm boundaries, with bounded sampled geometry; unfinished routes remain provisional.
+
+The default-on **Active regional solve area** overlay highlights the actual working window,
+with a translucent fill, boundary, phase label, and affected-net count. It follows regional
+template allocation, lane search, and spline realization, respects the selected layer, and clears
+at engine action and routing boundaries. Optional `active_region` records carry bounds, layers,
+nets, and an explicit active/inactive flag. Recovery snapshots and overlay history retain this
+state. Old router processes do not emit these region records; restart the router to obtain them.
+
+Live overlay history retains at most 4,096 events and 64 MiB of estimated event payloads, with a
+rolling reduced base state instead of repeated full-state checkpoints. The history slider shows
+its retained range and trimmed-event count. Current geometry is limited to 128 MiB per reduced
+state: advisory entities are evicted before source scenes or current copper, and an update whose
+mandatory geometry cannot fit is rejected with a visible integrity counter. These are payload
+budgets, not a process-RSS limit; the viewer also holds working states, UI buffers, and allocators.
+
+Live input uses an 8 MiB message limit and a 32 MiB pending-event budget. Producer socket queues
+also have 32 MiB budgets and reject payloads exceeding 8 MiB, counting transport drops. A later
+valid message can continue on the same connection. Source and dynamic snapshots remain separate
+recovery records. Very large scenes or snapshots may exceed these limits and cannot be recovered
+in full by the viewer. File replay streams JSONL with an 8 MiB line limit and a 128 MiB retained
+event budget; an oversized replay is rejected without replacing the previously loaded trace.
+
+### Regional metric scope
+
+`cumulative_regional_*` metrics are cumulative along the ancestry of the routing checkpoint
+selected for the result, including physical-scope retries retained by that checkpoint.
+They do not represent all engine work: attempts on discarded or superseded checkpoints
+are not merged into the selected result. Final `regional_*` metrics describe the selected
+checkpoint’s latest regional result. In particular, zero final HC or layered-navmesh counters
+do not establish that those algorithms were never invoked during the run.
+
+Physical scaffold repair records now publish `regional_physical_requests`,
+`regional_admitted_physical_requests`, `regional_configured_blocker_objects`,
+`regional_blocker_objects` (resolved current owners), `regional_fragments`,
+`regional_windows`, and `regional_bundle_searches`. These records describe each bounded
+physical repair and remain available independently of the selected global checkpoint.
+Failure-driven admission is separate from exact copper-conflict counts: expansion exhaustion
+requests work but does not prove a clearance violation or capacity deficit.
+
+
+Scaffold `request_evidence` also reports primary-search attachment diagnosis:
+`access_evaluated`, source/target `endpoint_contained_by_copper`,
+`component_anchors`, and `legal_attachments`. The membership flags distinguish a physical
+component contact from a free-space branch endpoint. Anchor counts include a free-space
+endpoint when no copper contains it; they are not component counts. These fields describe
+the primary search, not aggregate victim-exchange searches. If access was not evaluated
+(e.g. zero search allowance or a direct accepted path), false/zero values are not evidence
+of missing copper or blocked access.
+
+
+Final CLI `copper_scaffold.physical_open_connections` and `physical_unrouted_nets` are computed
+from retained checked copper using the canonical connectivity oracle. They differ from the
+number of missing scaffold requests, whose spanning-demand identity may change after terminal
+canonicalization. They are internal physical connectivity metrics, not external KiCad DRC
+certification or strict curved completion.

@@ -1,11 +1,13 @@
 #include "flux/core/board_free_space.hpp"
 
+#include "flux/core/bezier_copper.hpp"
 #include "flux/core/copper_geometry.hpp"
 #include "flux/core/geometry.hpp"
 #include "flux/core/keepout_geometry.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <optional>
 
 namespace flux {
@@ -64,28 +66,52 @@ namespace {
   return outline ? std::optional<Polygon>{std::move(outline->area)} : std::nullopt;
 }
 
-[[nodiscard]] std::optional<Polygon> conservative_track_arc_outline(const TrackArc& arc) {
+[[nodiscard]] std::optional<std::vector<Polygon>>
+conservative_track_arc_outline(const TrackArc& arc) {
   const auto parameters = geometry::circular_arc_parameters(arc.start, arc.middle, arc.end);
   if (!parameters || arc.width.value() <= 0) {
     return std::nullopt;
   }
-  constexpr std::size_t sides = 128U;
   const auto pi = std::acos(-1.0L);
-  const auto guarded_radius =
-      (parameters->radius_nm + static_cast<long double>(arc.width.value()) / 2.0L + 2.0L) /
-      std::cos(pi / static_cast<long double>(sides));
-  Polygon area;
-  area.vertices.reserve(sides);
-  for (std::size_t index = 0; index < sides; ++index) {
-    const auto angle =
-        2.0L * pi * static_cast<long double>(index) / static_cast<long double>(sides);
-    area.vertices.push_back(
-        Point{Nanometres{static_cast<std::int64_t>(
-                  std::llround(parameters->center_x_nm + guarded_radius * std::cos(angle)))},
-              Nanometres{static_cast<std::int64_t>(
-                  std::llround(parameters->center_y_nm + guarded_radius * std::sin(angle)))}});
+  // Cover only the swept arc, not its entire supporting disk. Each chord's copper envelope
+  // is enlarged by the exact sagitta and rounding guard, so this remains conservative for
+  // either orientation, major arcs, and round end caps. A union of simple rectangles also
+  // handles thick arcs without constructing a self-intersecting annular polygon.
+  constexpr long double maximum_sagitta_nm = 5'000.0L;
+  const auto step = std::min(
+      pi / 8.0L,
+      2.0L * std::acos(std::clamp(1.0L - maximum_sagitta_nm / parameters->radius_nm, -1.0L, 1.0L)));
+  const auto count = std::ceil(std::abs(parameters->sweep_radians) / step);
+  if (!std::isfinite(count) || count < 1.0L || count > 8'192.0L)
+    return std::nullopt;
+  const auto sides = static_cast<std::size_t>(count);
+  const auto delta = parameters->sweep_radians / static_cast<long double>(sides);
+  const auto sagitta = parameters->radius_nm * (1.0L - std::cos(delta / 2.0L));
+  const auto width = static_cast<long double>(arc.width.value()) + 2.0L * sagitta + 4.0L;
+  if (width >= static_cast<long double>(std::numeric_limits<std::int64_t>::max()))
+    return std::nullopt;
+  const auto at = [&](std::size_t index) {
+    if (index == 0U)
+      return arc.start;
+    if (index == sides)
+      return arc.end;
+    const auto angle = parameters->start_angle_radians + delta * index;
+    return Point{Nanometres{static_cast<std::int64_t>(std::llround(
+                     parameters->center_x_nm + parameters->radius_nm * std::cos(angle)))},
+                 Nanometres{static_cast<std::int64_t>(std::llround(
+                     parameters->center_y_nm + parameters->radius_nm * std::sin(angle)))}};
+  };
+  std::vector<Polygon> areas;
+  areas.reserve(sides);
+  for (std::size_t index = 0U; index < sides; ++index) {
+    auto outline = conservative_track_outline(
+        TrackSegment{arc.id, arc.net, arc.layer, at(index), at(index + 1U),
+                     Nanometres{static_cast<std::int64_t>(std::ceil(width))}, arc.locked});
+    if (!outline)
+      return std::nullopt;
+    areas.push_back(std::move(*outline));
   }
-  return geometry::is_simple_polygon(area) ? std::optional<Polygon>{std::move(area)} : std::nullopt;
+  return areas;
 }
 
 } // namespace
@@ -104,7 +130,7 @@ extract_polygonal_board_free_space(const Board& board,
     result.diagnostic = "polygonal free-space extraction requires a declared copper layer";
     return result;
   }
-  if (std::none_of(board.nets.begin(), board.nets.end(),
+  if (config.omit_same_net_copper && std::none_of(board.nets.begin(), board.nets.end(),
                    [&config](const auto& net) { return net.id == config.routed_net; })) {
     result.diagnostic = "polygonal free-space extraction requires a declared routed net";
     return result;
@@ -165,14 +191,43 @@ extract_polygonal_board_free_space(const Board& board,
     for (const auto& arc : board.track_arcs) {
       if ((!config.omit_same_net_copper || arc.net != config.routed_net) &&
           arc.layer == config.layer) {
-        if (auto polygon = conservative_track_arc_outline(arc)) {
-          result.domain.obstacles.push_back(std::move(*polygon));
-          result.obstacle_ids.push_back(arc.id);
-          result.obstacle_nets.push_back(arc.net);
+        if (auto polygons = conservative_track_arc_outline(arc)) {
+          for (auto& polygon : *polygons) {
+            result.domain.obstacles.push_back(std::move(polygon));
+            result.obstacle_ids.push_back(arc.id);
+            result.obstacle_nets.push_back(arc.net);
+          }
           result.conservative_obstacles.push_back(arc.id);
         } else {
           result.unsupported_obstacles.push_back(arc.id);
         }
+      }
+    }
+    for (const auto& curve : board.track_beziers) {
+      if ((!config.omit_same_net_copper || curve.net != config.routed_net) &&
+          curve.layer == config.layer) {
+        const auto flattened = tessellate_track_bezier(curve);
+        if (!flattened.certified) {
+          result.unsupported_obstacles.push_back(curve.id);
+          continue;
+        }
+        bool supported = true;
+        for (const auto& segment : flattened.segments) {
+          const auto guard = segment.centerline_deviation_nm.value() + segment.quantization_error_nm.value();
+          if (guard > (std::numeric_limits<std::int64_t>::max() - curve.width.value()) / 2) {
+            supported = false;
+            break;
+          }
+          TrackSegment proxy{curve.id, curve.net, curve.layer, segment.start, segment.end,
+                             Nanometres{curve.width.value() + 2 * guard}, curve.locked};
+          if (auto polygon = conservative_track_outline(proxy)) {
+            result.domain.obstacles.push_back(std::move(*polygon));
+            result.obstacle_ids.push_back(curve.id);
+            result.obstacle_nets.push_back(curve.net);
+          } else { supported = false; break; }
+        }
+        if (supported) result.conservative_obstacles.push_back(curve.id);
+        else result.unsupported_obstacles.push_back(curve.id);
       }
     }
     for (const auto& via : board.vias) {

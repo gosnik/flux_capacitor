@@ -93,6 +93,14 @@ build_free_space_skeleton(const FreeSpaceDomain& domain,
 assess_free_space_chords(const FreeSpaceDomain& domain,
                          const std::vector<std::pair<Point, Point>>& chords);
 
+// Batch chord assessment for a domain which the caller has already accepted with
+// validate_free_space_chord_domain().  Geometry and clearance semantics are identical to
+// assess_free_space_chords(); only the invariant polygon validation pass is omitted.  This keeps
+// repeated local certificates fail-closed without paying O(boundary^2) validation per batch.
+[[nodiscard]] std::vector<std::optional<Nanometres>>
+assess_validated_free_space_chords(const FreeSpaceDomain& domain,
+                                   const std::vector<std::pair<Point, Point>>& chords);
+
 // Conservative equal-width lane count for an accepted medial edge. The local channel width is
 // twice the edge's verified nearest-boundary clearance; each additional lane consumes one trace
 // width plus one inter-lane clearance.

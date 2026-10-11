@@ -1,4 +1,6 @@
+#include "flux/core/routing_engine.hpp"
 #include "flux/core/board_free_space.hpp"
+#include "flux/core/connectivity.hpp"
 #include "flux/core/detailed_router.hpp"
 #include "flux/core/evaluate.hpp"
 #include "flux/core/free_space_offset.hpp"
@@ -11,6 +13,7 @@
 #include "flux/core/routing_feedback.hpp"
 #include "flux/core/routing_preset.hpp"
 #include "flux/core/routing_rules.hpp"
+#include "flux/generated/parity_manifest.hpp"
 #include "flux/io/differential_pair_constraints.hpp"
 #include "flux/io/kicad_export.hpp"
 #include "flux/io/kicad_import.hpp"
@@ -27,15 +30,14 @@
 #include "flux/io/work_plan.hpp"
 #include "flux/io/work_plan_executor.hpp"
 #include "flux/io/work_plan_router.hpp"
-#include "flux/generated/parity_manifest.hpp"
 
 #include <boost/json.hpp>
 #include <boost/process/v1.hpp>
 
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <charconv>
+#include <chrono>
 #include <csignal>
 #include <cstdlib>
 #include <filesystem>
@@ -606,10 +608,37 @@ summarize_residual_conflicts(const flux::GlobalRouteResult& result) {
   return summary;
 }
 
+void print_engine_fields(flux::RoutingEngineOutcome outcome,
+                         const std::vector<flux::RoutingEngineAttempt>& attempts) {
+  std::cout << ",\n  \"routing_engine_outcome\": " << json_quote(flux::to_string(outcome))
+            << ",\n  \"routing_engine_attempts\": [";
+  bool first = true;
+  for (const auto& attempt : attempts) {
+    if (!first) std::cout << ',';
+    first = false;
+    std::cout << "{\"action\":" << json_quote(flux::to_string(attempt.action))
+              << ",\"work_units\":" << attempt.work_units
+              << ",\"elapsed_microseconds\":" << attempt.elapsed_microseconds
+              << ",\"live_copper_terrain_revision\":" << attempt.live_copper_terrain_revision
+              << ",\"live_copper_terrain_features\":" << attempt.live_copper_terrain_features
+              << ",\"live_copper_terrain_provisional\":"
+              << (attempt.live_copper_terrain_provisional ? "true" : "false")
+              << ",\"quality_before\":" << attempt.quality_before
+              << ",\"quality_after\":" << attempt.quality_after
+              << ",\"accepted\":" << (attempt.accepted ? "true" : "false")
+              << ",\"physical_improvement\":" << (attempt.physical_improvement ? "true" : "false")
+              << ",\"evidence_recorded\":" << (attempt.evidence_recorded ? "true" : "false")
+              << ",\"interrupted_at_decision\":" << (attempt.interrupted_at_decision ? "true" : "false")
+              << ",\"diagnostic\":" << json_quote(attempt.diagnostic) << '}';
+  }
+  std::cout << ']';
+}
+
 void print_route_result(const flux::GlobalRouteResult& result,
                         const flux::RegionalRouteResult* regional = nullptr,
                         const flux::RouterTelemetryStatistics* telemetry = nullptr,
-                        const flux::RoutingPlanResult* routing_plan = nullptr) {
+                        const flux::RoutingPlanResult* routing_plan = nullptr,
+                        const flux::RoutingEngineState* engine_state = nullptr) {
   std::size_t point_count = 0;
   std::size_t geometric_corridor_runs = 0U;
   std::size_t geometric_corridor_cells = 0U;
@@ -665,9 +694,15 @@ void print_route_result(const flux::GlobalRouteResult& result,
       << "  \"single_layer_residual_conflict_groups\": " << residual_summary.single_layer_groups
       << ",\n"
       << "  \"clearance_shadow_conflicts\": " << result.clearance_shadow_conflicts.size() << ",\n"
+      << "  \"unresolved_packing_obligations\": " << result.unresolved_corridor_packing.size() << ",\n"
+      << "  \"packing_obligation_budget_exhausted\": " << (result.corridor_packing_obligation_budget_exhausted ? "true" : "false") << ",\n"
       << "  \"clearance_shadow_owner_attributed_conflicts\": "
       << attributed_clearance_shadow_conflicts << ",\n"
       << "  \"clearance_shadow_overflow\": " << result.clearance_shadow_overflow << ",\n"
+      << "  \"clearance_shadow_raster_samples\": "
+      << result.clearance_shadow_raster_samples << ",\n"
+      << "  \"clearance_shadow_coalesced_samples\": "
+      << result.clearance_shadow_coalesced_samples << ",\n"
       << "  \"clearance_shadow_history_increment\": " << result.clearance_shadow_history_increment
       << ",\n"
       << "  \"peak_clearance_shadow_history_increment\": "
@@ -686,6 +721,8 @@ void print_route_result(const flux::GlobalRouteResult& result,
   std::cout
       << ",\n"
       << "  \"configured_grid_pitch_nm\": " << result.configured_grid_pitch.value() << ",\n"
+      << "  \"configured_dense_candidate_grid\": "
+      << (result.configured_dense_candidate_grid ? "true" : "false") << ",\n"
       << "  \"configured_via_site_pitch_nm\": " << result.configured_via_site_pitch.value() << ",\n"
       << "  \"configured_via_site_phase_x\": " << result.configured_via_site_phase_x << ",\n"
       << "  \"configured_via_site_phase_y\": " << result.configured_via_site_phase_y << ",\n"
@@ -695,6 +732,8 @@ void print_route_result(const flux::GlobalRouteResult& result,
       << (result.configured_crossing_safe_diagonal_grid_edges ? "true" : "false") << ",\n"
       << "  \"configured_sampled_route_clearance_reservations\": "
       << (result.configured_sampled_route_clearance_reservations ? "true" : "false") << ",\n"
+      << "  \"configured_clearance_shadows_advisory_only\": "
+      << (result.configured_clearance_shadows_advisory_only ? "true" : "false") << ",\n"
       << "  \"configured_clearance_shadow_cost_quantum_nm\": "
       << result.configured_clearance_shadow_cost_quantum.value() << ",\n"
       << "  \"configured_capacity_reserve_per_mille\": "
@@ -718,6 +757,30 @@ void print_route_result(const flux::GlobalRouteResult& result,
       << result.configured_max_static_seed_hydraulic_candidates << ",\n"
       << "  \"configured_static_seed_hydraulic_gpu_preferred\": "
       << (result.configured_static_seed_hydraulic_flow.prefer_gpu ? "true" : "false") << ",\n"
+      << "  \"configured_static_seed_terrain_height_evolution\": "
+      << (result.configured_static_seed_hydraulic_flow.evolve_terrain_height ? "true" : "false") << ",\n"
+      << "  \"configured_board_terrain_guidance\": " << (result.configured_board_terrain_guidance.enabled ? "true" : "false") << ",\n"
+      << "  \"board_terrain_guidance_cache_reused\": " << (result.board_terrain_guidance_stats.cache_reused ? "true" : "false") << ",\n"
+      << "  \"board_terrain_guidance_gpu_used\": " << (result.board_terrain_guidance_stats.gpu_used ? "true" : "false") << ",\n"
+      << "  \"board_terrain_guidance_layers_built\": " << result.board_terrain_guidance_stats.layers_built << ",\n"
+      << "  \"board_terrain_guidance_cells\": " << result.board_terrain_guidance_stats.cells << ",\n"
+      << "  \"board_terrain_guidance_pressure_demands\": " << result.board_terrain_guidance_stats.pressure_demands << ",\n"
+      << "  \"board_terrain_guidance_pressure_cells\": " << result.board_terrain_guidance_stats.pressure_cells << ",\n"
+      << "  \"board_terrain_guidance_pressure_pairs_inspected\": " << result.board_terrain_guidance_stats.pressure_pairs_inspected << ",\n"
+      << "  \"board_terrain_guidance_pressure_paths\": " << result.board_terrain_guidance_stats.pressure_paths << ",\n"
+      << "  \"board_terrain_guidance_pressure_paths_incomplete\": " << result.board_terrain_guidance_stats.pressure_paths_incomplete << ",\n"
+      << "  \"board_terrain_guidance_pressure_search_expansions\": " << result.board_terrain_guidance_stats.pressure_search_expansions << ",\n"
+      << "  \"board_terrain_guidance_raster_time_us\": " << result.board_terrain_guidance_stats.raster_time_us << ",\n"
+      << "  \"board_terrain_guidance_pressure_time_us\": " << result.board_terrain_guidance_stats.pressure_time_us << ",\n"
+      << "  \"board_terrain_guidance_preparation_time_us\": " << result.board_terrain_guidance_stats.preparation_time_us << ",\n"
+      << "  \"board_terrain_guidance_pressure_budget_exhausted\": " << (result.board_terrain_guidance_stats.pressure_budget_exhausted ? "true" : "false") << ",\n"
+      << "  \"board_terrain_guidance_component_count\": " << result.board_terrain_guidance_stats.component_count << ",\n"
+      << "  \"board_terrain_guidance_smallest_component_cells\": " << result.board_terrain_guidance_stats.smallest_component_cells << ",\n"
+      << "  \"board_terrain_guidance_largest_component_cells\": " << result.board_terrain_guidance_stats.largest_component_cells << ",\n"
+      << "  \"board_terrain_guidance_connectivity_time_us\": " << result.board_terrain_guidance_stats.connectivity_time_us << ",\n"
+      << "  \"board_terrain_guidance_disconnected_pressure_pairs\": " << result.board_terrain_guidance_stats.disconnected_pressure_pairs << ",\n"
+      << "  \"board_terrain_guidance_evolution_time_us\": " << result.board_terrain_guidance_stats.evolution_time_us << ",\n"
+      << "  \"board_terrain_guidance_diagnostic\": " << json_quote(result.board_terrain_guidance_stats.diagnostic) << ",\n"
       << "  \"configured_max_static_seed_workers\": " << result.configured_max_static_seed_workers
       << ",\n"
       << "  \"configured_static_seed_alternative_edge_penalty\": "
@@ -793,6 +856,10 @@ void print_route_result(const flux::GlobalRouteResult& result,
       << (result.configured_navmesh_funnel_spline_seeds ? "true" : "false") << ",\n"
       << "  \"configured_global_navmesh_cell_pitch_nm\": "
       << result.configured_global_navmesh_cell_pitch.value() << ",\n"
+      << "  \"configured_usped_navmesh\": "
+      << (result.configured_global_navmesh_usped.enabled ? "true" : "false") << ",\n"
+      << "  \"static_seed_usped_refined_parents\": "
+      << result.static_seed_usped_refined_parents << ",\n"
       << "  \"configured_global_spline_minimum_bend_radius_nm\": "
       << result.configured_global_spline_minimum_bend_radius.value() << ",\n"
       << "  \"static_seed_connections\": " << result.static_seed_connections << ",\n"
@@ -817,6 +884,8 @@ void print_route_result(const flux::GlobalRouteResult& result,
       << "  \"static_seed_corridor_nodes\": " << result.static_seed_corridor_nodes << ",\n"
       << "  \"static_seed_spline_samples\": " << result.static_seed_spline_samples << ",\n"
       << "  \"static_seed_navmesh_domains\": " << result.static_seed_navmesh_domains << ",\n"
+      << "  \"session_navmesh_cache_hits\": " << result.session_navmesh_cache_hits << ",\n"
+      << "  \"session_navmesh_cache_misses\": " << result.session_navmesh_cache_misses << ",\n"
       << "  \"static_seed_navmesh_routes\": " << result.static_seed_navmesh_routes << ",\n"
       << "  \"static_seed_navmesh_cells\": " << result.static_seed_navmesh_cells << ",\n"
       << "  \"static_seed_navmesh_refined_parents\": " << result.static_seed_navmesh_refined_parents
@@ -845,6 +914,39 @@ void print_route_result(const flux::GlobalRouteResult& result,
       << ",\n"
       << "  \"static_seed_hydraulic_attempts\": " << result.static_seed_hydraulic_attempts << ",\n"
       << "  \"static_seed_hydraulic_accepted\": " << result.static_seed_hydraulic_accepted << ",\n"
+      << "  \"configured_live_copper_terrain_revision\": " << result.configured_live_copper_terrain_revision << ",\n"
+      << "  \"static_seed_height_evolution_attempts\": " << result.static_seed_height_evolution_attempts << ",\n"
+      << "  \"static_seed_height_evolution_invoked\": " << result.static_seed_height_evolution_invoked << ",\n"
+      << "  \"static_seed_height_evolution_gpu_invoked\": "
+      << result.static_seed_height_evolution_gpu_invoked << ",\n"
+      << "  \"static_seed_height_evolution_gpu_dispatches\": "
+      << result.static_seed_height_evolution_gpu_dispatches << ",\n"
+      << "  \"static_seed_height_evolution_gpu_mask_uploads\": "
+      << result.static_seed_height_evolution_gpu_mask_uploads << ",\n"
+      << "  \"static_seed_height_evolution_gpu_mask_upload_reuses\": "
+      << result.static_seed_height_evolution_gpu_mask_upload_reuses << ",\n"
+      << "  \"static_seed_height_evolution_gpu_mask_cross_pipeline_reuses\": "
+      << result.static_seed_height_evolution_gpu_mask_cross_pipeline_reuses << ",\n"
+      << "  \"static_seed_height_evolution_field_us\": "
+      << result.static_seed_height_evolution_field_us << ",\n"
+      << "  \"static_seed_height_evolution_extraction_us\": "
+      << result.static_seed_height_evolution_extraction_us << ",\n"
+      << "  \"static_seed_height_evolution_accepted\": " << result.static_seed_height_evolution_accepted << ",\n"
+      << "  \"static_seed_height_evolution_iterations\": " << result.static_seed_height_evolution_iterations << ",\n"
+      << "  \"static_seed_height_evolution_changed_cells\": " << result.static_seed_height_evolution_changed_cells << ",\n"
+      << "  \"static_seed_height_evolution_expanded_nodes\": " << result.static_seed_height_evolution_expanded_nodes << ",\n"
+      << "  \"static_seed_indexed_clearance_map_builds\": "
+      << result.static_seed_indexed_clearance_map_builds << ",\n"
+      << "  \"static_seed_indexed_clearance_map_reuses\": "
+      << result.static_seed_indexed_clearance_map_reuses << ",\n"
+      << "  \"static_seed_indexed_clearance_map_cells\": "
+      << result.static_seed_indexed_clearance_map_cells << ",\n"
+      << "  \"static_seed_indexed_clearance_map_records\": "
+      << result.static_seed_indexed_clearance_map_records << ",\n"
+      << "  \"static_seed_indexed_clearance_map_references\": "
+      << result.static_seed_indexed_clearance_map_references << ",\n"
+      << "  \"static_seed_indexed_clearance_map_fallbacks\": "
+      << result.static_seed_indexed_clearance_map_fallbacks << ",\n"
       << "  \"static_seed_hydraulic_failures\": " << result.static_seed_hydraulic_failures << ",\n"
       << "  \"static_seed_hydraulic_gpu_routes\": " << result.static_seed_hydraulic_gpu_routes
       << ",\n"
@@ -856,6 +958,12 @@ void print_route_result(const flux::GlobalRouteResult& result,
       << result.static_seed_hydraulic_gpu_buffer_reuses << ",\n"
       << "  \"static_seed_hydraulic_gpu_buffer_growths\": "
       << result.static_seed_hydraulic_gpu_buffer_growths << ",\n"
+      << "  \"static_seed_hydraulic_gpu_mask_uploads\": "
+      << result.static_seed_hydraulic_gpu_mask_uploads << ",\n"
+      << "  \"static_seed_hydraulic_gpu_mask_upload_reuses\": "
+      << result.static_seed_hydraulic_gpu_mask_upload_reuses << ",\n"
+      << "  \"static_seed_hydraulic_gpu_mask_cross_pipeline_reuses\": "
+      << result.static_seed_hydraulic_gpu_mask_cross_pipeline_reuses << ",\n"
       << "  \"static_seed_hydraulic_cpu_fallbacks\": " << result.static_seed_hydraulic_cpu_fallbacks
       << ",\n"
       << "  \"static_seed_hydraulic_relaxation_passes\": "
@@ -896,6 +1004,10 @@ void print_route_result(const flux::GlobalRouteResult& result,
       << ",\n"
       << "  \"static_seed_reprojections_reverted\": " << result.static_seed_reprojections_reverted
       << ",\n"
+      << "  \"static_seed_tree_attachment_nodes\": "
+      << result.static_seed_tree_attachment_nodes << ",\n"
+      << "  \"static_seed_attachment_reprojections_reverted\": "
+      << result.static_seed_attachment_reprojections_reverted << ",\n"
       << "  \"static_seed_corridor_departures\": " << result.static_seed_corridor_departures
       << ",\n"
       << "  \"static_seed_complete_trees\": " << result.static_seed_complete_trees << ",\n"
@@ -1075,6 +1187,8 @@ void print_route_result(const flux::GlobalRouteResult& result,
       << "  \"hard_capacity_soft_cut_routes\": " << result.hard_capacity_soft_cut_routes << ",\n"
       << "  \"hard_capacity_soft_cut_blockers\": " << result.hard_capacity_soft_cut_blockers
       << ",\n"
+      << "  \"hard_capacity_soft_cut_legal_shadow_observations\": "
+      << result.hard_capacity_soft_cut_legal_shadow_observations << ",\n"
       << "  \"configured_rollback_failed_hard_capacity_ripup\": "
       << (result.configured_rollback_failed_hard_capacity_ripup ? "true" : "false") << ",\n"
       << "  \"hard_capacity_failed_retry_rollbacks\": "
@@ -1630,6 +1744,18 @@ void print_route_result(const flux::GlobalRouteResult& result,
   } else {
     std::cout << regional->windows.size();
   }
+  std::cout << ",\n  \"regional_source_physical_repair_requests\": ";
+  if (regional) std::cout << regional->source_physical_repair_requests;
+  else std::cout << "null";
+  std::cout << ",\n  \"regional_admitted_physical_repair_requests\": ";
+  if (regional) std::cout << regional->admitted_physical_repair_requests;
+  else std::cout << "null";
+  std::cout << ",\n  \"regional_configured_physical_repair_blockers\": ";
+  if (regional) std::cout << regional->configured_physical_repair_blockers;
+  else std::cout << "null";
+  std::cout << ",\n  \"regional_resolved_physical_repair_blockers\": ";
+  if (regional) std::cout << regional->resolved_physical_repair_blockers;
+  else std::cout << "null";
   std::cout << ",\n  \"regional_geometrically_split_windows\": ";
   if (regional == nullptr) {
     std::cout << "null";
@@ -1691,6 +1817,36 @@ void print_route_result(const flux::GlobalRouteResult& result,
   } else {
     std::cout << regional->fragments_without_channel_topology;
   }
+  std::cout << ",\n  \"configured_local_channel_occupancy\": ";
+  if (regional == nullptr) {
+    std::cout << "null";
+  } else {
+    std::cout << (regional->configured.local_channel_occupancy ? "true" : "false");
+  }
+  std::cout << ",\n  \"configured_shared_channel_copper\": ";
+  if (regional == nullptr) {
+    std::cout << "null";
+  } else {
+    std::cout << (regional->configured.shared_channel_copper ? "true" : "false");
+  }
+  std::cout << ",\n  \"configured_centerline_channel_cuts\": ";
+  if (regional == nullptr) {
+    std::cout << "null";
+  } else {
+    std::cout << (regional->configured.centerline_channel_cuts ? "true" : "false");
+  }
+  std::cout << ",\n  \"configured_regional_max_bundle_search_states\": ";
+  if (regional == nullptr) {
+    std::cout << "null";
+  } else {
+    std::cout << regional->configured.max_bundle_search_states;
+  }
+  std::cout << ",\n  \"configured_regional_max_straight_portfolio_checks\": ";
+  if (regional == nullptr) {
+    std::cout << "null";
+  } else {
+    std::cout << regional->configured.max_straight_portfolio_checks;
+  }
   std::cout << ",\n  \"regional_selected_global_narrow_corridor_fallbacks\": ";
   if (regional == nullptr) {
     std::cout << "null";
@@ -1723,6 +1879,8 @@ void print_route_result(const flux::GlobalRouteResult& result,
       std::cout << value;
     }
   };
+  print_lane_solver_metric("regional_lane_precedence_rejected_states",
+                           regional == nullptr ? 0U : regional->lane_precedence_rejected_states);
   print_lane_solver_metric("regional_lane_solver_queries",
                            regional == nullptr ? 0U : regional->lane_solver_queries);
   print_lane_solver_metric("regional_lane_solver_cache_hits",
@@ -1738,6 +1896,10 @@ void print_route_result(const flux::GlobalRouteResult& result,
   print_lane_solver_metric("regional_partial_lane_capacity_pruned_states",
                            regional == nullptr ? 0U
                                                : regional->partial_lane_capacity_pruned_states);
+  print_lane_solver_metric("regional_frozen_copper_via_pruned_states",
+                           regional == nullptr ? 0U : regional->frozen_copper_via_pruned_states);
+  print_lane_solver_metric("regional_frozen_copper_via_rejected_states",
+                           regional == nullptr ? 0U : regional->frozen_copper_via_rejected_states);
   std::cout << ",\n  \"regional_complete_bundle_assignments\": ";
   if (regional == nullptr) {
     std::cout << "null";
@@ -1889,8 +2051,35 @@ void print_route_result(const flux::GlobalRouteResult& result,
       std::cout << value;
   };
   print_spline_performance_metric(
-      "regional_spline_interpolation_gpu_batches",
-      regional == nullptr ? 0U : regional->spline_interpolation_gpu_batches);
+      "regional_spline_topology_seed_gpu_batches",
+      regional == nullptr ? 0U : regional->spline_topology_seed_gpu_batches);
+  print_spline_performance_metric(
+      "regional_spline_topology_seed_gpu_fallbacks",
+      regional == nullptr ? 0U : regional->spline_topology_seed_gpu_fallbacks);
+  print_spline_performance_metric(
+      "regional_spline_topology_seed_gpu_candidates",
+      regional == nullptr ? 0U : regional->spline_topology_seed_gpu_candidates);
+  print_spline_performance_metric(
+      "regional_spline_topology_seed_exact_candidates",
+      regional == nullptr ? 0U : regional->spline_topology_seed_exact_candidates);
+  print_spline_performance_metric(
+      "regional_spline_topology_seed_construction_rejections",
+      regional == nullptr ? 0U : regional->spline_topology_seed_construction_rejections);
+  print_spline_performance_metric(
+      "regional_spline_topology_seed_corridor_rejections",
+      regional == nullptr ? 0U : regional->spline_topology_seed_corridor_rejections);
+  print_spline_performance_metric(
+      "regional_spline_topology_seed_cell_rejections",
+      regional == nullptr ? 0U : regional->spline_topology_seed_cell_rejections);
+  print_spline_performance_metric(
+      "regional_spline_topology_seed_gate_rejections",
+      regional == nullptr ? 0U : regional->spline_topology_seed_gate_rejections);
+  print_spline_performance_metric(
+      "regional_spline_topology_seed_shape_rejections",
+      regional == nullptr ? 0U : regional->spline_topology_seed_shape_rejections);
+  print_spline_performance_metric("regional_spline_interpolation_gpu_batches",
+                                  regional == nullptr ? 0U
+                                                      : regional->spline_interpolation_gpu_batches);
   print_spline_performance_metric(
       "regional_spline_interpolation_gpu_fallbacks",
       regional == nullptr ? 0U : regional->spline_interpolation_gpu_fallbacks);
@@ -1901,14 +2090,61 @@ void print_route_result(const flux::GlobalRouteResult& result,
       "regional_spline_interpolation_exact_candidates",
       regional == nullptr ? 0U : regional->spline_interpolation_exact_candidates);
   print_spline_performance_metric("regional_spline_geometry_cache_hits",
-                                  regional == nullptr ? 0U
-                                                      : regional->spline_geometry_cache_hits);
+                                  regional == nullptr ? 0U : regional->spline_geometry_cache_hits);
   print_spline_performance_metric("regional_spline_geometry_cache_misses",
                                   regional == nullptr ? 0U
                                                       : regional->spline_geometry_cache_misses);
+  print_spline_performance_metric("regional_spline_window_tasks",
+                                  regional == nullptr ? 0U : regional->spline_window_tasks);
+  print_spline_performance_metric("regional_spline_window_workers",
+                                  regional == nullptr ? 0U : regional->spline_window_workers);
+  print_spline_performance_metric("regional_spline_candidate_parallel_batches",
+      regional == nullptr ? 0U : regional->spline_candidate_parallel_batches);
+  print_spline_performance_metric("regional_spline_candidate_parallel_tasks",
+      regional == nullptr ? 0U : regional->spline_candidate_parallel_tasks);
+  print_spline_performance_metric("regional_spline_candidate_parallel_workers",
+      regional == nullptr ? 0U : regional->spline_candidate_parallel_workers);
+  print_spline_performance_metric("regional_spline_candidate_parallel_discarded",
+      regional == nullptr ? 0U : regional->spline_candidate_parallel_discarded);
   print_spline_performance_metric(
-      "regional_spline_offset_broadphase_batches",
-      regional == nullptr ? 0U : regional->spline_offset_broadphase_batches);
+      "regional_spline_incremental_segments_reused",
+      regional == nullptr ? 0U : regional->spline_incremental_segments_reused);
+  print_spline_performance_metric(
+      "regional_spline_incremental_segments_rebuilt",
+      regional == nullptr ? 0U : regional->spline_incremental_segments_rebuilt);
+  print_spline_performance_metric(
+      "regional_spline_route_certificate_cache_hits",
+      regional == nullptr ? 0U : regional->spline_route_certificate_cache_hits);
+  print_spline_performance_metric(
+      "regional_spline_route_certificate_cache_misses",
+      regional == nullptr ? 0U : regional->spline_route_certificate_cache_misses);
+  print_spline_performance_metric(
+      "regional_spline_centerline_certificate_pairs",
+      regional == nullptr ? 0U : regional->spline_centerline_certificate_pairs);
+  print_spline_performance_metric(
+      "regional_spline_centerline_separation_proofs",
+      regional == nullptr ? 0U : regional->spline_centerline_separation_proofs);
+  print_spline_performance_metric(
+      "regional_spline_centerline_collision_proofs",
+      regional == nullptr ? 0U : regional->spline_centerline_collision_proofs);
+  print_spline_performance_metric(
+      "regional_spline_centerline_ambiguous_pairs",
+      regional == nullptr ? 0U : regional->spline_centerline_ambiguous_pairs);
+  print_spline_performance_metric(
+      "regional_spline_centerline_certificate_nodes",
+      regional == nullptr ? 0U : regional->spline_centerline_certificate_nodes);
+  print_spline_performance_metric(
+      "regional_spline_centerline_simd_batches",
+      regional == nullptr ? 0U : regional->spline_centerline_simd_batches);
+  print_spline_performance_metric(
+      "regional_spline_centerline_simd_lanes",
+      regional == nullptr ? 0U : regional->spline_centerline_simd_lanes);
+  print_spline_performance_metric(
+      "regional_spline_centerline_multiprecision_comparisons",
+      regional == nullptr ? 0U : regional->spline_centerline_multiprecision_comparisons);
+  print_spline_performance_metric("regional_spline_offset_broadphase_batches",
+                                  regional == nullptr ? 0U
+                                                      : regional->spline_offset_broadphase_batches);
   print_spline_performance_metric(
       "regional_spline_offset_broadphase_gpu_batches",
       regional == nullptr ? 0U : regional->spline_offset_broadphase_gpu_batches);
@@ -1916,11 +2152,10 @@ void print_route_result(const flux::GlobalRouteResult& result,
       "regional_spline_offset_broadphase_rejections",
       regional == nullptr ? 0U : regional->spline_offset_broadphase_rejections);
   print_spline_performance_metric("regional_spline_offset_exact_pairs",
+                                  regional == nullptr ? 0U : regional->spline_offset_exact_pairs);
+  print_spline_performance_metric("regional_spline_offset_subdivision_nodes",
                                   regional == nullptr ? 0U
-                                                      : regional->spline_offset_exact_pairs);
-  print_spline_performance_metric(
-      "regional_spline_offset_subdivision_nodes",
-      regional == nullptr ? 0U : regional->spline_offset_subdivision_nodes);
+                                                      : regional->spline_offset_subdivision_nodes);
   print_spline_performance_metric(
       "regional_spline_offset_isolated_leaf_pairs",
       regional == nullptr ? 0U : regional->spline_offset_isolated_leaf_pairs);
@@ -1941,16 +2176,13 @@ void print_route_result(const flux::GlobalRouteResult& result,
                           : static_cast<std::uint64_t>(regional->spline_adaptive_assessment_us));
   print_spline_performance_metric(
       "regional_spline_offset_broadphase_us",
-      regional == nullptr ? 0U
-                          : static_cast<std::uint64_t>(regional->spline_offset_broadphase_us));
+      regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->spline_offset_broadphase_us));
   print_spline_performance_metric(
       "regional_spline_offset_exact_us",
-      regional == nullptr ? 0U
-                          : static_cast<std::uint64_t>(regional->spline_offset_exact_us));
+      regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->spline_offset_exact_us));
   print_spline_performance_metric(
       "regional_spline_realization_us",
-      regional == nullptr ? 0U
-                          : static_cast<std::uint64_t>(regional->spline_realization_us));
+      regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->spline_realization_us));
   std::cout << ",\n  \"regional_spline_joint_shove_attempts\": ";
   if (regional == nullptr) {
     std::cout << "null";
@@ -2047,6 +2279,44 @@ void print_route_result(const flux::GlobalRouteResult& result,
   } else {
     std::cout << regional->residual_cone_template_coverage_retained;
   }
+  const auto print_regional_count = [&](std::string_view name, auto member) {
+    std::cout << ",\n  \"" << name << "\": ";
+    if (regional == nullptr) {
+      std::cout << "null";
+    } else {
+      std::cout << regional->*member;
+    }
+  };
+  print_regional_count("regional_conflict_directed_topology_cores",
+                       &flux::RegionalRouteResult::conflict_directed_topology_cores);
+  print_regional_count("regional_conflict_directed_topology_fragments",
+                       &flux::RegionalRouteResult::conflict_directed_topology_fragments);
+  print_regional_count("regional_conflict_directed_master_reruns",
+                       &flux::RegionalRouteResult::conflict_directed_master_reruns);
+  print_regional_count("regional_conflict_directed_columns_generated",
+                       &flux::RegionalRouteResult::conflict_directed_columns_generated);
+  print_regional_count("regional_conflict_directed_no_good_clauses",
+                       &flux::RegionalRouteResult::conflict_directed_no_good_clauses);
+  print_regional_count("regional_conflict_directed_no_good_rejections",
+                       &flux::RegionalRouteResult::conflict_directed_no_good_rejections);
+  print_regional_count("regional_conflict_directed_no_good_unknown_withheld",
+                       &flux::RegionalRouteResult::conflict_directed_no_good_unknown_withheld);
+  print_regional_count("regional_conflict_directed_windows_recovered",
+                       &flux::RegionalRouteResult::conflict_directed_windows_recovered);
+  print_regional_count("regional_conflict_directed_windows_exhausted",
+                       &flux::RegionalRouteResult::conflict_directed_windows_exhausted);
+  print_regional_count("regional_confined_anisotropic_erosion_checks",
+                       &flux::RegionalRouteResult::confined_anisotropic_erosion_checks);
+  print_regional_count("regional_confined_anisotropic_erosion_accepted",
+                       &flux::RegionalRouteResult::confined_anisotropic_erosion_accepted);
+  print_regional_count("regional_confined_anisotropic_erosion_rejected",
+                       &flux::RegionalRouteResult::confined_anisotropic_erosion_rejected);
+  print_regional_count("regional_confined_anisotropic_erosion_gpu_routes",
+                       &flux::RegionalRouteResult::confined_anisotropic_erosion_gpu_routes);
+  print_regional_count("regional_confined_anisotropic_erosion_cpu_routes",
+                       &flux::RegionalRouteResult::confined_anisotropic_erosion_cpu_routes);
+  print_regional_count("regional_confined_anisotropic_erosion_exact_chords",
+                       &flux::RegionalRouteResult::confined_anisotropic_erosion_exact_chords);
   std::cout << ",\n  \"regional_residual_conflict_cone_attempts\": ";
   if (regional == nullptr) {
     std::cout << "null";
@@ -2228,6 +2498,8 @@ void print_route_result(const flux::GlobalRouteResult& result,
                 << ",\"partial_via_pair_pruned\":" << assignment->partial_via_pair_pruned_states
                 << ",\"partial_terminal_via_pruned\":"
                 << assignment->partial_terminal_via_pruned_states
+                << ",\"partial_frozen_copper_via_pruned\":"
+                << assignment->partial_frozen_copper_via_pruned_states
                 << ",\"partial_access_blockers\":[";
       for (std::size_t blocker_index = 0U;
            blocker_index < assignment->partial_access_blockers.size(); ++blocker_index) {
@@ -2286,6 +2558,8 @@ void print_route_result(const flux::GlobalRouteResult& result,
           << ",\"terminal_pair_rejected\":" << assignment->terminal_pair_rejected_states
           << ",\"via_pair_rejected\":" << assignment->via_pair_rejected_states
           << ",\"terminal_via_rejected\":" << assignment->terminal_via_rejected_states
+          << ",\"frozen_copper_via_rejected\":"
+          << assignment->frozen_copper_via_rejected_states
           << ",\"packing_rejected\":" << assignment->packing_rejected_states
           << ",\"selected_template_conflicts\":" << assignment->selected_template_conflicts
           << ",\"selected_residual_conflicts\":" << assignment->selected_residual_conflicts
@@ -2378,8 +2652,29 @@ void print_route_result(const flux::GlobalRouteResult& result,
                   << '}';
         first_template = false;
       }
-      std::cout << "]"
-                << ",\"spline_details\":[";
+      std::cout << "],\"frozen_copper_conflicts\":[";
+      bool first_frozen = true;
+      const auto print_frozen_conflicts = [&](const auto& conflicts, std::string_view provenance) {
+        for (const auto& conflict : conflicts) {
+          const auto print_fragment = [](const auto& id) {
+            std::cout << "{\"net\":" << json_quote(id.net.value())
+                      << ",\"connection\":" << id.connection_index
+                      << ",\"run\":" << id.run_index << ",\"fragment\":" << id.fragment_index << '}';
+          };
+          std::cout << (first_frozen ? "" : ",") << "{\"provenance\":"
+                    << json_quote(provenance) << ",\"candidate\":";
+          print_fragment(conflict.candidate);
+          std::cout << ",\"blocker\":";
+          print_fragment(conflict.blocker);
+          std::cout << ",\"layer\":" << json_quote(conflict.layer.value())
+                    << ",\"code\":" << json_quote(conflict.code)
+                    << ",\"clearance_deficit_nm\":" << conflict.clearance_deficit.value() << '}';
+          first_frozen = false;
+        }
+      };
+      print_frozen_conflicts(assignment->frozen_copper_conflicts, "access");
+      print_frozen_conflicts(assignment->native_frozen_copper_conflicts, "native");
+      std::cout << "],\"spline_details\":[";
       for (std::size_t spline_index = 0U; spline_index < assignment->spline_realizations.size();
            ++spline_index) {
         const auto& spline = assignment->spline_realizations[spline_index];
@@ -2467,6 +2762,9 @@ void print_route_result(const flux::GlobalRouteResult& result,
       "regional_partial_terminal_via_pruned_bundle_states",
       [](const auto& assignment) { return assignment.partial_terminal_via_pruned_states; });
   print_rejected_bundle_states(
+      "regional_partial_frozen_copper_via_pruned_bundle_states",
+      [](const auto& assignment) { return assignment.partial_frozen_copper_via_pruned_states; });
+  print_rejected_bundle_states(
       "regional_partial_lane_capacity_pruned_bundle_states",
       [](const auto& assignment) { return assignment.partial_lane_capacity_pruned_states; });
   print_rejected_bundle_states(
@@ -2487,6 +2785,9 @@ void print_route_result(const flux::GlobalRouteResult& result,
   print_rejected_bundle_states(
       "regional_terminal_via_rejected_bundle_states",
       [](const auto& assignment) { return assignment.terminal_via_rejected_states; });
+  print_rejected_bundle_states(
+      "regional_frozen_copper_via_rejected_bundle_states",
+      [](const auto& assignment) { return assignment.frozen_copper_via_rejected_states; });
   print_rejected_bundle_states(
       "regional_packing_rejected_bundle_states",
       [](const auto& assignment) { return assignment.packing_rejected_states; });
@@ -2524,6 +2825,15 @@ void print_route_result(const flux::GlobalRouteResult& result,
   } else {
     std::cout << (regional->spline_candidate_available ? "true" : "false");
   }
+  std::cout << ",\n  \"regional_spline_candidate_conflicting_articulation\": ";
+  if (regional == nullptr) {
+    std::cout << "null";
+  } else {
+    std::cout << (regional->spline_candidate_conflicting_articulation ? "true" : "false");
+  }
+  std::cout << ",\n  \"regional_spline_candidate_diagnostic\": ";
+  std::cout << json_quote(regional == nullptr ? std::string{}
+                                              : regional->spline_candidate_diagnostic);
   std::cout << ",\n  \"regional_complete_via_dependent_routes\": ";
   if (regional == nullptr) {
     std::cout << "null";
@@ -2774,6 +3084,60 @@ void print_route_result(const flux::GlobalRouteResult& result,
   } else {
     std::cout << regional->joint_spline_candidates_evaluated;
   }
+  std::cout << ",\n  \"regional_candidate_ranker_requested\": ";
+  if (regional == nullptr) {
+    std::cout << "null";
+  } else {
+    std::cout << (regional->candidate_ranker_requested ? "true" : "false");
+  }
+  std::cout << ",\n  \"regional_candidate_ranker_loaded\": ";
+  if (regional == nullptr) {
+    std::cout << "null";
+  } else {
+    std::cout << (regional->candidate_ranker_loaded ? "true" : "false");
+  }
+  std::cout << ",\n  \"regional_candidate_ranker_trees\": ";
+  if (regional == nullptr) {
+    std::cout << "null";
+  } else {
+    std::cout << regional->candidate_ranker_trees;
+  }
+  std::cout << ",\n  \"regional_candidate_ranker_groups_scored\": ";
+  if (regional == nullptr) {
+    std::cout << "null";
+  } else {
+    std::cout << regional->candidate_ranker_groups_scored;
+  }
+  std::cout << ",\n  \"regional_candidate_ranker_candidates_scored\": ";
+  if (regional == nullptr) {
+    std::cout << "null";
+  } else {
+    std::cout << regional->candidate_ranker_candidates_scored;
+  }
+  std::cout << ",\n  \"regional_candidate_ranker_candidates_reordered\": ";
+  if (regional == nullptr) {
+    std::cout << "null";
+  } else {
+    std::cout << regional->candidate_ranker_candidates_reordered;
+  }
+  std::cout << ",\n  \"regional_candidate_ranker_training_rows_written\": ";
+  if (regional == nullptr) {
+    std::cout << "null";
+  } else {
+    std::cout << regional->candidate_ranker_training_rows_written;
+  }
+  std::cout << ",\n  \"regional_candidate_ranker_training_rows_failed\": ";
+  if (regional == nullptr) {
+    std::cout << "null";
+  } else {
+    std::cout << regional->candidate_ranker_training_rows_failed;
+  }
+  std::cout << ",\n  \"regional_candidate_ranker_diagnostic\": ";
+  if (regional == nullptr) {
+    std::cout << "null";
+  } else {
+    std::cout << json_quote(regional->candidate_ranker_diagnostic);
+  }
   std::cout << ",\n  \"regional_spline_portfolio_windows\": ";
   if (regional == nullptr) {
     std::cout << "null";
@@ -2878,6 +3242,279 @@ void print_route_result(const flux::GlobalRouteResult& result,
   print_regional_diagnosis_metric("regional_quantized_clearance_conflicts",
                                   regional == nullptr ? 0U
                                                       : regional->quantized_clearance_conflicts);
+  print_regional_diagnosis_metric("regional_native_arc_windows_checked",
+                                  regional == nullptr ? 0U
+                                                      : regional->native_arc_windows_checked);
+  print_regional_diagnosis_metric("regional_spline_tightening_routes_examined",
+                                  regional == nullptr ? 0U : regional->spline_tightening_routes_examined);
+  print_regional_diagnosis_metric("regional_spline_tightening_routes_accepted",
+                                  regional == nullptr ? 0U : regional->spline_tightening_routes_accepted);
+  print_regional_diagnosis_metric("regional_spline_tightening_exact_length_before_nm",
+                                  regional == nullptr ? 0U : regional->spline_tightening_exact_length_before_nm);
+  print_regional_diagnosis_metric("regional_spline_tightening_exact_length_after_nm",
+                                  regional == nullptr ? 0U : regional->spline_tightening_exact_length_after_nm);
+  print_regional_diagnosis_metric("regional_native_scene_conflicts",
+                                  regional == nullptr ? 0U : regional->native_scene_conflicts);
+  print_regional_diagnosis_metric("regional_physical_scope_retries",
+                                  regional == nullptr ? 0U : regional->physical_scope_retries);
+  print_regional_diagnosis_metric("regional_physical_scope_retries_explored",
+                                  regional == nullptr ? 0U : regional->physical_scope_retries_explored);
+  print_regional_diagnosis_metric("regional_selected_physical_scope_retry",
+                                  regional == nullptr ? 0U : regional->selected_physical_scope_retry);
+  print_regional_diagnosis_metric("regional_native_scene_evaluated",
+                                  regional && regional->native_scene_evaluated ? 1U : 0U);
+  print_regional_diagnosis_metric("regional_native_scene_complete",
+                                  regional && regional->native_scene_complete ? 1U : 0U);
+  print_regional_diagnosis_metric("regional_straight_scene_evaluated",
+                                  regional && regional->straight_scene_evaluated ? 1U : 0U);
+  std::cout << ",\n  \"regional_physical_scope_attempts\": ";
+  if (regional == nullptr) {
+    std::cout << "null";
+  } else {
+    std::cout << '[';
+    for (std::size_t index = 0U; index < regional->physical_scope_attempts.size(); ++index) {
+      const auto& attempt = regional->physical_scope_attempts[index];
+      std::cout << (index == 0U ? "" : ",") << "{\"retry\":" << attempt.retry_index
+                << ",\"selected\":" << (attempt.selected ? "true" : "false")
+                << ",\"native_evaluated\":" << (attempt.native_scene_evaluated ? "true" : "false")
+                << ",\"native_complete\":" << (attempt.native_scene_complete ? "true" : "false")
+                << ",\"straight_evaluated\":" << (attempt.straight_scene_evaluated ? "true" : "false")
+                << ",\"incomplete_assignments\":" << attempt.incomplete_assignments
+                << ",\"opens\":";
+      if (attempt.straight_scene_evaluated) std::cout << attempt.open_connections;
+      else std::cout << "null";
+      std::cout << ",\"physical_errors\":";
+      if (attempt.straight_scene_evaluated || attempt.native_scene_evaluated)
+        std::cout << attempt.physical_errors;
+      else std::cout << "null";
+      std::cout << '}';
+    }
+    std::cout << ']';
+  }
+  print_regional_diagnosis_metric("regional_source_exact_copper_witnesses",
+                                  regional == nullptr ? 0U : regional->source_exact_copper_witnesses);
+  print_regional_diagnosis_metric("regional_mapped_exact_copper_pairs",
+                                  regional == nullptr ? 0U : regional->mapped_exact_copper_pairs);
+  print_regional_diagnosis_metric("regional_unmapped_exact_copper_pairs",
+                                  regional == nullptr ? 0U : regional->unmapped_exact_copper_pairs);
+  print_regional_diagnosis_metric("regional_linear_scaffold_checks",
+                                  regional == nullptr ? 0U : regional->linear_scaffold_checks);
+  print_regional_diagnosis_metric("regional_linear_scaffold_rejections",
+                                  regional == nullptr ? 0U : regional->linear_scaffold_rejections);
+  print_regional_diagnosis_metric("regional_straight_scene_trials",
+                                  regional == nullptr ? 0U : regional->straight_scene_trials);
+  print_regional_diagnosis_metric("regional_straight_source_fallback_selected",
+                                  regional && regional->straight_source_fallback_selected ? 1U : 0U);
+  print_regional_diagnosis_metric("regional_straight_scene_portfolio_checks",
+                                  regional == nullptr ? 0U : regional->straight_scene_portfolio_checks);
+  print_regional_diagnosis_metric("regional_candidate_alternative_cache_entries_peak",
+      regional == nullptr ? 0U : regional->candidate_pipeline_stats.alternative_cache_entries_peak);
+  print_regional_diagnosis_metric("regional_candidate_alternative_cache_shallow_bytes_estimate_peak",
+      regional == nullptr ? 0U : regional->candidate_pipeline_stats.alternative_cache_shallow_bytes_estimate_peak);
+  print_regional_diagnosis_metric("regional_candidate_access_selection_cache_hits",
+      regional == nullptr ? 0U : regional->candidate_pipeline_stats.access_selection_cache_hits);
+  print_regional_diagnosis_metric("regional_candidate_access_selection_cache_misses",
+      regional == nullptr ? 0U : regional->candidate_pipeline_stats.access_selection_cache_misses);
+  print_regional_diagnosis_metric("regional_candidate_access_selection_cache_avoided_calls",
+      regional == nullptr ? 0U : regional->candidate_pipeline_stats.access_selection_cache_avoided_calls);
+  print_regional_diagnosis_metric("regional_candidate_access_selection_cache_entries_peak",
+      regional == nullptr ? 0U : regional->candidate_pipeline_stats.access_selection_cache_entries_peak);
+  print_regional_diagnosis_metric("regional_candidate_bundle_search_excluding_access_us",
+      regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->candidate_pipeline_stats.bundle_search_excluding_access_us));
+  print_regional_diagnosis_metric("regional_candidate_access_selection_cache_capacity_skipped_insertions",
+      regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->candidate_pipeline_stats.access_selection_cache_capacity_skipped_insertions));
+  print_regional_diagnosis_metric("regional_candidate_channel_construction_invocations",
+                                  regional == nullptr ? 0U : regional->candidate_pipeline_stats.channel_construction_invocations);
+  print_regional_diagnosis_metric("regional_candidate_alternative_domain_requests",
+                                  regional == nullptr ? 0U : regional->candidate_pipeline_stats.alternative_domain_requests);
+  print_regional_diagnosis_metric("regional_candidate_bundle_assignment_invocations",
+                                  regional == nullptr ? 0U : regional->candidate_pipeline_stats.bundle_assignment_invocations);
+  print_regional_diagnosis_metric("regional_candidate_bundle_search_invocations",
+                                  regional == nullptr ? 0U : regional->candidate_pipeline_stats.bundle_search_invocations);
+  print_regional_diagnosis_metric("regional_candidate_lane_packing_invocations",
+                                  regional == nullptr ? 0U : regional->candidate_pipeline_stats.lane_packing_invocations);
+  print_regional_diagnosis_metric("regional_candidate_access_selection_invocations",
+                                  regional == nullptr ? 0U : regional->candidate_pipeline_stats.access_selection_invocations);
+  print_regional_diagnosis_metric("regional_candidate_channel_construction_us",
+                                  regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->candidate_pipeline_stats.channel_construction_us));
+  print_regional_diagnosis_metric("regional_candidate_alternative_domain_us",
+                                  regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->candidate_pipeline_stats.alternative_domain_us));
+  print_regional_diagnosis_metric("regional_channel_prepared_cells",
+      regional == nullptr ? 0U : regional->candidate_pipeline_stats.channel_prepared_cells);
+  print_regional_diagnosis_metric("regional_channel_spatial_index_queries",
+      regional == nullptr ? 0U : regional->candidate_pipeline_stats.channel_spatial_index_queries);
+  print_regional_diagnosis_metric("regional_channel_exact_overlap_checks",
+      regional == nullptr ? 0U : regional->candidate_pipeline_stats.channel_exact_overlap_checks);
+  print_regional_diagnosis_metric("regional_candidate_bundle_assignment_us",
+                                  regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->candidate_pipeline_stats.bundle_assignment_us));
+  print_regional_diagnosis_metric("regional_candidate_bundle_search_us",
+                                  regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->candidate_pipeline_stats.bundle_search_us));
+  print_regional_diagnosis_metric("regional_candidate_lane_packing_us",
+                                  regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->candidate_pipeline_stats.lane_packing_us));
+  print_regional_diagnosis_metric("regional_candidate_access_selection_us",
+                                  regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->candidate_pipeline_stats.access_selection_us));
+  print_regional_diagnosis_metric("regional_candidate_alternative_source_cache_hits",
+                                  regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->candidate_pipeline_stats.alternative_source_cache_hits));
+  print_regional_diagnosis_metric("regional_candidate_alternative_source_cache_misses",
+                                  regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->candidate_pipeline_stats.alternative_source_cache_misses));
+  print_regional_diagnosis_metric("regional_candidate_alternative_geometry_cache_hits",
+                                  regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->candidate_pipeline_stats.alternative_geometry_cache_hits));
+  print_regional_diagnosis_metric("regional_candidate_alternative_geometry_cache_misses",
+                                  regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->candidate_pipeline_stats.alternative_geometry_cache_misses));
+  print_regional_diagnosis_metric("regional_candidate_alternative_navigation_cache_hits",
+                                  regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->candidate_pipeline_stats.alternative_navigation_cache_hits));
+  print_regional_diagnosis_metric("regional_candidate_alternative_navigation_cache_misses",
+                                  regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->candidate_pipeline_stats.alternative_navigation_cache_misses));
+  print_regional_diagnosis_metric("regional_candidate_alternative_route_cache_hits",
+      regional == nullptr ? 0U : regional->candidate_pipeline_stats.alternative_route_cache_hits);
+  print_regional_diagnosis_metric("regional_candidate_alternative_route_cache_misses",
+      regional == nullptr ? 0U : regional->candidate_pipeline_stats.alternative_route_cache_misses);
+  print_regional_diagnosis_metric("regional_candidate_alternative_cache_evictions",
+                                  regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->candidate_pipeline_stats.alternative_cache_evictions));
+  print_regional_diagnosis_metric("regional_candidate_fixed_geometry_compatibility_checks",
+                                  regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->candidate_pipeline_stats.fixed_geometry_compatibility_checks));
+  print_regional_diagnosis_metric("regional_candidate_fixed_geometry_compatibility_rejections",
+                                  regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->candidate_pipeline_stats.fixed_geometry_compatibility_rejections));
+  print_regional_diagnosis_metric("configured_regional_max_straight_joint_windows",
+                                  regional == nullptr ? 0U : regional->configured.max_straight_joint_windows);
+  print_regional_diagnosis_metric("regional_straight_scene_multi_window_checks",
+                                  regional == nullptr ? 0U : regional->straight_scene_multi_window_checks);
+  print_regional_diagnosis_metric("regional_straight_scene_multi_window_improvements",
+                                  regional == nullptr ? 0U : regional->straight_scene_multi_window_improvements);
+  print_regional_diagnosis_metric("regional_validated_copper_scene_available",
+                                  regional && regional->validated_copper_scene.data ? 1U : 0U);
+  print_regional_diagnosis_metric("regional_straight_scene_geometry_checks",
+                                  regional == nullptr ? 0U : regional->straight_scene_geometry_checks);
+  print_regional_diagnosis_metric("regional_straight_scene_geometry_improvements",
+                                  regional == nullptr ? 0U : regional->straight_scene_geometry_improvements);
+  print_regional_diagnosis_metric("regional_straight_scene_joint_portfolio_checks",
+                                  regional == nullptr ? 0U : regional->straight_scene_joint_portfolio_checks);
+  print_regional_diagnosis_metric("regional_straight_scene_portfolio_improvements",
+                                  regional == nullptr ? 0U
+                                                      : regional->straight_scene_portfolio_improvements);
+  print_regional_diagnosis_metric("regional_straight_scene_geometry_attempts",
+      regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->straight_scene_geometry_attempts));
+  print_regional_diagnosis_metric("regional_straight_scene_geometry_error_reduction",
+      regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->straight_scene_geometry_error_reduction));
+  print_regional_diagnosis_metric("regional_straight_scene_geometry_elapsed_us",
+      regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->straight_scene_geometry_elapsed_us));
+  print_regional_diagnosis_metric("regional_straight_scene_portfolio_attempts",
+      regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->straight_scene_portfolio_attempts));
+  print_regional_diagnosis_metric("regional_straight_scene_portfolio_error_reduction",
+      regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->straight_scene_portfolio_error_reduction));
+  print_regional_diagnosis_metric("regional_straight_scene_portfolio_elapsed_us",
+      regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->straight_scene_portfolio_elapsed_us));
+  print_regional_diagnosis_metric("regional_straight_scene_provisional_context_conflicts",
+      regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->straight_scene_provisional_context_conflicts));
+  std::cout << ",\n  \"regional_straight_scene_search_outcome\": ";
+  if (regional == nullptr) std::cout << "null";
+  else {
+    const auto outcome_name = [](flux::RegionalStraightSearchOutcome outcome) {
+      switch (outcome) {
+      case flux::RegionalStraightSearchOutcome::not_run: return "not_run";
+      case flux::RegionalStraightSearchOutcome::found_legal_candidate: return "found_legal_candidate";
+      case flux::RegionalStraightSearchOutcome::retained_fixed_pool_exhausted: return "retained_fixed_pool_exhausted";
+      case flux::RegionalStraightSearchOutcome::budget_or_scope_unknown: return "budget_or_scope_unknown";
+      case flux::RegionalStraightSearchOutcome::cancelled: return "cancelled";
+      }
+      return "unknown";
+    };
+    std::cout << json_quote(outcome_name(regional->straight_scene_search_outcome));
+  }
+  print_regional_diagnosis_metric("regional_straight_scene_preview_checks",
+      regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->straight_scene_preview_checks));
+  print_regional_diagnosis_metric("regional_straight_scene_reserve_candidates",
+      regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->straight_scene_reserve_candidates));
+  print_regional_diagnosis_metric("regional_straight_scene_pool_states",
+      regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->straight_scene_pool_states));
+  print_regional_diagnosis_metric("regional_straight_scene_pool_complete",
+      regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->straight_scene_pool_complete));
+  print_regional_diagnosis_metric("regional_repair_geometry_attempts",
+      regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->repair_family_attempts[0]));
+  print_regional_diagnosis_metric("regional_repair_geometry_error_reduction",
+      regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->repair_family_error_reduction[0]));
+  print_regional_diagnosis_metric("regional_repair_geometry_work_units",
+      regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->repair_family_work_units[0]));
+  print_regional_diagnosis_metric("regional_repair_geometry_elapsed_us",
+      regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->repair_family_elapsed_us[0]));
+  print_regional_diagnosis_metric("regional_repair_single_attempts",
+      regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->repair_family_attempts[1]));
+  print_regional_diagnosis_metric("regional_repair_single_error_reduction",
+      regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->repair_family_error_reduction[1]));
+  print_regional_diagnosis_metric("regional_repair_single_work_units",
+      regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->repair_family_work_units[1]));
+  print_regional_diagnosis_metric("regional_repair_single_elapsed_us",
+      regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->repair_family_elapsed_us[1]));
+  print_regional_diagnosis_metric("regional_repair_pair_attempts",
+      regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->repair_family_attempts[2]));
+  print_regional_diagnosis_metric("regional_repair_pair_error_reduction",
+      regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->repair_family_error_reduction[2]));
+  print_regional_diagnosis_metric("regional_repair_pair_work_units",
+      regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->repair_family_work_units[2]));
+  print_regional_diagnosis_metric("regional_repair_pair_elapsed_us",
+      regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->repair_family_elapsed_us[2]));
+  print_regional_diagnosis_metric("regional_repair_multi_attempts",
+      regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->repair_family_attempts[3]));
+  print_regional_diagnosis_metric("regional_repair_multi_error_reduction",
+      regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->repair_family_error_reduction[3]));
+  print_regional_diagnosis_metric("regional_repair_multi_work_units",
+      regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->repair_family_work_units[3]));
+  print_regional_diagnosis_metric("regional_repair_multi_elapsed_us",
+      regional == nullptr ? 0U : static_cast<std::uint64_t>(regional->repair_family_elapsed_us[3]));
+  print_regional_diagnosis_metric("regional_straight_collapsed_via_adapters",
+                                  regional == nullptr ? 0U : regional->straight_collapsed_via_adapters);
+  print_regional_diagnosis_metric("regional_straight_scene_drc_violations",
+                                  regional == nullptr ? 0U : regional->straight_scene_drc_violations);
+  print_regional_diagnosis_metric("regional_straight_scene_open_connections",
+                                  regional == nullptr ? 0U : regional->straight_scene_open_connections);
+  std::cout << ",\n  \"regional_straight_scene_drc_categories\": {";
+  bool first_straight_category = true;
+  if (regional) for (const auto& [category, count] : regional->straight_scene_drc_categories) {
+    std::cout << (first_straight_category ? "" : ",") << json_quote(category) << ':' << count;
+    first_straight_category = false;
+  }
+  std::cout << '}';
+  print_regional_diagnosis_metric("regional_native_scene_fixed_conflicts",
+                                  regional == nullptr ? 0U : regional->native_scene_fixed_conflicts);
+  // Assembly can be withdrawn after a local repair. Keep last-scene evidence explicitly
+  // separate from the presence of a current manifest; neither constitutes final KiCad DRC.
+  std::cout << ",\n  \"regional_native_scene_manifest_available\": "
+            << (regional && regional->native_realization_manifest_available ? "true" : "false")
+            << ",\n  \"regional_last_native_scene_diagnoses\": [";
+  bool first_native_diagnosis = true;
+  if (regional) for (const auto& diagnosis : regional->local_routability_diagnoses) {
+    if (!diagnosis.resource.stable_id.starts_with("native-scene:")) continue;
+    const auto& bounds = diagnosis.resource.bounds;
+    std::cout << (first_native_diagnosis ? "" : ",")
+              << "{\"resource\":" << json_quote(diagnosis.resource.stable_id)
+              << ",\"layer\":" << json_quote(diagnosis.resource.layer.value())
+              << ",\"detail\":" << json_quote(diagnosis.detail)
+              << ",\"clearance_deficit_nm\":" << diagnosis.clearance_deficit.value()
+              << ",\"locally_resolved\":" << (diagnosis.locally_resolved ? "true" : "false")
+              << ",\"bounds_nm\":[" << bounds.minimum.x.value() << ',' << bounds.minimum.y.value()
+              << ',' << bounds.maximum.x.value() << ',' << bounds.maximum.y.value() << "]"
+              << ",\"nets\":[";
+    for (std::size_t index = 0; index < diagnosis.resource.nets.size(); ++index)
+      std::cout << (index ? "," : "") << json_quote(diagnosis.resource.nets[index].value());
+    std::cout << "]}";
+    first_native_diagnosis = false;
+  }
+  std::cout << ']';
+  print_regional_diagnosis_metric("regional_native_arc_fit_failures",
+                                  regional == nullptr ? 0U : regional->native_arc_fit_failures);
+  print_regional_diagnosis_metric("regional_native_arc_pieces_checked",
+                                  regional == nullptr ? 0U
+                                                      : regional->native_arc_pieces_checked);
+  print_regional_diagnosis_metric("regional_native_arc_copper_violations",
+                                  regional == nullptr ? 0U
+                                                      : regional->native_arc_copper_violations);
+  print_regional_diagnosis_metric("regional_native_scene_total_conflicts",
+                                  regional == nullptr ? 0U : regional->native_scene_total_conflicts);
+  print_regional_diagnosis_metric("regional_native_scene_open_connections",
+                                  regional == nullptr ? 0U : regional->native_scene_open_connections);
+  print_regional_diagnosis_metric("regional_native_arc_legal_windows",
+                                  regional == nullptr ? 0U
+                                                      : regional->native_arc_legal_windows);
   print_regional_diagnosis_metric("regional_quantization_feedback_attempts",
                                   regional == nullptr ? 0U
                                                       : regional->quantization_feedback_attempts);
@@ -2890,11 +3527,137 @@ void print_route_result(const flux::GlobalRouteResult& result,
   print_regional_diagnosis_metric(
       "regional_quantization_check_budget_exhausted_windows",
       regional == nullptr ? 0U : regional->quantization_check_budget_exhausted_windows);
+  std::cout << ",\n  \"configured_avbd_relaxation\": "
+            << (regional ? (regional->configured.enable_avbd_relaxation ? "true" : "false") : "null");
+  std::cout << ",\n  \"configured_avbd_iterations\": ";
+  if (regional) std::cout << regional->configured.avbd.iterations;
+  else std::cout << "null";
+  print_regional_diagnosis_metric("regional_avbd_windows_attempted",
+      regional == nullptr ? 0U : regional->avbd_windows_attempted);
+  print_regional_diagnosis_metric("regional_avbd_proposals_improved",
+      regional == nullptr ? 0U : regional->avbd_proposals_improved);
+  print_regional_diagnosis_metric("regional_avbd_windows_improved",
+      regional == nullptr ? 0U : regional->avbd_windows_improved);
+  print_regional_diagnosis_metric("regional_avbd_contacts",
+      regional == nullptr ? 0U : regional->avbd_contacts);
+  print_regional_diagnosis_metric("regional_avbd_duplicate_reductions",
+      regional == nullptr ? 0U : regional->avbd_duplicate_reductions);
+  print_regional_diagnosis_metric("regional_avbd_colors",
+      regional == nullptr ? 0U : regional->avbd_colors);
+  print_regional_diagnosis_metric("regional_avbd_local_block_solves",
+      regional == nullptr ? 0U : regional->avbd_local_block_solves);
+  print_regional_diagnosis_metric("regional_avbd_duals",
+      regional == nullptr ? 0U : regional->avbd_duals);
+  print_regional_diagnosis_metric("regional_avbd_penalty_updates",
+      regional == nullptr ? 0U : regional->avbd_penalty_updates);
+  print_regional_diagnosis_metric("regional_avbd_maximum_degree",
+      regional == nullptr ? 0U : regional->avbd_maximum_degree);
+  print_regional_diagnosis_metric("regional_avbd_moved_rigid_owners",
+      regional == nullptr ? 0U : regional->avbd_moved_rigid_owners);
+  print_regional_diagnosis_metric("regional_avbd_capacity_rejections",
+      regional == nullptr ? 0U : regional->avbd_capacity_rejections);
+  print_regional_diagnosis_metric("regional_avbd_solve_us",
+      regional == nullptr ? 0U : regional->avbd_solve_us);
   print_regional_diagnosis_metric("regional_xpbd_windows_attempted",
                                   regional == nullptr ? 0U : regional->xpbd_windows_attempted);
   print_regional_diagnosis_metric(
       "regional_xpbd_unconflicted_candidates_skipped",
       regional == nullptr ? 0U : regional->xpbd_unconflicted_candidates_skipped);
+  print_regional_diagnosis_metric("regional_layered_navmesh_graph_nodes",
+      regional == nullptr ? 0U : regional->candidate_pipeline_stats.layered_navmesh_graph_nodes);
+  print_regional_diagnosis_metric("regional_layered_navmesh_planar_edges",
+      regional == nullptr ? 0U : regional->candidate_pipeline_stats.layered_navmesh_planar_edges);
+  print_regional_diagnosis_metric("regional_layered_navmesh_via_zones",
+      regional == nullptr ? 0U : regional->candidate_pipeline_stats.layered_navmesh_via_zones);
+  print_regional_diagnosis_metric("regional_layered_navmesh_certified_transitions",
+      regional == nullptr ? 0U : regional->candidate_pipeline_stats.layered_navmesh_certified_transitions);
+  print_regional_diagnosis_metric("regional_layered_navmesh_rejected_spans",
+      regional == nullptr ? 0U : regional->candidate_pipeline_stats.layered_navmesh_rejected_spans);
+  print_regional_diagnosis_metric("regional_layered_navmesh_preparation_bound_hits",
+      regional == nullptr ? 0U : regional->candidate_pipeline_stats.layered_navmesh_preparation_bound_hits);
+  print_regional_diagnosis_metric("regional_layered_navmesh_search_expansions",
+      regional == nullptr ? 0U : regional->candidate_pipeline_stats.layered_navmesh_search_expansions);
+  print_regional_diagnosis_metric("regional_layered_navmesh_search_bound_hits",
+      regional == nullptr ? 0U : regional->candidate_pipeline_stats.layered_navmesh_search_bound_hits);
+  print_regional_diagnosis_metric("regional_layered_navmesh_selected_proposals",
+      regional == nullptr ? 0U : regional->candidate_pipeline_stats.layered_navmesh_selected_proposals);
+  print_regional_diagnosis_metric("regional_hc_seed_assignments_generated",
+      regional == nullptr ? 0U : regional->hc_composition_stats.seed_assignments_generated);
+  print_regional_diagnosis_metric("regional_hc_seed_assignments_admitted",
+      regional == nullptr ? 0U : regional->hc_composition_stats.seed_assignments_admitted);
+  std::cout << ",\n  \"configured_regional_hc_composition\": ";
+  if (regional == nullptr) std::cout << "null";
+  else std::cout << (regional->configured.enable_bounded_hc_composition ? "true" : "false");
+  std::cout << ",\n  \"configured_regional_layered_navmesh\": ";
+  if (regional == nullptr) std::cout << "null";
+  else std::cout << (regional->configured.enable_layered_navmesh ? "true" : "false");
+  print_regional_diagnosis_metric("regional_hc_retained_children",
+      regional == nullptr ? 0U : static_cast<std::size_t>(regional->hc_composition_stats.retained_children));
+  print_regional_diagnosis_metric("regional_hc_interaction_edges",
+      regional == nullptr ? 0U : static_cast<std::size_t>(regional->hc_composition_stats.interaction_edges));
+  print_regional_diagnosis_metric("regional_hc_nodes_expanded",
+      regional == nullptr ? 0U : static_cast<std::size_t>(regional->hc_composition_stats.nodes_expanded));
+  print_regional_diagnosis_metric("regional_hc_frontier_peak",
+      regional == nullptr ? 0U : static_cast<std::size_t>(regional->hc_composition_stats.frontier_peak));
+  print_regional_diagnosis_metric("regional_hc_compatibility_checks",
+      regional == nullptr ? 0U : static_cast<std::size_t>(regional->hc_composition_stats.compatibility_checks));
+  print_regional_diagnosis_metric("regional_hc_compatibility_rejections",
+      regional == nullptr ? 0U : static_cast<std::size_t>(regional->hc_composition_stats.compatibility_rejections));
+  print_regional_diagnosis_metric("regional_hc_stale_candidates_seen",
+      regional == nullptr ? 0U : static_cast<std::size_t>(regional->hc_composition_stats.stale_candidates_seen));
+  print_regional_diagnosis_metric("regional_hc_stale_candidates_revalidated",
+      regional == nullptr ? 0U : static_cast<std::size_t>(regional->hc_composition_stats.stale_candidates_revalidated));
+  print_regional_diagnosis_metric("regional_hc_stale_candidates_rejected",
+      regional == nullptr ? 0U : static_cast<std::size_t>(regional->hc_composition_stats.stale_candidates_rejected));
+  print_regional_diagnosis_metric("regional_hc_cache_hits",
+      regional == nullptr ? 0U : static_cast<std::size_t>(regional->hc_composition_stats.cache_hits));
+  print_regional_diagnosis_metric("regional_hc_cache_misses",
+      regional == nullptr ? 0U : static_cast<std::size_t>(regional->hc_composition_stats.cache_misses));
+  print_regional_diagnosis_metric("regional_hc_node_bound_hit",
+      regional == nullptr ? 0U : static_cast<std::size_t>(regional->hc_composition_stats.node_bound_hit));
+  print_regional_diagnosis_metric("regional_hc_frontier_bound_hit",
+      regional == nullptr ? 0U : static_cast<std::size_t>(regional->hc_composition_stats.frontier_bound_hit));
+  print_regional_diagnosis_metric("regional_hc_memory_bound_hit",
+      regional == nullptr ? 0U : static_cast<std::size_t>(regional->hc_composition_stats.memory_bound_hit));
+  print_regional_diagnosis_metric("regional_hc_child_bound_hit",
+      regional == nullptr ? 0U : static_cast<std::size_t>(regional->hc_composition_stats.child_bound_hit));
+  print_regional_diagnosis_metric("regional_hc_compatibility_bound_hit",
+      regional == nullptr ? 0U : static_cast<std::size_t>(regional->hc_composition_stats.compatibility_bound_hit));
+  print_regional_diagnosis_metric("regional_hc_cancelled",
+      regional == nullptr ? 0U : static_cast<std::size_t>(regional->hc_composition_stats.cancelled));
+  std::cout << ",\n  \"regional_hc_cache_disposition\": ";
+  if (regional == nullptr) {
+    std::cout << "null";
+  } else {
+    const auto disposition = regional->hc_composition_stats.cache_disposition;
+    const char* label = "rebuilt";
+    switch (disposition) {
+      case flux::RegionalHcCacheDisposition::rebuilt: label = "rebuilt"; break;
+      case flux::RegionalHcCacheDisposition::exact_reused: label = "exact_reused"; break;
+      case flux::RegionalHcCacheDisposition::stale_revalidated: label = "stale_revalidated"; break;
+      case flux::RegionalHcCacheDisposition::stale_rebuilt: label = "stale_rebuilt"; break;
+      case flux::RegionalHcCacheDisposition::invalidated: label = "invalidated"; break;
+    }
+    std::cout << json_quote(label);
+  }
+  print_regional_diagnosis_metric("regional_candidate_schedule_observations",
+      regional == nullptr ? 0U : regional->candidate_pipeline_stats.candidate_schedule_observations);
+  print_regional_diagnosis_metric("regional_candidate_schedule_reorders",
+      regional == nullptr ? 0U : regional->candidate_pipeline_stats.candidate_schedule_reorders);
+  print_regional_diagnosis_metric("regional_candidate_preflight_checked",
+      regional == nullptr ? 0U : regional->candidate_pipeline_stats.candidate_preflight_checked);
+  print_regional_diagnosis_metric("regional_candidate_preflight_definitive_rejections",
+      regional == nullptr ? 0U : regional->candidate_pipeline_stats.candidate_preflight_definitive_rejections);
+  print_regional_diagnosis_metric("regional_candidate_preflight_fixed_endpoint_rejections",
+      regional == nullptr ? 0U : regional->candidate_pipeline_stats.candidate_preflight_fixed_endpoint_rejections);
+  print_regional_diagnosis_metric("regional_candidate_preflight_packing_rejections",
+      regional == nullptr ? 0U : regional->candidate_pipeline_stats.candidate_preflight_packing_rejections);
+  print_regional_diagnosis_metric("regional_xpbd_subset_assessments",
+      regional == nullptr ? 0U : regional->xpbd_subset_assessments);
+  print_regional_diagnosis_metric("regional_xpbd_subset_repairs_retained",
+      regional == nullptr ? 0U : regional->xpbd_subset_repairs_retained);
+  print_regional_diagnosis_metric("regional_xpbd_subset_groups_retained",
+      regional == nullptr ? 0U : regional->xpbd_subset_groups_retained);
   print_regional_diagnosis_metric("regional_xpbd_windows_improved",
                                   regional == nullptr ? 0U : regional->xpbd_windows_improved);
   print_regional_diagnosis_metric("regional_xpbd_windows_legalized",
@@ -3067,6 +3830,12 @@ void print_route_result(const flux::GlobalRouteResult& result,
   } else {
     std::cout << regional->accepted_same_layer_detours;
   }
+  std::cout << ",\n  \"regional_source_packing_obligations\": ";
+  if (regional) std::cout << regional->source_packing_obligations; else std::cout << "null";
+  std::cout << ",\n  \"regional_unresolved_packing_obligations\": ";
+  if (regional) std::cout << regional->unresolved_packing_obligations(); else std::cout << "null";
+  std::cout << ",\n  \"regional_unmapped_packing_obligations\": ";
+  if (regional) std::cout << regional->unmapped_packing_obligations; else std::cout << "null";
   std::cout << ",\n  \"regional_unmapped_shadow_conflicts\": ";
   if (regional == nullptr) {
     std::cout << "null";
@@ -3157,6 +3926,87 @@ void print_route_result(const flux::GlobalRouteResult& result,
   } else {
     std::cout << routing_plan->cumulative_global_iterations;
   }
+  std::cout << ",\n  \"cumulative_regional_channel_construction_us\": ";
+  if (routing_plan == nullptr) std::cout << "null";
+  else std::cout << static_cast<std::uint64_t>(routing_plan->cumulative_candidate_pipeline_stats.channel_construction_us);
+  std::cout << ",\n  \"cumulative_regional_alternative_domain_us\": ";
+  if (routing_plan == nullptr) std::cout << "null";
+  else std::cout << static_cast<std::uint64_t>(routing_plan->cumulative_candidate_pipeline_stats.alternative_domain_us);
+  std::cout << ",\n  \"cumulative_regional_bundle_assignment_us\": ";
+  if (routing_plan == nullptr) std::cout << "null";
+  else std::cout << static_cast<std::uint64_t>(routing_plan->cumulative_candidate_pipeline_stats.bundle_assignment_us);
+  std::cout << ",\n  \"cumulative_regional_bundle_search_us\": ";
+  if (routing_plan == nullptr) std::cout << "null";
+  else std::cout << static_cast<std::uint64_t>(routing_plan->cumulative_candidate_pipeline_stats.bundle_search_us);
+  std::cout << ",\n  \"cumulative_regional_lane_packing_us\": ";
+  if (routing_plan == nullptr) std::cout << "null";
+  else std::cout << static_cast<std::uint64_t>(routing_plan->cumulative_candidate_pipeline_stats.lane_packing_us);
+  std::cout << ",\n  \"cumulative_regional_access_selection_us\": ";
+  if (routing_plan == nullptr) std::cout << "null";
+  else std::cout << static_cast<std::uint64_t>(routing_plan->cumulative_candidate_pipeline_stats.access_selection_us);
+  std::cout << ",\n  \"cumulative_regional_channel_construction_invocations\": ";
+  if (routing_plan == nullptr) std::cout << "null";
+  else std::cout << static_cast<std::uint64_t>(routing_plan->cumulative_candidate_pipeline_stats.channel_construction_invocations);
+  std::cout << ",\n  \"cumulative_regional_alternative_domain_requests\": ";
+  if (routing_plan == nullptr) std::cout << "null";
+  else std::cout << static_cast<std::uint64_t>(routing_plan->cumulative_candidate_pipeline_stats.alternative_domain_requests);
+  std::cout << ",\n  \"cumulative_regional_bundle_assignment_invocations\": ";
+  if (routing_plan == nullptr) std::cout << "null";
+  else std::cout << static_cast<std::uint64_t>(routing_plan->cumulative_candidate_pipeline_stats.bundle_assignment_invocations);
+  std::cout << ",\n  \"cumulative_regional_bundle_search_invocations\": ";
+  if (routing_plan == nullptr) std::cout << "null";
+  else std::cout << static_cast<std::uint64_t>(routing_plan->cumulative_candidate_pipeline_stats.bundle_search_invocations);
+  std::cout << ",\n  \"cumulative_regional_lane_packing_invocations\": ";
+  if (routing_plan == nullptr) std::cout << "null";
+  else std::cout << static_cast<std::uint64_t>(routing_plan->cumulative_candidate_pipeline_stats.lane_packing_invocations);
+  std::cout << ",\n  \"cumulative_regional_access_selection_invocations\": ";
+  if (routing_plan == nullptr) std::cout << "null";
+  else std::cout << static_cast<std::uint64_t>(routing_plan->cumulative_candidate_pipeline_stats.access_selection_invocations);
+  std::cout << ",\n  \"cumulative_regional_alternative_route_cache_hits\": ";
+  if (!routing_plan) std::cout << "null";
+  else std::cout << routing_plan->cumulative_candidate_pipeline_stats.alternative_route_cache_hits;
+  std::cout << ",\n  \"cumulative_regional_alternative_route_cache_misses\": ";
+  if (!routing_plan) std::cout << "null";
+  else std::cout << routing_plan->cumulative_candidate_pipeline_stats.alternative_route_cache_misses;
+  std::cout << ",\n  \"cumulative_regional_alternative_navigation_cache_hits\": ";
+  if (routing_plan == nullptr) std::cout << "null";
+  else std::cout << static_cast<std::uint64_t>(routing_plan->cumulative_candidate_pipeline_stats.alternative_navigation_cache_hits);
+  std::cout << ",\n  \"cumulative_regional_alternative_navigation_cache_misses\": ";
+  if (routing_plan == nullptr) std::cout << "null";
+  else std::cout << static_cast<std::uint64_t>(routing_plan->cumulative_candidate_pipeline_stats.alternative_navigation_cache_misses);
+  std::cout << ",\n  \"cumulative_regional_alternative_cache_evictions\": ";
+  if (routing_plan == nullptr) std::cout << "null";
+  else std::cout << static_cast<std::uint64_t>(routing_plan->cumulative_candidate_pipeline_stats.alternative_cache_evictions);
+  std::cout << ",\n  \"cumulative_regional_fixed_geometry_compatibility_checks\": ";
+  if (routing_plan == nullptr) std::cout << "null";
+  else std::cout << static_cast<std::uint64_t>(routing_plan->cumulative_candidate_pipeline_stats.fixed_geometry_compatibility_checks);
+  std::cout << ",\n  \"cumulative_regional_fixed_geometry_compatibility_rejections\": ";
+  if (routing_plan == nullptr) std::cout << "null";
+  else std::cout << static_cast<std::uint64_t>(routing_plan->cumulative_candidate_pipeline_stats.fixed_geometry_compatibility_rejections);
+  std::cout << ",\n  \"cumulative_regional_alternative_cache_entries_peak\": ";
+  if (routing_plan == nullptr) std::cout << "null";
+  else std::cout << routing_plan->cumulative_candidate_pipeline_stats.alternative_cache_entries_peak;
+  std::cout << ",\n  \"cumulative_regional_alternative_cache_shallow_bytes_estimate_peak\": ";
+  if (routing_plan == nullptr) std::cout << "null";
+  else std::cout << routing_plan->cumulative_candidate_pipeline_stats.alternative_cache_shallow_bytes_estimate_peak;
+  std::cout << ",\n  \"cumulative_regional_access_selection_cache_hits\": ";
+  if (routing_plan == nullptr) std::cout << "null";
+  else std::cout << routing_plan->cumulative_candidate_pipeline_stats.access_selection_cache_hits;
+  std::cout << ",\n  \"cumulative_regional_access_selection_cache_misses\": ";
+  if (routing_plan == nullptr) std::cout << "null";
+  else std::cout << routing_plan->cumulative_candidate_pipeline_stats.access_selection_cache_misses;
+  std::cout << ",\n  \"cumulative_regional_access_selection_cache_avoided_calls\": ";
+  if (routing_plan == nullptr) std::cout << "null";
+  else std::cout << routing_plan->cumulative_candidate_pipeline_stats.access_selection_cache_avoided_calls;
+  std::cout << ",\n  \"cumulative_regional_access_selection_cache_entries_peak\": ";
+  if (routing_plan == nullptr) std::cout << "null";
+  else std::cout << routing_plan->cumulative_candidate_pipeline_stats.access_selection_cache_entries_peak;
+  std::cout << ",\n  \"cumulative_regional_bundle_search_excluding_access_us\": ";
+  if (routing_plan == nullptr) std::cout << "null";
+  else std::cout << static_cast<std::uint64_t>(routing_plan->cumulative_candidate_pipeline_stats.bundle_search_excluding_access_us);
+  std::cout << ",\n  \"cumulative_regional_access_selection_cache_capacity_skipped_insertions\": ";
+  if (routing_plan == nullptr) std::cout << "null";
+  else std::cout << static_cast<std::uint64_t>(routing_plan->cumulative_candidate_pipeline_stats.access_selection_cache_capacity_skipped_insertions);
   std::cout << ",\n  \"retained_global_portfolio_peak\": ";
   if (routing_plan == nullptr) {
     std::cout << "null";
@@ -3175,11 +4025,35 @@ void print_route_result(const flux::GlobalRouteResult& result,
   } else {
     std::cout << routing_plan->intermediate_regional_probes;
   }
+  std::cout << ",\n  \"provisional_exact_promotions_attempted\": ";
+  if (routing_plan == nullptr) {
+    std::cout << "null";
+  } else {
+    std::cout << routing_plan->provisional_exact_promotions_attempted;
+  }
+  std::cout << ",\n  \"provisional_exact_promotions_succeeded\": ";
+  if (routing_plan == nullptr) {
+    std::cout << "null";
+  } else {
+    std::cout << routing_plan->provisional_exact_promotions_succeeded;
+  }
+  std::cout << ",\n  \"discarded_portfolio_diagnoses\": ";
+  if (routing_plan == nullptr) {
+    std::cout << "null";
+  } else {
+    std::cout << routing_plan->discarded_portfolio_diagnoses;
+  }
   std::cout << ",\n  \"routing_plan_complete\": ";
   if (routing_plan == nullptr) {
     std::cout << "null";
   } else {
     std::cout << (routing_plan->complete() ? "true" : "false");
+  }
+  std::cout << ",\n  \"regional_evaluated\": ";
+  if (routing_plan == nullptr) {
+    std::cout << "null";
+  } else {
+    std::cout << (routing_plan->regional_evaluated ? "true" : "false");
   }
   std::cout << ",\n  \"regional_feedback_passes\": ";
   if (routing_plan == nullptr) {
@@ -3192,6 +4066,32 @@ void print_route_result(const flux::GlobalRouteResult& result,
     std::cout << "null";
   } else {
     std::cout << routing_plan->cheap_physical_probes;
+  }
+  std::cout << ",\n  \"quantized_copper_oracle\": ";
+  if (routing_plan == nullptr || !routing_plan->quantized_copper_oracle.evaluated) {
+    std::cout << "null";
+  } else {
+    const auto& oracle = routing_plan->quantized_copper_oracle;
+    std::cout << "{\"feasible\":" << (oracle.feasible() ? "true" : "false")
+              << ",\"configured_grid_pitch_nm\":" << oracle.configured_grid_pitch.value()
+              << ",\"paths_examined\":" << oracle.paths_examined
+              << ",\"paths_materialized\":" << oracle.paths_materialized
+              << ",\"tracks\":" << oracle.generated_tracks
+              << ",\"vias\":" << oracle.generated_vias
+              << ",\"reused_transitions\":" << oracle.reused_same_net_transitions
+              << ",\"malformed_paths\":" << oracle.malformed_paths
+              << ",\"drc_violations\":" << oracle.drc_violations
+              << ",\"open_connections\":" << oracle.open_connections
+              << ",\"unrouted_nets\":" << oracle.unrouted_nets
+              << ",\"diagnoses\":" << oracle.diagnoses.size()
+              << ",\"elapsed_us\":" << oracle.elapsed_us
+              << ",\"drc_violation_counts\":{";
+    bool first_category = true;
+    for (const auto& [code, count] : oracle.drc_violation_counts) {
+      std::cout << (first_category ? "" : ",") << json_quote(code) << ':' << count;
+      first_category = false;
+    }
+    std::cout << "}}";
   }
   std::cout << ",\n  \"routability_feedback_budget_exhausted\": ";
   if (routing_plan == nullptr) {
@@ -3215,6 +4115,18 @@ void print_route_result(const flux::GlobalRouteResult& result,
                 << ",\"history_entries_before\":" << probe.history_entries_before
                 << ",\"history_pressure_before\":" << probe.history_pressure_before
                 << ",\"global_diagnoses\":" << probe.global_diagnoses
+                << ",\"quantized_copper_oracle_evaluated\":"
+                << (probe.quantized_copper_oracle_evaluated ? "true" : "false")
+                << ",\"quantized_copper_oracle_feasible\":"
+                << (probe.quantized_copper_oracle_feasible ? "true" : "false")
+                << ",\"quantized_copper_oracle_diagnoses\":"
+                << probe.quantized_copper_oracle_diagnoses
+                << ",\"quantized_copper_oracle_violations\":"
+                << probe.quantized_copper_oracle_violations
+                << ",\"quantized_copper_oracle_opens\":"
+                << probe.quantized_copper_oracle_opens
+                << ",\"quantized_copper_oracle_us\":"
+                << probe.quantized_copper_oracle_us
                 << ",\"history_entries_after_global\":" << probe.history_entries_after_global
                 << ",\"history_pressure_after_global\":" << probe.history_pressure_after_global
                 << ",\"candidates\":[";
@@ -3231,6 +4143,8 @@ void print_route_result(const flux::GlobalRouteResult& result,
                   << ",\"global_rerouted_nets\":" << candidate.global_rerouted_nets
                   << ",\"global_unrouted_nets\":" << candidate.global_unrouted_nets
                   << ",\"global_total_overflow\":" << candidate.global_total_overflow
+                  << ",\"global_sampled_overflow\":" << candidate.global_sampled_overflow
+                  << ",\"global_corridor_overflow\":" << candidate.global_corridor_overflow
                   << ",\"global_clearance_shadow_conflicts\":"
                   << candidate.global_clearance_shadow_conflicts
                   << ",\"global_unaccepted_lane_transitions\":"
@@ -3238,8 +4152,24 @@ void print_route_result(const flux::GlobalRouteResult& result,
                   << ",\"coarse_topology_complete\":"
                   << (candidate.coarse_topology_complete ? "true" : "false")
                   << ",\"regional_consulted\":" << (candidate.regional_consulted ? "true" : "false")
+                  << ",\"regional_spline_realization_enabled\":"
+                  << (candidate.regional_spline_realization_enabled ? "true" : "false")
+                  << ",\"regional_straight_realization_enabled\":"
+                  << (candidate.regional_straight_realization_enabled ? "true" : "false")
+                  << ",\"regional_straight_scene_evaluated\":"
+                  << (candidate.regional_straight_scene_evaluated ? "true" : "false")
+                  << ",\"regional_straight_scene_violations\":"
+                  << candidate.regional_straight_scene_violations
+                  << ",\"provisional_plan_complete\":"
+                  << (candidate.provisional_plan_complete ? "true" : "false")
+                  << ",\"exact_promotion_attempted\":"
+                  << (candidate.exact_promotion_attempted ? "true" : "false")
+                  << ",\"exact_promotion_succeeded\":"
+                  << (candidate.exact_promotion_succeeded ? "true" : "false")
                   << ",\"regional_incomplete_bundle_assignments\":"
                   << candidate.regional_incomplete_bundle_assignments
+                  << ",\"regional_spline_candidates_evaluated\":"
+                  << candidate.regional_spline_candidates_evaluated
                   << ",\"regional_diagnoses\":" << candidate.regional_diagnoses
                   << ",\"plan_complete\":" << (candidate.plan_complete ? "true" : "false") << '}';
       }
@@ -3271,9 +4201,233 @@ void print_route_result(const flux::GlobalRouteResult& result,
                 << ",\"contributes_to_history\":"
                 << (diagnosis.contributes_to_history ? "true" : "false") << ",\"nets\":";
       print_net_ids(diagnosis.resource.nets);
+      std::cout << ",\"source_segment_pairs\":[";
+      const auto print_source = [](const flux::RoutabilitySourceSegment& source) {
+        std::cout << "{\"net\":" << json_quote(source.net.value())
+                  << ",\"connection\":" << source.connection_index
+                  << ",\"segment\":" << source.segment_index
+                  << ",\"layer\":" << json_quote(source.layer.value())
+                  << ",\"start_nm\":[" << source.start.x.value() << ',' << source.start.y.value()
+                  << "],\"end_nm\":[" << source.end.x.value() << ',' << source.end.y.value() << "]}";
+      };
+      for (std::size_t pair_index = 0; pair_index < diagnosis.source_segment_pairs.size(); ++pair_index) {
+        std::cout << (pair_index ? ",[" : "[");
+        print_source(diagnosis.source_segment_pairs[pair_index].first);
+        std::cout << ',';
+        print_source(diagnosis.source_segment_pairs[pair_index].second);
+        std::cout << ']';
+      }
+      std::cout << ']';
       std::cout << '}';
     }
     std::cout << ']';
+  }
+  if (engine_state) {
+    print_engine_fields(engine_state->outcome, engine_state->attempts);
+    if (engine_state->legal_scaffold) {
+      const auto& scaffold = *engine_state->legal_scaffold;
+      const auto physical_connectivity = flux::analyze_connectivity(scaffold.copper);
+      std::cout << ",\n  \"copper_scaffold\": {\"complete\": " << (scaffold.complete ? "true" : "false")
+                << ", \"physical_open_connections\": " << physical_connectivity.open_connections
+                << ", \"physical_unrouted_nets\": " << physical_connectivity.unrouted_nets
+                << ", \"request_count\": " << scaffold.request_count
+                << ", \"satisfied_connections\": " << scaffold.satisfied_indices.size()
+                << ", \"missing_connections\": " << scaffold.missing_indices.size()
+                << ", \"retained_paths\": " << scaffold.paths.size()
+                << ", \"satisfied_indices\":[";
+      for (std::size_t index = 0U; index < scaffold.satisfied_indices.size(); ++index)
+        std::cout << (index == 0U ? "" : ",") << scaffold.satisfied_indices[index];
+      std::cout << "]"
+                << ", \"missing_indices\":[";
+      for (std::size_t index = 0U; index < scaffold.missing_indices.size(); ++index)
+        std::cout << (index == 0U ? "" : ",") << scaffold.missing_indices[index];
+      std::cout << "]"
+                << ", \"searched_connections\": " << scaffold.counters.searched_connections
+                << ", \"routed_connections\": " << scaffold.counters.routed_connections
+                << ", \"expansions\": " << scaffold.counters.expansions
+                << ", \"candidate_rejections\": " << scaffold.counters.candidate_rejections
+                << ", \"goal_rejections\": " << scaffold.counters.goal_rejections
+                << ", \"peak_via_history_nodes\": " << scaffold.counters.peak_via_history_nodes
+                << ", \"via_history_budget_exhaustions\": " << scaffold.counters.via_history_budget_exhaustions
+                << ", \"source_attachments\": " << scaffold.counters.source_attachments
+                << ", \"target_attachments\": " << scaffold.counters.target_attachments
+                << ", \"component_connections\": " << scaffold.counters.component_connections
+                << ", \"published_tracks\": " << scaffold.counters.published_tracks
+                << ", \"published_vias\": " << scaffold.counters.published_vias
+                << ", \"survivor_tracks_preserved\": " << scaffold.counters.survivor_tracks_preserved
+                << ", \"survivor_vias_preserved\": " << scaffold.counters.survivor_vias_preserved
+                << ", \"completed_transactions\": " << scaffold.counters.completed_transactions
+                << ", \"joint_passage_candidates\": " << scaffold.counters.joint_passage_candidates
+                << ", \"joint_group_attempts\": " << scaffold.counters.joint_group_attempts
+                << ", \"joint_group_accepted\": " << scaffold.counters.joint_group_accepted
+                << ", \"joint_search_expansions\": " << scaffold.counters.joint_search_expansions
+                << ", \"joint_xpbd_invocations\": " << scaffold.counters.joint_xpbd_invocations
+                << ", \"joint_avbd_invocations\": " << scaffold.counters.joint_avbd_invocations
+                << ", \"joint_pns_attempts\": " << scaffold.counters.joint_pns_attempts
+                << ", \"joint_exact_rejections\": " << scaffold.counters.joint_exact_rejections
+                << ", \"joint_budget_exhausted\": " << scaffold.counters.joint_budget_exhausted
+                << ", \"displacement_attempts\": " << scaffold.counters.displacement_attempts
+                << ", \"displacement_accepted\": " << scaffold.counters.displacement_accepted
+                << ", \"displacement_budget_exhausted\": " << scaffold.counters.displacement_budget_exhausted
+                << ", \"displacement_moved_tracks\": " << scaffold.counters.displacement_moved_tracks
+                << ", \"displacement_moved_vias\": " << scaffold.counters.displacement_moved_vias
+                << ", \"displacement_search_expansions\": " << scaffold.counters.displacement_search_expansions
+                << ", \"displacement_search_failures\": " << scaffold.counters.displacement_search_failures
+                << ", \"displacement_shove_rejections\": " << scaffold.counters.displacement_shove_rejections
+                << ", \"displacement_validation_rejections\": " << scaffold.counters.displacement_validation_rejections
+                << ", \"displacement_reconstruction_rejections\": " << scaffold.counters.displacement_reconstruction_rejections
+                << ", \"victim_exchanges_attempted\": " << scaffold.counters.victim_exchanges_attempted
+                << ", \"victim_exchanges_accepted\": " << scaffold.counters.victim_exchanges_accepted
+                << ", \"coupled_victim_exchanges_attempted\": " << scaffold.counters.coupled_victim_exchanges_attempted
+                << ", \"coupled_victim_exchanges_accepted\": " << scaffold.counters.coupled_victim_exchanges_accepted
+                << ", \"coupled_component_victims_attempted\": " << scaffold.counters.coupled_component_victims_attempted
+                << ", \"coupled_component_victims_accepted\": " << scaffold.counters.coupled_component_victims_accepted
+                << ", \"coupled_expansion_budget_exhaustions\": " << scaffold.counters.coupled_expansion_budget_exhaustions
+                << ", \"exchange_rollbacks\": " << scaffold.counters.exchange_rollbacks
+                << ", \"cancelled\": " << (scaffold.counters.cancelled ? "true" : "false");
+      const auto print_ids = [](const auto& ids) {
+        std::cout << '[';
+        for (std::size_t i = 0; i < ids.size(); ++i)
+          std::cout << (i ? "," : "") << json_quote(ids[i].value());
+        std::cout << ']';
+      };
+      std::cout << ", \"blocked_passages\":[";
+      for (std::size_t i = 0; i < scaffold.blocked_passages.size(); ++i) {
+        const auto& passage = scaffold.blocked_passages[i];
+        std::cout << (i ? "," : "") << "{\"request_index\":" << passage.request_index
+                  << ",\"clearance_deficit_nm\":" << passage.clearance_deficit_nm
+                  << ",\"displacement_space_nm\":" << passage.displacement_space_nm
+                  << ",\"movement_cost_nm\":" << passage.movement_cost_nm
+                  << ",\"blocker_owners\":[";
+        for (std::size_t j = 0; j < passage.blocker_owners.size(); ++j)
+          std::cout << (j ? "," : "") << passage.blocker_owners[j];
+        std::cout << "]}";
+      }
+      std::cout << ']';
+      std::cout << ", \"request_evidence\":[";
+      for (std::size_t i = 0; i < scaffold.request_evidence.size(); ++i) {
+        const auto& evidence = scaffold.request_evidence[i];
+        std::cout << (i ? "," : "") << "{\"request_identity\":" << json_quote(evidence.request_identity)
+                  << ",\"net\":" << json_quote(evidence.net.value())
+                  << ",\"connection_index\":" << evidence.connection_index
+                  << ",\"termination\":" << json_quote(flux::to_string(evidence.termination))
+                  << ",\"access_evaluated\":" << (evidence.access_evaluated ? "true" : "false")
+                  << ",\"source_endpoint_contained_by_copper\":" << (evidence.source_endpoint_contained_by_copper ? "true" : "false")
+                  << ",\"target_endpoint_contained_by_copper\":" << (evidence.target_endpoint_contained_by_copper ? "true" : "false")
+                  << ",\"source_component_anchors\":" << evidence.source_component_anchors
+                  << ",\"target_component_anchors\":" << evidence.target_component_anchors
+                  << ",\"source_legal_attachments\":" << evidence.source_legal_attachments
+                  << ",\"target_legal_attachments\":" << evidence.target_legal_attachments
+                  << ",\"blocker_objects\":";
+        print_ids(evidence.blocker_objects);
+        std::cout << ",\"blocker_nets\":"; print_ids(evidence.blocker_nets);
+        std::cout << '}';
+      }
+      std::cout << "],\"exchange_rollback_evidence\":[";
+      for (std::size_t i = 0; i < scaffold.exchange_rollbacks.size(); ++i) {
+        const auto& rollback = scaffold.exchange_rollbacks[i];
+        std::cout << (i ? "," : "") << "{\"request_identity\":" << json_quote(rollback.request_identity)
+                  << ",\"reason\":" << json_quote(flux::to_string(rollback.reason))
+                  << ",\"victim_request_identities\":[";
+        for (std::size_t j = 0; j < rollback.victim_request_identities.size(); ++j)
+          std::cout << (j ? "," : "") << json_quote(rollback.victim_request_identities[j]);
+        std::cout << "],\"blocker_objects\":"; print_ids(rollback.blocker_objects);
+        std::cout << ",\"blocker_nets\":"; print_ids(rollback.blocker_nets);
+        std::cout << '}';
+      }
+      std::cout << "]}";
+    }
+    std::cout << ",\n  \"routing_engine_scaffold_regional_actions\": " << engine_state->scaffold_regional_actions;
+    std::cout << ",\n  \"routing_engine_scaffold_regional_missing_requests\": " << engine_state->scaffold_regional_missing_requests;
+
+    std::cout << ",\n  \"routing_engine_scaffold_terminal_rebinds\": " << engine_state->scaffold_terminal_rebinds;
+    std::cout << ",\n  \"routing_engine_scaffold_terminal_rebind_attempts\": " << engine_state->scaffold_terminal_rebind_attempted_proofs.size();
+    std::cout << ",\n  \"routing_engine_scaffold_terminal_rebind_proofs\": [";
+    for (std::size_t i = 0; i < engine_state->scaffold_terminal_rebind_proofs.size(); ++i)
+      std::cout << (i ? "," : "") << json_quote(engine_state->scaffold_terminal_rebind_proofs[i]);
+    std::cout << ']';
+
+    std::cout << ",\n  \"routing_engine_physical_preparation_reuses\": " << engine_state->physical_preparation_reuses;
+    std::cout << ",\n  \"routing_engine_physical_repairs\": [";
+    for (std::size_t i = 0; i < engine_state->physical_repair_evidence.size(); ++i) {
+      const auto& evidence = engine_state->physical_repair_evidence[i];
+      std::cout << (i ? "," : "") << "{\"physical_key\":" << json_quote(evidence.physical_key)
+                << ",\"request_indices\":[";
+      for (std::size_t j = 0; j < evidence.request_indices.size(); ++j)
+        std::cout << (j ? "," : "") << evidence.request_indices[j];
+      std::cout << "],\"packing_rejections\":" << evidence.packing_rejections
+                << ",\"no_good_rejections\":" << evidence.no_good_rejections
+                << ",\"no_good_unknown_withheld\":" << evidence.no_good_unknown_withheld
+                << ",\"regional_fragments\":" << evidence.regional_fragments
+                << ",\"regional_windows\":" << evidence.regional_windows
+                << ",\"regional_bundle_searches\":" << evidence.regional_bundle_searches
+                << ",\"regional_physical_requests\":" << evidence.regional_physical_requests
+                << ",\"regional_admitted_physical_requests\":" << evidence.regional_admitted_physical_requests
+                << ",\"regional_blocker_objects\":" << evidence.regional_blocker_objects
+                << ",\"regional_configured_blocker_objects\":" << evidence.regional_configured_blocker_objects
+                << ",\"scene_evaluated\":" << (evidence.scene_evaluated ? "true" : "false")
+                << ",\"candidate_available\":" << (evidence.candidate_available ? "true" : "false")
+                << ",\"diagnostic\":" << json_quote(evidence.diagnostic)
+                << ",\"diagnoses\":[";
+      for (std::size_t j = 0; j < evidence.diagnoses.size(); ++j) {
+        const auto& d = evidence.diagnoses[j];
+        std::cout << (j ? "," : "") << "{\"resource\":" << json_quote(d.resource.stable_id)
+                  << ",\"kind\":" << json_quote(flux::to_string(d.kind))
+                  << ",\"layer\":" << json_quote(d.resource.layer.value())
+                  << ",\"clearance_deficit_nm\":" << d.clearance_deficit.value()
+                  << ",\"bounds_nm\":[" << d.resource.bounds.minimum.x.value() << ','
+                  << d.resource.bounds.minimum.y.value() << ',' << d.resource.bounds.maximum.x.value()
+                  << ',' << d.resource.bounds.maximum.y.value() << "],\"nets\":[";
+        for (std::size_t n = 0; n < d.resource.nets.size(); ++n)
+          std::cout << (n ? "," : "") << json_quote(d.resource.nets[n].value());
+        std::cout << "],\"detail\":" << json_quote(d.detail) << '}';
+      }
+      std::cout << "]}";
+    }
+    std::cout << "]";
+    if (engine_state->scaffold_oracle) {
+      const auto& oracle = *engine_state->scaffold_oracle;
+      std::cout << ",\n  \"routing_engine_scaffold_oracle\": {\"evaluated\":" << (oracle.evaluated ? "true" : "false")
+                << ",\"feasible\":" << (oracle.feasible() ? "true" : "false")
+                << ",\"open_connections\":" << oracle.open_connections
+                << ",\"drc_violations\":" << oracle.drc_violations
+                << ",\"malformed_paths\":" << oracle.malformed_paths
+                << ",\"diagnostic\":" << json_quote(oracle.diagnostic) << '}';
+    }
+    std::cout << ",\n  \"routing_engine_scheduler\": \"deadline_experiments\"";
+    std::cout << ",\n  \"routing_engine_experiment_initial_explorations\": " << engine_state->experiment_initial_explorations;
+    std::cout << ",\n  \"routing_engine_experiment_state_suppressions\": " << engine_state->experiment_state_suppressions;
+    std::cout << ",\n  \"routing_engine_experiment_started\": " << engine_state->experiment_started;
+    std::cout << ",\n  \"routing_engine_experiment_suspended\": " << engine_state->experiment_suspended;
+    std::cout << ",\n  \"routing_engine_experiment_resumed\": " << engine_state->experiment_resumed;
+    std::cout << ",\n  \"routing_engine_experiment_invalidated\": " << engine_state->experiment_invalidated;
+    std::cout << ",\n  \"routing_engine_experiment_retired\": " << engine_state->experiment_retired;
+    std::cout << ",\n  \"routing_engine_experiment_memory_evictions\": " << engine_state->experiment_memory_evictions;
+    std::cout << ",\n  \"routing_engine_experiment_active_us\": " << engine_state->experiment_active_us;
+    std::cout << ",\n  \"routing_engine_preparation_work_allowance\": " << engine_state->preparation_work_budget.allowance;
+    std::cout << ",\n  \"routing_engine_preparation_work_consumed\": " << engine_state->preparation_work_budget.consumed;
+    std::cout << ",\n  \"routing_engine_preparation_budget_exhaustions\": " << engine_state->preparation_budget_exhaustions;
+    std::cout << ",\n  \"routing_engine_changed_context_retry_allowance\": " << engine_state->changed_context_retry_budget.allowance;
+    std::cout << ",\n  \"routing_engine_changed_context_retry_consumed\": " << engine_state->changed_context_retry_budget.consumed;
+    std::cout << ",\n  \"routing_engine_physical_context_changes\": " << engine_state->physical_context_changes;
+    std::cout << ",\n  \"routing_engine_global_retry_allowance\": " << engine_state->global_retry_budget.allowance;
+    std::cout << ",\n  \"routing_engine_global_retry_consumed\": " << engine_state->global_retry_budget.consumed;
+    std::cout << ",\n  \"routing_engine_global_retry_earned\": " << engine_state->global_retry_budget.earned;
+    std::cout << ",\n  \"routing_engine_global_retry_credit_events\": " << engine_state->global_retry_credit_events;
+    std::cout << ",\n  \"routing_engine_regional_work_allowance\": " << engine_state->regional_work_budget.allowance;
+    std::cout << ",\n  \"routing_engine_regional_work_consumed\": " << engine_state->regional_work_budget.consumed;
+    std::cout << ",\n  \"routing_engine_regional_work_earned\": " << engine_state->regional_work_budget.earned;
+    std::cout << ",\n  \"routing_engine_regional_work_credit_events\": " << engine_state->regional_work_credit_events;
+    std::cout << ",\n  \"routing_engine_regional_work_budget_exhaustions\": " << engine_state->regional_work_budget_exhaustions;
+    std::cout << ",\n  \"routing_engine_decision_points\": " << engine_state->decision_points
+              << ",\n  \"routing_engine_tightening_actions\": " << engine_state->tightening_actions
+              << ",\n  \"routing_engine_tightening_improvements\": " << engine_state->tightening_improvements
+              << ",\n  \"routing_engine_regional_action_switches\": " << engine_state->regional_action_switches
+              << ",\n  \"routing_engine_regional_continuations_resumed\": " << engine_state->regional_continuations_resumed
+              << ",\n  \"routing_engine_preparation_reuses\": " << engine_state->preparation_reuses
+              << ",\n  \"routing_engine_speculative_preparations_started\": " << engine_state->speculative_preparations_started
+              << ",\n  \"routing_engine_speculative_preparations_used\": " << engine_state->speculative_preparations_used
+              << ",\n  \"routing_engine_speculative_preparations_discarded\": " << engine_state->speculative_preparations_discarded;
   }
   std::cout << ",\n  \"diagnostic\": " << json_quote(result.diagnostic) << "\n}\n";
 }
@@ -3289,7 +4443,8 @@ struct ExportSummary {
 void print_detailed_result(const flux::DetailedRouteResult& result,
                            std::optional<ExportSummary> exported = std::nullopt,
                            std::optional<std::string_view> workflow = std::nullopt,
-                           const flux::GlobalRouteResult* global = nullptr) {
+                           const flux::GlobalRouteResult* global = nullptr,
+                           const flux::MaterializationFeedbackResult* session = nullptr) {
   const auto pair_gap_violations = static_cast<std::size_t>(std::count_if(
       result.copper_drc.violations.begin(), result.copper_drc.violations.end(),
       [](const auto& violation) { return violation.code == "differential_pair_gap"; }));
@@ -3332,6 +4487,29 @@ void print_detailed_result(const flux::DetailedRouteResult& result,
             << ",\n"
             << "  \"global_diagnostic\": "
             << (global == nullptr ? "null" : json_quote(global->diagnostic)) << ",\n"
+            << "  \"configured_live_copper_terrain_revision\": " << (global ? global->configured_live_copper_terrain_revision : 0U) << ",\n"
+            << "  \"static_seed_height_evolution_attempts\": " << (global ? global->static_seed_height_evolution_attempts : 0U) << ",\n"
+            << "  \"static_seed_height_evolution_invoked\": " << (global ? global->static_seed_height_evolution_invoked : 0U) << ",\n"
+            << "  \"static_seed_height_evolution_gpu_invoked\": " << (global ? global->static_seed_height_evolution_gpu_invoked : 0U) << ",\n"
+            << "  \"static_seed_height_evolution_gpu_dispatches\": " << (global ? global->static_seed_height_evolution_gpu_dispatches : 0U) << ",\n"
+            << "  \"static_seed_height_evolution_gpu_mask_uploads\": " << (global ? global->static_seed_height_evolution_gpu_mask_uploads : 0U) << ",\n"
+            << "  \"static_seed_height_evolution_gpu_mask_upload_reuses\": " << (global ? global->static_seed_height_evolution_gpu_mask_upload_reuses : 0U) << ",\n"
+            << "  \"static_seed_height_evolution_gpu_mask_cross_pipeline_reuses\": " << (global ? global->static_seed_height_evolution_gpu_mask_cross_pipeline_reuses : 0U) << ",\n"
+            << "  \"static_seed_hydraulic_gpu_mask_uploads\": " << (global ? global->static_seed_hydraulic_gpu_mask_uploads : 0U) << ",\n"
+            << "  \"static_seed_hydraulic_gpu_mask_upload_reuses\": " << (global ? global->static_seed_hydraulic_gpu_mask_upload_reuses : 0U) << ",\n"
+            << "  \"static_seed_hydraulic_gpu_mask_cross_pipeline_reuses\": " << (global ? global->static_seed_hydraulic_gpu_mask_cross_pipeline_reuses : 0U) << ",\n"
+            << "  \"static_seed_height_evolution_field_us\": " << (global ? global->static_seed_height_evolution_field_us : 0U) << ",\n"
+            << "  \"static_seed_height_evolution_extraction_us\": " << (global ? global->static_seed_height_evolution_extraction_us : 0U) << ",\n"
+            << "  \"static_seed_height_evolution_accepted\": " << (global ? global->static_seed_height_evolution_accepted : 0U) << ",\n"
+            << "  \"static_seed_height_evolution_iterations\": " << (global ? global->static_seed_height_evolution_iterations : 0U) << ",\n"
+            << "  \"static_seed_height_evolution_changed_cells\": " << (global ? global->static_seed_height_evolution_changed_cells : 0U) << ",\n"
+            << "  \"static_seed_height_evolution_expanded_nodes\": " << (global ? global->static_seed_height_evolution_expanded_nodes : 0U) << ",\n"
+            << "  \"static_seed_indexed_clearance_map_builds\": " << (global ? global->static_seed_indexed_clearance_map_builds : 0U) << ",\n"
+            << "  \"static_seed_indexed_clearance_map_reuses\": " << (global ? global->static_seed_indexed_clearance_map_reuses : 0U) << ",\n"
+            << "  \"static_seed_indexed_clearance_map_cells\": " << (global ? global->static_seed_indexed_clearance_map_cells : 0U) << ",\n"
+            << "  \"static_seed_indexed_clearance_map_records\": " << (global ? global->static_seed_indexed_clearance_map_records : 0U) << ",\n"
+            << "  \"static_seed_indexed_clearance_map_references\": " << (global ? global->static_seed_indexed_clearance_map_references : 0U) << ",\n"
+            << "  \"static_seed_indexed_clearance_map_fallbacks\": " << (global ? global->static_seed_indexed_clearance_map_fallbacks : 0U) << ",\n"
             << "  \"global_iterations\": ";
   if (global == nullptr) {
     std::cout << "null";
@@ -3355,6 +4533,12 @@ void print_detailed_result(const flux::DetailedRouteResult& result,
     std::cout << "null";
   } else {
     std::cout << (global->configured_sampled_route_clearance_reservations ? "true" : "false");
+  }
+  std::cout << ",\n  \"configured_clearance_shadows_advisory_only\": ";
+  if (!global) {
+    std::cout << "null";
+  } else {
+    std::cout << (global->configured_clearance_shadows_advisory_only ? "true" : "false");
   }
   std::cout << ",\n  \"configured_single_lane_direct_voronoi_resources\": ";
   if (global == nullptr) {
@@ -3566,6 +4750,10 @@ void print_detailed_result(const flux::DetailedRouteResult& result,
   } else {
     std::cout << global->corridor_overflow;
   }
+  std::cout << ",\n  \"global_unresolved_packing_obligations\": ";
+  if (global) std::cout << global->unresolved_corridor_packing.size(); else std::cout << "null";
+  std::cout << ",\n  \"global_packing_obligation_budget_exhausted\": ";
+  if (global) std::cout << (global->corridor_packing_obligation_budget_exhausted ? "true" : "false"); else std::cout << "null";
   std::cout << ",\n  \"global_clearance_shadow_conflicts\": ";
   if (global == nullptr) {
     std::cout << "null";
@@ -3583,6 +4771,18 @@ void print_detailed_result(const flux::DetailedRouteResult& result,
     std::cout << "null";
   } else {
     std::cout << global->clearance_shadow_overflow;
+  }
+  std::cout << ",\n  \"global_clearance_shadow_raster_samples\": ";
+  if (!global) {
+    std::cout << "null";
+  } else {
+    std::cout << global->clearance_shadow_raster_samples;
+  }
+  std::cout << ",\n  \"global_clearance_shadow_coalesced_samples\": ";
+  if (!global) {
+    std::cout << "null";
+  } else {
+    std::cout << global->clearance_shadow_coalesced_samples;
   }
   std::cout << ",\n  \"global_clearance_shadow_history_increment\": ";
   if (global == nullptr) {
@@ -3670,12 +4870,29 @@ void print_detailed_result(const flux::DetailedRouteResult& result,
   }
   std::cout
       << ",\n"
+      << "  \"straight_angle_candidate_checks\": " << result.straight_angle_candidate_checks << ",\n"
+      << "  \"straight_angle_segments_converted\": " << result.straight_angle_segments_converted << ",\n"
+      << "  \"straight_angle_segments_unresolved\": " << result.straight_angle_segments_unresolved << ",\n"
+      << "  \"reused_validated_regional_scene\": " << (result.reused_validated_regional_scene ? "true" : "false") << ",\n"
       << "  \"added_tracks\": " << result.added_tracks << ",\n"
       << "  \"added_track_arcs\": " << result.added_track_arcs << ",\n"
+      << "  \"added_track_beziers\": " << result.added_track_beziers << ",\n"
+      << "  \"fitted_cubic_beziers\": " << result.fitted_cubic_beziers << ",\n"
+      << "  \"reused_track_beziers\": " << result.reused_track_beziers << ",\n"
       << "  \"unrounded_non_junction_bends\": " << result.unrounded_non_junction_bends << ",\n"
+      << "  \"unrounded_straight_track_bends\": " << result.unrounded_straight_track_bends << ",\n"
+      << "  \"unrounded_curve_tangent_bends\": " << result.unrounded_curve_tangent_bends << ",\n"
+      << "  \"residual_bend_repair_attempted\": " << result.residual_bend_repair_attempted << ",\n"
+      << "  \"residual_bend_repair_accepted\": " << result.residual_bend_repair_accepted << ",\n"
+      << "  \"residual_bend_repair_rejected\": " << result.residual_bend_repair_rejected << ",\n"
+      << "  \"spline_committed_context_retry_tasks\": "
+      << result.spline_committed_context_retry_tasks << ",\n"
+      << "  \"spline_committed_context_retry_commits\": "
+      << result.spline_committed_context_retry_commits << ",\n"
       << "  \"added_vias\": " << result.added_vias << ",\n"
       << "  \"removed_tracks\": " << result.removed_tracks << ",\n"
       << "  \"removed_track_arcs\": " << result.removed_track_arcs << ",\n"
+      << "  \"removed_track_beziers\": " << result.removed_track_beziers << ",\n"
       << "  \"removed_vias\": " << result.removed_vias << ",\n"
       << "  \"reused_tracks\": " << result.reused_tracks << ",\n"
       << "  \"reused_track_arcs\": " << result.reused_track_arcs << ",\n"
@@ -3790,6 +5007,18 @@ void print_detailed_result(const flux::DetailedRouteResult& result,
       << ",\n"
       << "  \"attempted_quintic_ph_runs\": " << result.attempted_quintic_ph_runs << ",\n"
       << "  \"fitted_quintic_ph_runs\": " << result.fitted_quintic_ph_runs << ",\n"
+      << "  \"spline_g2_promotion_attempts\": " << result.spline_g2_promotion_attempts << ",\n"
+      << "  \"spline_g2_promotions\": " << result.spline_g2_promotions << ",\n"
+      << "  \"spline_g2_fallbacks\": " << result.spline_g2_fallbacks << ",\n"
+      << "  \"spline_g2_promotion_microseconds\": " << result.spline_g2_promotion_microseconds << ",\n"
+      << "  \"regional_native_spline_runs_materialized\": "
+      << result.regional_native_spline_runs_materialized << ",\n"
+      << "  \"regional_native_track_segments_materialized\": "
+      << result.regional_native_track_segments_materialized << ",\n"
+      << "  \"regional_native_track_arcs_materialized\": "
+      << result.regional_native_track_arcs_materialized << ",\n"
+      << "  \"regional_native_track_beziers_materialized\": "
+      << result.regional_native_track_beziers_materialized << ",\n"
       << "  \"adaptive_spline_tessellation_samples\": "
       << result.adaptive_spline_tessellation_samples << ",\n"
       << "  \"spline_fitted_track_segments\": " << result.spline_fitted_track_segments << ",\n"
@@ -3817,12 +5046,17 @@ void print_detailed_result(const flux::DetailedRouteResult& result,
       << "  \"spline_funnel_points\": " << result.spline_funnel_points << ",\n"
       << "  \"spline_seed_candidates\": " << result.spline_seed_candidates << ",\n"
       << "  \"spline_seed_exact_legal\": " << result.spline_seed_exact_legal << ",\n"
+      << "  \"spline_run_aligned_seed_candidates\": " << result.spline_run_aligned_seed_candidates << ",\n"
+      << "  \"spline_run_aligned_seed_exact_legal\": " << result.spline_run_aligned_seed_exact_legal << ",\n"
       << "  \"spline_seed_portfolio_improvements\": " << result.spline_seed_portfolio_improvements
       << ",\n"
       << "  \"spline_trajectory_attempts\": " << result.spline_trajectory_attempts << ",\n"
       << "  \"spline_trajectory_accepted\": " << result.spline_trajectory_accepted << ",\n"
       << "  \"spline_trajectory_control_moves\": " << result.spline_trajectory_control_moves
       << ",\n"
+      << "  \"spline_paired_obstacle_support_attempts\": " << result.spline_paired_obstacle_support_attempts << ",\n"
+      << "  \"spline_paired_obstacle_supports_inserted\": " << result.spline_paired_obstacle_supports_inserted << ",\n"
+      << "  \"spline_paired_obstacle_support_recoveries\": " << result.spline_paired_obstacle_support_recoveries << ",\n"
       << "  \"spline_trajectory_candidate_checks\": " << result.spline_trajectory_candidate_checks
       << ",\n"
       << "  \"spline_multistart_attempts\": " << result.spline_multistart_attempts << ",\n"
@@ -3924,6 +5158,24 @@ void print_detailed_result(const flux::DetailedRouteResult& result,
       << result.residual_joint_exact_transactions_rejected << ",\n"
       << "  \"residual_joint_transaction_accepted\": "
       << (result.residual_joint_transaction_accepted ? "true" : "false") << ",\n"
+      << "  \"regional_candidate_ranker_requested\": "
+      << (result.regional_candidate_ranker_requested ? "true" : "false") << ",\n"
+      << "  \"regional_candidate_ranker_loaded\": "
+      << (result.regional_candidate_ranker_loaded ? "true" : "false") << ",\n"
+      << "  \"regional_candidate_ranker_trees\": " << result.regional_candidate_ranker_trees
+      << ",\n"
+      << "  \"regional_candidate_ranker_groups_scored\": "
+      << result.regional_candidate_ranker_groups_scored << ",\n"
+      << "  \"regional_candidate_ranker_candidates_scored\": "
+      << result.regional_candidate_ranker_candidates_scored << ",\n"
+      << "  \"regional_candidate_ranker_candidates_reordered\": "
+      << result.regional_candidate_ranker_candidates_reordered << ",\n"
+      << "  \"regional_candidate_ranker_training_rows_written\": "
+      << result.regional_candidate_ranker_training_rows_written << ",\n"
+      << "  \"regional_candidate_ranker_training_rows_failed\": "
+      << result.regional_candidate_ranker_training_rows_failed << ",\n"
+      << "  \"regional_candidate_ranker_diagnostic\": "
+      << json_quote(result.regional_candidate_ranker_diagnostic) << ",\n"
       << "  \"spline_candidate_budget_exhausted\": "
       << (result.spline_candidate_budget_exhausted ? "true" : "false") << ",\n"
       << "  \"pns_candidate_budget_exhausted\": "
@@ -4147,6 +5399,16 @@ void print_detailed_result(const flux::DetailedRouteResult& result,
             << result.final_routability_feedback_improvements << ",\n"
             << "  \"final_routability_diagnoses_consumed\": "
             << result.final_routability_diagnoses_consumed << ",\n"
+            << "  \"final_routability_local_geometry_passes\": "
+            << result.final_routability_local_geometry_passes << ",\n"
+            << "  \"final_routability_regional_passes\": "
+            << result.final_routability_regional_passes << ",\n"
+            << "  \"final_routability_global_passes\": " << result.final_routability_global_passes
+            << ",\n"
+            << "  \"final_routability_repeated_failure_escalations\": "
+            << result.final_routability_repeated_failure_escalations << ",\n"
+            << "  \"final_routability_incremental_detailed_passes\": "
+            << result.final_routability_incremental_detailed_passes << ",\n"
             << "  \"diagnostic\": " << json_quote(result.diagnostic);
   if (exported) {
     std::cout << ",\n  \"artifact_written\": " << (exported->written ? "true" : "false")
@@ -4158,6 +5420,43 @@ void print_detailed_result(const flux::DetailedRouteResult& result,
       std::cout << (index == 0U ? "" : ", ") << json_quote(exported->issue_codes[index]);
     }
     std::cout << ']';
+  }
+  if (session) {
+    print_engine_fields(session->engine_outcome, session->engine_attempts);
+    std::cout << ",\n  \"routing_engine_scheduler\": \"deadline_experiments\"";
+    std::cout << ",\n  \"routing_engine_experiment_initial_explorations\": " << session->engine_experiment_initial_explorations;
+    std::cout << ",\n  \"routing_engine_experiment_state_suppressions\": " << session->engine_experiment_state_suppressions;
+    std::cout << ",\n  \"routing_engine_experiment_started\": " << session->engine_experiment_started;
+    std::cout << ",\n  \"routing_engine_experiment_suspended\": " << session->engine_experiment_suspended;
+    std::cout << ",\n  \"routing_engine_experiment_resumed\": " << session->engine_experiment_resumed;
+    std::cout << ",\n  \"routing_engine_experiment_invalidated\": " << session->engine_experiment_invalidated;
+    std::cout << ",\n  \"routing_engine_experiment_retired\": " << session->engine_experiment_retired;
+    std::cout << ",\n  \"routing_engine_experiment_memory_evictions\": " << session->engine_experiment_memory_evictions;
+    std::cout << ",\n  \"routing_engine_experiment_active_us\": " << session->engine_experiment_active_us;
+    std::cout << ",\n  \"routing_engine_preparation_work_allowance\": " << session->engine_preparation_work_budget.allowance;
+    std::cout << ",\n  \"routing_engine_preparation_work_consumed\": " << session->engine_preparation_work_budget.consumed;
+    std::cout << ",\n  \"routing_engine_preparation_budget_exhaustions\": " << session->engine_preparation_budget_exhaustions;
+    std::cout << ",\n  \"routing_engine_changed_context_retry_allowance\": " << session->engine_changed_context_retry_budget.allowance;
+    std::cout << ",\n  \"routing_engine_changed_context_retry_consumed\": " << session->engine_changed_context_retry_budget.consumed;
+    std::cout << ",\n  \"routing_engine_physical_context_changes\": " << session->engine_physical_context_changes;
+    std::cout << ",\n  \"routing_engine_global_retry_allowance\": " << session->engine_global_retry_budget.allowance;
+    std::cout << ",\n  \"routing_engine_global_retry_consumed\": " << session->engine_global_retry_budget.consumed;
+    std::cout << ",\n  \"routing_engine_global_retry_earned\": " << session->engine_global_retry_budget.earned;
+    std::cout << ",\n  \"routing_engine_global_retry_credit_events\": " << session->engine_global_retry_credit_events;
+    std::cout << ",\n  \"routing_engine_regional_work_allowance\": " << session->engine_regional_work_budget.allowance;
+    std::cout << ",\n  \"routing_engine_regional_work_consumed\": " << session->engine_regional_work_budget.consumed;
+    std::cout << ",\n  \"routing_engine_regional_work_earned\": " << session->engine_regional_work_budget.earned;
+    std::cout << ",\n  \"routing_engine_regional_work_credit_events\": " << session->engine_regional_work_credit_events;
+    std::cout << ",\n  \"routing_engine_regional_work_budget_exhaustions\": " << session->engine_regional_work_budget_exhaustions;
+    std::cout << ",\n  \"routing_engine_decision_points\": " << session->engine_decision_points;
+    std::cout << ",\n  \"routing_engine_tightening_actions\": " << session->engine_tightening_actions;
+    std::cout << ",\n  \"routing_engine_tightening_improvements\": " << session->engine_tightening_improvements;
+    std::cout << ",\n  \"routing_engine_regional_action_switches\": " << session->engine_regional_action_switches;
+    std::cout << ",\n  \"routing_engine_regional_continuations_resumed\": " << session->engine_regional_continuations_resumed;
+    std::cout << ",\n  \"routing_engine_preparation_reuses\": " << session->engine_preparation_reuses;
+    std::cout << ",\n  \"routing_engine_speculative_preparations_started\": " << session->engine_speculative_preparations_started;
+    std::cout << ",\n  \"routing_engine_speculative_preparations_used\": " << session->engine_speculative_preparations_used;
+    std::cout << ",\n  \"routing_engine_speculative_preparations_discarded\": " << session->engine_speculative_preparations_discarded;
   }
   std::cout << "\n}\n";
 }
@@ -4565,6 +5864,8 @@ void print_integrated_result(const flux::IntegratedOptimizationResult& result,
       << result.global_route.hard_capacity_soft_cut_routes << ",\n"
       << "  \"hard_capacity_soft_cut_blockers\": "
       << result.global_route.hard_capacity_soft_cut_blockers << ",\n"
+      << "  \"hard_capacity_soft_cut_legal_shadow_observations\": "
+      << result.global_route.hard_capacity_soft_cut_legal_shadow_observations << ",\n"
       << "  \"configured_rollback_failed_hard_capacity_ripup\": "
       << (result.global_route.configured_rollback_failed_hard_capacity_ripup ? "true" : "false")
       << ",\n"
@@ -4980,6 +6281,15 @@ void print_integrated_result(const flux::IntegratedOptimizationResult& result,
       << "  \"fitted_circular_arcs\": " << result.detailed_route.fitted_circular_arcs << ",\n"
       << "  \"unrounded_non_junction_bends\": "
       << result.detailed_route.unrounded_non_junction_bends << ",\n"
+      << "  \"unrounded_straight_track_bends\": " << result.detailed_route.unrounded_straight_track_bends << ",\n"
+      << "  \"unrounded_curve_tangent_bends\": " << result.detailed_route.unrounded_curve_tangent_bends << ",\n"
+      << "  \"residual_bend_repair_attempted\": " << result.detailed_route.residual_bend_repair_attempted << ",\n"
+      << "  \"residual_bend_repair_accepted\": " << result.detailed_route.residual_bend_repair_accepted << ",\n"
+      << "  \"residual_bend_repair_rejected\": " << result.detailed_route.residual_bend_repair_rejected << ",\n"
+      << "  \"spline_committed_context_retry_tasks\": "
+      << result.detailed_route.spline_committed_context_retry_tasks << ",\n"
+      << "  \"spline_committed_context_retry_commits\": "
+      << result.detailed_route.spline_committed_context_retry_commits << ",\n"
       << "  \"radius_reduced_circular_arcs\": "
       << result.detailed_route.radius_reduced_circular_arcs << ",\n"
       << "  \"withheld_circular_arc_corners\": "
@@ -4993,6 +6303,19 @@ void print_integrated_result(const flux::IntegratedOptimizationResult& result,
       << "  \"attempted_quintic_ph_runs\": " << result.detailed_route.attempted_quintic_ph_runs
       << ",\n"
       << "  \"fitted_quintic_ph_runs\": " << result.detailed_route.fitted_quintic_ph_runs << ",\n"
+      << "  \"spline_g2_promotion_attempts\": "
+      << result.detailed_route.spline_g2_promotion_attempts << ",\n"
+      << "  \"spline_g2_promotions\": " << result.detailed_route.spline_g2_promotions << ",\n"
+      << "  \"spline_g2_fallbacks\": " << result.detailed_route.spline_g2_fallbacks << ",\n"
+      << "  \"spline_g2_promotion_microseconds\": " << result.detailed_route.spline_g2_promotion_microseconds << ",\n"
+      << "  \"regional_native_spline_runs_materialized\": "
+      << result.detailed_route.regional_native_spline_runs_materialized << ",\n"
+      << "  \"regional_native_track_segments_materialized\": "
+      << result.detailed_route.regional_native_track_segments_materialized << ",\n"
+      << "  \"regional_native_track_arcs_materialized\": "
+      << result.detailed_route.regional_native_track_arcs_materialized << ",\n"
+      << "  \"regional_native_track_beziers_materialized\": "
+      << result.detailed_route.regional_native_track_beziers_materialized << ",\n"
       << "  \"adaptive_spline_tessellation_samples\": "
       << result.detailed_route.adaptive_spline_tessellation_samples << ",\n"
       << "  \"spline_collision_envelopes\": " << result.detailed_route.spline_collision_envelopes
@@ -5019,6 +6342,8 @@ void print_integrated_result(const flux::IntegratedOptimizationResult& result,
       << result.detailed_route.spline_navmesh_topology_rejections << ",\n"
       << "  \"spline_seed_candidates\": " << result.detailed_route.spline_seed_candidates << ",\n"
       << "  \"spline_seed_exact_legal\": " << result.detailed_route.spline_seed_exact_legal << ",\n"
+      << "  \"spline_run_aligned_seed_candidates\": " << result.detailed_route.spline_run_aligned_seed_candidates << ",\n"
+      << "  \"spline_run_aligned_seed_exact_legal\": " << result.detailed_route.spline_run_aligned_seed_exact_legal << ",\n"
       << "  \"spline_seed_portfolio_improvements\": "
       << result.detailed_route.spline_seed_portfolio_improvements << ",\n"
       << "  \"spline_trajectory_accepted\": " << result.detailed_route.spline_trajectory_accepted
@@ -5078,6 +6403,24 @@ void print_integrated_result(const flux::IntegratedOptimizationResult& result,
       << result.detailed_route.residual_joint_candidate_states << ",\n"
       << "  \"residual_joint_transaction_accepted\": "
       << (result.detailed_route.residual_joint_transaction_accepted ? "true" : "false") << ",\n"
+      << "  \"regional_candidate_ranker_requested\": "
+      << (result.detailed_route.regional_candidate_ranker_requested ? "true" : "false") << ",\n"
+      << "  \"regional_candidate_ranker_loaded\": "
+      << (result.detailed_route.regional_candidate_ranker_loaded ? "true" : "false") << ",\n"
+      << "  \"regional_candidate_ranker_trees\": "
+      << result.detailed_route.regional_candidate_ranker_trees << ",\n"
+      << "  \"regional_candidate_ranker_groups_scored\": "
+      << result.detailed_route.regional_candidate_ranker_groups_scored << ",\n"
+      << "  \"regional_candidate_ranker_candidates_scored\": "
+      << result.detailed_route.regional_candidate_ranker_candidates_scored << ",\n"
+      << "  \"regional_candidate_ranker_candidates_reordered\": "
+      << result.detailed_route.regional_candidate_ranker_candidates_reordered << ",\n"
+      << "  \"regional_candidate_ranker_training_rows_written\": "
+      << result.detailed_route.regional_candidate_ranker_training_rows_written << ",\n"
+      << "  \"regional_candidate_ranker_training_rows_failed\": "
+      << result.detailed_route.regional_candidate_ranker_training_rows_failed << ",\n"
+      << "  \"regional_candidate_ranker_diagnostic\": "
+      << json_quote(result.detailed_route.regional_candidate_ranker_diagnostic) << ",\n"
       << "  \"configured_differential_pair_skew_tuning_step_nm\": "
       << result.detailed_route.materialized_config.differential_pair_skew_tuning_step.value()
       << ",\n"
@@ -5493,13 +6836,11 @@ void print_import_result(const flux::io::KicadImportResult& imported) {
     std::cout << ",\n"
               << "  \"source_revision\": " << json_quote(imported.board->source_revision) << ",\n"
               << "  \"physical_thickness_nm\": "
-              << (imported.board->physical_thickness
-                      ? imported.board->physical_thickness->value()
-                      : 0)
+              << (imported.board->physical_thickness ? imported.board->physical_thickness->value()
+                                                     : 0)
               << ",\n"
               << "  \"stackup_layers\": "
-              << (imported.board->stackup ? imported.board->stackup->layers.size() : 0U)
-              << ",\n"
+              << (imported.board->stackup ? imported.board->stackup->layers.size() : 0U) << ",\n"
               << "  \"stackup_dielectrics\": " << stackup_dielectrics << ",\n"
               << "  \"board_cutouts\": " << imported.board->cutouts.size() << ",\n"
               << "  \"layers\": " << imported.board->layers.size() << ",\n"
@@ -5514,6 +6855,7 @@ void print_import_result(const flux::io::KicadImportResult& imported) {
               << "  \"footprints\": " << imported.board->footprints.size() << ",\n"
               << "  \"tracks\": " << imported.board->tracks.size() << ",\n"
               << "  \"track_arcs\": " << imported.board->track_arcs.size() << ",\n"
+              << "  \"track_beziers\": " << imported.board->track_beziers.size() << ",\n"
               << "  \"vias\": " << imported.board->vias.size() << ",\n"
               << "  \"zones\": " << imported.board->zones.size() << ",\n"
               << "  \"zones_requiring_refill\": " << zones_requiring_refill << ",\n"
@@ -5604,6 +6946,21 @@ void print_kicad_change_state(const flux::io::KicadTrackArcChangeState& state) {
             << ", \"locked\": " << (state.locked ? "true" : "false") << '}';
 }
 
+void print_kicad_change_state(const flux::io::KicadTrackBezierChangeState& state) {
+  std::cout << "{\"id\": " << json_quote(state.id.value())
+            << ", \"net\": " << json_quote(state.net_name)
+            << ", \"layer\": " << json_quote(state.layer.value()) << ", \"start_nm\": ";
+  print_point_json(state.start);
+  std::cout << ", \"control1_nm\": ";
+  print_point_json(state.control1);
+  std::cout << ", \"control2_nm\": ";
+  print_point_json(state.control2);
+  std::cout << ", \"end_nm\": ";
+  print_point_json(state.end);
+  std::cout << ", \"width_nm\": " << state.width.value()
+            << ", \"locked\": " << (state.locked ? "true" : "false") << '}';
+}
+
 void print_kicad_change_state(const flux::io::KicadViaChangeState& state) {
   std::cout << "{\"id\": " << json_quote(state.id.value())
             << ", \"net\": " << json_quote(state.net_name) << ", \"position_nm\": ";
@@ -5677,6 +7034,14 @@ void print_kicad_change_set(const flux::io::KicadChangeSetResult& result) {
     if (!change_set.source_track_arcs.empty()) {
       std::cout << '\n';
     }
+    std::cout << "    ],\n    \"track_beziers\": [";
+    for (std::size_t index = 0U; index < change_set.source_track_beziers.size(); ++index) {
+      std::cout << (index == 0U ? "" : ",\n      ");
+      print_kicad_change_state(change_set.source_track_beziers[index]);
+    }
+    if (!change_set.source_track_beziers.empty()) {
+      std::cout << '\n';
+    }
     std::cout << "    ],\n    \"vias\": [";
     for (std::size_t index = 0U; index < change_set.source_vias.size(); ++index) {
       std::cout << (index == 0U ? "" : ",\n      ");
@@ -5702,6 +7067,8 @@ void print_kicad_change_set(const flux::io::KicadChangeSetResult& result) {
     print_kicad_routing_changes(change_set.tracks);
     std::cout << ",\n  \"track_arcs\": ";
     print_kicad_routing_changes(change_set.track_arcs);
+    std::cout << ",\n  \"track_beziers\": ";
+    print_kicad_routing_changes(change_set.track_beziers);
     std::cout << ",\n  \"vias\": ";
     print_kicad_routing_changes(change_set.vias);
   }
@@ -5826,15 +7193,15 @@ void print_specctra_import(const flux::io::SpecctraSesImportResult& result, bool
   return result;
 }
 
-[[nodiscard]] bool work_plan_capabilities_satisfied(
-    const flux::io::FluxWorkPlan& plan, const std::map<std::string, std::string>& statuses) {
+[[nodiscard]] bool
+work_plan_capabilities_satisfied(const flux::io::FluxWorkPlan& plan,
+                                 const std::map<std::string, std::string>& statuses) {
   const auto capabilities = flux::io::required_flux_work_plan_capabilities(plan);
   return std::all_of(capabilities.begin(), capabilities.end(), [&](const auto& capability) {
-        const auto found = statuses.find(capability);
-        return found != statuses.end() &&
-               (found->second == "present" ||
-                found->second == "intentional-stronger-alternative");
-      });
+    const auto found = statuses.find(capability);
+    return found != statuses.end() &&
+           (found->second == "present" || found->second == "intentional-stronger-alternative");
+  });
 }
 
 struct WorkPlanPrintOutcome {
@@ -5842,8 +7209,9 @@ struct WorkPlanPrintOutcome {
   bool executable{false};
 };
 
-[[nodiscard]] WorkPlanPrintOutcome print_work_plan_result(
-    const flux::io::WorkPlanLoadResult& loaded, const flux::Board& source, bool dry_run) {
+[[nodiscard]] WorkPlanPrintOutcome
+print_work_plan_result(const flux::io::WorkPlanLoadResult& loaded, const flux::Board& source,
+                       bool dry_run) {
   const auto& prepared_source = loaded.policy_board ? *loaded.policy_board : source;
   const auto statuses = parity_capability_statuses();
   std::vector<std::string> capabilities;
@@ -5902,8 +7270,7 @@ struct WorkPlanPrintOutcome {
     for (std::size_t index = 0U; index < loaded.applied_policy_kinds.size(); ++index) {
       std::cout << (index == 0U ? "" : ", ") << json_quote(loaded.applied_policy_kinds[index]);
     }
-    std::cout << ']'
-              << ",\n  \"step_count\": " << plan.steps.size() << ",\n  \"steps\": [";
+    std::cout << ']' << ",\n  \"step_count\": " << plan.steps.size() << ",\n  \"steps\": [";
     for (std::size_t index = 0U; index < plan.steps.size(); ++index) {
       const auto& step = plan.steps[index];
       std::cout << (index == 0U ? "" : ",") << "\n    {\"id\": " << json_quote(step.id)
@@ -5917,15 +7284,14 @@ struct WorkPlanPrintOutcome {
     std::cout << "  ]";
     if (expansion) {
       const auto net_name = [&prepared_source](const flux::NetId& id) {
-        const auto found =
-            std::find_if(prepared_source.nets.begin(), prepared_source.nets.end(),
-                         [&id](const auto& net) { return net.id == id; });
+        const auto found = std::find_if(prepared_source.nets.begin(), prepared_source.nets.end(),
+                                        [&id](const auto& net) { return net.id == id; });
         return found == prepared_source.nets.end() ? id.value() : found->name;
       };
       const auto footprint_reference = [&prepared_source](const flux::ObjectId& id) {
-        const auto found = std::find_if(
-            prepared_source.footprints.begin(), prepared_source.footprints.end(),
-            [&id](const auto& fp) { return fp.id == id; });
+        const auto found =
+            std::find_if(prepared_source.footprints.begin(), prepared_source.footprints.end(),
+                         [&id](const auto& fp) { return fp.id == id; });
         return found == prepared_source.footprints.end() ? id.value() : found->reference;
       };
       const auto print_ids = [](const auto& ids, const auto& label) {
@@ -5950,8 +7316,9 @@ struct WorkPlanPrintOutcome {
         for (std::size_t evidence_index = 0U; evidence_index < step.evidence.size();
              ++evidence_index) {
           const auto& evidence = step.evidence[evidence_index];
-          std::cout << (evidence_index == 0U ? "" : ",") << "{\"field\": "
-                    << json_quote(evidence.field) << ", \"value\": " << json_quote(evidence.value)
+          std::cout << (evidence_index == 0U ? "" : ",")
+                    << "{\"field\": " << json_quote(evidence.field)
+                    << ", \"value\": " << json_quote(evidence.value)
                     << ", \"exclusion\": " << (evidence.exclusion ? "true" : "false")
                     << ", \"nets\": ";
           print_ids(evidence.nets, net_name);
@@ -5968,13 +7335,15 @@ struct WorkPlanPrintOutcome {
       std::cout << "  ],\n  \"existing_copper_authority\": {\"reroutable_nets\": ";
       print_ids(authority.reroutable_nets, net_name);
       std::cout << ", \"removable_unlocked_tracks\": " << authority.removable_tracks.size()
-                << ", \"removable_unlocked_track_arcs\": "
-                << authority.removable_track_arcs.size() << ", \"removable_unlocked_vias\": "
-                << authority.removable_vias.size() << ", \"immutable_tracks\": "
-                << authority.immutable_tracks.size() << ", \"immutable_track_arcs\": "
-                << authority.immutable_track_arcs.size() << ", \"immutable_vias\": "
-                << authority.immutable_vias.size() << ", \"immutable_zones\": "
-                << authority.immutable_zones.size() << "},\n  \"selected_net_mask\": [";
+                << ", \"removable_unlocked_track_arcs\": " << authority.removable_track_arcs.size()
+                << ", \"removable_unlocked_track_beziers\": " << authority.removable_track_beziers.size()
+                << ", \"removable_unlocked_vias\": " << authority.removable_vias.size()
+                << ", \"immutable_tracks\": " << authority.immutable_tracks.size()
+                << ", \"immutable_track_arcs\": " << authority.immutable_track_arcs.size()
+                << ", \"immutable_track_beziers\": " << authority.immutable_track_beziers.size()
+                << ", \"immutable_vias\": " << authority.immutable_vias.size()
+                << ", \"immutable_zones\": " << authority.immutable_zones.size()
+                << "},\n  \"selected_net_mask\": [";
       for (std::size_t index = 0U; index < expansion->selected_net_mask.size(); ++index) {
         std::cout << (index == 0U ? "" : ",")
                   << static_cast<unsigned int>(expansion->selected_net_mask[index]);
@@ -6005,8 +7374,8 @@ struct WorkPlanPrintOutcome {
                       << json_quote(step.applied_options[option_index]);
           }
           std::cout << "], \"configuration\": {\"grid_pitch_nm\": "
-                    << planner.global.grid_pitch.value() << ", \"via_site_pitch_nm\": "
-                    << planner.global.via_site_pitch.value()
+                    << planner.global.grid_pitch.value()
+                    << ", \"via_site_pitch_nm\": " << planner.global.via_site_pitch.value()
                     << ", \"max_router_iterations\": " << planner.global.max_iterations
                     << ", \"max_final_routability_feedback_passes\": "
                     << step.max_final_routability_feedback_passes
@@ -6022,8 +7391,8 @@ struct WorkPlanPrintOutcome {
                     << planner.global.max_expansions_per_connection
                     << ", \"routability_feedback_retries\": "
                     << planner.max_routability_feedback_retries
-                    << ", \"retained_global_portfolios\": "
-                    << planner.retained_global_portfolios << ", \"xpbd_relaxation\": "
+                    << ", \"retained_global_portfolios\": " << planner.retained_global_portfolios
+                    << ", \"xpbd_relaxation\": "
                     << (planner.regional.enable_xpbd_relaxation ? "true" : "false")
                     << ", \"xpbd_feedback\": "
                     << (planner.regional.enable_xpbd_feedback ? "true" : "false")
@@ -6039,46 +7408,38 @@ struct WorkPlanPrintOutcome {
                     << '}';
           if (step.placement) {
             const auto& placement = *step.placement;
-            std::cout << ", \"placement\": {\"move_step_nm\": "
-                      << placement.move_step.value()
-                      << ", \"routing_feedback_margin_nm\": "
-                      << placement.routing_feedback_margin.value()
-                      << ", \"max_placement_passes\": " << placement.max_passes
-                      << ", \"max_candidate_evaluations\": "
-                      << placement.max_candidate_evaluations
-                      << ", \"max_candidate_evaluation_workers\": "
-                      << placement.max_candidate_evaluation_workers
-                      << ", \"max_full_routing_candidates_per_wave\": "
-                      << placement.max_full_routing_candidates_per_wave
-                      << ", \"candidate_evaluation_offset\": "
-                      << placement.candidate_evaluation_offset
-                      << ", \"enable_global_placement\": "
-                      << (placement.enable_global_placement ? "true" : "false")
-                      << ", \"enable_global_routing_guidance\": "
-                      << (placement.enable_global_routing_guidance ? "true" : "false")
-                      << ", \"enable_routing_guided_moves\": "
-                      << (placement.enable_routing_guided_moves ? "true" : "false")
-                      << ", \"enable_swap_moves\": "
-                      << (placement.enable_swap_moves ? "true" : "false")
-                      << ", \"enable_group_moves\": "
-                      << (placement.enable_group_moves ? "true" : "false")
-                      << ", \"enable_relative_component_moves\": "
-                      << (placement.enable_relative_component_moves ? "true" : "false")
-                      << ", \"enable_incremental_routing\": "
-                      << (placement.enable_incremental_routing ? "true" : "false")
-                      << ", \"optimize_routed_quality\": "
-                      << (placement.optimize_routed_quality ? "true" : "false")
-                      << ", \"orientation_repair\": "
-                      << (placement.orientation_repair ? "true" : "false")
-                      << ", \"side_flip_repair\": "
-                      << (placement.side_flip_repair ? "true" : "false")
-                      << ", \"assignment_global_placement\": "
-                      << (placement.assignment_global_placement ? "true" : "false")
-                      << ", \"allow_tentative_placement_envelopes\": "
-                      << (placement.allow_tentative_placement_envelopes ? "true" : "false")
-                      << ", \"suggested_placement_move_priorities\": "
-                      << (placement.suggested_placement_move_priorities ? "true" : "false")
-                      << '}';
+            std::cout
+                << ", \"placement\": {\"move_step_nm\": " << placement.move_step.value()
+                << ", \"routing_feedback_margin_nm\": " << placement.routing_feedback_margin.value()
+                << ", \"max_placement_passes\": " << placement.max_passes
+                << ", \"max_candidate_evaluations\": " << placement.max_candidate_evaluations
+                << ", \"max_candidate_evaluation_workers\": "
+                << placement.max_candidate_evaluation_workers
+                << ", \"max_full_routing_candidates_per_wave\": "
+                << placement.max_full_routing_candidates_per_wave
+                << ", \"candidate_evaluation_offset\": " << placement.candidate_evaluation_offset
+                << ", \"enable_global_placement\": "
+                << (placement.enable_global_placement ? "true" : "false")
+                << ", \"enable_global_routing_guidance\": "
+                << (placement.enable_global_routing_guidance ? "true" : "false")
+                << ", \"enable_routing_guided_moves\": "
+                << (placement.enable_routing_guided_moves ? "true" : "false")
+                << ", \"enable_swap_moves\": " << (placement.enable_swap_moves ? "true" : "false")
+                << ", \"enable_group_moves\": " << (placement.enable_group_moves ? "true" : "false")
+                << ", \"enable_relative_component_moves\": "
+                << (placement.enable_relative_component_moves ? "true" : "false")
+                << ", \"enable_incremental_routing\": "
+                << (placement.enable_incremental_routing ? "true" : "false")
+                << ", \"optimize_routed_quality\": "
+                << (placement.optimize_routed_quality ? "true" : "false")
+                << ", \"orientation_repair\": " << (placement.orientation_repair ? "true" : "false")
+                << ", \"side_flip_repair\": " << (placement.side_flip_repair ? "true" : "false")
+                << ", \"assignment_global_placement\": "
+                << (placement.assignment_global_placement ? "true" : "false")
+                << ", \"allow_tentative_placement_envelopes\": "
+                << (placement.allow_tentative_placement_envelopes ? "true" : "false")
+                << ", \"suggested_placement_move_priorities\": "
+                << (placement.suggested_placement_move_priorities ? "true" : "false") << '}';
           }
           std::cout << '}';
         }
@@ -6130,12 +7491,11 @@ make_work_plan_staging_directory(const std::filesystem::path& output) {
   if (error || !std::filesystem::is_directory(parent, error) || error) {
     return std::nullopt;
   }
-  const auto nonce = static_cast<std::uint64_t>(
-      std::chrono::steady_clock::now().time_since_epoch().count());
+  const auto nonce =
+      static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
   for (std::uint64_t attempt = 0U; attempt < 128U; ++attempt) {
     const auto candidate = parent / (".flux-work-plan-drc-" + output.filename().string() + "-" +
-                                     std::to_string(nonce) + "-" +
-                                     std::to_string(attempt));
+                                     std::to_string(nonce) + "-" + std::to_string(attempt));
     error.clear();
     if (std::filesystem::create_directory(candidate, error)) {
       return candidate;
@@ -6257,8 +7617,8 @@ make_work_plan_staging_directory(const std::filesystem::path& output) {
   return std::nullopt;
 }
 
-[[nodiscard]] std::optional<std::string>
-read_bounded_text_file(const std::filesystem::path& path, std::size_t maximum_bytes) {
+[[nodiscard]] std::optional<std::string> read_bounded_text_file(const std::filesystem::path& path,
+                                                                std::size_t maximum_bytes) {
   std::error_code error;
   const auto size = std::filesystem::file_size(path, error);
   if (error || size > maximum_bytes) {
@@ -6307,8 +7667,7 @@ read_bounded_text_file(const std::filesystem::path& path, std::size_t maximum_by
 [[nodiscard]] ExternalKicadDrcResult
 run_external_kicad_drc(const std::filesystem::path& executable,
                        const std::filesystem::path& candidate,
-                       const std::filesystem::path& staging_directory,
-                       std::stop_token stop_token) {
+                       const std::filesystem::path& staging_directory, std::stop_token stop_token) {
   namespace process = boost::process::v1;
   ExternalKicadDrcResult result;
   result.executable = executable.generic_string();
@@ -6371,8 +7730,7 @@ run_external_kicad_drc(const std::filesystem::path& executable,
   return result;
 }
 
-[[nodiscard]] flux::io::WorkPlanAcceptanceState
-work_plan_acceptance_for_board(const Board& board) {
+[[nodiscard]] flux::io::WorkPlanAcceptanceState work_plan_acceptance_for_board(const Board& board) {
   const auto evaluated = flux::evaluate_board(board);
   flux::io::WorkPlanAcceptanceState result;
   result.structural_validation_ok = evaluated.validation.ok();
@@ -6389,19 +7747,18 @@ work_plan_acceptance_for_board(const Board& board) {
 void print_work_plan_execution(
     const flux::io::WorkPlanExecutionResult& execution,
     const std::optional<std::filesystem::path>& output_path = std::nullopt,
-    const flux::io::KicadExportResult* export_result = nullptr,
-    bool output_published = false) {
+    const flux::io::KicadExportResult* export_result = nullptr, bool output_published = false) {
   boost::system::error_code error;
-  auto value = boost::json::parse(flux::io::serialize_flux_work_plan_execution_summary(execution),
-                                  error);
+  auto value =
+      boost::json::parse(flux::io::serialize_flux_work_plan_execution_summary(execution), error);
   if (error || !value.is_object()) {
     std::cout << "{\"internally_complete\":false,\"diagnostics\":[{\"code\":"
                  "\"work_plan_summary_serialization_failed\"}]}\n";
     return;
   }
   auto& object = value.as_object();
-  object["output"] = output_path ? boost::json::value(output_path->generic_string())
-                                 : boost::json::value();
+  object["output"] =
+      output_path ? boost::json::value(output_path->generic_string()) : boost::json::value();
   object["export_attempted"] = export_result != nullptr;
   object["export_ok"] = export_result != nullptr && export_result->ok();
   object["output_published"] = output_published;
@@ -6431,8 +7788,8 @@ void print_netclass_snapshot_result(const flux::io::KicadNetClassSnapshotResult&
             << "  \"netclass_snapshot_errors\": " << errors << ",\n"
             << "  \"api_version\": " << json_quote(snapshot.api_version) << ",\n"
             << "  \"project_revision\": " << json_quote(snapshot.project_revision) << ",\n"
-            << "  \"applied_board_rules\": "
-            << (snapshot.applied_board_rules ? "true" : "false") << ",\n"
+            << "  \"applied_board_rules\": " << (snapshot.applied_board_rules ? "true" : "false")
+            << ",\n"
             << "  \"applied_classes\": " << snapshot.applied_classes << ",\n"
             << "  \"applied_nets\": " << snapshot.applied_nets
             << ",\n  \"netclass_snapshot_diagnostics\": [";
@@ -6482,7 +7839,28 @@ struct KicadCommandTail {
   std::optional<std::size_t> via_site_phase_x;
   std::optional<std::size_t> via_site_phase_y;
   std::optional<std::size_t> max_router_iterations;
+  std::optional<std::size_t> routing_timeout_ms;
+  std::optional<std::size_t> routing_slice_ms;
+  std::optional<std::size_t> routing_slice_work;
+  std::optional<std::size_t> routing_max_actions;
+  bool routing_legacy_policy{false};
+  std::optional<std::size_t> physical_feedback_retries;
+  std::optional<bool> feedback_shadows_advisory;
+  bool oracle_first_feedback{false};
+  bool assembled_straight_feedback{false};
+  bool full_strength_first_pass{false};
+  bool no_full_strength_first_pass{false};
+  bool frozen_copper_context{false};
+  bool local_channel_occupancy{false};
+  bool shared_channel_copper{false};
+  bool centerline_channel_cuts{false};
+  std::optional<std::size_t> max_regional_bundle_states;
+  std::optional<std::size_t> max_straight_portfolio_checks;
+  std::optional<std::size_t> max_straight_joint_windows;
+  bool expand_frozen_copper_scope{false};
+  bool prioritize_frozen_scope_expansion{false};
   std::optional<std::size_t> max_final_routability_feedback_passes;
+  std::optional<std::size_t> avbd_iterations;
   std::optional<std::size_t> xpbd_iterations;
   std::optional<Nanometres> xpbd_maximum_step;
   std::optional<std::size_t> max_static_seed_workers;
@@ -6522,9 +7900,13 @@ struct KicadCommandTail {
   std::optional<std::uint32_t> telemetry_rate_hz;
   std::optional<flux::RouterTelemetryLevel> telemetry_level;
   std::optional<std::filesystem::path> telemetry_record;
+  std::optional<std::filesystem::path> regional_candidate_ranker_model;
+  std::optional<std::filesystem::path> regional_candidate_ranker_training_data;
   bool strict_medial_topology{false};
+  bool usped_navmesh{false};
   bool diagonal_grid_edges{false};
   bool crossing_safe_diagonal_grid_edges{false};
+  bool dense_candidate_grid{false};
   bool sampled_route_clearance_reservations{false};
   bool direct_medial_edges{false};
   bool negotiate_voronoi_lane_conflicts{false};
@@ -6536,15 +7918,24 @@ struct KicadCommandTail {
   bool protect_recovered_hard_capacity_ripup_nets{false};
   bool selective_congestion_reroute{false};
   bool repair_sampled_conflicts{false};
-  bool xpbd_relaxation{false};
-  bool xpbd_feedback{false};
+  bool avbd_relaxation{true};
+  bool xpbd_relaxation{true};
+  bool xpbd_feedback{true};
   bool xpbd_cpu{false};
+  bool terrain_height_evolution{true};
+  bool terrain_height_evolution_explicit{false};
+  bool board_terrain_guidance{true};
+  bool board_terrain_guidance_explicit{false};
+  std::optional<bool> hc_composition;
+  std::optional<bool> layered_navmesh;
   bool reuse_weighted_search_frontier{false};
   bool physical_overflow_objective{false};
   bool physical_overflow_history{false};
   bool physical_envelope_ordering{false};
   bool search_diversification{false};
   bool circular_arc_refinement{false};
+  bool curved_tracks{true};
+  bool track_geometry_explicit{false};
   bool differential_pair_skew_tuning{false};
   bool differential_pair_skew_tuning_batch_assignment{false};
   bool enable_swap_moves{false};
@@ -6582,19 +7973,143 @@ struct KicadCommandTail {
         return std::nullopt;
       }
       result.priority_route_net_names.emplace_back(argv[++index]);
+    } else if (argument == "--local-channel-occupancy") {
+      if (result.local_channel_occupancy) return std::nullopt;
+      result.local_channel_occupancy = true;
+    } else if (argument == "--shared-channel-copper") {
+      if (result.shared_channel_copper) return std::nullopt;
+      result.shared_channel_copper = true;
+    } else if (argument == "--centerline-channel-cuts") {
+      if (result.centerline_channel_cuts) return std::nullopt;
+      result.centerline_channel_cuts = true;
+    } else if (argument == "--prioritize-frozen-scope-expansion") {
+      if (result.prioritize_frozen_scope_expansion) return std::nullopt;
+      result.prioritize_frozen_scope_expansion = true;
+    } else if (argument == "--expand-frozen-copper-scope") {
+      if (result.expand_frozen_copper_scope) return std::nullopt;
+      result.expand_frozen_copper_scope = true;
+    } else if (argument == "--frozen-copper-context") {
+      if (result.frozen_copper_context) return std::nullopt;
+      result.frozen_copper_context = true;
+    } else if (argument == "--full-strength-first-pass") {
+      if (result.full_strength_first_pass || result.no_full_strength_first_pass) return std::nullopt;
+      result.full_strength_first_pass = true;
+    } else if (argument == "--no-full-strength-first-pass") {
+      if (result.full_strength_first_pass || result.no_full_strength_first_pass) return std::nullopt;
+      result.no_full_strength_first_pass = true;
+    } else if (argument == "--oracle-first-feedback") {
+      if (result.oracle_first_feedback) return std::nullopt;
+      result.oracle_first_feedback = true;
+    } else if (argument == "--assembled-straight-feedback") {
+      if (result.assembled_straight_feedback) return std::nullopt;
+      result.assembled_straight_feedback = true;
+    } else if (argument == "--feedback-shadow-policy") {
+      if (result.feedback_shadows_advisory.has_value() || index + 1 >= argc) return std::nullopt;
+      const std::string_view policy{argv[++index]};
+      if (policy != "enforced" && policy != "advisory") return std::nullopt;
+      result.feedback_shadows_advisory = policy == "advisory";
     } else if (argument == "--repair-sampled-conflicts") {
       if (result.repair_sampled_conflicts) {
         return std::nullopt;
       }
       result.repair_sampled_conflicts = true;
+    } else if (argument == "--avbd-relaxation" || argument == "--no-avbd-relaxation") {
+      result.avbd_relaxation = argument == "--avbd-relaxation";
+    } else if (argument == "--avbd-iterations") {
+      if (result.avbd_iterations || index + 1 >= argc) return std::nullopt;
+      std::size_t value = 0U;
+      const std::string_view token{argv[++index]};
+      const auto parsed = std::from_chars(token.data(), token.data() + token.size(), value);
+      if (parsed.ec != std::errc{} || parsed.ptr != token.data() + token.size() ||
+          value == 0U || value > 128U) return std::nullopt;
+      result.avbd_iterations = value;
     } else if (argument == "--xpbd-relaxation") {
       result.xpbd_relaxation = true;
     } else if (argument == "--xpbd-feedback") {
       result.xpbd_relaxation = true;
       result.xpbd_feedback = true;
+    } else if (argument == "--no-xpbd-relaxation") {
+      result.xpbd_relaxation = false;
+      result.xpbd_feedback = false;
+    } else if (argument == "--no-xpbd-feedback") {
+      result.xpbd_feedback = false;
     } else if (argument == "--xpbd-cpu") {
       result.xpbd_relaxation = true;
       result.xpbd_cpu = true;
+    } else if (argument == "--terrain-height-evolution" ||
+               argument == "--no-terrain-height-evolution") {
+      if (result.terrain_height_evolution_explicit) return std::nullopt;
+      result.terrain_height_evolution_explicit = true;
+      result.terrain_height_evolution = argument == "--terrain-height-evolution";
+    } else if (argument == "--board-terrain-guidance" ||
+               argument == "--no-board-terrain-guidance") {
+      if (result.board_terrain_guidance_explicit) return std::nullopt;
+      result.board_terrain_guidance_explicit = true;
+      result.board_terrain_guidance = argument == "--board-terrain-guidance";
+    } else if (argument == "--hc-composition" || argument == "--no-hc-composition") {
+      if (result.hc_composition.has_value()) return std::nullopt;
+      result.hc_composition = argument == "--hc-composition";
+    } else if (argument == "--layered-navmesh" || argument == "--no-layered-navmesh") {
+      if (result.layered_navmesh.has_value()) return std::nullopt;
+      result.layered_navmesh = argument == "--layered-navmesh";
+    } else if (argument == "--regional-candidate-ranker-model") {
+      if (result.regional_candidate_ranker_model || index + 1 >= argc ||
+          std::string_view{argv[index + 1]}.empty()) {
+        return std::nullopt;
+      }
+      result.regional_candidate_ranker_model = std::filesystem::path{argv[++index]};
+    } else if (argument == "--regional-candidate-training-data") {
+      if (result.regional_candidate_ranker_training_data || index + 1 >= argc ||
+          std::string_view{argv[index + 1]}.empty()) {
+        return std::nullopt;
+      }
+      result.regional_candidate_ranker_training_data = std::filesystem::path{argv[++index]};
+    } else if (argument == "--max-regional-bundle-states") {
+      if (result.max_regional_bundle_states || index + 1 >= argc) return std::nullopt;
+      std::size_t value = 0;
+      const std::string_view token{argv[++index]};
+      const auto parsed = std::from_chars(token.data(), token.data() + token.size(), value);
+      if (parsed.ec != std::errc{} || parsed.ptr != token.data() + token.size() ||
+          value == 0 || value > 1'000'000U) return std::nullopt;
+      result.max_regional_bundle_states = value;
+    } else if (argument == "--max-straight-joint-windows") {
+      if (result.max_straight_joint_windows || index + 1 >= argc) return std::nullopt;
+      std::size_t value = 0U;
+      const std::string_view token{argv[++index]};
+      const auto parsed = std::from_chars(token.data(), token.data() + token.size(), value);
+      if (parsed.ec != std::errc{} || parsed.ptr != token.data() + token.size() || value > 4U)
+        return std::nullopt;
+      result.max_straight_joint_windows = value;
+    } else if (argument == "--routing-engine-policy") {
+      if (std::string_view{argv[1]} != "route-kicad" && std::string_view{argv[1]} != "detail-kicad")
+        return std::nullopt;
+      if (index + 1 >= argc) return std::nullopt;
+      const std::string_view value{argv[++index]};
+      if (value != "adaptive" && value != "legacy") return std::nullopt;
+      result.routing_legacy_policy = value == "legacy";
+    } else if (argument == "--routing-timeout-ms" || argument == "--routing-slice-ms" ||
+               argument == "--routing-slice-work" || argument == "--routing-max-actions") {
+      if (std::string_view{argv[1]} != "route-kicad" && std::string_view{argv[1]} != "detail-kicad")
+        return std::nullopt;
+      auto& target = argument == "--routing-timeout-ms" ? result.routing_timeout_ms :
+                     argument == "--routing-slice-ms" ? result.routing_slice_ms :
+                     argument == "--routing-slice-work" ? result.routing_slice_work :
+                                                        result.routing_max_actions;
+      if (target || index + 1 >= argc) return std::nullopt;
+      const std::string_view token{argv[++index]};
+      std::size_t value = 0U;
+      const auto parsed = std::from_chars(token.data(), token.data() + token.size(), value);
+      if (parsed.ec != std::errc{} || parsed.ptr != token.data() + token.size() ||
+          value == 0U || value > 86'400'000U) return std::nullopt;
+      target = value;
+    } else if (argument == "--max-straight-portfolio-checks") {
+      if (result.max_straight_portfolio_checks || index + 1 >= argc) return std::nullopt;
+      std::size_t value = 0U;
+      const std::string_view token{argv[++index]};
+      const auto parsed = std::from_chars(token.data(), token.data() + token.size(), value);
+      if (parsed.ec != std::errc{} || parsed.ptr != token.data() + token.size() ||
+          value > 4'096U) return std::nullopt;
+      result.max_straight_portfolio_checks = value;
     } else if (argument == "--xpbd-iterations") {
       if (result.xpbd_iterations || index + 1 >= argc)
         return std::nullopt;
@@ -6849,7 +8364,7 @@ struct KicadCommandTail {
         return std::nullopt;
       }
       *target = value;
-    } else if (argument == "--max-router-iterations" ||
+    } else if (argument == "--max-router-iterations" || argument == "--physical-feedback-retries" ||
                argument == "--max-final-routability-feedback-passes" ||
                argument == "--max-static-seed-workers" || argument == "--max-expansions" ||
                argument == "--present-congestion-escalation-start-iteration" ||
@@ -6871,12 +8386,15 @@ struct KicadCommandTail {
       const auto parsed = std::from_chars(token.data(), token.data() + token.size(), value);
       if (parsed.ec != std::errc{} || parsed.ptr != token.data() + token.size() ||
           (value == 0U && argument != "--pin-escape-radius" && argument != "--via-site-phase-x" &&
-           argument != "--via-site-phase-y")) {
+           argument != "--via-site-phase-y" && argument != "--physical-feedback-retries")) {
         return std::nullopt;
       }
       auto* target = &result.max_corridor_neck_down_states;
       if (argument == "--max-router-iterations") {
         target = &result.max_router_iterations;
+      } else if (argument == "--physical-feedback-retries") {
+        if (result.physical_feedback_retries.has_value() || value > 64U) return std::nullopt;
+        target = &result.physical_feedback_retries;
       } else if (argument == "--max-final-routability-feedback-passes") {
         target = &result.max_final_routability_feedback_passes;
       } else if (argument == "--max-static-seed-workers") {
@@ -6917,6 +8435,9 @@ struct KicadCommandTail {
         return std::nullopt;
       }
       result.diagonal_grid_edges = true;
+    } else if (argument == "--dense-candidate-grid") {
+      if (result.dense_candidate_grid) return std::nullopt;
+      result.dense_candidate_grid = true;
     } else if (argument == "--crossing-safe-diagonal-grid") {
       if (result.crossing_safe_diagonal_grid_edges) {
         return std::nullopt;
@@ -6927,6 +8448,9 @@ struct KicadCommandTail {
         return std::nullopt;
       }
       result.sampled_route_clearance_reservations = true;
+    } else if (argument == "--usped-navmesh") {
+      if (result.usped_navmesh) return std::nullopt;
+      result.usped_navmesh = true;
     } else if (argument == "--strict-medial") {
       if (result.strict_medial_topology) {
         return std::nullopt;
@@ -7002,8 +8526,14 @@ struct KicadCommandTail {
         return std::nullopt;
       }
       result.search_diversification = true;
+    } else if (argument == "--curved-tracks" || argument == "--straight-tracks") {
+      if (result.track_geometry_explicit ||
+          (argument == "--straight-tracks" && result.circular_arc_refinement)) return std::nullopt;
+      result.track_geometry_explicit = true;
+      result.curved_tracks = argument == "--curved-tracks";
     } else if (argument == "--arcs") {
-      if (result.circular_arc_refinement) {
+      if (result.circular_arc_refinement ||
+          (result.track_geometry_explicit && !result.curved_tracks)) {
         return std::nullopt;
       }
       result.circular_arc_refinement = true;
@@ -7154,6 +8684,13 @@ struct KicadCommandTail {
                             result.telemetry_level || result.telemetry_record)) {
     return std::nullopt;
   }
+  // Explicit retry counts partition an explicit total budget; never silently create more
+  // PathFinder iterations than requested (each initial/retry epoch needs at least one).
+  if (result.physical_feedback_retries &&
+      (!result.max_router_iterations ||
+       *result.physical_feedback_retries >= *result.max_router_iterations)) return std::nullopt;
+  if (result.full_strength_first_pass &&
+      (result.oracle_first_feedback || !result.xpbd_relaxation || !result.xpbd_feedback)) return std::nullopt;
   return result;
 }
 
@@ -7197,8 +8734,31 @@ make_router_telemetry_service(const KicadCommandTail& tail) {
   return std::make_unique<flux::RouterTelemetryService>(std::move(config));
 }
 
+void publish_telemetry_outcome(flux::RouterTelemetryService* telemetry, bool complete,
+                               std::string detail, const Board* resulting_copper = nullptr) {
+  if (telemetry == nullptr) {
+    return;
+  }
+  if (resulting_copper != nullptr) {
+    telemetry->publish_generated_copper(
+        *resulting_copper, complete
+                               ? "Copper generated: exact accepted detailed-routing candidate"
+                               : "Copper generated: incomplete/non-authoritative review candidate");
+  }
+  flux::RouterTelemetryEvent outcome;
+  outcome.kind = complete ? flux::RouterTelemetryEventKind::routing_completed
+                          : flux::RouterTelemetryEventKind::routing_finished;
+  outcome.stable_id = "routing-outcome";
+  outcome.detail = std::move(detail);
+  static_cast<void>(telemetry->try_emit(std::move(outcome)));
+}
+
 [[nodiscard]] bool apply_router_tail(const KicadCommandTail& tail, const flux::Board& board,
                                      flux::GlobalRouterConfig& config) {
+  config.global_navmesh_usped.enabled = tail.usped_navmesh;
+  config.static_seed_hydraulic_flow.evolve_terrain_height = tail.terrain_height_evolution;
+  config.board_terrain_guidance.enabled = tail.board_terrain_guidance;
+  config.static_seed_hydraulic_flow.prefer_gpu = true;
   std::set<std::string> selected_names;
   for (const auto& name : tail.route_net_names) {
     const auto found = std::find_if(board.nets.begin(), board.nets.end(),
@@ -7230,6 +8790,7 @@ make_router_telemetry_service(const KicadCommandTail& tail) {
   config.use_direct_voronoi_resource_edges = tail.direct_medial_edges;
   config.allow_diagonal_grid_edges = tail.diagonal_grid_edges;
   config.allow_crossing_safe_diagonal_grid_edges = tail.crossing_safe_diagonal_grid_edges;
+  config.allow_dense_candidate_grid = tail.dense_candidate_grid;
   if (tail.sampled_route_clearance_reservations) {
     config.reserve_sampled_route_clearance = true;
   }
@@ -7378,11 +8939,37 @@ make_router_telemetry_service(const KicadCommandTail& tail) {
     config.max_terminal_escape_reservation_resources =
         *tail.max_terminal_escape_reservation_resources;
   }
+  if (!tail.grid_pitch && !tail.dense_candidate_grid) {
+    const auto rule_floor = flux::minimum_legal_planar_grid_pitch(board, config);
+    if (!rule_floor) {
+      std::cerr << "source rules require an unrepresentable planar grid pitch\n";
+      return false;
+    }
+    config.grid_pitch = std::max(config.grid_pitch, *rule_floor);
+  }
   return true;
 }
 
 void apply_regional_tail(const KicadCommandTail& tail, flux::RegionalRouterConfig& config) {
+  if (tail.hc_composition) config.enable_bounded_hc_composition = *tail.hc_composition;
+  if (tail.layered_navmesh) config.enable_layered_navmesh = *tail.layered_navmesh;
+  config.enable_spline_realization = tail.curved_tracks || tail.circular_arc_refinement;
+  config.local_channel_occupancy = tail.local_channel_occupancy || tail.centerline_channel_cuts;
+  config.shared_channel_copper = tail.shared_channel_copper;
+  config.centerline_channel_cuts = tail.centerline_channel_cuts;
+  if (tail.max_regional_bundle_states)
+    config.max_bundle_search_states = *tail.max_regional_bundle_states;
+  if (tail.max_straight_portfolio_checks)
+    config.max_straight_portfolio_checks = *tail.max_straight_portfolio_checks;
+  if (tail.max_straight_joint_windows)
+    config.max_straight_joint_windows = *tail.max_straight_joint_windows;
+  config.frozen_copper_context = tail.frozen_copper_context;
+  config.expand_frozen_copper_scope = tail.expand_frozen_copper_scope;
+  config.prioritize_frozen_scope_expansion = tail.prioritize_frozen_scope_expansion;
+  config.frozen_copper_context = config.frozen_copper_context || config.expand_frozen_copper_scope;
   config.treat_saved_zone_fills_as_refillable = tail.refillable_zone_fills;
+  config.enable_avbd_relaxation = tail.avbd_relaxation;
+  if (tail.avbd_iterations) config.avbd.iterations = *tail.avbd_iterations;
   config.enable_xpbd_relaxation = tail.xpbd_relaxation;
   config.enable_xpbd_feedback = tail.xpbd_feedback;
   config.xpbd.prefer_gpu = !tail.xpbd_cpu;
@@ -7390,10 +8977,22 @@ void apply_regional_tail(const KicadCommandTail& tail, flux::RegionalRouterConfi
     config.xpbd.iterations = *tail.xpbd_iterations;
   if (tail.xpbd_maximum_step)
     config.xpbd.maximum_step_nm = tail.xpbd_maximum_step->value();
+  if (tail.regional_candidate_ranker_model)
+    config.candidate_ranker_model_path = tail.regional_candidate_ranker_model->string();
+  if (tail.regional_candidate_ranker_training_data)
+    config.candidate_ranker_training_data_path =
+        tail.regional_candidate_ranker_training_data->string();
 }
 
 [[nodiscard]] bool autoroute_tail_is_supported(const KicadCommandTail& tail) {
   return tail.output.has_value() && !tail.placement_envelope_constraints &&
+         !tail.physical_feedback_retries && !tail.feedback_shadows_advisory &&
+         !tail.oracle_first_feedback && !tail.assembled_straight_feedback &&
+         !tail.full_strength_first_pass && !tail.no_full_strength_first_pass && !tail.frozen_copper_context &&
+         !tail.expand_frozen_copper_scope && !tail.prioritize_frozen_scope_expansion &&
+         !tail.local_channel_occupancy && !tail.shared_channel_copper && !tail.centerline_channel_cuts &&
+         !tail.hc_composition && !tail.layered_navmesh &&
+         !tail.max_regional_bundle_states && !tail.max_straight_joint_windows &&
          tail.route_net_names.empty() && tail.priority_route_net_names.empty() &&
          !tail.repair_sampled_conflicts && !tail.placement_group_constraints &&
          !tail.placement_region_constraints && !tail.relative_placement_constraints &&
@@ -7418,11 +9017,12 @@ void apply_regional_tail(const KicadCommandTail& tail, flux::RegionalRouterConfi
          !tail.max_corridor_neck_down_length && !tail.max_voronoi_resource_segment_length &&
          !tail.max_corridor_neck_down_states && !tail.selective_full_reroute_interval &&
          !tail.diagonal_grid_edges && !tail.crossing_safe_diagonal_grid_edges &&
+         !tail.dense_candidate_grid &&
          !tail.sampled_route_clearance_reservations && !tail.width_reduction_cost_per_grid_step &&
          !tail.river_following_cost && !tail.former_route_memory_cost &&
          !tail.terminal_escape_reservation_cost && !tail.terminal_escape_proximity_cost &&
          !tail.capacity_reserve_cost && !tail.max_terminal_escape_reservation_resources &&
-         !tail.strict_medial_topology && !tail.direct_medial_edges &&
+         !tail.usped_navmesh && !tail.strict_medial_topology && !tail.direct_medial_edges &&
          !tail.negotiate_voronoi_lane_conflicts && !tail.diversify_pin_access_rings &&
          !tail.search_diversification && !tail.multisource_steiner_growth &&
          !tail.atomic_complete_net_routing && !tail.rollback_failed_hard_capacity_ripup &&
@@ -7430,7 +9030,7 @@ void apply_regional_tail(const KicadCommandTail& tail, flux::RegionalRouterConfi
          !tail.defer_hard_capacity_ripup_victims_to_pass_tail &&
          !tail.protect_recovered_hard_capacity_ripup_nets && !tail.reuse_weighted_search_frontier &&
          !tail.physical_overflow_objective && !tail.physical_overflow_history &&
-         !tail.physical_envelope_ordering && !tail.circular_arc_refinement &&
+         !tail.physical_envelope_ordering && !tail.circular_arc_refinement && !tail.track_geometry_explicit &&
          !tail.differential_pair_skew_tuning &&
          !tail.differential_pair_skew_tuning_batch_assignment && !tail.enable_swap_moves &&
          !tail.enable_group_moves && !tail.enable_relative_component_moves &&
@@ -7723,19 +9323,20 @@ constrained_optimizer_config(const Board& board,
                                       std::optional<std::string_view> workflow = std::nullopt,
                                       bool allow_provisional_zone_refill = false,
                                       bool write_incomplete_preview = false,
-                                      bool diagnostic_lossy_preview = false) {
+                                      bool diagnostic_lossy_preview = false,
+                                      const flux::MaterializationFeedbackResult* session = nullptr) {
   const bool exportable = detailed.complete() || (allow_provisional_zone_refill &&
                                                   detailed.provisional_zone_refill_candidate());
   const bool preview_exportable = write_incomplete_preview && detailed.candidate.has_value();
   if (!output_path || (!exportable && !preview_exportable) || !detailed.candidate) {
-    print_detailed_result(detailed, std::nullopt, workflow, &global);
+    print_detailed_result(detailed, std::nullopt, workflow, &global, session);
     return exportable ? EXIT_SUCCESS : 5;
   }
   flux::io::KicadExportOptions export_options;
   export_options.allow_lossy_diagnostic_preview = diagnostic_lossy_preview;
   export_options.verify_round_trip = !diagnostic_lossy_preview;
-  const auto exported = flux::io::export_kicad_candidate_file(
-      source_path, *output_path, source, *detailed.candidate, export_options);
+  const auto exported = flux::io::export_kicad_candidate_file(source_path, *output_path, source,
+                                                              *detailed.candidate, export_options);
   const auto error_count = static_cast<std::size_t>(std::count_if(
       exported.diagnostics.begin(), exported.diagnostics.end(), [](const auto& diagnostic) {
         return diagnostic.severity == flux::io::ExportSeverity::error;
@@ -7748,7 +9349,7 @@ constrained_optimizer_config(const Board& board,
   print_detailed_result(detailed,
                         ExportSummary{exported.ok(), error_count, exported.generated_id_map.size(),
                                       std::move(issue_codes), !exportable},
-                        workflow, &global);
+                        workflow, &global, session);
   if (!exported.ok()) {
     return 7;
   }
@@ -7916,7 +9517,7 @@ constrained_optimizer_config(const Board& board,
 }
 
 void print_help() {
-  std::cout << "flux-cli 0.139.0\n\n"
+  std::cout << "flux-cli 0.140.0\n\n"
                "Usage:\n"
                "  flux-cli version       Print the engine version\n"
                "  flux-cli capabilities --json  Print the pinned feature-parity contract\n"
@@ -7950,8 +9551,10 @@ void print_help() {
                "[--diffpairs SIDECAR] [--buses SIDECAR] [--no-telemetry] "
                "[--telemetry-listen ADDRESS:PORT] [--telemetry-rate HZ] "
                "[--telemetry-level normal|diagnostic|trace] [--telemetry-record FILE]\n"
-               "    [--xpbd-relaxation] [--xpbd-feedback] [--xpbd-cpu] "
-               "[--xpbd-iterations N] [--xpbd-max-step-nm NM]\n"
+               "    [--no-xpbd-relaxation | --no-xpbd-feedback] [--xpbd-cpu] "
+               "[--xpbd-iterations N] [--xpbd-max-step-nm NM] [--no-avbd-relaxation] [--avbd-iterations N] [--terrain-height-evolution | --no-terrain-height-evolution] [--board-terrain-guidance | --no-board-terrain-guidance] [--hc-composition | --no-hc-composition] [--layered-navmesh | --no-layered-navmesh]\n"
+               "    [--regional-candidate-ranker-model MODEL.json] "
+               "[--regional-candidate-training-data OBSERVATIONS.jsonl]\n"
                "  flux-cli export-dsn-kicad BOARD OUTPUT.dsn [--netclasses SNAPSHOT] "
                "[--refillable-zones]\n"
                "  flux-cli import-ses-kicad BOARD INPUT.dsn RESULT.ses OUTPUT.kicad_pcb "
@@ -7970,14 +9573,20 @@ void print_help() {
                "[--buses SIDECAR] [--envelopes SIDECAR] [--placement-groups SIDECAR] "
                "[--placement-regions SIDECAR] "
                "[--relative-placements SIDECAR] "
-               "[--max-router-iterations N] "
+               "[--max-router-iterations N] [--physical-feedback-retries N] "
+               "[--feedback-shadow-policy enforced|advisory] [--oracle-first-feedback | --assembled-straight-feedback | --full-strength-first-pass | --no-full-strength-first-pass] "
+               "[--frozen-copper-context] [--expand-frozen-copper-scope] [--prioritize-frozen-scope-expansion] "
+               "[--local-channel-occupancy] [--shared-channel-copper] [--centerline-channel-cuts] "
+               "[--max-regional-bundle-states N] [--max-straight-portfolio-checks N] [--max-straight-joint-windows 0..4] [--routing-engine-policy adaptive|legacy] [--routing-timeout-ms N] [--routing-slice-ms N] [--routing-slice-work N] [--routing-max-actions N] [--curved-tracks|--straight-tracks] "
                "[--max-static-seed-workers N] "
+               "[--terrain-height-evolution | --no-terrain-height-evolution] [--board-terrain-guidance | --no-board-terrain-guidance] [--hc-composition | --no-hc-composition] [--layered-navmesh | --no-layered-navmesh] "
                "[--no-telemetry] [--telemetry-listen ADDRESS:PORT] "
                "[--telemetry-rate HZ] [--telemetry-level normal|diagnostic|trace] "
                "[--telemetry-record FILE] "
                "[--grid-pitch-nm NM] [--via-site-pitch-nm NM] "
                "[--via-site-phase-x N] [--via-site-phase-y N] "
                "[--diagonal-grid | --crossing-safe-diagonal-grid] "
+               "[--dense-candidate-grid] "
                "[--sampled-clearance-reservations] "
                "[--clearance-shadow-cost-quantum-nm NM] "
                "[--capacity-reserve-per-mille N] [--capacity-reserve-cost N] "
@@ -7994,12 +9603,14 @@ void print_help() {
                "[--local-pin-escape-pitch-nm NM] [--max-local-pin-escape-expansions N] "
                "[--multisource-steiner] [--atomic-net-trees] "
                "[--selective-congestion-reroute] [--selective-full-reroute-interval N] "
-               "[--strict-medial] [--direct-medial] [--negotiate-lane-conflicts]\n"
+               "[--strict-medial] [--direct-medial] [--negotiate-lane-conflicts] "
+               "[--usped-navmesh] [--regional-candidate-ranker-model MODEL.json] "
+               "[--regional-candidate-training-data OBSERVATIONS.jsonl]\n"
                "  flux-cli detail-kicad BOARD [--netclasses SNAPSHOT] [--diffpairs SIDECAR] "
                "[--buses SIDECAR] [--envelopes SIDECAR] [--placement-groups SIDECAR] "
                "[--placement-regions SIDECAR] "
                "[--relative-placements SIDECAR] "
-               "[--strict-medial] [--direct-medial] [--negotiate-lane-conflicts] [--arcs] "
+               "[--strict-medial] [--direct-medial] [--negotiate-lane-conflicts] [--arcs] [--curved-tracks|--straight-tracks] "
                "[--refillable-zones] [--route-net NAME]... [--route-first NAME]... "
                "[--repair-sampled-conflicts] "
                "[--no-telemetry] [--telemetry-listen ADDRESS:PORT] "
@@ -8007,8 +9618,11 @@ void print_help() {
                "[--telemetry-record FILE] "
                "[--max-final-routability-feedback-passes N] "
                "[--write-incomplete-preview | --diagnostic-lossy-preview] "
-               "[--xpbd-relaxation] [--xpbd-feedback] [--xpbd-cpu] "
-               "[--xpbd-iterations N] [--xpbd-max-step-nm NM] "
+               "[--no-xpbd-relaxation | --no-xpbd-feedback] [--xpbd-cpu] "
+               "[--xpbd-iterations N] [--xpbd-max-step-nm NM] [--no-avbd-relaxation] [--avbd-iterations N] "
+               "[--terrain-height-evolution | --no-terrain-height-evolution] [--board-terrain-guidance | --no-board-terrain-guidance] [--hc-composition | --no-hc-composition] [--layered-navmesh | --no-layered-navmesh] "
+               "[--regional-candidate-ranker-model MODEL.json] "
+               "[--regional-candidate-training-data OBSERVATIONS.jsonl] "
                "[--tune-differential-pair-skew] [--batch-assign-differential-pair-skew] "
                "[OUTPUT]\n"
                "  flux-cli optimize-kicad BOARD [--netclasses SNAPSHOT] [--diffpairs SIDECAR] "
@@ -8017,7 +9631,7 @@ void print_help() {
                "[--relative-placements SIDECAR] "
                "[--placement-move-priorities SIDECAR] "
                "[--suggested-placement-move-priorities] "
-               "[--strict-medial] [--direct-medial] [--arcs] "
+               "[--strict-medial] [--direct-medial] [--arcs] [--curved-tracks|--straight-tracks] "
                "[--tune-differential-pair-skew] [--batch-assign-differential-pair-skew] "
                "[--swaps] [--group-moves] "
                "[--relative-component-moves] "
@@ -8029,7 +9643,7 @@ void print_help() {
                "[--relative-placements SIDECAR] "
                "[--placement-move-priorities SIDECAR] "
                "[--suggested-placement-move-priorities] "
-               "[--direct-medial] [--arcs] [--tune-differential-pair-skew] "
+               "[--direct-medial] [--arcs] [--curved-tracks|--straight-tracks] [--tune-differential-pair-skew] "
                "[--batch-assign-differential-pair-skew] "
                "[--routing-guided-global-placement] "
                "[--assignment-global-placement] "
@@ -8041,7 +9655,7 @@ void print_help() {
                "[--relative-placements SIDECAR] "
                "[--placement-move-priorities SIDECAR] "
                "[--suggested-placement-move-priorities] "
-               "[--direct-medial] [--arcs] [--tune-differential-pair-skew] "
+               "[--direct-medial] [--arcs] [--curved-tracks|--straight-tracks] [--tune-differential-pair-skew] "
                "[--batch-assign-differential-pair-skew] "
                "[--swaps] [--group-moves] [--relative-component-moves] "
                "[--tentative-envelopes] [OUTPUT]\n"
@@ -8051,7 +9665,7 @@ void print_help() {
                "[--relative-placements SIDECAR] "
                "[--placement-move-priorities SIDECAR] "
                "[--suggested-placement-move-priorities] "
-               "[--direct-medial] [--arcs] [--tune-differential-pair-skew] "
+               "[--direct-medial] [--arcs] [--curved-tracks|--straight-tracks] [--tune-differential-pair-skew] "
                "[--batch-assign-differential-pair-skew] "
                "[--swaps] [--group-moves] [--relative-component-moves] "
                "[--tentative-envelopes] [OUTPUT]\n"
@@ -8062,8 +9676,12 @@ void print_help() {
                "[--move-step-nm N].\n"
                "  WebSocket telemetry is enabled by default on 127.0.0.1:8765 for all KiCad "
                "routing/optimization commands; use [--no-telemetry] to disable it.\n"
+               "  Local channel occupancy is experimental and opt-in for route-kicad/detail-kicad.\n"
                "  All KiCad route/detail/optimize commands accept [--grid-pitch-nm N] "
-               "[--max-router-iterations N] "
+               "[--max-router-iterations N] [--physical-feedback-retries N] "
+               "[--feedback-shadow-policy enforced|advisory] [--oracle-first-feedback | --assembled-straight-feedback | --full-strength-first-pass | --no-full-strength-first-pass] "
+               "[--frozen-copper-context] [--expand-frozen-copper-scope] [--prioritize-frozen-scope-expansion] "
+               "[--max-straight-portfolio-checks N] [--max-straight-joint-windows 0..4] [--routing-engine-policy adaptive|legacy] [--routing-timeout-ms N] [--routing-slice-ms N] [--routing-slice-work N] [--routing-max-actions N] "
                "[--max-static-seed-workers N] "
                "[--max-expansions N] [--expansion-retry-heuristic-weight-per-mille N] "
                "[--reuse-weighted-search-frontier] "
@@ -8126,7 +9744,7 @@ int main(int argc, char** argv) {
   }
   const std::string_view command{argv[1]};
   if (command == "version" && argc == 2) {
-    std::cout << "flux_capacitor 0.139.0 board-schema " << flux::board_schema_version << '\n';
+    std::cout << "flux_capacitor 0.140.0 board-schema " << flux::board_schema_version << '\n';
     return EXIT_SUCCESS;
   }
   if (command == "capabilities" && argc == 3 && std::string_view{argv[2]} == "--json") {
@@ -8141,7 +9759,7 @@ int main(int argc, char** argv) {
     const char* override_value = std::getenv("FLUX_VULKAN_DEVICE");
     std::cout << "{\n"
               << "  \"engine\": \"flux_capacitor\",\n"
-              << "  \"version\": \"0.139.0\",\n"
+              << "  \"version\": \"0.140.0\",\n"
               << "  \"board_schema\": " << flux::board_schema_version << ",\n"
               << "  \"production_gpu_required\": true,\n"
               << "  \"gpu_available\": " << (device.available ? "true" : "false") << ",\n"
@@ -8202,10 +9820,10 @@ int main(int argc, char** argv) {
     const auto loaded =
         flux::io::load_flux_work_plan_file(std::filesystem::path{argv[3]}, &*imported.board);
     const auto& prepared_source = loaded.policy_board ? *loaded.policy_board : *imported.board;
-    const auto compiled = loaded.plan
-                              ? std::optional{flux::io::compile_flux_work_plan_routes(
-                                    prepared_source, *loaded.plan)}
-                              : std::nullopt;
+    const auto compiled =
+        loaded.plan
+            ? std::optional{flux::io::compile_flux_work_plan_routes(prepared_source, *loaded.plan)}
+            : std::nullopt;
     if (!loaded.ok() || !compiled || !compiled->ok() || !loaded.plan) {
       static_cast<void>(print_work_plan_result(loaded, *imported.board, true));
       return 11;
@@ -8231,8 +9849,7 @@ int main(int argc, char** argv) {
       telemetry_tail.telemetry_level = flux::RouterTelemetryLevel::normal;
     }
     if (loaded.plan->telemetry.record) {
-      telemetry_tail.telemetry_record =
-          std::filesystem::path{*loaded.plan->telemetry.record};
+      telemetry_tail.telemetry_record = std::filesystem::path{*loaded.plan->telemetry.record};
     }
     auto telemetry = make_router_telemetry_service(telemetry_tail);
     if (loaded.plan->telemetry.enabled && !telemetry) {
@@ -8254,8 +9871,8 @@ int main(int argc, char** argv) {
           execution.candidate) {
         exported.emplace();
         const auto export_error = [&](std::string code, std::string message) {
-          exported->diagnostics.push_back({flux::io::ExportSeverity::error, std::move(code),
-                                           std::move(message), {}});
+          exported->diagnostics.push_back(
+              {flux::io::ExportSeverity::error, std::move(code), std::move(message), {}});
           execution.candidate_ready_for_export = false;
           execution.candidate_ready_for_zone_refill = false;
         };
@@ -8300,10 +9917,10 @@ int main(int argc, char** argv) {
                       execution.zone_refill_diagnostic = std::move(refilled_context_diagnostic);
                     } else {
                       const auto refilled_candidate = refilled_directory / source_path.filename();
-                      const auto refill = flux::io::run_kicad_zone_refill(
-                          {*python, *helper, temporary_candidate, refilled_candidate,
-                           refilled_directory},
-                          stop_bridge.token());
+                      const auto refill =
+                          flux::io::run_kicad_zone_refill({*python, *helper, temporary_candidate,
+                                                           refilled_candidate, refilled_directory},
+                                                          stop_bridge.token());
                       execution.zone_refill_run = refill.run;
                       execution.zone_refill_exit_code = refill.exit_code;
                       execution.zone_refill_executable = refill.executable;
@@ -8356,9 +9973,9 @@ int main(int argc, char** argv) {
                       "usable kicad-cli";
                   execution.candidate_ready_for_export = false;
                 } else {
-                  const auto drc = run_external_kicad_drc(*kicad_cli, exact_candidate,
-                                                          exact_candidate.parent_path(),
-                                                          stop_bridge.token());
+                  const auto drc =
+                      run_external_kicad_drc(*kicad_cli, exact_candidate,
+                                             exact_candidate.parent_path(), stop_bridge.token());
                   execution.external_kicad_drc_run = drc.run;
                   execution.external_kicad_drc_passed = drc.passed;
                   execution.external_kicad_drc_exit_code = drc.exit_code;
@@ -8390,16 +10007,24 @@ int main(int argc, char** argv) {
         }
       }
     }
+    const bool work_plan_completed =
+        execution.ok() &&
+        (preview || (exported && exported->ok() && execution.external_kicad_drc_passed &&
+                     output_published));
+    if (telemetry) {
+      publish_telemetry_outcome(
+          telemetry.get(), work_plan_completed,
+          work_plan_completed ? "Routing completed: work plan accepted"
+                              : "Routing stopped: work plan did not reach accepted output",
+          execution.candidate ? &*execution.candidate : nullptr);
+      telemetry->stop();
+    }
     print_work_plan_execution(execution, output_path, exported ? &*exported : nullptr,
                               output_published);
     if (stop_bridge.stop_requested()) {
       return 130;
     }
-    return execution.ok() &&
-                   (preview || (exported && exported->ok() &&
-                                execution.external_kicad_drc_passed && output_published))
-               ? EXIT_SUCCESS
-               : 13;
+    return work_plan_completed ? EXIT_SUCCESS : 13;
   }
   if ((command == "demo" || command == "demo-invalid") && argc == 2) {
     const auto result = flux::evaluate_board(make_demo_board(command == "demo-invalid"));
@@ -8822,7 +10447,8 @@ int main(int argc, char** argv) {
     auto routing_plan = flux::plan_routes(*source, planner_config, {}, telemetry.get());
     auto global = routing_plan.coarse_global;
     auto detailed_config = autoroute.detailed;
-    detailed_config.existing_routing = flux::ExistingRoutingPolicy::replace_unlocked_for_routed_nets;
+    detailed_config.existing_routing =
+        flux::ExistingRoutingPolicy::replace_unlocked_for_routed_nets;
     auto detailed = flux::materialize_detailed_route(*source, routing_plan, detailed_config);
     if (global.complete() &&
         detailed.stop_reason == flux::DetailedRouterStopReason::copper_violations) {
@@ -8916,6 +10542,10 @@ int main(int argc, char** argv) {
       detailed.discarded_shared_resource_fanout_failures = discarded_shared_fanout_failures;
     }
     if (telemetry) {
+      publish_telemetry_outcome(telemetry.get(), detailed.complete(),
+                                detailed.complete() ? "Routing completed: accepted detailed copper"
+                                                    : "Routing stopped: " + detailed.diagnostic,
+                                detailed.candidate ? &*detailed.candidate : nullptr);
       telemetry->stop();
     }
     return finish_kicad_detail(source_path, tail->output, *source, detailed, global,
@@ -8970,20 +10600,56 @@ int main(int argc, char** argv) {
     auto planner_config = flux::RoutingPlannerConfig{};
     planner_config.global = config;
     planner_config.regional = regional_config;
+    planner_config.curved_tracks = tail->curved_tracks || tail->circular_arc_refinement;
+    if (tail->max_router_iterations) {
+      planner_config.max_routability_feedback_retries =
+          std::min(planner_config.max_routability_feedback_retries,
+                   *tail->max_router_iterations > 0U ? *tail->max_router_iterations - 1U : 0U);
+    }
+    if (tail->physical_feedback_retries) {
+      planner_config.max_routability_feedback_retries = *tail->physical_feedback_retries;
+    }
+    planner_config.clearance_shadows_advisory = tail->feedback_shadows_advisory;
+    planner_config.oracle_first_feedback = tail->oracle_first_feedback;
+    planner_config.enable_assembled_straight_feedback = tail->assembled_straight_feedback;
+    planner_config.full_strength_first_pass = !tail->no_full_strength_first_pass &&
+        !tail->oracle_first_feedback && tail->xpbd_relaxation && tail->xpbd_feedback;
+    flux::RoutingEngineConfig engine_config;
+    engine_config.planner = planner_config;
+    engine_config.materialize = false;
+    engine_config.post_negotiation_sampled_conflict_repair = tail->repair_sampled_conflicts;
+    engine_config.planning_mode = tail->routing_legacy_policy
+        ? flux::RoutingEnginePlanningMode::legacy_plan_routes
+        : flux::RoutingEnginePlanningMode::split_stages;
+    engine_config.shared_deadline = std::chrono::milliseconds{tail->routing_timeout_ms.value_or(0U)};
+    if (tail->routing_max_actions) engine_config.max_actions = *tail->routing_max_actions;
+    flux::RoutingEngineStepBudget step_budget;
+    if (tail->routing_slice_ms) step_budget.time_slice = std::chrono::milliseconds{*tail->routing_slice_ms};
+    if (tail->routing_slice_work) step_budget.work_units = *tail->routing_slice_work;
+    flux::RoutingEngine engine(*source, *source, engine_config, telemetry.get());
+    while (!engine.terminal()) {
+      const auto step = engine.advance(step_budget);
+      if (step.outcome == flux::RoutingEngineOutcome::awaiting_materialization ||
+          step.outcome == flux::RoutingEngineOutcome::awaiting_external_validation) break;
+    }
     flux::RoutingPlanResult routing_plan;
-    if (tail->repair_sampled_conflicts) {
-      routing_plan = flux::plan_routes_with_sampled_conflict_repair(
-          *source, planner_config, 2U, {}, telemetry.get());
-    } else {
-      routing_plan = flux::plan_routes(*source, planner_config, {}, telemetry.get());
+    if (const auto* selected = engine.selected_plan()) routing_plan = *selected;
+    else {
+      routing_plan.stop_reason = flux::RoutingPlanStopReason::cancelled;
+      routing_plan.diagnostic = std::string("routing engine stopped before a checkpoint: ") +
+                                flux::to_string(engine.state().outcome);
     }
     std::optional<flux::RouterTelemetryStatistics> telemetry_statistics;
     if (telemetry) {
+      publish_telemetry_outcome(telemetry.get(), routing_plan.complete(),
+                                routing_plan.complete()
+                                    ? "Routing completed: global and regional plan is feasible"
+                                    : "Routing stopped incomplete: " + routing_plan.diagnostic);
       telemetry->stop();
       telemetry_statistics = telemetry->statistics();
     }
     print_route_result(routing_plan.coarse_global, &routing_plan.regional,
-                       telemetry_statistics ? &*telemetry_statistics : nullptr, &routing_plan);
+                       telemetry_statistics ? &*telemetry_statistics : nullptr, &routing_plan, &engine.state());
     return routing_plan.complete() ? EXIT_SUCCESS : 3;
   }
   if (command == "detail-kicad" && argc >= 3) {
@@ -9051,31 +10717,60 @@ int main(int argc, char** argv) {
     auto planner_config = flux::RoutingPlannerConfig{};
     planner_config.global = global_config;
     planner_config.regional = regional_config;
-    flux::RoutingPlanResult regional_plan;
-    if (tail->repair_sampled_conflicts) {
-      regional_plan = flux::plan_routes_with_sampled_conflict_repair(
-          *source, planner_config, 2U, {}, telemetry.get());
-    } else {
-      regional_plan = flux::plan_routes(*source, planner_config, {}, telemetry.get());
+    planner_config.curved_tracks = tail->curved_tracks || tail->circular_arc_refinement;
+    if (tail->max_router_iterations) {
+      planner_config.max_routability_feedback_retries =
+          std::min(planner_config.max_routability_feedback_retries,
+                   *tail->max_router_iterations > 0U ? *tail->max_router_iterations - 1U : 0U);
     }
-    auto global = regional_plan.coarse_global;
+    if (tail->physical_feedback_retries) {
+      planner_config.max_routability_feedback_retries = *tail->physical_feedback_retries;
+    }
+    planner_config.clearance_shadows_advisory = tail->feedback_shadows_advisory;
+    planner_config.oracle_first_feedback = tail->oracle_first_feedback;
+    planner_config.enable_assembled_straight_feedback = tail->assembled_straight_feedback;
+    planner_config.full_strength_first_pass = !tail->no_full_strength_first_pass &&
+        !tail->oracle_first_feedback && tail->xpbd_relaxation && tail->xpbd_feedback;
     flux::DetailedRouterConfig detailed_config;
-    detailed_config.allow_invalid_source_for_diagnostic_preview =
-        tail->diagnostic_lossy_preview;
+    detailed_config.allow_invalid_source_for_diagnostic_preview = tail->diagnostic_lossy_preview;
     detailed_config.existing_routing =
         flux::ExistingRoutingPolicy::replace_unlocked_for_routed_nets;
     detailed_config.defer_saved_zone_fill_clearance_to_refill = tail->refillable_zone_fills;
     detailed_config.pull_tight_45_degrees = !tail->refillable_zone_fills;
-    detailed_config.continuous_refinement = !tail->refillable_zone_fills;
+    detailed_config.continuous_refinement = !tail->refillable_zone_fills && planner_config.curved_tracks;
     detailed_config.topology_locked_medial_materialization =
         !tail->refillable_zone_fills && tail->strict_medial_topology;
-    detailed_config.circular_arc_refinement = tail->circular_arc_refinement;
+    detailed_config.circular_arc_refinement = planner_config.curved_tracks;
+    detailed_config.restrict_straight_track_angles = !planner_config.curved_tracks;
     detailed_config.differential_pair_skew_tuning =
-        !tail->refillable_zone_fills && tail->differential_pair_skew_tuning;
+        !tail->refillable_zone_fills && (tail->differential_pair_skew_tuning || planner_config.full_strength_first_pass);
     detailed_config.differential_pair_skew_tuning_batch_assignment =
-        !tail->refillable_zone_fills && tail->differential_pair_skew_tuning_batch_assignment;
+        !tail->refillable_zone_fills && (tail->differential_pair_skew_tuning_batch_assignment || planner_config.full_strength_first_pass);
+    flux::PersistentRoutingSessionConfig session_config;
+    session_config.planner = planner_config;
+    session_config.detailed = detailed_config;
+    session_config.max_final_feedback_passes =
+        tail->max_final_routability_feedback_passes.value_or(3U);
+    session_config.post_negotiation_sampled_conflict_repair = tail->repair_sampled_conflicts;
+    session_config.max_post_negotiation_sampled_conflict_repair_cones = 2U;
+    session_config.engine.planning_mode = tail->routing_legacy_policy
+        ? flux::RoutingEnginePlanningMode::legacy_plan_routes
+        : flux::RoutingEnginePlanningMode::split_stages;
+    session_config.engine.shared_deadline = std::chrono::milliseconds{tail->routing_timeout_ms.value_or(0U)};
+    if (tail->routing_max_actions) session_config.engine.max_actions = *tail->routing_max_actions;
+    if (tail->routing_slice_ms) session_config.step_budget.time_slice = std::chrono::milliseconds{*tail->routing_slice_ms};
+    if (tail->routing_slice_work) session_config.step_budget.work_units = *tail->routing_slice_work;
+
+    auto session =
+        flux::run_persistent_routing_session(*source, *source, session_config, {}, telemetry.get());
+    auto regional_plan = std::move(session.routing);
+    auto global = regional_plan.coarse_global;
+    auto detailed = std::move(session.detailed);
     auto materialization_global = global;
-    const bool previewing_incomplete_global = tail->write_incomplete_preview && !global.complete();
+    const bool previewing_incomplete_global = tail->write_incomplete_preview &&
+        !detailed.complete() && !detailed.provisional_zone_refill_candidate() && !global.complete() &&
+        session.engine_outcome != flux::RoutingEngineOutcome::timed_out &&
+        session.engine_outcome != flux::RoutingEngineOutcome::cancelled;
     if (previewing_incomplete_global) {
       // Materialize the best paths only for a review artifact. Keep the original global result
       // authoritative in JSON and for the process exit status.
@@ -9083,18 +10778,8 @@ int main(int argc, char** argv) {
       materialization_global.unrouted_nets.clear();
       materialization_global.total_overflow = 0U;
     }
-    auto detailed =
-        !previewing_incomplete_global
-            ? flux::materialize_detailed_route(*source, regional_plan, detailed_config)
-            : flux::materialize_detailed_route(*source, materialization_global, detailed_config);
-    if (!previewing_incomplete_global && !tail->repair_sampled_conflicts) {
-      auto feedback = flux::refine_materialization_with_routability_feedback(
-          *source, *source, std::move(regional_plan), std::move(detailed), planner_config,
-          detailed_config, tail->max_final_routability_feedback_passes.value_or(3U), {},
-          telemetry.get());
-      regional_plan = std::move(feedback.routing);
-      global = regional_plan.coarse_global;
-      detailed = std::move(feedback.detailed);
+    if (previewing_incomplete_global) {
+      detailed = flux::materialize_detailed_route(*source, materialization_global, detailed_config);
     }
     if (previewing_incomplete_global && detailed.complete()) {
       detailed.stop_reason = flux::DetailedRouterStopReason::incomplete_global_route;
@@ -9102,17 +10787,20 @@ int main(int argc, char** argv) {
           "review-only preview materialized from an incomplete global-route checkpoint";
     }
     if (telemetry) {
+      publish_telemetry_outcome(telemetry.get(), detailed.complete(),
+                                detailed.complete() ? "Routing completed: accepted detailed copper"
+                                                    : "Routing stopped: " + detailed.diagnostic,
+                                detailed.candidate ? &*detailed.candidate : nullptr);
       telemetry->stop();
     }
     return finish_kicad_detail(
         std::filesystem::path{argv[2]}, tail->output, *source, detailed, global,
         tail->diagnostic_lossy_preview
             ? std::optional<std::string_view>{"diagnostic_lossy_preview_v1"}
-        : tail->refillable_zone_fills
-            ? std::optional<std::string_view>{"refillable_zones_v1"}
-            : std::nullopt,
+        : tail->refillable_zone_fills ? std::optional<std::string_view>{"refillable_zones_v1"}
+                                      : std::nullopt,
         tail->refillable_zone_fills, tail->write_incomplete_preview,
-        tail->diagnostic_lossy_preview);
+        tail->diagnostic_lossy_preview, &session);
   }
   if ((command == "optimize-kicad" || command == "global-optimize-kicad") && argc >= 3) {
     const auto tail =
@@ -9174,13 +10862,20 @@ int main(int argc, char** argv) {
       return 10;
     }
     config.detailed_router.topology_locked_medial_materialization = tail->strict_medial_topology;
-    config.detailed_router.circular_arc_refinement = tail->circular_arc_refinement;
+    config.detailed_router.circular_arc_refinement = tail->circular_arc_refinement || tail->curved_tracks;
+    config.detailed_router.restrict_straight_track_angles =
+        !config.detailed_router.circular_arc_refinement;
     config.detailed_router.differential_pair_skew_tuning = tail->differential_pair_skew_tuning;
     config.detailed_router.differential_pair_skew_tuning_batch_assignment =
         tail->differential_pair_skew_tuning_batch_assignment;
     const auto optimized =
         flux::optimize_integrated_placement_routing(*source, config, {}, telemetry.get());
     if (telemetry) {
+      publish_telemetry_outcome(
+          telemetry.get(), optimized.complete(),
+          optimized.complete() ? "Routing completed: accepted integrated placement/routing result"
+                               : "Routing stopped: " + optimized.diagnostic,
+          optimized.candidate ? &*optimized.candidate : nullptr);
       telemetry->stop();
     }
     return finish_kicad_optimization(std::filesystem::path{argv[2]}, tail->output, *source,
@@ -9251,13 +10946,20 @@ int main(int argc, char** argv) {
       return 10;
     }
     config.detailed_router.topology_locked_medial_materialization = tail->strict_medial_topology;
-    config.detailed_router.circular_arc_refinement = tail->circular_arc_refinement;
+    config.detailed_router.circular_arc_refinement = tail->circular_arc_refinement || tail->curved_tracks;
+    config.detailed_router.restrict_straight_track_angles =
+        !config.detailed_router.circular_arc_refinement;
     config.detailed_router.differential_pair_skew_tuning = tail->differential_pair_skew_tuning;
     config.detailed_router.differential_pair_skew_tuning_batch_assignment =
         tail->differential_pair_skew_tuning_batch_assignment;
     const auto optimized = flux::optimize_integrated_placement_routing(*constrained.board, config,
                                                                        {}, telemetry.get());
     if (telemetry) {
+      publish_telemetry_outcome(telemetry.get(), optimized.complete(),
+                                optimized.complete()
+                                    ? "Routing completed: accepted constrained optimization result"
+                                    : "Routing stopped: " + optimized.diagnostic,
+                                optimized.candidate ? &*optimized.candidate : nullptr);
       telemetry->stop();
     }
     return finish_kicad_optimization(source_path, tail->output, *constrained.board, optimized);

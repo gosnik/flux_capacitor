@@ -1,0 +1,42 @@
+flowchart TB
+  START["Start or resume routing state"] --> STOP{"Deadline or cancellation?"}
+  STOP -->|Yes| SAVE["Return accepted board or best explicitly incomplete checkpoint"]
+  STOP -->|No| DONE{"Detailed candidate complete?"}
+  DONE -->|Yes| ACCEPT["Finish; benchmark acceptance still requires external KiCad DRC"]
+  DONE -->|No| PLAN{"Working global plan exists?"}
+  PLAN -->|No| GLOBAL["Bounded global allocation"]
+  PLAN -->|Yes| SCE{"New source: scaffold enabled and eligible for this evidence key?"}
+  SCE -->|Yes| SCA["Bounded legal-copper construction; certify complete result with oracle"]
+  SCA --> RUN
+  SCE -->|No| READY{"Physical evidence permits materialization?"}
+  READY -->|Yes| POLISH{"Tightening needed and not already attempted?"}
+  POLISH -->|Yes| TIGHT["Bounded curve tightening"]
+  POLISH -->|No| MAT["Materialize and validate copper"]
+  READY -->|No| PREFIX{"Connected topology needs its first regional prefix?"}
+  PREFIX -->|Yes| FIRST["Mandatory bounded regional prefix"]
+  PREFIX -->|No| DIAG["Collect current diagnoses; retain packing-unresolved obligations"]
+  DIAG --> KIND{"Diagnosis supplies action priority; eligibility still applies"}
+  KIND -->|Packing unresolved| REG["Candidate: regional preparation and packing"]
+  KIND -->|Packing failure, topology or layer trap| USP["USPED or feedback global replan"]
+  KIND -->|Shove deadlock| XP["XPBD repair if enabled; otherwise regional realization"]
+  KIND -->|Curvature or quantization clearance| ER["Confined erosion if enabled; otherwise regional realization"]
+  KIND -->|Other evidence| FB["Candidate: feedback global replan"]
+  FIRST --> RUN
+  FB --> CHOOSE
+  REG --> CHOOSE["Select among eligible strategy-state trials: exploration, physical gain, fairness"]
+  USP --> CHOOSE
+  XP --> CHOOSE
+  ER --> CHOOSE
+  GLOBAL --> RUN["Execute one bounded segment; park resumable work"]
+  CHOOSE --> ELIG{"Eligible bounded action remains?"}
+  ELIG -->|Yes| RUN
+  ELIG -->|No: exhausted| SAVE
+  TIGHT --> RUN
+  MAT --> RUN
+  RUN --> EVID["Evaluate opens, physical violations, malformed geometry and curve quality"]
+  EVID --> KEEP["Update working state, best checkpoint, diagnoses and bounded caches"]
+  KEEP --> RESET{"Relevant geometry or state changed?"}
+  RESET -->|Yes| INVALID["Invalidate affected evidence; re-enable relevant actions"]
+  RESET -->|No| REUSE["Reuse preparation; avoid repeating exhausted identical trials"]
+  INVALID --> STOP
+  REUSE --> STOP

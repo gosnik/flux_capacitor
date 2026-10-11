@@ -1,0 +1,368 @@
+--- a/src/regional_router.cpp
++++ b/src/regional_router.cpp
+@@ -15420,6 +15420,7 @@
+   result.configured.enable_straight_realization = true;
+   result.configured.enable_spline_realization = false;
+   result.straight_scene_portfolio_checks = 0U;
++  result.straight_scene_joint_portfolio_checks = 0U;
+   result.straight_scene_portfolio_improvements = 0U;
+   const std::vector<RegionalBundleStopReason> discrete_stop_reasons = [&] {
+     std::vector<RegionalBundleStopReason> reasons;
+@@ -15503,20 +15504,7 @@
+       !comparable(result) || result.spline_candidate_available || stop_token.stop_requested()) {
+     return;
+   }
+-  std::vector<std::size_t> window_order;
+-  for (std::size_t index = 0U; index < result.bundle_assignments.size(); ++index) {
+-    const auto& assignment = result.bundle_assignments[index];
+-    if (discrete_stop_reasons[index] != RegionalBundleStopReason::complete ||
+-        assignment.spline_candidate_shortlist.empty()) continue;
+-    window_order.push_back(index);
+-  }
+-  std::stable_sort(window_order.begin(), window_order.end(), [&](const auto left, const auto right) {
+-    const auto& a = result.bundle_assignments[left];
+-    const auto& b = result.bundle_assignments[right];
+-    const auto pressure_a = a.selected_template_conflicts + a.selected_residual_conflicts;
+-    const auto pressure_b = b.selected_template_conflicts + b.selected_residual_conflicts;
+-    return pressure_a != pressure_b ? pressure_a > pressure_b : a.window_id < b.window_id;
+-  });
++  const auto budget = result.configured.max_straight_portfolio_checks;
+   const auto same_selection = [](const RegionalBundleAssignment& assignment,
+                                  const RegionalBundleSelection& selection) {
+     return assignment.selected_templates == selection.templates &&
+@@ -15524,49 +15512,160 @@
+            assignment.via_assignment_region_order == selection.via_assignment_region_order &&
+            assignment.packed_cross_sections == selection.packed_cross_sections;
+   };
+-  for (const auto index : window_order) {
++  struct WindowPortfolio {
++    std::size_t index;
++    std::set<NetId> nets;
++    std::size_t physical_pressure{0U};
++    std::vector<RegionalBundleSelection> alternatives;
++  };
++  std::vector<WindowPortfolio> portfolios;
++  for (std::size_t index = 0U; index < result.bundle_assignments.size(); ++index) {
+     const auto& assignment = result.bundle_assignments[index];
+-    std::vector<RegionalBundleSelection> alternatives;
+-    const auto remaining_checks = result.configured.max_straight_portfolio_checks -
+-                                  result.straight_scene_portfolio_checks;
+-    alternatives.reserve(std::min(assignment.spline_candidate_shortlist.size(), remaining_checks));
++    if (discrete_stop_reasons[index] != RegionalBundleStopReason::complete ||
++        assignment.spline_candidate_shortlist.empty()) continue;
++    WindowPortfolio portfolio{index, {}, 0U, {}};
++    const auto window = std::find_if(result.windows.begin(), result.windows.end(),
++        [&](const auto& item) { return item.id == assignment.window_id; });
++    if (window == result.windows.end()) continue;
++    for (const auto& fragment : window->owned_fragments) portfolio.nets.insert(fragment.net);
++    // Retain rejected singles as well: two individually unhelpful moves can form a legal
++    // transaction. Copy the bounded pool before any incumbent replacement invalidates it.
+     for (const auto& selection : assignment.spline_candidate_shortlist) {
+-      if (alternatives.size() >= remaining_checks) break;
++      if (portfolio.alternatives.size() >= budget) break;
+       if (same_selection(assignment, selection) ||
+-          std::find(alternatives.begin(), alternatives.end(), selection) != alternatives.end()) continue;
+-      alternatives.push_back(selection);
+-    }
+-    for (const auto& selection : alternatives) {
+-      if (result.straight_scene_portfolio_checks >=
+-              result.configured.max_straight_portfolio_checks ||
+-          stop_token.stop_requested()) return;
+-      auto trial = result;
+-      for (std::size_t restore = 0U; restore < trial.bundle_assignments.size(); ++restore)
+-        if (discrete_stop_reasons[restore] == RegionalBundleStopReason::complete)
+-          trial.bundle_assignments[restore].stop_reason = discrete_stop_reasons[restore];
+-      apply_selection(trial.bundle_assignments[index], selection);
+-      const auto prior_scaffold_checks = trial.linear_scaffold_checks;
+-      const auto prior_scaffold_rejections = trial.linear_scaffold_rejections;
+-      realize_regional_straight_candidate_once(board, global, trial, stop_token);
+-      result.linear_scaffold_checks += trial.linear_scaffold_checks - prior_scaffold_checks;
+-      result.linear_scaffold_rejections +=
+-          trial.linear_scaffold_rejections - prior_scaffold_rejections;
+-      ++result.straight_scene_portfolio_checks;
+-      ++result.straight_scene_trials;
+-      if (stop_token.stop_requested() || !comparable(trial) ||
+-          trial.straight_scene_open_connections > result.straight_scene_open_connections) continue;
+-      const auto trial_objective = objective(trial);
+-      if (trial_objective < objective(result)) {
+-        trial.straight_scene_trials = result.straight_scene_trials;
+-        trial.linear_scaffold_checks = result.linear_scaffold_checks;
+-        trial.linear_scaffold_rejections = result.linear_scaffold_rejections;
+-        trial.straight_scene_portfolio_checks = result.straight_scene_portfolio_checks;
+-        trial.straight_scene_portfolio_improvements = result.straight_scene_portfolio_improvements + 1U;
+-        result = std::move(trial);
+-        if (result.spline_candidate_available) return;
+-      }
+-    }
+-  }
++          std::find(portfolio.alternatives.begin(), portfolio.alternatives.end(), selection) !=
++              portfolio.alternatives.end()) continue;
++      portfolio.alternatives.push_back(selection);
++    }
++    if (portfolio.alternatives.empty()) continue;
++    for (const auto& diagnosis : result.local_routability_diagnoses) {
++      if (diagnosis.locally_resolved ||
++          (!diagnosis.resource.stable_id.starts_with("native-scene:") &&
++           !diagnosis.resource.stable_id.starts_with("straight-scene:"))) continue;
++      if (std::any_of(diagnosis.resource.nets.begin(), diagnosis.resource.nets.end(),
++                      [&](const auto& net) { return portfolio.nets.contains(net); }))
++        ++portfolio.physical_pressure;
++    }
++    portfolios.push_back(std::move(portfolio));
++  }
++  std::stable_sort(portfolios.begin(), portfolios.end(), [&](const auto& a, const auto& b) {
++    const auto& left = result.bundle_assignments[a.index];
++    const auto& right = result.bundle_assignments[b.index];
++    return std::tuple{a.physical_pressure, left.selected_template_conflicts,
++                      left.selected_residual_conflicts} !=
++                   std::tuple{b.physical_pressure, right.selected_template_conflicts,
++                              right.selected_residual_conflicts}
++        ? std::tuple{a.physical_pressure, left.selected_template_conflicts,
++                     left.selected_residual_conflicts} >
++              std::tuple{b.physical_pressure, right.selected_template_conflicts,
++                         right.selected_residual_conflicts}
++        : left.window_id < right.window_id;
++  });
++  if (portfolios.size() > budget) portfolios.resize(budget);
++  // Link windows only through an observed copper conflict between distinct owned nets.
++  // Attribution selects a neighborhood; the full-scene oracle still decides acceptance.
++  std::vector<std::pair<std::size_t, std::size_t>> pairs;
++  for (std::size_t first = 0U; first < portfolios.size() && pairs.size() < budget; ++first) {
++    for (std::size_t second = first + 1U;
++         second < portfolios.size() && pairs.size() < budget; ++second) {
++      const bool linked = std::any_of(result.local_routability_diagnoses.begin(),
++          result.local_routability_diagnoses.end(), [&](const auto& diagnosis) {
++        if (diagnosis.locally_resolved ||
++            (!diagnosis.resource.stable_id.starts_with("native-scene:") &&
++             !diagnosis.resource.stable_id.starts_with("straight-scene:"))) return false;
++        for (const auto& a : diagnosis.resource.nets)
++          if (portfolios[first].nets.contains(a))
++            for (const auto& b : diagnosis.resource.nets)
++              if (a != b && portfolios[second].nets.contains(b)) return true;
++        return false;
++      });
++      if (linked) pairs.emplace_back(first, second);
++    }
++  }
++  const auto exhausted = [&] {
++    return result.straight_scene_portfolio_checks >= budget ||
++           result.spline_candidate_available || stop_token.stop_requested();
++  };
++  std::vector<std::size_t> incumbent_choices(portfolios.size(), 0U);
++  std::set<std::vector<std::size_t>> evaluated_choices{incumbent_choices};
++  const auto probe = [&](std::size_t first_index, std::size_t first_rank,
++                         std::optional<std::pair<std::size_t, std::size_t>> second_choice) {
++    if (exhausted()) return;
++    const auto& first = portfolios[first_index];
++    const auto& selection = first.alternatives[first_rank];
++    const auto* second = second_choice ? &portfolios[second_choice->first] : nullptr;
++    const auto* second_selection = second_choice
++        ? &second->alternatives[second_choice->second] : nullptr;
++    if (same_selection(result.bundle_assignments[first.index], selection) &&
++        (second == nullptr ||
++         same_selection(result.bundle_assignments[second->index], *second_selection))) return;
++    auto choices = incumbent_choices;
++    choices[first_index] = first_rank + 1U;
++    if (second_choice) choices[second_choice->first] = second_choice->second + 1U;
++    if (!evaluated_choices.insert(choices).second) return;
++    auto trial = result;
++    for (std::size_t restore = 0U; restore < trial.bundle_assignments.size(); ++restore)
++      trial.bundle_assignments[restore].stop_reason = discrete_stop_reasons[restore];
++    apply_selection(trial.bundle_assignments[first.index], selection);
++    if (second != nullptr)
++      apply_selection(trial.bundle_assignments[second->index], *second_selection);
++    const auto prior_scaffold_checks = trial.linear_scaffold_checks;
++    const auto prior_scaffold_rejections = trial.linear_scaffold_rejections;
++    realize_regional_straight_candidate_once(board, global, trial, stop_token);
++    result.linear_scaffold_checks += trial.linear_scaffold_checks - prior_scaffold_checks;
++    result.linear_scaffold_rejections += trial.linear_scaffold_rejections - prior_scaffold_rejections;
++    ++result.straight_scene_portfolio_checks;
++    if (second != nullptr) ++result.straight_scene_joint_portfolio_checks;
++    ++result.straight_scene_trials;
++    if (stop_token.stop_requested() || !comparable(trial) ||
++        trial.straight_scene_open_connections > result.straight_scene_open_connections ||
++        !(objective(trial) < objective(result))) return;
++    trial.straight_scene_trials = result.straight_scene_trials;
++    trial.linear_scaffold_checks = result.linear_scaffold_checks;
++    trial.linear_scaffold_rejections = result.linear_scaffold_rejections;
++    trial.straight_scene_portfolio_checks = result.straight_scene_portfolio_checks;
++    trial.straight_scene_joint_portfolio_checks = result.straight_scene_joint_portfolio_checks;
++    trial.straight_scene_portfolio_improvements = result.straight_scene_portfolio_improvements + 1U;
++    result = std::move(trial);
++    incumbent_choices = std::move(choices);
++  };
++  // Explore singles breadth first so one high-pressure window cannot consume the entire
++  // budget. Reserve half for coupled moves when physical evidence links movable windows.
++  const auto single_limit = pairs.empty() ? budget : (budget + 1U) / 2U;
++  std::size_t next_single_rank = 0U;
++  std::size_t next_single_window = 0U;
++  const auto singles = [&](std::size_t limit) {
++    for (; next_single_rank < budget && !exhausted(); ++next_single_rank) {
++      for (; next_single_window < portfolios.size(); ++next_single_window) {
++        if (result.straight_scene_portfolio_checks >= limit || exhausted()) return;
++        const auto& portfolio = portfolios[next_single_window];
++        if (next_single_rank >= portfolio.alternatives.size()) continue;
++        probe(next_single_window, next_single_rank, std::nullopt);
++      }
++      next_single_window = 0U;
++      if (std::none_of(portfolios.begin(), portfolios.end(), [&](const auto& portfolio) {
++            return next_single_rank + 1U < portfolio.alternatives.size();
++          })) return;
++    }
++  };
++  singles(single_limit);
++  // Diagonal enumeration reaches every retained pair within the shared bound, without
++  // requiring either constituent move to improve the incumbent by itself.
++  for (std::size_t rank_sum = 0U; rank_sum < 2U * budget && !exhausted(); ++rank_sum) {
++    bool any = false;
++    for (const auto& [first, second] : pairs) {
++      const auto& a = portfolios[first];
++      const auto& b = portfolios[second];
++      for (std::size_t rank_a = 0U; rank_a <= rank_sum && !exhausted(); ++rank_a) {
++        const auto rank_b = rank_sum - rank_a;
++        if (rank_a >= a.alternatives.size() || rank_b >= b.alternatives.size()) continue;
++        any = true;
++        probe(first, rank_a, std::pair{second, rank_b});
++      }
++    }
++    if (!any) break;
++  }
++  singles(budget);
+ }
+ 
+ void assess_regional_native_scene(const Board& source, RegionalRouteResult& regional) {
+@@ -17802,6 +17901,12 @@
+           std::count_if(regional_candidate.regional.bundle_assignments.begin(),
+                         regional_candidate.regional.bundle_assignments.end(),
+                         [](const auto& assignment) { return !assignment.complete(); }));
++      feedback_candidate.regional_straight_realization_enabled =
++          regional_attempt_config.enable_straight_realization;
++      feedback_candidate.regional_straight_scene_evaluated =
++          regional_candidate.regional.straight_scene_evaluated;
++      feedback_candidate.regional_straight_scene_violations =
++          regional_candidate.regional.straight_scene_drc_violations;
+       feedback_candidate.regional_spline_candidates_evaluated =
+           regional_candidate.regional.joint_spline_candidates_evaluated;
+       feedback_candidate.regional_diagnoses = regional_diagnoses.size();
+--- a/include/flux/core/regional_router.hpp
++++ b/include/flux/core/regional_router.hpp
+@@ -163,7 +163,8 @@
+   // Realize selected lanes as integer H/V/45 copper without PH interpolation.
+   bool enable_straight_realization{false};
+   // After the selected straight transaction and its retained source-topology fallback both fail
+-  // whole-scene copper checks, replay this many existing discrete portfolio alternatives. Zero
++  // whole-scene copper checks, replay this many existing discrete portfolio alternatives.
++  // Singles and conflict-linked two-window transactions share this exact-check budget. Zero
+   // preserves the selected-only baseline. This does not generate topology or relax packing.
+   std::size_t max_straight_portfolio_checks{0U};
+   // Materialize each final PH window candidate immediately as KiCad-native arcs/segments and
+@@ -922,6 +923,7 @@
+   std::size_t straight_scene_trials{0U};
+   bool straight_source_fallback_selected{false};
+   std::size_t straight_scene_portfolio_checks{0U};
++  std::size_t straight_scene_joint_portfolio_checks{0U};
+   std::size_t straight_scene_portfolio_improvements{0U};
+   std::size_t straight_collapsed_via_adapters{0U};
+   std::size_t straight_scene_drc_violations{0U};
+@@ -1280,6 +1282,9 @@
+   bool coarse_topology_complete{false};
+   bool regional_consulted{false};
+   bool regional_spline_realization_enabled{false};
++  bool regional_straight_realization_enabled{false};
++  bool regional_straight_scene_evaluated{false};
++  std::size_t regional_straight_scene_violations{0U};
+   // A discrete-only regional probe may establish a plausible lane/escape/layer/via assignment,
+   // but it is not authoritative physical completion.  The planner immediately promotes such a
+   // state through the ordinary PH/copper-aware regional transaction before it can terminate an
+--- a/apps/flux-cli/main.cpp
++++ b/apps/flux-cli/main.cpp
+@@ -3183,6 +3183,8 @@
+                                   regional && regional->straight_source_fallback_selected ? 1U : 0U);
+   print_regional_diagnosis_metric("regional_straight_scene_portfolio_checks",
+                                   regional == nullptr ? 0U : regional->straight_scene_portfolio_checks);
++  print_regional_diagnosis_metric("regional_straight_scene_joint_portfolio_checks",
++                                  regional == nullptr ? 0U : regional->straight_scene_joint_portfolio_checks);
+   print_regional_diagnosis_metric("regional_straight_scene_portfolio_improvements",
+                                   regional == nullptr ? 0U
+                                                       : regional->straight_scene_portfolio_improvements);
+@@ -3662,6 +3664,12 @@
+                   << ",\"regional_consulted\":" << (candidate.regional_consulted ? "true" : "false")
+                   << ",\"regional_spline_realization_enabled\":"
+                   << (candidate.regional_spline_realization_enabled ? "true" : "false")
++                  << ",\"regional_straight_realization_enabled\":"
++                  << (candidate.regional_straight_realization_enabled ? "true" : "false")
++                  << ",\"regional_straight_scene_evaluated\":"
++                  << (candidate.regional_straight_scene_evaluated ? "true" : "false")
++                  << ",\"regional_straight_scene_violations\":"
++                  << candidate.regional_straight_scene_violations
+                   << ",\"provisional_plan_complete\":"
+                   << (candidate.provisional_plan_complete ? "true" : "false")
+                   << ",\"exact_promotion_attempted\":"
+--- a/tests/unit/core_tests.cpp
++++ b/tests/unit/core_tests.cpp
+@@ -635,6 +635,12 @@
+                           }),
+           "one retained B dogleg must repair the complete A/B straight scene without changing "
+           "A into a curved realization");
++  require(std::none_of(enabled.local_routability_diagnoses.begin(),
++                      enabled.local_routability_diagnoses.end(), [](const auto& diagnosis) {
++                        return diagnosis.resource.stable_id.starts_with("straight-scene:") ||
++                               diagnosis.resource.stable_id.starts_with("native-scene:");
++                      }),
++          "a repaired scene must not retain discarded copper conflicts for upstream feedback");
+   auto rejected_then_legal = retained;
+   auto& alternatives = rejected_then_legal.bundle_assignments[1];
+   auto first_crossing = b_dogleg;
+@@ -669,6 +675,52 @@
+   flux::realize_regional_straight_candidate(board, global, cancelled, stop.get_token());
+   require(!cancelled.spline_candidate_available && cancelled.straight_scene_portfolio_checks == 0U,
+           "a cancelled portfolio replay must not publish a partially rebuilt straight scene");
++
++  // Both retained moves are necessary. A's lowered lane still crosses the original B;
++  // B's detour crosses the original A twice. Together they are disjoint. A greedy
++  // one-window improvement cannot leave this physical local minimum.
++  auto coupled = retained;
++  auto a_lowered = a_template;
++  a_lowered.id = 1U;
++  a_lowered.selected_global_topology = false;
++  a_lowered.topology_centerline = {a_fragment.start, mm(20, 30), mm(80, 30), a_fragment.end};
++  auto b_around = b_dogleg;
++  b_around.topology_centerline = {b_fragment.start, mm(10, 20), mm(10, 50), mm(40, 50),
++                                 mm(40, 35), mm(60, 35), mm(60, 60), b_fragment.end};
++  coupled.bundle_assignments[0].templates.push_back(a_lowered);
++  coupled.bundle_assignments[0].spline_candidate_shortlist = {dogleg_selection};
++  coupled.bundle_assignments[1].templates[1] = b_around;
++  auto only_a = coupled;
++  only_a.bundle_assignments[1].spline_candidate_shortlist.clear();
++  only_a.configured.max_straight_portfolio_checks = 3U;
++  flux::realize_regional_straight_candidate(board, global, only_a);
++  require(!only_a.spline_candidate_available && only_a.straight_scene_portfolio_improvements == 0U,
++          "the lowered A lane alone must not improve the crossing scene");
++  auto only_b = coupled;
++  only_b.bundle_assignments[0].spline_candidate_shortlist.clear();
++  only_b.configured.max_straight_portfolio_checks = 3U;
++  flux::realize_regional_straight_candidate(board, global, only_b);
++  require(!only_b.spline_candidate_available && only_b.straight_scene_portfolio_improvements == 0U,
++          "the B detour alone must not improve the crossing scene");
++  auto too_small = coupled;
++  too_small.configured.max_straight_portfolio_checks = 1U;
++  flux::realize_regional_straight_candidate(board, global, too_small);
++  require(!too_small.spline_candidate_available && too_small.straight_scene_portfolio_checks == 1U,
++          "coordinated search must obey the shared exact-check bound");
++  coupled.configured.max_straight_portfolio_checks = 3U;
++  flux::realize_regional_straight_candidate(board, global, coupled);
++  require(coupled.spline_candidate_available,
++          "paired retained moves must find legal copper when neither single move improves it");
++  require(coupled.native_scene_complete &&
++              coupled.native_scene_conflicts == 0U && coupled.straight_scene_drc_violations == 0U &&
++              coupled.straight_scene_open_connections == 0U &&
++              coupled.straight_scene_joint_portfolio_checks == 1U &&
++              coupled.straight_scene_portfolio_checks == 3U &&
++              coupled.straight_scene_portfolio_improvements == 1U &&
++              coupled.linear_scaffold_checks == 4U && coupled.linear_scaffold_rejections == 3U &&
++              coupled.bundle_assignments[0].selected_templates == dogleg_selection.templates &&
++              coupled.bundle_assignments[1].selected_templates == dogleg_selection.templates,
++          "a paired transaction must escape the one-window local minimum with exact clean copper");
+ }
+ 
+ void straight_regional_layer_adapters_preserve_connectivity() {

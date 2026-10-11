@@ -1,0 +1,94 @@
+{
+  "date": "2026-10-10",
+  "tier": 2,
+  "board": "ft2232h_jtag",
+  "revision": "94aa691ad89576d1c0ac07a5346020da21fc9d06",
+  "configuration": {
+    "flux_cli": "build/tautening-release/flux-cli",
+    "track_geometry": "curved",
+    "telemetry_level": "diagnostic",
+    "iteration_budget": 30,
+    "planning_timeout_seconds": 960,
+    "detailed_timeout_seconds": 960,
+    "routing_timeout_seconds": 900,
+    "route_locked": true,
+    "artifacts": "build/history-sharing-tier2-20261010/iter30",
+    "telemetry": "build/history-sharing-20261010/tier2-iter30/ft2232h_jtag-global.jsonl"
+  },
+  "outcome": {
+    "harness_exit_code": 0,
+    "qualified": false,
+    "complete": false,
+    "stop_reason": "iteration_limit",
+    "paths": 117,
+    "unrouted_nets": 0,
+    "total_overflow": 381,
+    "congested_resources": 34,
+    "congested_corridors": 5,
+    "clearance_shadow_conflicts": 340,
+    "internal_drc": {
+      "configured_grid_pitch_nm": 1,
+      "diagnoses": 152,
+      "drc_violation_counts": {
+        "hole_clearance": 43,
+        "track_clearance": 842,
+        "track_via_clearance": 45
+      },
+      "drc_violations": 930,
+      "elapsed_us": 257199,
+      "feasible": false,
+      "malformed_paths": 0,
+      "open_connections": 0,
+      "paths_examined": 117,
+      "paths_materialized": 117,
+      "reused_transitions": 1,
+      "tracks": 1672,
+      "unrouted_nets": 0,
+      "vias": 21
+    },
+    "external_kicad_drc": "not run; no accepted detailed copper",
+    "engine_outcome": "timed-out",
+    "stop_reason_scope": "retained global checkpoint; engine itself reached deadline",
+    "regional_evaluated": false
+  },
+  "runtime": {
+    "router_duration_seconds": 900.1659048489819,
+    "wall_seconds": 904.19,
+    "user_seconds": 1115.57,
+    "system_seconds": 7.11,
+    "max_rss_kbytes": 1120852
+  },
+  "preliminary_one_iteration_run": {
+    "status": "stopped_before_completion",
+    "artifacts": "build/history-sharing-tier2-20261010",
+    "reason": "manifest locked board has no probe_iterations; rerun superseded it with iteration_budget=30"
+  },
+  "previews": [
+    "build/history-sharing-tier2-20261010/iter30/tier-2-ft2232h_jtag/analysis/global/near-00-window-1/copper-00-F_Cu.png",
+    "build/history-sharing-tier2-20261010/iter30/tier-2-ft2232h_jtag/analysis/global/near-00-window-1/provisional-overview.png",
+    "build/history-sharing-tier2-20261010/iter30/tier-2-ft2232h_jtag/analysis/global/near-00-window-1/spline-controls-closeup.png",
+    "build/history-sharing-tier2-20261010/iter30/tier-2-ft2232h_jtag/analysis/global/near-00-window-1/spline-controls.png"
+  ],
+  "working_tree": "dirty; check of current implementation, no code changes in this run",
+  "scheduler": {
+    "routing_engine_experiment_active_us": 891068779,
+    "routing_engine_experiment_initial_explorations": 12,
+    "routing_engine_experiment_invalidated": 6,
+    "routing_engine_experiment_memory_evictions": 0,
+    "routing_engine_experiment_resumed": 14,
+    "routing_engine_experiment_retired": 4,
+    "routing_engine_experiment_started": 12,
+    "routing_engine_experiment_state_suppressions": 0,
+    "routing_engine_experiment_suspended": 21
+  },
+  "gpu_masks": {
+    "static_seed_height_evolution_gpu_mask_cross_pipeline_reuses": 0,
+    "static_seed_height_evolution_gpu_mask_upload_reuses": 31,
+    "static_seed_height_evolution_gpu_mask_uploads": 10,
+    "static_seed_hydraulic_gpu_mask_cross_pipeline_reuses": 0,
+    "static_seed_hydraulic_gpu_mask_upload_reuses": 31,
+    "static_seed_hydraulic_gpu_mask_uploads": 10
+  },
+  "binary_sha256": "0987a60a137d67cc39b78502c20cd3546e561ad81ba6c12f3836a7fcad2695d9",
+  "visual_inspection": "Provisional overview inspected: largely angular scaffold with visible overlaps; not final legal or smooth copper."
+}

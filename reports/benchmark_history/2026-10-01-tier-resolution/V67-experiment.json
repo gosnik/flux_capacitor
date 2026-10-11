@@ -1,0 +1,61 @@
+{
+  "schema": 1,
+  "experiment": "V67 straight transaction boundary correction",
+  "status": "review fixes validated; full normal Tier1 in progress",
+  "failure": "V64 frozen access gate treats foreign coarse routes as immutable during straight assembly, although another owned window can replace them in the same transaction",
+  "hypothesis": "Restricting early frozen-copper checks to independent curved realization preserves feasible straight transactions without weakening assembled copper authority",
+  "change": "Require frozen_copper_context and enable_spline_realization for early via-versus-foreign-fragment selection; serialize and restore both realization modes; schema4 requires both modeflags and rejects ambiguous earlier contexts",
+  "baseline": "build/tier-resolution-20261001-v66-reconstructed-source (V65 baseline plus exact saved V66 cache hunk); original V66 capture raced V67 source edits",
+  "validation": {
+    "core": "53/53",
+    "tier0": "qualified; exact copper and external KiCad DRC",
+    "micro_test": "frozen_foreign_copper_rejects_selected_vias_before_spline_selection",
+    "micro_original": "copper errors >0; zero opens; source board has no tracks/vias",
+    "micro_assembled": "native and quantized zero errors/opens; owned second window replaces coarse crossing with legal dogleg",
+    "red_proof": {
+      "source": "actual pre-gate V65-source regional_router.cpp linked with current fixture",
+      "result": "0/1 expected failure at straight whole-scene mode admission",
+      "artifact": "build/tier-resolution-20261001-v67/before-v65"
+    },
+    "matched_tier1": {
+      "qualified": false,
+      "routing_plan_complete": false,
+      "topology_complete": true,
+      "paths": 78,
+      "unrouted": 0,
+      "overflow": 0,
+      "coarse_errors": 796,
+      "opens": 0,
+      "tracks": 1292,
+      "vias": 46,
+      "runtime_s": 299.9658165330038,
+      "baseline_runtime_s": 308.621,
+      "native_scene_evaluated": false,
+      "straight_scene_evaluated": false,
+      "result": "identical materialized coarse metrics to V63 matched control; no frontier quality improvement",
+      "artifact": "build/tier-resolution-20261001-v67/bounded-tier1-r1/run-result.json"
+    },
+    "coarse_telemetry_replay": {
+      "snapshot_sequence": 5956,
+      "paths": 78,
+      "tracks": 1292,
+      "vias": 46,
+      "drc_violations": 796,
+      "opens": 0,
+      "malformed": 0,
+      "grid_pitch_nm": 1,
+      "all_final_coarse_counts_match": true,
+      "artifact": "build/tier-resolution-20261001-v67/selected-coarse-replay.jsonl",
+      "limitation": "geometry diagnostic only; does not restore allocation certificates"
+    },
+    "review": "resolved schema/mode provenance and actual selected via-size coverage; frozen boolean also required; independent re-review found no remaining material issue",
+    "reviewed_core": "53/53"
+  },
+  "files_sha256": {
+    "src/regional_router.cpp": "abdb8512d9836da9a377249ebd21734bd7fe3e6a1cd139fbe34ce1200ef50193",
+    "tests/unit/core_tests.cpp": "675859effc9ac0e06f5f97c32b0b7960b6a8e95f3ff5192cf4bf0612f86c3688",
+    "tools/replay_regional_bundle.cpp": "928b578d7089cefd7d5f5a3b8c37c57070d64a5a0d606e6332267aa686d10dc7"
+  },
+  "reviewed_source": "build/tier-resolution-20261001-v67-reviewed-source",
+  "normal_run": "build/tier-resolution-20261001-v67-reviewed/tier1-normal"
+}

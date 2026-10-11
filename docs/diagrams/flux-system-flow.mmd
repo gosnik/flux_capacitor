@@ -1,0 +1,46 @@
+flowchart TB
+  K["KiCad board + project rules"] --> I["Import and validate canonical board"]
+  I --> P["Prepared geometry: edges, pads, keepouts, existing copper"]
+  I --> T["Connectivity, same-net trees, terminal escapes and via candidates"]
+  P --> N["Free space, NavMesh, corridors, physical resources"]
+  P --> M["Indexed physical map: exact primitives, owners, layers, radii"]
+  M --> E["Terrain guidance when enabled: LittlePlanets height, flow, pressure"]
+  N --> U["Optional USPED guidance and route alternatives"]
+  E --> A["Route portfolios and topology candidates"]
+  U --> A
+  T --> A
+  A --> G["Global allocation: PathFinder negotiation, layer and via choices"]
+  G --> S["Capacity accounting and exact-qualified clearance shadows"]
+  M --> S
+  S -. new source path, not in benchmark binary .-> SC["Construct legal copper scaffold: direct route, bounded physical search, victim exchange"]
+  SC --> SQ{"Whole-board quantized oracle feasible?"}
+  SQ -->|Yes| V
+  SQ -->|No| SM
+  S --> O["Explicit packing obligations: capacity is not physical proof"]
+  S --> C["Measured conflicts and attributed diagnoses"]
+  O --> R["Regional windows and joint candidate preparation"]
+  C --> R
+  R --> L["Feasibility screening, lane order and lane positions"]
+  L --> F["Configured realization: PH curves and tightening, or straight geometry"]
+  F --> X["Eligible joint repair: XPBD; optional AVBD refinement if residual improves"]
+  X --> Q["Assemble and quantize candidate copper; internal oracle"]
+  Q --> V{"Materialization gate: complete legal native or straight scene, or validated fallback?"}
+  V -->|Yes| B["Fit PH to cubic Béziers; materialize net-assigned curves, straight tracks and vias"]
+  B --> D["Internal validation, connectivity and curves; benchmark KiCad DRC"]
+  D --> Z{"All required checks pass?"}
+  Z -->|Yes| OK["Accepted routed board"]
+  V -->|No| H["Physical feedback: owner pairs, bounds, layer, rule and topology cause"]
+  Z -->|No| H
+  H --> R
+  H --> G
+  H --> T
+  H --> E
+  SM["State engine: short resumable actions, deadlines, deterministic selection"] -. schedules .-> G
+  SM -. schedules .-> R
+  SM -. schedules .-> X
+  SM -. schedules .-> B
+  P --> SP["One bounded speculative preparation worker; validate snapshot before reuse"]
+  SP --> R
+  G -. checkpoints .-> OBS["Telemetry, viewer, benchmark history"]
+  R -. geometry and metrics .-> OBS
+  D -. authoritative results .-> OBS

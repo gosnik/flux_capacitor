@@ -1,0 +1,234 @@
+{
+  "schema": 1,
+  "authoritative": false,
+  "unrounded_bends": [
+    {
+      "net": "kicad-net-17",
+      "layer": "F.Cu",
+      "point_nm": [
+        37000000,
+        58500000
+      ],
+      "tracks": [
+        {
+          "id": "flux-route-kicad-net-17-0-regional-native-track-4",
+          "points_nm": [
+            [
+              37000000,
+              58500000
+            ],
+            [
+              16000000,
+              58500000
+            ]
+          ],
+          "width_nm": 250000
+        },
+        {
+          "id": "flux-board-spline-15-spline-0-0",
+          "points_nm": [
+            [
+              38080000,
+              57000000
+            ],
+            [
+              37000000,
+              58500000
+            ]
+          ],
+          "width_nm": 250000
+        }
+      ]
+    },
+    {
+      "net": "kicad-net-23",
+      "layer": "B.Cu",
+      "point_nm": [
+        32100000,
+        45600000
+      ],
+      "tracks": [
+        {
+          "id": "flux-route-kicad-net-23-0-regional-native-track-2",
+          "points_nm": [
+            [
+              32100000,
+              46100000
+            ],
+            [
+              32100000,
+              45600000
+            ]
+          ],
+          "width_nm": 250000
+        },
+        {
+          "id": "flux-route-kicad-net-23-0-regional-native-track-3",
+          "points_nm": [
+            [
+              32100000,
+              45600000
+            ],
+            [
+              30000000,
+              45600000
+            ]
+          ],
+          "width_nm": 250000
+        }
+      ]
+    },
+    {
+      "net": "kicad-net-3",
+      "layer": "B.Cu",
+      "point_nm": [
+        26000000,
+        24500000
+      ],
+      "tracks": [
+        {
+          "id": "flux-route-kicad-net-3-3-regional-native-track-3",
+          "points_nm": [
+            [
+              26000000,
+              24500000
+            ],
+            [
+              26000000,
+              36500000
+            ]
+          ],
+          "width_nm": 250000
+        },
+        {
+          "id": "flux-board-spline-32-spline-0-0",
+          "points_nm": [
+            [
+              30500000,
+              24000000
+            ],
+            [
+              26000000,
+              24500000
+            ]
+          ],
+          "width_nm": 250000
+        }
+      ]
+    },
+    {
+      "net": "kicad-net-3",
+      "layer": "B.Cu",
+      "point_nm": [
+        28000000,
+        44000000
+      ],
+      "tracks": [
+        {
+          "id": "flux-route-kicad-net-3-5-regional-native-track-4",
+          "points_nm": [
+            [
+              28000000,
+              44000000
+            ],
+            [
+              34500000,
+              44000000
+            ]
+          ],
+          "width_nm": 250000
+        },
+        {
+          "id": "flux-board-spline-35-spline-0-0",
+          "points_nm": [
+            [
+              27000000,
+              45500000
+            ],
+            [
+              28000000,
+              44000000
+            ]
+          ],
+          "width_nm": 250000
+        }
+      ]
+    },
+    {
+      "net": "kicad-net-4",
+      "layer": "F.Cu",
+      "point_nm": [
+        28500000,
+        41500000
+      ],
+      "tracks": [
+        {
+          "id": "flux-route-kicad-net-4-0-regional-native-track-3",
+          "points_nm": [
+            [
+              28500000,
+              41500000
+            ],
+            [
+              30500000,
+              43500000
+            ]
+          ],
+          "width_nm": 250000
+        },
+        {
+          "id": "flux-board-spline-41-spline-0-0",
+          "points_nm": [
+            [
+              27460000,
+              41000000
+            ],
+            [
+              28500000,
+              41500000
+            ]
+          ],
+          "width_nm": 250000
+        }
+      ]
+    },
+    {
+      "net": "kicad-net-4",
+      "layer": "F.Cu",
+      "point_nm": [
+        31000000,
+        44000000
+      ],
+      "tracks": [
+        {
+          "id": "flux-route-kicad-net-4-0-regional-native-track-6",
+          "points_nm": [
+            [
+              31000000,
+              44000000
+            ],
+            [
+              31000000,
+              51000000
+            ]
+          ],
+          "width_nm": 250000
+        },
+        {
+          "id": "flux-board-spline-42-spline-0-0",
+          "points_nm": [
+            [
+              30500000,
+              43500000
+            ],
+            [
+              31000000,
+              44000000
+            ]
+          ],
+          "width_nm": 250000
+        }
+      ]
+    }
+  ]
+}

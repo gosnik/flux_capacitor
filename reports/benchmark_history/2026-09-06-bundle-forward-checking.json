@@ -1,0 +1,88 @@
+{
+  "schema": 1,
+  "date": "2026-09-06",
+  "git_revision": "25e3b884be9b359d9c5bf0cc4fbb6cc836fd4f82",
+  "dirty_worktree": true,
+  "experiment": "bundle-forward-checking-v16",
+  "status": "tier0_pass_tier1_unresolved",
+  "hypothesis": "Exact conservative pairwise access support and forward domain checking avoid spending the bounded DFS below contradictions visible before complete choices.",
+  "local_tests": {
+    "twelve_fragment_terminal_ordering_trap": "pass",
+    "exhaustive_legal_combinations_preserved": 2048,
+    "movable_via_domain_preserved": "pass",
+    "exhausted_query_remains_unknown": "pass",
+    "equivalent_via_runup_representative": "pass",
+    "full_core_suite": "34/34 pass"
+  },
+  "tier0": {
+    "board": "pt2399_delay",
+    "artifact": "build/tier0-forward-check-v16-20260906",
+    "binary_sha256": "a1f57cab70f0a1fd0eddd362026c9f230baedb5aff344830d39ce1fa243bcb9a",
+    "outcome": "pass",
+    "paths": 50,
+    "tracks": 75,
+    "arcs": 299,
+    "vias": 5,
+    "opens": 0,
+    "internal_copper_violations": 0,
+    "validation_errors": 0,
+    "kicad_drc_violations": 0,
+    "global_duration_seconds": 269.75057159899734,
+    "detail_duration_seconds": 329.6973192039877,
+    "copper_sha256": "459bffc8258348a89eafcc275a35decdfc59e8afb1278b0731a58e0fd9df35ac",
+    "byte_identical_to_v15": true,
+    "measurement_limits": "Some execution overlapped unit tests; these durations are not an isolated performance comparison. Equivalent-representative guard and worker shutdown fix were added afterward; this recorded scene contains no ambiguous via representatives."
+  },
+  "tier1": {
+    "board": "bm_svf",
+    "artifact": "build/tier1-forward-check-v16b-20260906",
+    "binary_sha256": "0be271b8eb1b5e565467cfe40eb892e7279131e62fc0ba25db16990cd3a2cbc8",
+    "planning_timeout_seconds": 1800,
+    "prioritize_frozen_scope_expansion": true,
+    "outcome": "diagnostic_timeout",
+    "peak_resident_kib_observed": 1569580,
+    "final_kicad_drc": "not_evaluated",
+    "pre_native_checkpoints": [
+      {"epoch": 1, "seconds": 36.318876, "violations": 764, "opens": 0},
+      {"epoch": 2, "seconds": 216.543977, "violations": 1297, "opens": 0},
+      {"epoch": 3, "seconds": 287.856883, "violations": 2216, "opens": 0}
+    ],
+    "portfolio_ready_seconds": 730.239586,
+    "active_tier_barrier_seconds": 897.705515,
+    "active_tier_duration_seconds": 167.465929,
+    "ordinary_splines_finished_seconds": 1088.248742,
+    "residual_cone_0": {
+      "portfolio_duration_seconds": 84.849594,
+      "bundle_search_us": 314756,
+      "bundle_states": 100000,
+      "generated_choices": 0,
+      "access_pruned": 5,
+      "lane_capacity_pruned_replay": 21422,
+      "complete_states": 0,
+      "stop": "state_budget_exhausted"
+    },
+    "residual_cone_1": {
+      "portfolio_ready_seconds": 1287.399370,
+      "bundle_search_us": 4893317,
+      "bundle_states": 100000,
+      "generated_choices": 11965,
+      "access_pruned": 1730,
+      "complete_states_retained": 584,
+      "active_native_illegal_routes": [19, 20, 19, 20, 20, 24, 24, 24],
+      "active_total_routes": [22, 22, 23, 24, 24, 26, 26, 26],
+      "first_fallback_wave_seconds": 1520.533212,
+      "second_fallback_wave_reached": true
+    },
+    "residual_cone_2": "not_reached",
+    "measurement_limits": "Concurrent core/integration checks, compilation and diagnostic replay prevent an isolated end-to-end speed comparison. Active candidate contents changed, and faster realization does not establish better geometry."
+  },
+  "interpretation": "Access forward checking removes large downstream invalid-leaf screening work, but the first residual cone moves into a capacity-constrained search dead end. The tier remains unresolved. Resource forward checking is the next isolated refinement, not a clearance relaxation.",
+  "integration_tests": {
+    "non_core_non_corpus": "120/127 pass; same seven previously recorded demo expectation failures",
+    "initial_junit": "build/forward-check-v16b-ctest.xml",
+    "constrained_export_rerun_junit": "build/forward-check-v16b-constrained-rerun.xml",
+    "constrained_export_rerun": "4/4 pass, including KiCad DRC, in 85.30 seconds",
+    "duplicate_corpus_jobs": "cancelled; standalone benchmark results remain authoritative"
+  },
+  "tier_promoted": false
+}

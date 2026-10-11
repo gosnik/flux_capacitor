@@ -1,0 +1,79 @@
+{
+  "artifact_root": "/home/adam/qtbits/flux_capacitor/build/tiers-curved-extended-20261008",
+  "boards": [
+    {
+      "artifact_paths": [],
+      "curve": {
+        "all": {},
+        "field": null,
+        "unknown": true,
+        "value": null
+      },
+      "outcome": {
+        "all": {},
+        "field": null,
+        "unknown": true,
+        "value": null
+      },
+      "physical": {
+        "all": {},
+        "field": null,
+        "unknown": true,
+        "value": null
+      },
+      "route": {
+        "all": {},
+        "field": null,
+        "unknown": true,
+        "value": null
+      },
+      "sha256": "0295194de615f46c864e340b0ec25872f0926d3111ba3af3d44236bb6cceaac4",
+      "source": "pt2399_delay/run-metadata.json"
+    },
+    {
+      "artifact_paths": [
+        {
+          "path": "/home/adam/qtbits/flux_capacitor/tests/fixtures/routing-corpus/pt2399_delay.kicad_pcb",
+          "sha256": "c48693b458eb28ae11f2ef099acf33ee9a797d87f430457c6961b41e2f2c4cab"
+        }
+      ],
+      "curve": {
+        "all": {},
+        "field": null,
+        "unknown": true,
+        "value": null
+      },
+      "outcome": {
+        "all": {},
+        "field": null,
+        "unknown": true,
+        "value": null
+      },
+      "physical": {
+        "all": {
+          "unrouted_nets": {
+            "field": "metrics.unrouted_nets",
+            "value": 0
+          }
+        },
+        "field": "metrics.unrouted_nets",
+        "value": 0
+      },
+      "route": {
+        "all": {
+          "vias": {
+            "field": "metrics.vias",
+            "value": 0
+          }
+        },
+        "field": "metrics.vias",
+        "value": 0
+      },
+      "sha256": "6eaac53a9b3e320bddd403035de90ef54591494343ec568db9af9a33baeee8e6",
+      "source": "pt2399_delay/tier-0-pt2399_delay/telemetry/pt2399_delay-global.jsonl"
+    }
+  ],
+  "schema": 1,
+  "status": "interrupted-debug-control",
+  "not_authoritative_release_result": true
+}

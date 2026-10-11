@@ -1,0 +1,384 @@
+{
+  "schema": 1,
+  "experiment": "early-frozen-scope-v1",
+  "notes": [
+    "N1/R0 diagnostic 1800-second cap; timed out, no final KiCad DRC. Earlier scope expansion alone is insufficient."
+  ],
+  "runs": [
+    {
+      "root": "build/tier1-early-scope-20260906",
+      "metadata": {
+        "artifact_contract": {
+          "analysis_pngs_required_for_routing": true,
+          "failed_route_png_mode": "both",
+          "files_write_once": true,
+          "max_failed_route_png_results": 1,
+          "source_boards_immutable": true,
+          "telemetry_level": null,
+          "telemetry_required_for_routing": true
+        },
+        "capability_contract": {
+          "reference": {
+            "commit": "e239e067c204870b4ac570fc9e931a374bdfd5b4",
+            "project": "KiCadRoutingTools",
+            "repository": "https://github.com/drandyhaas/KiCadRoutingTools",
+            "version": "0.21.5"
+          },
+          "schema": "flux_parity_manifest",
+          "schema_version": 1,
+          "sha256": "d8b57b3e1ba5c761fa2c610ffea1aa2e1f70f845f988ab7e92fbceca36fda5d0"
+        },
+        "corpus": {
+          "manifest_sha256": "e5685277e3917f4a153d29a2214afb717b13b41395bcf48b04f555adb923bede",
+          "path": "/home/adam/qtbits/flux_capacitor/tests/fixtures/routing-corpus",
+          "source_corpus": {
+            "commit": "661c88b3c3b0ebc9ade65eab63d30b1cde217fb4",
+            "discussion": "https://github.com/drandyhaas/KiCadRoutingTools/discussions/117",
+            "repository": "drandyhaas/KiCadRoutingTools",
+            "stress_directory": "https://github.com/drandyhaas/KiCadRoutingTools/tree/main/tests/stress"
+          }
+        },
+        "created_utc": "2026-09-06T01:42:05.652730+00:00",
+        "environment": {
+          "flux": {
+            "board_schema": 21,
+            "engine": "flux_capacitor",
+            "gpu_api_version_raw": 4211017,
+            "gpu_available": true,
+            "gpu_device": "NVIDIA GeForce RTX 5080",
+            "gpu_device_id": 11266,
+            "gpu_device_type": "discrete",
+            "gpu_diagnostic": "",
+            "gpu_driver_version_raw": 2496987136,
+            "gpu_override": null,
+            "gpu_vendor_id": 4318,
+            "production_gpu_required": true,
+            "version": "0.140.0"
+          },
+          "flux_vulkan_device_override": null,
+          "inkscape": {
+            "available": true,
+            "command": [
+              "/snap/bin/inkscape",
+              "--version"
+            ],
+            "returncode": 0,
+            "stderr": "",
+            "stdout": "Inkscape 1.4.4 (dcaf3e7d9e, 2026-05-05)"
+          },
+          "kicad_cli": {
+            "available": true,
+            "command": [
+              "/usr/bin/kicad-cli",
+              "--version"
+            ],
+            "returncode": 0,
+            "stderr": "",
+            "stdout": "9.0.8"
+          },
+          "platform": "Linux-7.0.0-31-generic-x86_64-with-glibc2.43",
+          "python": "3.14.4 (main, Jun 18 2026, 14:25:02) [GCC 15.2.0]"
+        },
+        "executable": {
+          "path": "/home/adam/qtbits/flux_capacitor/build/release/flux-cli",
+          "sha256": "d54d2d9d20a57b8090d9f8a13955ca5196e1102841311a49b87ad82a1752c6a1"
+        },
+        "invocation": [
+          "/home/adam/qtbits/flux_capacitor/tests/python/verify_routing_corpus.py",
+          "--flux-cli",
+          "build/release/flux-cli",
+          "--corpus",
+          "tests/fixtures/routing-corpus",
+          "--board",
+          "bm_svf",
+          "--artifacts",
+          "build/tier1-early-scope-20260906",
+          "--iteration-budget",
+          "1",
+          "--physical-feedback-retries",
+          "0",
+          "--planning-timeout-seconds",
+          "1800",
+          "--prioritize-frozen-scope-expansion",
+          "--kicad-cli",
+          "/usr/bin/kicad-cli",
+          "--inkscape",
+          "/snap/bin/inkscape",
+          "--max-failed-route-png-results",
+          "1"
+        ],
+        "mode": "routing",
+        "schema": "flux_routing_baseline",
+        "schema_version": 1,
+        "selection": {
+          "boards": [
+            {
+              "effective_planning_timeout_seconds": 1800,
+              "id": "bm_svf",
+              "level": 1,
+              "project_sha256": "04856904fe9070f7decd33b676d3f58e44676b6c930e65fa8a16f0ddd65d54db",
+              "qualification": "detailed_complete",
+              "reference_sha256": "52317a66f7442b3b260f07ff1b7c16dd94f99c088c61533b81698cbda6d4d77b",
+              "router_args": [
+                "--crossing-safe-diagonal-grid",
+                "--direct-medial",
+                "--grid-pitch-nm",
+                "650000",
+                "--xpbd-relaxation",
+                "--xpbd-feedback",
+                "--atomic-net-trees",
+                "--hard-capacity-start-iteration",
+                "4",
+                "--max-hard-capacity-ripup-attempts-per-pass",
+                "8",
+                "--max-hard-capacity-ripup-nets-per-attempt",
+                "8",
+                "--max-hard-capacity-conflict-set-states-per-attempt",
+                "256",
+                "--terminal-escape-proximity-cost",
+                "500",
+                "--rollback-failed-hard-capacity-ripup",
+                "--defer-hard-capacity-ripup-victims-to-pass-tail",
+                "--protect-recovered-hard-capacity-ripup-nets",
+                "--physical-feedback-retries",
+                "0",
+                "--prioritize-frozen-scope-expansion"
+              ],
+              "source_sha256": "308ce5513cb6b2b33820648a0062a54f548f6b3c13d856cdcd9b7c3ac8a20d2a",
+              "status": "unlocked"
+            }
+          ],
+          "explicit_boards": [
+            "bm_svf"
+          ],
+          "iteration_budget_override": 1,
+          "level": "unlocked",
+          "planning_timeout_override_seconds": 1800,
+          "strict_medial_control_override": false
+        }
+      },
+      "outcome": {
+        "artifacts": [
+          {
+            "bytes": 4773,
+            "path": "run-metadata.json",
+            "sha256": "6370300d55f87221f8c81b438f3eaff883f60bb6c97b84c7894f4b9d18fdc21d"
+          },
+          {
+            "bytes": 1211,
+            "path": "tier-1-bm_svf/analysis/global/failed-route-previews.json",
+            "sha256": "604c4fefca192dc901a97f38f6e309ff8c9ebccc856022ab3f3c39a78960cc64"
+          },
+          {
+            "bytes": 277870,
+            "path": "tier-1-bm_svf/analysis/global/near-00-window-7/copper-00-B_Cu.png",
+            "sha256": "6d6e61958979a0daf47379872193f90d1b2d28020b7f7533fc698f15f8da2559"
+          },
+          {
+            "bytes": 351352,
+            "path": "tier-1-bm_svf/analysis/global/near-00-window-7/copper-01-F_Cu.png",
+            "sha256": "135ddf73170733e38a5bfa7450a6dd9f5219934ab01d77e09c5d2e1c0918787d"
+          },
+          {
+            "bytes": 431381,
+            "path": "tier-1-bm_svf/analysis/global/near-00-window-7/provisional-overview.png",
+            "sha256": "d2d19d3901db1fb93f04239b982d11eb52ce8f436da39588ad55757fa596a8d2"
+          },
+          {
+            "bytes": 8073,
+            "path": "tier-1-bm_svf/analysis/global/near-00-window-7/spline-controls-closeup.png",
+            "sha256": "2abd0cf25f8faab5cefa050edfa4f7c442956895edcdbc366dccb561945242fc"
+          },
+          {
+            "bytes": 285151,
+            "path": "tier-1-bm_svf/analysis/global/near-00-window-7/spline-controls.png",
+            "sha256": "5b27a3e1911513ffa30e05dd01e31af4547805c0edf75efc277ea539eea7a745"
+          },
+          {
+            "bytes": 736719588,
+            "path": "tier-1-bm_svf/telemetry/bm_svf-global.jsonl",
+            "sha256": "51f73807c1ad67d05c23e956d2ea251ebc7caa021c79d9e69a11892140e9f5fe"
+          }
+        ],
+        "boards": [],
+        "diagnostic": "Command '['/home/adam/qtbits/flux_capacitor/build/release/flux-cli', 'route-kicad', '/home/adam/qtbits/flux_capacitor/tests/fixtures/routing-corpus/bm_svf.kicad_pcb', '--max-router-iterations', '1', '--max-expansions', '50000', '--max-static-seed-workers', '2', '--search-diversification', '--crossing-safe-diagonal-grid', '--direct-medial', '--grid-pitch-nm', '650000', '--xpbd-relaxation', '--xpbd-feedback', '--atomic-net-trees', '--hard-capacity-start-iteration', '4', '--max-hard-capacity-ripup-attempts-per-pass', '8', '--max-hard-capacity-ripup-nets-per-attempt', '8', '--max-hard-capacity-conflict-set-states-per-attempt', '256', '--terminal-escape-proximity-cost', '500', '--rollback-failed-hard-capacity-ripup', '--defer-hard-capacity-ripup-victims-to-pass-tail', '--protect-recovered-hard-capacity-ripup-nets', '--physical-feedback-retries', '0', '--prioritize-frozen-scope-expansion', '--telemetry-level', 'diagnostic', '--telemetry-record', '/home/adam/qtbits/flux_capacitor/build/tier1-early-scope-20260906/tier-1-bm_svf/telemetry/bm_svf-global.jsonl']' timed out after 1800 seconds",
+        "schema": "flux_routing_baseline_result",
+        "schema_version": 1,
+        "status": "failed"
+      },
+      "planning_records": [],
+      "detailed_records": [],
+      "epoch_telemetry": [
+        {
+          "artifact": "build/tier1-early-scope-20260906/tier-1-bm_svf/telemetry/bm_svf-global.jsonl",
+          "messages": [
+            "interleaved routing epoch started: pathfinder_budget=1, retained_portfolios=0, physical_history_entries=0"
+          ],
+          "events": [
+            {
+              "monotonic_time_us": 1983,
+              "message": "interleaved routing epoch started: pathfinder_budget=1, retained_portfolios=0, physical_history_entries=0"
+            }
+          ],
+          "event_counts": {
+            "RoutingStarted": 1,
+            "snapshot": 299,
+            "SearchSummary": 3655,
+            "RouteCandidateSelected": 2173,
+            "HydraulicFieldUpdated": 51,
+            "NetQueued": 25,
+            "PathFinderIterationStarted": 1,
+            "RouteRippedUp": 11,
+            "PathFinderIterationCompleted": 1,
+            "ConflictAdded": 380,
+            "ResidualGroupUpdated": 89,
+            "ViaCandidateGenerated": 1224,
+            "ViaAssigned": 82
+          },
+          "regional_progress": [
+            {
+              "monotonic_time_us": 71146140,
+              "message": "regional conflict extraction and joint physical packing started"
+            },
+            {
+              "monotonic_time_us": 71146158,
+              "message": "regional fragments constructed: fragments=406"
+            },
+            {
+              "monotonic_time_us": 71146983,
+              "message": "exact copper repair scope: witnesses=146, mapped_pairs=135, unmapped_pairs=3"
+            },
+            {
+              "monotonic_time_us": 71149501,
+              "message": "regional conflict graph constructed: edges=129, components=20"
+            },
+            {
+              "monotonic_time_us": 71151138,
+              "message": "ordinary regional windows constructed: windows=23, fragments=117, owned=114"
+            },
+            {
+              "monotonic_time_us": 71354429,
+              "message": "ordinary regional corridors constructed: channels=55"
+            },
+            {
+              "monotonic_time_us": 402539133,
+              "message": "ordinary regional bundle portfolio prepared: assignments=23, alternative_templates=483"
+            },
+            {
+              "monotonic_time_us": 568323649,
+              "message": "ordinary regional spline realization completed: splines=72"
+            },
+            {
+              "monotonic_time_us": 568324252,
+              "message": "ordinary native rejection identifies a new outside blocker; deferring same-scope topology/residual repair until ownership expands; retries_remaining=2"
+            },
+            {
+              "monotonic_time_us": 568389253,
+              "message": "regional conflict extraction and joint physical packing started"
+            },
+            {
+              "monotonic_time_us": 568397293,
+              "message": "regional fragments constructed: fragments=406"
+            },
+            {
+              "monotonic_time_us": 568397297,
+              "message": "exact copper repair scope: witnesses=205, mapped_pairs=194, unmapped_pairs=3"
+            },
+            {
+              "monotonic_time_us": 568397299,
+              "message": "regional conflict graph constructed: edges=187, components=10"
+            },
+            {
+              "monotonic_time_us": 568397300,
+              "message": "ordinary regional windows constructed: windows=11, fragments=152, owned=151"
+            },
+            {
+              "monotonic_time_us": 568576276,
+              "message": "ordinary regional corridors constructed: channels=39"
+            },
+            {
+              "monotonic_time_us": 959448399,
+              "message": "ordinary regional bundle portfolio prepared: assignments=11, alternative_templates=318"
+            },
+            {
+              "monotonic_time_us": 1115947637,
+              "message": "ordinary regional spline realization completed: splines=41"
+            },
+            {
+              "monotonic_time_us": 1115948998,
+              "message": "ordinary native rejection identifies a new outside blocker; deferring same-scope topology/residual repair until ownership expands; retries_remaining=1"
+            },
+            {
+              "monotonic_time_us": 1115996416,
+              "message": "regional conflict extraction and joint physical packing started"
+            },
+            {
+              "monotonic_time_us": 1115996486,
+              "message": "regional fragments constructed: fragments=406"
+            },
+            {
+              "monotonic_time_us": 1115997395,
+              "message": "exact copper repair scope: witnesses=222, mapped_pairs=211, unmapped_pairs=3"
+            },
+            {
+              "monotonic_time_us": 1116000430,
+              "message": "regional conflict graph constructed: edges=204, components=7"
+            },
+            {
+              "monotonic_time_us": 1116003183,
+              "message": "ordinary regional windows constructed: windows=8, fragments=158, owned=157"
+            },
+            {
+              "monotonic_time_us": 1116187337,
+              "message": "ordinary regional corridors constructed: channels=33"
+            },
+            {
+              "monotonic_time_us": 1263432361,
+              "message": "ordinary regional bundle portfolio prepared: assignments=8, alternative_templates=241"
+            },
+            {
+              "monotonic_time_us": 1446928906,
+              "message": "ordinary regional spline realization completed: splines=17"
+            },
+            {
+              "monotonic_time_us": 1446930426,
+              "message": "conflict-directed exact master: window=1, round=1, core_fragments=8, no_goods=8"
+            },
+            {
+              "monotonic_time_us": 1576198342,
+              "message": "conflict-directed exact master: window=1, round=2, core_fragments=8, no_goods=16"
+            },
+            {
+              "monotonic_time_us": 1720488270,
+              "message": "conflict-directed exact master: window=1, round=3, core_fragments=8, no_goods=24"
+            }
+          ],
+          "non_authoritative_last_snapshot": {
+            "monotonic_time_us": 1720479839,
+            "metrics": {
+              "iteration": 0,
+              "total_nets": 25,
+              "routed_nets": 25,
+              "unrouted_nets": 0,
+              "total_groups": 10,
+              "routed_groups": 0,
+              "unrouted_groups": 0,
+              "sampled_overflow": 11,
+              "corridor_overflow": 1,
+              "physical_overflow_nm": 3524016,
+              "clearance_shadow_conflicts": 213,
+              "regional_conflicts": 187,
+              "route_cost": 189239,
+              "vias": 47,
+              "rip_ups": 11,
+              "search_expansions": 0,
+              "selected_checkpoint": 0,
+              "best_checkpoint": 0,
+              "selected_is_best": false
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

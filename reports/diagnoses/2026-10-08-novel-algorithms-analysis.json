@@ -1,0 +1,105 @@
+{
+  "date": "2026-10-08",
+  "scope": "research-only: erosion, hydraulic/USPED, XPBD, skeleton/Voronoi, and PH modules versus the current straight Tier-1 bm_svf runtime bottleneck",
+  "current_evidence": {
+    "pipeline_audit": "reports/diagnoses/2026-10-08-pipeline-cost-audit.json",
+    "V73_candidate_generation_and_assignment_seconds": 2396.739213,
+    "V73_candidate_generation_and_assignment_percent": 95.079845577,
+    "V73_access_assignment_states": 4369985,
+    "V73_partial_access_assignment_states": 4413939,
+    "interpretation": "No claimed speedup may be inferred for a module that executes only after a failed detailed regional state, or that is inactive in straight realization."
+  },
+  "ranked_actions": [
+    {
+      "rank": 1,
+      "module": "Regional alternative-domain preparation/cache",
+      "status": "implemented and active; direct cause-path to the measured bottleneck",
+      "code": ["src/regional_router.cpp:4470-4563", "src/regional_router.cpp:7796-7845"],
+      "why": "Every alternative-domain request is timed and can miss source, geometry, and navigation caches before polygon extraction, offsetting and validated NavMesh preparation. This lies inside candidate generation/assignment, unlike XPBD and conflict erosion.",
+      "minimal_experiment": "Add exclusive timers/counters for source extraction, offset, NavMesh preparation and LRU eviction, then compare current cache retention against a larger bounded cache on the same fixed Tier-1 command. Require identical selected state, copper legality and DRC result; report hit/miss, retained cells and peak memory.",
+      "constraints": "Cache only immutable net/layer/envelope/search-bound geometry. Dynamic occupancy/history and final legality remain uncached; preserve exact keys and fail-closed domain preparation.",
+      "overhead": "CPU/memory trade-off; no GPU benefit demonstrated."
+    },
+    {
+      "rank": 2,
+      "module": "Free-space skeleton / Voronoi corridor evidence",
+      "status": "implemented and active in global allocation; not measured against the current Tier-1 bottleneck",
+      "code": ["src/free_space_skeleton.cpp:168-318", "src/global_router.cpp:2986-3042", "src/global_router.cpp:6419-6475"],
+      "why": "The skeleton gives clearance-certified medial chord capacity and can reject impossible lanes before expensive regional access assignment. Its current construction is repeated per net/layer in one evidence path and per shared layer in another; it is a plausible pruning input, not an established speedup.",
+      "minimal_experiment": "On the fixed board, compare baseline with skeleton-derived capacity only as a pre-assignment infeasibility filter for a limited sample of windows. Measure domain construction time, surviving template/access states, false-prune count, final selected topology and DRC. Do not alter costs in the first test.",
+      "constraints": "Boost Voronoi edges are advisory. Keep exact chord assessment, reject non-certified curved chords, and never infer clearance from the Voronoi graph alone.",
+      "overhead": "CPU sweepline plus exact chord checks; cached shared layer skeletons could reduce repeated work but require an immutable extraction key."
+    },
+    {
+      "rank": 3,
+      "module": "Confined anisotropic hydraulic erosion",
+      "status": "implemented and enabled by default, but only in conflict-directed PH/copper retry; effectiveness on current straight Tier-1 is unmeasured",
+      "code": ["include/flux/core/regional_router.hpp:145-162", "src/regional_router.cpp:5545-5790", "src/regional_router.cpp:8061-8087", "src/hydraulic_path.cpp:355-428"],
+      "why": "It runs only after exact realization attributes same-layer blockers, has a global 32-check cap and two signed lateral priors. It therefore cannot reduce the initial 94-95% candidate-assignment time. Historical telemetry shows accepted columns (for example 14/1, 24/2 and 48/3 checks/accepted) but no controlled Tier-1 outcome or time comparison.",
+      "minimal_experiment": "Run one PH-enabled fixed conflict-cone replay with checks 0 versus 32, holding all other portfolios and cache limits fixed. Record attributed windows, check/accepted/rejected counts, distinct topology signatures, exact-chord certification, downstream bundle states, wall/GPU time and final DRC. Retain only if it resolves/reduces the same failure mechanism.",
+      "constraints": "Pressure/prior must never change walkability; require blocker-envelope separation, topology guards, prepared-polygon chord certificates, PH/native copper checks and external DRC. Do not make erosion a global capacity oracle before proof that its topology columns help.",
+      "overhead": "GPU-mandatory when preferred: hydraulic dispatch failure returns failure rather than silently using CPU. Per check defaults run 3x512 droplets and 256 relaxation iterations; GPU batching/reuse telemetry exists."
+    },
+    {
+      "rank": 4,
+      "module": "XPBD relaxation and pressure feedback",
+      "status": "implemented, enabled by default, measured on an older PH Tier-1 run; inactive or non-ranking for current straight realization",
+      "code": ["include/flux/core/regional_router.hpp:210-220", "src/regional_router.cpp:12007-12510", "src/routing_xpbd.cpp:787-805", "reports/vulkan_xpbd_iteration.md:124-171"],
+      "why": "It is a bounded joint local deformation after templates are selected. The retained benchmark reduced first-checkpoint shadow conflicts 111 to 69 and accepted 24 zero-violation local repairs, but the run remained non-DRC-clean and consumed 3.351 s GPU solve time inside a 2686.6 s run. It is evidence for local repair/feedback, not the measured planning-time fix.",
+      "minimal_experiment": "After the assignment bottleneck changes, repeat an A/B on the exact current PH frontier: feedback off/on with identical seed, candidate limits and timeout. Compare accepted/legalized windows, residual distribution, replan count, selected topology, total time and DRC categories.",
+      "constraints": "Fix endpoints and selected gate sequence; re-fit PH curves and accept only via existing topology, envelope, native copper, connectivity and DRC gates. Escalate non-convergence to topology change rather than adding iterations.",
+      "overhead": "GPU broadphase/solver/pressure field with CPU fallback in XPBD; broadphase and readback are already timed."
+    },
+    {
+      "rank": 5,
+      "module": "USPED NavMesh refinement",
+      "status": "implemented but opt-in; no tier-promotion or measured whole-board benefit",
+      "code": ["docs/adr/0172-usped-informed-navmesh.md", "src/usped.cpp:9-94", "src/navmesh_route.cpp:548-724", "include/flux/core/usped.hpp:10-37"],
+      "why": "It adds selected subcells according to a geometry-only D8 clearance field; it neither models net demand nor removes coarse cells. Prior data show enabled runs can add 4096 parents versus zero, but ADR 0172 explicitly states no evidence of improved realization or runtime. More cells can increase domain preparation and search costs, the current bottleneck.",
+      "minimal_experiment": "Use a fixed mesh-cell cap and paired on/off run, reporting actual cells, prepass time, selected parents, passages/candidates retained, candidate-assignment time, physical legality and KiCad DRC. Stop if it increases cost without changing a diagnosed resolution-limited failure.",
+      "constraints": "Keep masked cells immutable, no sink filling through obstacles, and fallback to baseline on cell-budget exhaustion. It is a CPU O(N log N) prepass today; GPU work is unjustified before a positive controlled result.",
+      "overhead": "CPU raster point queries, sort, field construction and additional NavMesh leaves."
+    },
+    {
+      "rank": 6,
+      "module": "PH curves / exact rational offsets",
+      "status": "implemented and authoritative only through later certificates; not a planning-speed mechanism",
+      "code": ["src/ph_route.cpp:2703-2814", "src/regional_router.cpp:12395-12484", "include/flux/core/spline_route.hpp:365-488"],
+      "why": "PH offsets make exact-envelope checks tractable and reject illegal local deformations. Current straight frontier leaves this path inactive. Improving it may affect DRC correctness once selected topology is viable, but cannot directly shrink millions of access-assignment states.",
+      "minimal_experiment": "Use the existing failing PH replay only after the planner reaches it. Compare certificate-first rejection against the current native-scene path for equal candidates; record rejected candidates before expensive materialization and exact agreement."
+    }
+  ],
+  "literature": [
+    {
+      "topic": "XPBD",
+      "source": "Macklin, Muller, Chentanez, XPBD: Position-Based Simulation of Compliant Constrained Dynamics (2016)",
+      "url": "https://mmacklin.com/xpbd.pdf",
+      "relevance": "Supports compliance-based iterative constraint projection; it does not establish topology planning or PCB legality."
+    },
+    {
+      "topic": "USPED",
+      "source": "Mitasova et al., Modelling topographic potential for erosion and deposition using GIS (1996), DOI 10.1080/02693799608902101",
+      "url": "https://www.tandfonline.com/doi/pdf/10.1080/02693799608902101",
+      "relevance": "Supports terrain transport/divergence semantics only; Flux deliberately maps it to a geometry-refinement prior."
+    },
+    {
+      "topic": "segment Voronoi",
+      "source": "Boost.Polygon Voronoi documentation",
+      "url": "https://www.boost.org/doc/libs/1_83_0/libs/polygon/doc/voronoi_diagram.htm",
+      "relevance": "Documents finite/infinite, primary/secondary and curved segment-site edges; validates Flux's need for independent chord certification."
+    },
+    {
+      "topic": "PH offsets",
+      "source": "Farouki and Manjunathaiah, Design of Rational CAM Profiles with Pythagorean-Hodograph Curves (1998), DOI 10.1016/S0094-114X(97)00099-2",
+      "url": "https://www.sciencedirect.com/science/article/pii/S0094114X97000992",
+      "relevance": "Supports exact rational offsets/arc-length properties used for clearance certification, not a global-routing solution."
+    },
+    {
+      "topic": "negotiated congestion",
+      "source": "McMurchie and Ebeling, PathFinder (1995)",
+      "url": "https://janders.eecg.toronto.edu/1387_2015/readings/pathfinder.pdf",
+      "relevance": "Supports cost/history negotiation; physical feasibility still needs Flux's geometric gates."
+    }
+  ],
+  "conclusion": "Do not expand erosion, USPED, XPBD or PH work to solve the present runtime issue. First profile and reduce alternative-domain construction and access-assignment state work while preserving certificates. Use erosion and XPBD only as targeted physical-conflict experiments after a PH/copper failure identifies a local topology or deformation mechanism."
+}

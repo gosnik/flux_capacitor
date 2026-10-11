@@ -1,5 +1,6 @@
 #include "flux/core/evaluate.hpp"
 
+#include "flux/core/bezier_copper.hpp"
 #include "flux/core/geometry.hpp"
 
 #include <compare>
@@ -59,6 +60,18 @@ EvaluationResult evaluate_board(const Board& board) {
     const auto remaining =
         std::numeric_limits<std::uint64_t>::max() - result.objective.routed_length_nm;
     result.objective.routed_length_nm += length > remaining ? remaining : length;
+  }
+  for (const auto& curve : board.track_beziers) {
+    const auto flattened = tessellate_track_bezier(curve);
+    if (!flattened.certified) {
+      result.objective.routed_length_nm = std::numeric_limits<std::uint64_t>::max();
+      continue;
+    }
+    for (const auto& segment : flattened.segments) {
+      const auto length = geometry::segment_length_nm(segment.start, segment.end);
+      const auto remaining = std::numeric_limits<std::uint64_t>::max() - result.objective.routed_length_nm;
+      result.objective.routed_length_nm += length > remaining ? remaining : length;
+    }
   }
   return result;
 }

@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "board": "pt2399_delay",
+  "tier": 0,
+  "failing_stage": "global checkpoint scheduling before physical certification",
+  "classification": ["search", "physical feasibility feedback"],
+  "smallest_net_set": null,
+  "physical_region": null,
+  "layers": ["F.Cu", "B.Cu"],
+  "resources": null,
+  "root_mechanism": "Initial global iteration count, shadow policy and allowed scope repair depend on total retry budget; a physically promising N1 seed is not offered the same certification in larger-budget runs",
+  "alternative_evidence": "Prior N1 accepted internal native scene: 50 paths, zero unrouted nets, zero native-scene conflicts, two scope retries; final KiCad legality remains unverified",
+  "prior_N6": {"planning_timeout_seconds": 600, "first_epoch_oracle_violations": 32, "first_epoch_oracle_opens": 0, "later_epoch_oracle_violations": 0, "later_epoch_oracle_opens": 9},
+  "candidate_ranking": ["certify initial seed with full scope repair", "preserve connection coverage during hard-capacity feedback", "retain larger global portfolios"],
+  "experiment": "Use seed-first epoch budget, full scope on initial/final epochs, retry-independent default initial shadow policy; keep explicit overrides and total budget",
+  "success_criterion": "Normal-budget detail reaches accepted output and final KiCad DRC without regressing local fixtures",
+  "regression_criterion": "Previously certifiable seeds disappear, retry budget is exceeded, or a legal fixture fails"
+}

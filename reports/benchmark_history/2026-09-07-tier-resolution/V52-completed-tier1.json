@@ -1,0 +1,82 @@
+{
+  "schema": 1,
+  "experiment": "V52",
+  "artifacts": "build/tier-resolution-v52-tier1",
+  "git_revision": "94aa691ad89576d1c0ac07a5346020da21fc9d06",
+  "working_tree_dirty": true,
+  "board": "bm_svf",
+  "tier": 1,
+  "qualified": false,
+  "completed": true,
+  "duration_seconds": 1698.7358973750015,
+  "configuration": {
+    "max_regional_bundle_states": 256,
+    "planning_timeout_seconds": 1800,
+    "curved_tracks": false
+  },
+  "exact_straight_scenes": [
+    {
+      "sequence": 3695,
+      "drc_violations": 733,
+      "opens": 0
+    },
+    {
+      "sequence": 5937,
+      "drc_violations": 725,
+      "opens": 0
+    },
+    {
+      "sequence": 8235,
+      "drc_violations": 644,
+      "opens": 0
+    },
+    {
+      "sequence": 10713,
+      "drc_violations": 1098,
+      "opens": 1
+    },
+    {
+      "sequence": 13307,
+      "drc_violations": 1329,
+      "opens": 1
+    },
+    {
+      "sequence": 15977,
+      "drc_violations": 1481,
+      "opens": 1
+    },
+    {
+      "sequence": 18669,
+      "drc_violations": 1060,
+      "opens": 0
+    },
+    {
+      "sequence": 21130,
+      "drc_violations": 1024,
+      "opens": 0
+    },
+    {
+      "sequence": 23656,
+      "drc_violations": 1123,
+      "opens": 0
+    },
+    {
+      "sequence": 26171,
+      "drc_violations": 745,
+      "opens": 0
+    },
+    {
+      "sequence": 28600,
+      "drc_violations": 776,
+      "opens": 0
+    },
+    {
+      "sequence": 31094,
+      "drc_violations": 796,
+      "opens": 0
+    }
+  ],
+  "selected_result_limitation": "Deferred regional assessment incorrectly outranked evaluated failed assignments, so final selected regional counters are zero. Exact scene events and matched reconstructed oracle evidence are retained independently. V54 regression reproduces this selection bug.",
+  "all_tiers_complete": false,
+  "metadata_file": "build/tier-resolution-v52-tier1/run-metadata.json"
+}

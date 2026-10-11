@@ -1,0 +1,329 @@
+{
+  "board": "bm_svf",
+  "tier": 1,
+  "stage": "quantized copper oracle / global-to-regional realization",
+  "classification": "geometric with allocation feedback",
+  "source": "build/tier-resolution-tier1-baseline/tier-1-bm_svf/telemetry/bm_svf-global.jsonl",
+  "snapshot_time_us": 92484455,
+  "epoch_summary": "interleaved routing epoch completed: regional_candidates=2, history_entries=519, history_pressure=5071, quantized_oracle_violations=560, quantized_oracle_opens=0",
+  "exact_oracle_violation_count": 560,
+  "telemetry_conflict_witnesses": 128,
+  "top_pairs": [
+    {
+      "nets": [
+        "kicad-net-4",
+        "kicad-net-5"
+      ],
+      "witnesses": 10
+    },
+    {
+      "nets": [
+        "kicad-net-1",
+        "kicad-net-13"
+      ],
+      "witnesses": 10
+    },
+    {
+      "nets": [
+        "kicad-net-1",
+        "kicad-net-7"
+      ],
+      "witnesses": 10
+    },
+    {
+      "nets": [
+        "kicad-net-1",
+        "kicad-net-16"
+      ],
+      "witnesses": 8
+    },
+    {
+      "nets": [
+        "kicad-net-16",
+        "kicad-net-5"
+      ],
+      "witnesses": 6
+    },
+    {
+      "nets": [
+        "kicad-net-13",
+        "kicad-net-14"
+      ],
+      "witnesses": 5
+    },
+    {
+      "nets": [
+        "kicad-net-20",
+        "kicad-net-25"
+      ],
+      "witnesses": 5
+    },
+    {
+      "nets": [
+        "kicad-net-13",
+        "kicad-net-16"
+      ],
+      "witnesses": 5
+    }
+  ],
+  "smallest_implicated_set": [
+    "kicad-net-4",
+    "kicad-net-5"
+  ],
+  "layers": [
+    "B.Cu",
+    "F.Cu"
+  ],
+  "region_nm": {
+    "x_nm": [
+      50890000,
+      53490000
+    ],
+    "y_nm": [
+      82565000,
+      93246500
+    ]
+  },
+  "dominant_categories": {
+    "quantization_clearance": 128
+  },
+  "witness_examples": [
+    {
+      "id": "quantized-copper:quantization_clearance:change_lane_order:B.Cu:52:83:track_clearance:kicad-net-4/1/run:kicad-net-5/1/run:kicad-net-4:kicad-net-5",
+      "kind": "physical",
+      "resource": "quantized-copper:quantization_clearance:change_lane_order:B.Cu:52:83:track_clearance:kicad-net-4/1/run:kicad-net-5/1/run:kicad-net-4:kicad-net-5",
+      "group": "quantized-copper-oracle:quantization_clearance",
+      "location": {
+        "x_nm": 52840000,
+        "y_nm": 83865000,
+        "layer": "B.Cu"
+      },
+      "nets": [
+        "kicad-net-4",
+        "kicad-net-5"
+      ],
+      "clearance_deficit_nm": 450000,
+      "pressure": 10,
+      "history": 0
+    },
+    {
+      "id": "quantized-copper:quantization_clearance:change_lane_order:B.Cu:52:84:track_clearance:kicad-net-4/1/run:kicad-net-5/1/run:kicad-net-4:kicad-net-5",
+      "kind": "physical",
+      "resource": "quantized-copper:quantization_clearance:change_lane_order:B.Cu:52:84:track_clearance:kicad-net-4/1/run:kicad-net-5/1/run:kicad-net-4:kicad-net-5",
+      "group": "quantized-copper-oracle:quantization_clearance",
+      "location": {
+        "x_nm": 52190000,
+        "y_nm": 84840000,
+        "layer": "B.Cu"
+      },
+      "nets": [
+        "kicad-net-4",
+        "kicad-net-5"
+      ],
+      "clearance_deficit_nm": 450000,
+      "pressure": 10,
+      "history": 0
+    },
+    {
+      "id": "quantized-copper:quantization_clearance:change_lane_order:B.Cu:52:85:track_clearance:kicad-net-4/1/run:kicad-net-5/1/run:kicad-net-4:kicad-net-5",
+      "kind": "physical",
+      "resource": "quantized-copper:quantization_clearance:change_lane_order:B.Cu:52:85:track_clearance:kicad-net-4/1/run:kicad-net-5/1/run:kicad-net-4:kicad-net-5",
+      "group": "quantized-copper-oracle:quantization_clearance",
+      "location": {
+        "x_nm": 52190000,
+        "y_nm": 85490000,
+        "layer": "B.Cu"
+      },
+      "nets": [
+        "kicad-net-4",
+        "kicad-net-5"
+      ],
+      "clearance_deficit_nm": 450000,
+      "pressure": 10,
+      "history": 0
+    },
+    {
+      "id": "quantized-copper:quantization_clearance:change_lane_order:B.Cu:52:86:track_clearance:kicad-net-4/1/run:kicad-net-5/1/run:kicad-net-4:kicad-net-5",
+      "kind": "physical",
+      "resource": "quantized-copper:quantization_clearance:change_lane_order:B.Cu:52:86:track_clearance:kicad-net-4/1/run:kicad-net-5/1/run:kicad-net-4:kicad-net-5",
+      "group": "quantized-copper-oracle:quantization_clearance",
+      "location": {
+        "x_nm": 52190000,
+        "y_nm": 86465000,
+        "layer": "B.Cu"
+      },
+      "nets": [
+        "kicad-net-4",
+        "kicad-net-5"
+      ],
+      "clearance_deficit_nm": 450000,
+      "pressure": 10,
+      "history": 0
+    },
+    {
+      "id": "quantized-copper:quantization_clearance:change_lane_order:B.Cu:52:87:track_clearance:kicad-net-4/1/run:kicad-net-5/1/run:kicad-net-4:kicad-net-5",
+      "kind": "physical",
+      "resource": "quantized-copper:quantization_clearance:change_lane_order:B.Cu:52:87:track_clearance:kicad-net-4/1/run:kicad-net-5/1/run:kicad-net-4:kicad-net-5",
+      "group": "quantized-copper-oracle:quantization_clearance",
+      "location": {
+        "x_nm": 52190000,
+        "y_nm": 87440000,
+        "layer": "B.Cu"
+      },
+      "nets": [
+        "kicad-net-4",
+        "kicad-net-5"
+      ],
+      "clearance_deficit_nm": 450000,
+      "pressure": 10,
+      "history": 0
+    },
+    {
+      "id": "quantized-copper:quantization_clearance:change_lane_order:B.Cu:52:88:track_clearance:kicad-net-4/1/run:kicad-net-5/1/run:kicad-net-4:kicad-net-5",
+      "kind": "physical",
+      "resource": "quantized-copper:quantization_clearance:change_lane_order:B.Cu:52:88:track_clearance:kicad-net-4/1/run:kicad-net-5/1/run:kicad-net-4:kicad-net-5",
+      "group": "quantized-copper-oracle:quantization_clearance",
+      "location": {
+        "x_nm": 52190000,
+        "y_nm": 88415000,
+        "layer": "B.Cu"
+      },
+      "nets": [
+        "kicad-net-4",
+        "kicad-net-5"
+      ],
+      "clearance_deficit_nm": 450000,
+      "pressure": 10,
+      "history": 0
+    },
+    {
+      "id": "quantized-copper:quantization_clearance:change_lane_order:B.Cu:52:89:track_clearance:kicad-net-4/1/run:kicad-net-5/1/run:kicad-net-4:kicad-net-5",
+      "kind": "physical",
+      "resource": "quantized-copper:quantization_clearance:change_lane_order:B.Cu:52:89:track_clearance:kicad-net-4/1/run:kicad-net-5/1/run:kicad-net-4:kicad-net-5",
+      "group": "quantized-copper-oracle:quantization_clearance",
+      "location": {
+        "x_nm": 52190000,
+        "y_nm": 89390000,
+        "layer": "B.Cu"
+      },
+      "nets": [
+        "kicad-net-4",
+        "kicad-net-5"
+      ],
+      "clearance_deficit_nm": 450000,
+      "pressure": 10,
+      "history": 0
+    },
+    {
+      "id": "quantized-copper:quantization_clearance:change_lane_order:B.Cu:53:82:track_clearance:kicad-net-4/1/run:kicad-net-5/1/run:kicad-net-4:kicad-net-5",
+      "kind": "physical",
+      "resource": "quantized-copper:quantization_clearance:change_lane_order:B.Cu:53:82:track_clearance:kicad-net-4/1/run:kicad-net-5/1/run:kicad-net-4:kicad-net-5",
+      "group": "quantized-copper-oracle:quantization_clearance",
+      "location": {
+        "x_nm": 53490000,
+        "y_nm": 82565000,
+        "layer": "B.Cu"
+      },
+      "nets": [
+        "kicad-net-4",
+        "kicad-net-5"
+      ],
+      "clearance_deficit_nm": 450000,
+      "pressure": 10,
+      "history": 0
+    }
+  ],
+  "interpretation": "Snapshot immediately preceding the best completed intermediate oracle epoch. Telemetry witnesses can be accumulated or coalesced and are not the oracle total, unique collisions, or external KiCad DRC counts. Global connectivity and capacity feasibility do not establish copper legality.",
+  "alternative_route_evidence": "Prior external KRT routing demonstrates feasibility; Flux has not reproduced the legal allocation.",
+  "completed_release_run": {
+    "artifacts": "build/tier-resolution-v47-release-tier1",
+    "planning_seconds": 1115.174,
+    "paths": 78,
+    "unrouted_nets": 0,
+    "abstract_overflow": 0,
+    "regional_windows": 44,
+    "complete_regional_bundles": 44,
+    "physical_conflict_edges": 151,
+    "straight_replacement_candidate": false,
+    "exact_copper_violations": {
+      "track_clearance": 436,
+      "track_via_clearance": 105,
+      "hole_clearance": 19
+    },
+    "final_kicad_drc_accepted": false
+  },
+  "earliest_missing_handoff": "Straight mode suppresses spline realization and also skips the only builder of regional replacement centerlines. Complete discrete lane assignments therefore do not become physical replacements.",
+  "straight_realization_progress": {
+    "experiments": [
+      "V49",
+      "V50",
+      "V51",
+      "V52"
+    ],
+    "retained_splines": true,
+    "physical_handoff": "Implemented and exactly checked; no tier promotion",
+    "measured_tree_junction_failures": "Existing branch vertices were lost during collinear fragment compression; V52 preserves them",
+    "first_portfolio_scope_sequence": [
+      {
+        "drc": 733,
+        "opens": 0
+      },
+      {
+        "drc": 725,
+        "opens": 0
+      },
+      {
+        "drc": 644,
+        "opens": 0
+      }
+    ],
+    "remaining_stage": "detailed physical copper legality",
+    "remaining_witnesses": [
+      {
+        "nets": [
+          "kicad-net-16",
+          "kicad-net-5"
+        ],
+        "layer": "B.Cu",
+        "bounds_nm": [
+          52152499,
+          90227499,
+          53527501,
+          91152501
+        ],
+        "kind": "track_via_clearance",
+        "coalesced_diagnoses": 12
+      },
+      {
+        "nets": [
+          "kicad-net-21",
+          "kicad-net-22"
+        ],
+        "layer": "F.Cu",
+        "bounds_nm": [
+          65489999,
+          56291999,
+          66190001,
+          56992001
+        ],
+        "kind": "track_clearance",
+        "coalesced_diagnoses": 11
+      }
+    ],
+    "diagnostic_pair_sweep": {
+      "authoritative": false,
+      "before_drc": 644,
+      "after_drc": 419,
+      "opens": 0,
+      "vias_before": 64,
+      "vias_after": 49,
+      "attempts": 13,
+      "stopped_reason": "No improving retained slot combination for the five current largest paired groups"
+    },
+    "next_ranked_hypotheses": [
+      "Generate new via/corridor alternatives for exact physical conflict components; retained pair slots reach a local minimum.",
+      "Evaluate a bounded larger joint neighborhood with exact copper costs and preserved tree anchors.",
+      "Feed realized physical conflicts to an earlier global epoch without exceeding declared search budgets."
+    ]
+  }
+}

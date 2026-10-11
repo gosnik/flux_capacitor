@@ -1,0 +1,62 @@
+diff --git a/src/regional_router.cpp b/src/regional_router.cpp
+--- a/src/regional_router.cpp
++++ b/src/regional_router.cpp
+@@
++  bool nonfinal_full_straight_assessment_attempted = false;
+@@
++    const auto globally_negotiated = [](const GlobalRouteResult& global) {
++      return coarse_topology_complete(global) && global.sampled_overflow == 0U &&
++             global.corridor_overflow == 0U &&
++             global.unaccepted_selected_voronoi_lane_transitions == 0U;
++    };
++    const bool may_assess_nonfinal_straight =
++        full_strength_epoch && !config.curved_tracks && config.interleave_routability_feedback &&
++        !final_epoch && !nonfinal_full_straight_assessment_attempted;
++    bool nonfinal_full_straight_assessment = false;
++    if (may_assess_nonfinal_straight) {
++      std::optional<std::pair<GlobalRouteResult, bool>> selected_input;
++      if (globally_negotiated(probed_global) && probed_global.total_overflow == 0U) {
++        selected_input.emplace(probed_global, pass > 0U);
++      } else {
++        for (const auto& retained : retained_global_portfolios) {
++          if (globally_negotiated(retained) && retained.total_overflow == 0U) {
++            selected_input.emplace(retained, pass > 0U);
++            break;
++          }
++        }
++      }
++      if (selected_input) {
++        regional_inputs.clear();
++        regional_inputs.push_back(std::move(*selected_input));
++        nonfinal_full_straight_assessment = true;
++        nonfinal_full_straight_assessment_attempted = true;
++      }
++    }
+@@
+-        (!full_strength_epoch || !config.curved_tracks);
++        (!full_strength_epoch || !config.curved_tracks) && !nonfinal_full_straight_assessment;
+@@
+-        if (pass > 0U && !final_epoch) regional_attempt_config.max_physical_scope_retries = 0U;
++        if ((pass > 0U && !final_epoch) || nonfinal_full_straight_assessment) {
++          regional_attempt_config.max_physical_scope_retries = 0U;
++        }
+diff --git a/tests/unit/core_tests.cpp b/tests/unit/core_tests.cpp
+--- a/tests/unit/core_tests.cpp
++++ b/tests/unit/core_tests.cpp
+@@
++  // Incomplete straight seeds remain cheap intermediate probes.
++  require(std::all_of(straight_feedback.feedback_probes.begin(), straight_feedback.feedback_probes.end(),
++                      [&](const auto& epoch) {
++                        return epoch.intermediate_regional_probe ||
++                               epoch.pass + 1U == straight_feedback.feedback_probes.size();
++                      }),
++          "an unresolved straight crossing must remain a cheap intermediate probe until final realization");
++
++  flux::RoutingPlannerConfig negotiated_straight_config;
++  negotiated_straight_config.full_strength_first_pass = true;
++  negotiated_straight_config.curved_tracks = false;
++  negotiated_straight_config.global = crossing_config;
++  negotiated_straight_config.global.max_iterations = 6U;
++  negotiated_straight_config.max_routability_feedback_retries = 2U;
++  const auto negotiated_straight = flux::plan_routes(two_pad_board(), negotiated_straight_config);
++  // Assert one clean non-final straight-enabled regional transaction with zero scope expansion.

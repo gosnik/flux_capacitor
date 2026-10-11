@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "date": "2026-09-07",
+  "experiment": "V28 run-aligned PH shoulder tangents",
+  "baseline_revision": "263aa64",
+  "kernel_commit": "7cd59fc",
+  "worktree": "Detailed integration plus preserved pre-existing experiments",
+  "board": "pt2399_delay",
+  "tier": 0,
+  "binary_sha256": "88d9984606ff1082c7405eea3d0086c06519818ef7a739273b20c60e1671f813",
+  "controlled_configuration": {"grid_pitch_nm": 900000, "iterations": 4, "feedback_retries": 3, "shadows": "enforced", "prioritize_frozen_scope_expansion": true},
+  "before": {"artifact": "build/tier0-baseline-v28-20260907", "global_seconds": 59.721530472, "detail_seconds": 133.191925739, "tracks": 88, "arcs": 136, "vias": 4, "unrounded_bends": 5, "kicad_errors": 0, "opens": 0, "tier_pass": false},
+  "after": {"artifact": "build/tier0-run-aligned-v28-20260907", "global_seconds": 61.09070394499577, "detail_seconds": 130.69260403502267, "paths": 50, "tracks": 82, "arcs": 152, "vias": 4, "run_aligned_candidates": 24, "run_aligned_exact_legal": 4, "unrounded_bends": 0, "internal_copper_violations": 0, "kicad_errors": 0, "opens": 0, "tier_pass": true},
+  "normal_budget_control": {"artifact": "build/tier0-run-aligned-default-budget-v28-20260907", "only_routing_override": {"grid_pitch_nm": 900000}, "global_seconds": 66.90592743299203, "detail_seconds": 131.30924501898699, "tier_pass": true, "copper_byte_identical": true},
+  "accepted_pcb_sha256": "2e0197607f1b02982a4e66fe58527c86b87f8b8f600ade47041d8bfb09e51cf7",
+  "route_length_mm": 407.95254076405774,
+  "route_length_method": "Native telemetry segments and three-point arcs; independent chord/asin cross-check within 1 nm",
+  "original_project_sha256": "ddbcc3d30ca8a4e88f38be0bb5a12f4f29f67048bd503d3e77b2e615196bab8a",
+  "external_drc": {"engine": "KiCad 9.0.8", "severity": "error", "original_project": true, "violations": 0, "opens": 0},
+  "peak_memory_bytes": null,
+  "decision": "keep: mirrored micro-test and original-project final copper support the measured bowing mechanism; timing differences are not a speedup claim"
+}

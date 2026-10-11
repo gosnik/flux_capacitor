@@ -1,0 +1,346 @@
+{
+  "kind": "pipeline_sequence_analysis",
+  "captured_at_utc": "2026-10-09T12:30:28.201939+00:00",
+  "code_changed": false,
+  "historical_runs": [
+    {
+      "source": "build/bezier-integration-validation/tier0.json",
+      "tier": 0,
+      "outcome": "timed-out",
+      "attempts": [
+        {
+          "action": "global",
+          "work_units": 7715,
+          "elapsed_microseconds": 11321244,
+          "quality_before": 18446744073709551615,
+          "quality_after": 3,
+          "accepted": true,
+          "diagnostic": "split global checkpoint"
+        },
+        {
+          "action": "quantized-probe",
+          "work_units": 0,
+          "elapsed_microseconds": 108515,
+          "quality_before": 18446744073709551615,
+          "quality_after": 8,
+          "accepted": true,
+          "diagnostic": "split global checkpoint"
+        },
+        {
+          "action": "regional",
+          "work_units": 32653,
+          "elapsed_microseconds": 45266893,
+          "quality_before": 18446744073709551615,
+          "quality_after": 0,
+          "accepted": true,
+          "diagnostic": "selected global paths require regional physical packing"
+        },
+        {
+          "action": "materialize",
+          "work_units": 1138,
+          "elapsed_microseconds": 70896628,
+          "quality_before": 18446744073709551615,
+          "quality_after": 0,
+          "accepted": true,
+          "diagnostic": "selected global paths require regional physical packing"
+        },
+        {
+          "action": "xpbd",
+          "work_units": 14678,
+          "elapsed_microseconds": 47176942,
+          "quality_before": 0,
+          "quality_after": 0,
+          "accepted": false,
+          "diagnostic": "selected global paths require regional physical packing"
+        }
+      ],
+      "unsmoothed_joints": 16
+    },
+    {
+      "source": "build/terrain-feedback-validation/terrain-tier0-detail.stdout",
+      "tier": 0,
+      "outcome": "timed-out",
+      "attempts": [
+        {
+          "action": "global",
+          "work_units": 7715,
+          "elapsed_microseconds": 17295585,
+          "live_copper_terrain_revision": 0,
+          "live_copper_terrain_features": 0,
+          "live_copper_terrain_provisional": false,
+          "quality_before": 18446744073709551615,
+          "quality_after": 3,
+          "accepted": true,
+          "diagnostic": "split global checkpoint"
+        },
+        {
+          "action": "quantized-probe",
+          "work_units": 0,
+          "elapsed_microseconds": 104276,
+          "live_copper_terrain_revision": 1,
+          "live_copper_terrain_features": 575,
+          "live_copper_terrain_provisional": true,
+          "quality_before": 18446744073709551615,
+          "quality_after": 8,
+          "accepted": true,
+          "diagnostic": "split global checkpoint"
+        },
+        {
+          "action": "regional",
+          "work_units": 32653,
+          "elapsed_microseconds": 46215585,
+          "live_copper_terrain_revision": 1,
+          "live_copper_terrain_features": 575,
+          "live_copper_terrain_provisional": true,
+          "quality_before": 18446744073709551615,
+          "quality_after": 0,
+          "accepted": true,
+          "diagnostic": "selected global paths require regional physical packing"
+        },
+        {
+          "action": "materialize",
+          "work_units": 1136,
+          "elapsed_microseconds": 70263197,
+          "live_copper_terrain_revision": 2,
+          "live_copper_terrain_features": 568,
+          "live_copper_terrain_provisional": true,
+          "quality_before": 18446744073709551615,
+          "quality_after": 0,
+          "accepted": true,
+          "diagnostic": "selected global paths require regional physical packing"
+        },
+        {
+          "action": "feedback-global",
+          "work_units": 6605,
+          "elapsed_microseconds": 15568812,
+          "live_copper_terrain_revision": 3,
+          "live_copper_terrain_features": 232,
+          "live_copper_terrain_provisional": false,
+          "quality_before": 3,
+          "quality_after": 0,
+          "accepted": true,
+          "diagnostic": "split global checkpoint"
+        },
+        {
+          "action": "quantized-probe",
+          "work_units": 0,
+          "elapsed_microseconds": 78930,
+          "live_copper_terrain_revision": 4,
+          "live_copper_terrain_features": 541,
+          "live_copper_terrain_provisional": true,
+          "quality_before": 18446744073709551615,
+          "quality_after": 56,
+          "accepted": true,
+          "diagnostic": "split global checkpoint"
+        }
+      ],
+      "unsmoothed_joints": 9
+    }
+  ],
+  "live_tier1": {
+    "source": "build/tier1-terrain-telemetry-20261009T104445Z/telemetry-records/bm_svf-global.jsonl",
+    "incomplete_at_capture": true,
+    "last_telemetry_seconds": 6311.627338,
+    "action_events": [
+      {
+        "time_seconds": 0.002372,
+        "message": "action=global, generation=0, work=0; kernel created"
+      },
+      {
+        "time_seconds": 156.140654,
+        "message": "action=global, generation=0, work=563405; accepted=yes, elapsed_us=156130793"
+      },
+      {
+        "time_seconds": 156.140665,
+        "message": "action=feedback-global, generation=1, work=0; kernel created"
+      },
+      {
+        "time_seconds": 303.233036,
+        "message": "action=feedback-global, generation=1, work=328419; accepted=yes, elapsed_us=147099382"
+      },
+      {
+        "time_seconds": 303.242734,
+        "message": "action=quantized-probe, generation=2, work=0; kernel created"
+      },
+      {
+        "time_seconds": 303.957789,
+        "message": "action=quantized-probe, generation=2, work=0; accepted=yes, elapsed_us=724738"
+      },
+      {
+        "time_seconds": 303.964461,
+        "message": "action=regional, generation=3, work=0; kernel created"
+      }
+    ],
+    "global_iteration_events": [
+      {
+        "time_seconds": 155.99945,
+        "metrics": {
+          "iteration": 1,
+          "total_nets": 25,
+          "routed_nets": 19,
+          "unrouted_nets": 6,
+          "total_groups": 0,
+          "routed_groups": 0,
+          "unrouted_groups": 0,
+          "sampled_overflow": 0,
+          "corridor_overflow": 0,
+          "physical_overflow_nm": 0,
+          "clearance_shadow_conflicts": 44,
+          "regional_conflicts": 0,
+          "route_cost": 1417459,
+          "vias": 0,
+          "rip_ups": 11,
+          "search_expansions": 380921,
+          "selected_checkpoint": 0,
+          "best_checkpoint": 0,
+          "selected_is_best": false
+        }
+      },
+      {
+        "time_seconds": 281.506916,
+        "metrics": {
+          "iteration": 1,
+          "total_nets": 25,
+          "routed_nets": 25,
+          "unrouted_nets": 0,
+          "total_groups": 0,
+          "routed_groups": 0,
+          "unrouted_groups": 0,
+          "sampled_overflow": 0,
+          "corridor_overflow": 0,
+          "physical_overflow_nm": 0,
+          "clearance_shadow_conflicts": 330,
+          "regional_conflicts": 0,
+          "route_cost": 842536,
+          "vias": 0,
+          "rip_ups": 0,
+          "search_expansions": 60770,
+          "selected_checkpoint": 0,
+          "best_checkpoint": 0,
+          "selected_is_best": false
+        }
+      },
+      {
+        "time_seconds": 289.421256,
+        "metrics": {
+          "iteration": 2,
+          "total_nets": 25,
+          "routed_nets": 25,
+          "unrouted_nets": 0,
+          "total_groups": 0,
+          "routed_groups": 0,
+          "unrouted_groups": 0,
+          "sampled_overflow": 0,
+          "corridor_overflow": 0,
+          "physical_overflow_nm": 0,
+          "clearance_shadow_conflicts": 355,
+          "regional_conflicts": 0,
+          "route_cost": 927476,
+          "vias": 0,
+          "rip_ups": 0,
+          "search_expansions": 66815,
+          "selected_checkpoint": 0,
+          "best_checkpoint": 0,
+          "selected_is_best": false
+        }
+      },
+      {
+        "time_seconds": 294.892982,
+        "metrics": {
+          "iteration": 3,
+          "total_nets": 14,
+          "routed_nets": 14,
+          "unrouted_nets": 0,
+          "total_groups": 0,
+          "routed_groups": 0,
+          "unrouted_groups": 0,
+          "sampled_overflow": 0,
+          "corridor_overflow": 0,
+          "physical_overflow_nm": 0,
+          "clearance_shadow_conflicts": 288,
+          "regional_conflicts": 0,
+          "route_cost": 784338,
+          "vias": 0,
+          "rip_ups": 0,
+          "search_expansions": 55520,
+          "selected_checkpoint": 0,
+          "best_checkpoint": 0,
+          "selected_is_best": false
+        }
+      },
+      {
+        "time_seconds": 303.119058,
+        "metrics": {
+          "iteration": 4,
+          "total_nets": 25,
+          "routed_nets": 25,
+          "unrouted_nets": 0,
+          "total_groups": 0,
+          "routed_groups": 0,
+          "unrouted_groups": 0,
+          "sampled_overflow": 0,
+          "corridor_overflow": 0,
+          "physical_overflow_nm": 0,
+          "clearance_shadow_conflicts": 388,
+          "regional_conflicts": 0,
+          "route_cost": 898987,
+          "vias": 0,
+          "rip_ups": 0,
+          "search_expansions": 63862,
+          "selected_checkpoint": 0,
+          "best_checkpoint": 0,
+          "selected_is_best": false
+        }
+      }
+    ],
+    "regional_analysis_start_seconds": [
+      303.998882,
+      4754.73681,
+      5668.116801
+    ],
+    "shove_deadlock_count": 20,
+    "first_shove_deadlock": {
+      "time_seconds": 1433.256986,
+      "message": "selected spline/PNS realization diagnosed shove_deadlock; xpbd_attempted=no, xpbd_topology_escape=no; selected state has realizations=5, topology=0, shape=0, mutual=2, quantization=2, short=0, locally_resolved=no"
+    },
+    "spline_phase_records": 186,
+    "summed_worker_phase_microseconds": {
+      "setup_us": 132176972,
+      "interpolation_us": 115490337,
+      "xpbd_us": 4,
+      "joint_shove_us": 237723171,
+      "trajectory_polish_us": 126828438,
+      "adaptive_pair_us": 204514083,
+      "post_polish_us": 994782,
+      "quantization_us": 74429,
+      "native_fit_us": 7656,
+      "native_drc_us": 17397622,
+      "elapsed_us": 835975285
+    },
+    "timing_warning": "Per-candidate worker timings overlap; sums are not elapsed critical-path time. In-flight work has no final duration."
+  },
+  "parallel_worker_experiment": "reports/benchmark_history/2026-09-06-eight-spline-workers.json",
+  "recommendations_ranked": [
+    "Return bounded regional transactions to engine before fallback/scope waves monopolize deadline.",
+    "Use common completion-aware post-probe scoring and conditional probe/regional/materialization transitions.",
+    "Reuse immutable scene/domain preparation across actions; precompute terrain/USPED proposals keyed to exact dependencies.",
+    "Bound speculative local-repair and topology-alternative jobs, commit one validated result serially.",
+    "Parallelize candidate search inside dominant windows only after measuring the critical path; do not simply increase window workers."
+  ],
+  "speculation_contract": [
+    "Immutable input fingerprint: board/rules/net/layer/clearance/topology and relevant copper content.",
+    "Private mutable result/cache/history deltas; no premature shared copper or history updates.",
+    "Shared CPU/GPU/memory budget with foreground priority and bounded queue.",
+    "Cancellation at safe checkpoints; revalidate stale results against touched resources before commit.",
+    "Deterministic arbitration and exact copper checks; external KiCad DRC remains final promotion gate."
+  ],
+  "limits": [
+    "Historical configurations, build modes and concurrent workloads differ; no causal speedup inferred.",
+    "accepted is a score-improvement telemetry flag, not a guarantee of legality or a rollback gate.",
+    "No sequence ablation or new benchmark was run for this analysis."
+  ],
+  "references": [
+    "https://docs.verilogtorouting.org/en/latest/vpr/command_line_usage/",
+    "https://openroad.readthedocs.io/en/latest/main/src/drt/README.html"
+  ]
+}

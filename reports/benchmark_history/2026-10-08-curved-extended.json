@@ -1,0 +1,452 @@
+{
+  "date": "2026-10-08",
+  "status": "finished_with_interrupted_runs",
+  "build": "Release",
+  "binary_sha256": "dc7760fff714dfa6357bff063cc86bd76702fc7f1d1cbe3a49f010d6890e11c8",
+  "outer_timeout_seconds": 10800,
+  "engine_timeout_seconds": 10740,
+  "concurrent_runs": true,
+  "geometry": "curved",
+  "manifest_promoted": false,
+  "boards": [
+    {
+      "board": "pt2399_delay",
+      "tier": 0,
+      "artifacts": "build/tiers-curved-extended-release-20261008/pt2399_delay",
+      "state": "complete",
+      "qualified": false,
+      "final_copper_available": false,
+      "metrics": {
+        "global": {
+          "duration_seconds": 56.83509936599876,
+          "routing_engine_outcome": "awaiting-materialization",
+          "routing_plan_complete": true,
+          "paths": 50,
+          "unrouted_nets": 0,
+          "routing_engine_attempts": [
+            {
+              "accepted": true,
+              "action": "global",
+              "diagnostic": "split global checkpoint",
+              "elapsed_microseconds": 10735871,
+              "quality_after": 3,
+              "quality_before": 18446744073709551615,
+              "work_units": 7715
+            },
+            {
+              "accepted": true,
+              "action": "quantized-probe",
+              "diagnostic": "split global checkpoint",
+              "elapsed_microseconds": 103708,
+              "quality_after": 8,
+              "quality_before": 18446744073709551615,
+              "work_units": 0
+            },
+            {
+              "accepted": true,
+              "action": "regional",
+              "diagnostic": "selected global paths require regional physical packing",
+              "elapsed_microseconds": 45868217,
+              "quality_after": 0,
+              "quality_before": 18446744073709551615,
+              "work_units": 32653
+            }
+          ]
+        },
+        "detail": {
+          "duration_seconds": 6451.414429486998,
+          "added_track_arcs": 142,
+          "added_tracks": 87,
+          "added_vias": 3,
+          "complete": false,
+          "copper_violations": 0,
+          "open_connections": 0,
+          "routing_engine_attempts": [
+            {
+              "accepted": true,
+              "action": "global",
+              "diagnostic": "split global checkpoint",
+              "elapsed_microseconds": 10734030,
+              "quality_after": 3,
+              "quality_before": 18446744073709551615,
+              "work_units": 7715
+            },
+            {
+              "accepted": true,
+              "action": "quantized-probe",
+              "diagnostic": "split global checkpoint",
+              "elapsed_microseconds": 107845,
+              "quality_after": 8,
+              "quality_before": 18446744073709551615,
+              "work_units": 0
+            },
+            {
+              "accepted": true,
+              "action": "regional",
+              "diagnostic": "selected global paths require regional physical packing",
+              "elapsed_microseconds": 44724077,
+              "quality_after": 0,
+              "quality_before": 18446744073709551615,
+              "work_units": 32653
+            },
+            {
+              "accepted": true,
+              "action": "materialize",
+              "diagnostic": "selected global paths require regional physical packing",
+              "elapsed_microseconds": 61317755,
+              "quality_after": 0,
+              "quality_before": 18446744073709551615,
+              "work_units": 1136
+            },
+            {
+              "accepted": true,
+              "action": "feedback-global",
+              "diagnostic": "split global checkpoint",
+              "elapsed_microseconds": 9243563,
+              "quality_after": 0,
+              "quality_before": 3,
+              "work_units": 6605
+            },
+            {
+              "accepted": true,
+              "action": "quantized-probe",
+              "diagnostic": "split global checkpoint",
+              "elapsed_microseconds": 85225,
+              "quality_after": 56,
+              "quality_before": 18446744073709551615,
+              "work_units": 0
+            },
+            {
+              "accepted": false,
+              "action": "regional",
+              "diagnostic": "selected global paths require regional physical packing",
+              "elapsed_microseconds": 1701470795,
+              "quality_after": 18446744073709551615,
+              "quality_before": 18446744073709551615,
+              "work_units": 16127002
+            },
+            {
+              "accepted": false,
+              "action": "materialize",
+              "diagnostic": "selected global paths require regional physical packing",
+              "elapsed_microseconds": 68405601,
+              "quality_after": 13,
+              "quality_before": 0,
+              "work_units": 1359
+            },
+            {
+              "accepted": false,
+              "action": "xpbd",
+              "diagnostic": "selected global paths require regional physical packing",
+              "elapsed_microseconds": 2693662813,
+              "quality_after": 18446744073709551615,
+              "quality_before": 18446744073709551615,
+              "work_units": 33722894
+            },
+            {
+              "accepted": false,
+              "action": "materialize",
+              "diagnostic": "selected global paths require regional physical packing",
+              "elapsed_microseconds": 64455554,
+              "quality_after": 13,
+              "quality_before": 0,
+              "work_units": 1359
+            },
+            {
+              "accepted": false,
+              "action": "erosion",
+              "diagnostic": "selected global paths require regional physical packing",
+              "elapsed_microseconds": 1657509824,
+              "quality_after": 18446744073709551615,
+              "quality_before": 18446744073709551615,
+              "work_units": 32959789
+            },
+            {
+              "accepted": false,
+              "action": "materialize",
+              "diagnostic": "selected global paths require regional physical packing",
+              "elapsed_microseconds": 62216476,
+              "quality_after": 13,
+              "quality_before": 0,
+              "work_units": 1359
+            },
+            {
+              "accepted": false,
+              "action": "usped",
+              "diagnostic": "split global checkpoint",
+              "elapsed_microseconds": 13193016,
+              "quality_after": 0,
+              "quality_before": 0,
+              "work_units": 12717
+            }
+          ],
+          "routing_engine_outcome": "exhausted",
+          "spline_trajectory_final_bend_radius_violations": 0,
+          "spline_trajectory_final_continuous_violations": 0,
+          "spline_trajectory_final_control_station_reversals": 0,
+          "spline_trajectory_final_cusps": 0,
+          "spline_trajectory_final_excess_turn_violations": 0,
+          "spline_trajectory_final_self_intersections": 0,
+          "spline_trajectory_final_shape_violations": 0,
+          "spline_trajectory_final_station_reversals": 0,
+          "spline_trajectory_final_unintended_inflections": 0,
+          "spline_trajectory_final_violations": 0,
+          "unrounded_non_junction_bends": 6
+        }
+      },
+      "candidate_copper_available": true,
+      "diagnostic": "qualified curved detailed route regressed: six unrounded bends; external KiCad one unconnected item",
+      "external_drc": {
+        "violations": 0,
+        "unconnected_items": 1
+      },
+      "process_metrics": {
+        "harness_wall_seconds": 6553,
+        "peak_rss_kb": 3565420,
+        "user_cpu_seconds": 10461.18,
+        "system_cpu_seconds": 56.47,
+        "source": "build/tiers-curved-extended-release-20261008/experiment/logs/pt2399_delay.time"
+      }
+    },
+    {
+      "board": "bm_svf",
+      "tier": 1,
+      "artifacts": "build/tiers-curved-extended-release-20261008/bm_svf",
+      "state": "interrupted_without_final_result",
+      "qualified": false,
+      "final_copper_available": false,
+      "metrics": {},
+      "diagnostic": "Process absent; telemetry ends mid-run; no final result. Cause not established. Not classified as engine timeout or exhaustion."
+    },
+    {
+      "board": "ft2232h_jtag",
+      "tier": 2,
+      "artifacts": "build/tiers-curved-extended-release-20261008/ft2232h_jtag",
+      "state": "complete",
+      "qualified": false,
+      "final_copper_available": false,
+      "metrics": {
+        "global": {
+          "duration_seconds": 9305.421877743996,
+          "clearance_shadow_conflicts": 340,
+          "paths": 117,
+          "routing_engine_attempts": [
+            {
+              "accepted": true,
+              "action": "global",
+              "diagnostic": "split global checkpoint",
+              "elapsed_microseconds": 54134272,
+              "quality_after": 381,
+              "quality_before": 18446744073709551615,
+              "work_units": 432286
+            },
+            {
+              "accepted": true,
+              "action": "quantized-probe",
+              "diagnostic": "split global checkpoint",
+              "elapsed_microseconds": 255877,
+              "quality_after": 930,
+              "quality_before": 18446744073709551615,
+              "work_units": 0
+            },
+            {
+              "accepted": false,
+              "action": "regional",
+              "diagnostic": "selected global paths require regional physical packing",
+              "elapsed_microseconds": 580069783,
+              "quality_after": 18446744073709551615,
+              "quality_before": 18446744073709551615,
+              "work_units": 109927923
+            },
+            {
+              "accepted": false,
+              "action": "xpbd",
+              "diagnostic": "selected global paths require regional physical packing",
+              "elapsed_microseconds": 1112232873,
+              "quality_after": 18446744073709551615,
+              "quality_before": 18446744073709551615,
+              "work_units": 57985633
+            },
+            {
+              "accepted": false,
+              "action": "erosion",
+              "diagnostic": "selected global paths require regional physical packing",
+              "elapsed_microseconds": 697735783,
+              "quality_after": 18446744073709551615,
+              "quality_before": 18446744073709551615,
+              "work_units": 58244618
+            },
+            {
+              "accepted": false,
+              "action": "regional",
+              "diagnostic": "selected global paths require regional physical packing",
+              "elapsed_microseconds": 710019699,
+              "quality_after": 18446744073709551615,
+              "quality_before": 18446744073709551615,
+              "work_units": 57985314
+            },
+            {
+              "accepted": false,
+              "action": "xpbd",
+              "diagnostic": "selected global paths require regional physical packing",
+              "elapsed_microseconds": 1179640236,
+              "quality_after": 18446744073709551615,
+              "quality_before": 18446744073709551615,
+              "work_units": 57985633
+            },
+            {
+              "accepted": false,
+              "action": "erosion",
+              "diagnostic": "selected global paths require regional physical packing",
+              "elapsed_microseconds": 741581741,
+              "quality_after": 18446744073709551615,
+              "quality_before": 18446744073709551615,
+              "work_units": 58244618
+            },
+            {
+              "accepted": false,
+              "action": "regional",
+              "diagnostic": "selected global paths require regional physical packing",
+              "elapsed_microseconds": 729186414,
+              "quality_after": 18446744073709551615,
+              "quality_before": 18446744073709551615,
+              "work_units": 57985314
+            },
+            {
+              "accepted": false,
+              "action": "xpbd",
+              "diagnostic": "selected global paths require regional physical packing",
+              "elapsed_microseconds": 1074809441,
+              "quality_after": 18446744073709551615,
+              "quality_before": 18446744073709551615,
+              "work_units": 57985633
+            },
+            {
+              "accepted": false,
+              "action": "erosion",
+              "diagnostic": "selected global paths require regional physical packing",
+              "elapsed_microseconds": 859060101,
+              "quality_after": 18446744073709551615,
+              "quality_before": 18446744073709551615,
+              "work_units": 58244618
+            },
+            {
+              "accepted": false,
+              "action": "erosion",
+              "diagnostic": "selected global paths require regional physical packing",
+              "elapsed_microseconds": 776777093,
+              "quality_after": 18446744073709551615,
+              "quality_before": 18446744073709551615,
+              "work_units": 58244618
+            },
+            {
+              "accepted": false,
+              "action": "erosion",
+              "diagnostic": "selected global paths require regional physical packing",
+              "elapsed_microseconds": 789443805,
+              "quality_after": 18446744073709551615,
+              "quality_before": 18446744073709551615,
+              "work_units": 58244618
+            }
+          ],
+          "routing_engine_outcome": "exhausted",
+          "routing_plan_complete": false,
+          "total_overflow": 381,
+          "unrouted_nets": 0
+        }
+      },
+      "diagnostic": "physical plan incomplete; repeated repair attempts exhausted; no detailed copper",
+      "process_metrics": {
+        "harness_wall_seconds": 9358,
+        "peak_rss_kb": 3183924,
+        "user_cpu_seconds": 13971.69,
+        "system_cpu_seconds": 141.63
+      }
+    },
+    {
+      "board": "gb_nintendo_power",
+      "tier": 3,
+      "artifacts": "build/tiers-curved-extended-release-20261008/gb_nintendo_power-iterations30",
+      "state": "complete",
+      "qualified": false,
+      "final_copper_available": false,
+      "metrics": {
+        "global": {
+          "duration_seconds": 422.56765105299564,
+          "routing_engine_outcome": "exhausted",
+          "routing_plan_complete": false,
+          "paths": 1,
+          "unrouted_nets": 64,
+          "routing_engine_attempts": [
+            {
+              "accepted": true,
+              "action": "global",
+              "diagnostic": "split global checkpoint",
+              "elapsed_microseconds": 14728129,
+              "quality_after": 64,
+              "quality_before": 18446744073709551615,
+              "work_units": 167505
+            },
+            {
+              "accepted": false,
+              "action": "feedback-global",
+              "diagnostic": "split global checkpoint",
+              "elapsed_microseconds": 76336357,
+              "quality_after": 64,
+              "quality_before": 64,
+              "work_units": 822611
+            },
+            {
+              "accepted": false,
+              "action": "usped",
+              "diagnostic": "split global checkpoint",
+              "elapsed_microseconds": 83126076,
+              "quality_after": 64,
+              "quality_before": 64,
+              "work_units": 822037
+            },
+            {
+              "accepted": false,
+              "action": "feedback-global",
+              "diagnostic": "split global checkpoint",
+              "elapsed_microseconds": 92257039,
+              "quality_after": 64,
+              "quality_before": 64,
+              "work_units": 821693
+            },
+            {
+              "accepted": false,
+              "action": "usped",
+              "diagnostic": "split global checkpoint",
+              "elapsed_microseconds": 85637381,
+              "quality_after": 64,
+              "quality_before": 64,
+              "work_units": 823153
+            },
+            {
+              "accepted": false,
+              "action": "feedback-global",
+              "diagnostic": "split global checkpoint",
+              "elapsed_microseconds": 70413643,
+              "quality_after": 64,
+              "quality_before": 64,
+              "work_units": 686988
+            }
+          ]
+        }
+      },
+      "diagnostic": ""
+    },
+    {
+      "board": "nascom_eprom_80bus",
+      "tier": 4,
+      "artifacts": "build/tiers-curved-extended-release-20261008/nascom_eprom_80bus",
+      "state": "interrupted_without_final_result",
+      "qualified": false,
+      "final_copper_available": false,
+      "metrics": {},
+      "diagnostic": "Process absent; telemetry ends mid-run; no final result. Cause not established. Not classified as engine timeout or exhaustion."
+    }
+  ],
+  "visual_audit": "reports/diagnoses/2026-10-08-curved-extended-visual.json"
+}

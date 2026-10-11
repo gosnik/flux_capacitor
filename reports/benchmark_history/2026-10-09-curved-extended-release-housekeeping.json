@@ -1,0 +1,27 @@
+{
+  "date": "2026-10-09",
+  "artifact_root": "build/tiers-curved-extended-release-20261008",
+  "executable_sha256": "dc7760fff714dfa6357bff063cc86bd76702fc7f1d1cbe3a49f010d6890e11c8",
+  "geometry": "curved",
+  "tier0": {
+    "board": "pt2399_delay",
+    "status": "failed",
+    "duration_seconds": 6451.414429486998,
+    "complete": false,
+    "stop_reason": "invalid_path",
+    "artifact_preview_only": true,
+    "authoritative_final_copper": false,
+    "detail_result": "build/tiers-curved-extended-release-20261008/pt2399_delay/tier-0-pt2399_delay/detail-result.json"
+  },
+  "tier1": {
+    "board": "bm_svf",
+    "status": "interrupted_without_result",
+    "authoritative_final_copper": false,
+    "telemetry": "build/tiers-curved-extended-release-20261008/bm_svf/tier-1-bm_svf/telemetry/bm_svf-global.jsonl",
+    "last_sequence": 60577,
+    "last_monotonic_time_us": 9511920186,
+    "result": null,
+    "reason": "No result or time log was written; no bm_svf runner process remained during post-run inspection."
+  },
+  "visual_report": "reports/diagnoses/2026-10-08-curved-extended-visual.json"
+}

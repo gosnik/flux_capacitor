@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "experiment": "V35 cut-crossing demand after V34 exact-identity ablation",
+  "board": "bm_svf",
+  "tier": 1,
+  "stage": "regional discrete capacity before lane packing or spline realization",
+  "source_context": "build/tier1-local-support-v33-20260907/tier-1-bm_svf/telemetry/bm_svf-global.jsonl",
+  "group": "regional-bundle-context:ordinary:0",
+  "occurrence": 1,
+  "layer": "F.Cu",
+  "smallest_mechanism": {
+    "channel": 20,
+    "section": 1,
+    "fragments": [["kicad-net-5", 1, 0, 2], ["kicad-net-5", 1, 0, 3]],
+    "shared_bend_nm": [54790000, 91990000],
+    "wall_nm": [[54393048, 92271500], [55186952, 92271500]],
+    "centerline_distances_nm": [0, 281500],
+    "copper_radius_nm": 125000,
+    "clearance_expanded_radius_nm": 325000,
+    "legacy_demand_nm": 1100000,
+    "section_width_nm": 793904,
+    "finding": "Only one branch's copper crosses the section; the adjacent branch is charged a full independent lane due to clearance-only contact."
+  },
+  "other_evidence": [
+    "Channel 0 sections 2/3 charge both net-13 bend fragments despite distances 261000/325000 nm, outside their copper radii.",
+    "Channel 20 section 2 charges three net-5 fragments at distances 197670, 209500 and 251999 nm, all outside their copper radii."
+  ],
+  "actual_physical_baseline": {
+    "connections": 78,
+    "opens": 0,
+    "native_internal_reports": 853,
+    "categories": {"track_clearance": 752, "track_via_clearance": 71, "hole_clearance": 28, "via_clearance": 2},
+    "final_copper_exported": false,
+    "final_kicad_drc": null
+  },
+  "classification": "An overconservative allocation abstraction coexists with genuine geometric conflicts; neither a cut bound nor reduced capacity rejection proves a route exists.",
+  "ranked_candidates": [
+    "Count finite centerline cuts for the optimistic lane allocator; retain full physical obstacles, clearances and all fragments downstream.",
+    "Compute same-net capsule/section interval unions, requiring a new packing model and monotone partial bound.",
+    "Jointly change corridor or layer topology if genuine copper conflicts survive."
+  ],
+  "success_criterion": "Generate complete choices in the frozen first window and improve fully certified Tier-1 progress without Tier-0 regression.",
+  "regression_criterion": "Any changed fabrication rule, missing connection, broken exact DRC gate or Tier-0 failure rejects promotion."
+}

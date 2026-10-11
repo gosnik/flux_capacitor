@@ -10,8 +10,8 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
-#include <optional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -75,6 +75,7 @@ private:
   void draw_menu_bar();
   void draw_source_panel();
   void draw_overlay_panel();
+  void draw_legend_panel();
   void draw_board_canvas();
   void draw_metrics_panel();
   void draw_activity_panel();
@@ -90,11 +91,14 @@ private:
   [[nodiscard]] const telemetry::LiveState& state() const;
   [[nodiscard]] const telemetry::LiveState& overlay_state() const;
   void sync_overlay_history_to_source();
+  [[nodiscard]] std::optional<std::uint64_t> freshness_age_us(
+      const std::optional<std::uint64_t>& event_time_us, bool metrics) const;
 
   LaunchOptions options_;
   SourceMode mode_{SourceMode::live};
   LiveClient client_;
   telemetry::LiveState live_state_;
+  telemetry::LiveSessionTimeline live_timeline_;
   telemetry::Trace trace_;
   telemetry::Replay replay_;
   telemetry::LiveStateHistory overlay_history_;
@@ -113,7 +117,14 @@ private:
   double replay_accumulator_us_{0.0};
   std::uint64_t replay_clock_us_{0};
   std::uint64_t live_connection_generation_{0};
+  // Kept across automatic WebSocket reconnects so the first authoritative source identity can
+  // distinguish a continuation of the current board from a genuinely new board.
+  std::string live_board_identity_;
   std::chrono::steady_clock::time_point last_tick_{std::chrono::steady_clock::now()};
+  std::optional<std::uint64_t> live_metrics_event_time_us_;
+  std::optional<std::uint64_t> live_geometry_event_time_us_;
+  std::optional<std::chrono::steady_clock::time_point> live_metrics_received_at_;
+  std::optional<std::chrono::steady_clock::time_point> live_geometry_received_at_;
   bool wants_exit_{false};
 };
 

@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "experiment": "coherent-endpoint-via-quantization-seed-control",
+  "board": "bm_svf",
+  "tier": 1,
+  "git_revision": "25e3b884be9b359d9c5bf0cc4fbb6cc836fd4f82",
+  "checkpoint": "first complete 78-path selected global snapshot, before downstream feedback",
+  "same_source_paths": true,
+  "path_sha256": "a88a7b34663d93454f018cc283935a853fca18e759df99835e5599ca197166bd",
+  "hash_definition": "SHA256 of sorted (id,width_nm,points) tuples encoded as JSON with sorted object keys and compact separators",
+  "before": {
+    "cli_sha256": "ff4f0e19f1abb1bc4e631df434a0adc2c332a4c7c94ec0eec4d76dba5c231909",
+    "root": "build/tier1-exact-branch-v4-20260906",
+    "provisional_copper_violations": 684,
+    "provisional_opens": 5,
+    "exact_diagnoses": 146,
+    "mapped_source_pairs": 317,
+    "unmapped_source_pairs": 0
+  },
+  "after": {
+    "cli_sha256": "892d1078ace2857b425ef23c1ffd1a67429156ef1f2c817bf00b27f479186ce4",
+    "root": "build/tier1-coherent-via-v5-20260906",
+    "provisional_copper_violations": 764,
+    "provisional_opens": 0,
+    "exact_diagnoses": 153,
+    "mapped_source_pairs": 334,
+    "unmapped_source_pairs": 0
+  },
+  "interpretation": "Identical source paths now have zero provisional opens. More copper is evaluated rather than discarded as malformed, exposing additional collisions. This is a diagnostic correctness improvement, not legal routing.",
+  "final_kicad_drc": "not_evaluated_for_this_seed_control",
+  "tier_promoted": false
+}

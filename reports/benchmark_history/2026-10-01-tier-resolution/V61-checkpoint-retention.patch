@@ -1,0 +1,427 @@
+--- a/src/regional_router.cpp
++++ b/src/regional_router.cpp
+@@ -13811,6 +13811,20 @@
+ 
+ void build_regional_spline_candidate(const Board& board, const GlobalRouteResult& global,
+                                      RegionalRouteResult& result) {
++  // Assessment belongs to the exact scene which was checked. Rebuilding (even if ownership
++  // fails before assembly) invalidates that evidence; a copied incumbent is kept separately.
++  result.native_scene_evaluated = false;
++  result.native_scene_complete = false;
++  result.native_scene_conflicts = 0U;
++  result.native_scene_fixed_conflicts = 0U;
++  result.straight_scene_evaluated = false;
++  result.straight_scene_drc_violations = 0U;
++  result.straight_scene_open_connections = 0U;
++  result.straight_scene_drc_categories.clear();
++  std::erase_if(result.local_routability_diagnoses, [](const auto& diagnosis) {
++    return diagnosis.resource.stable_id.starts_with("native-scene:") ||
++           diagnosis.resource.stable_id.starts_with("straight-scene:");
++  });
+   result.spline_candidate_paths.clear();
+   result.native_realization_manifest.clear();
+   result.native_realization_manifest_available = false;
+@@ -14955,10 +14969,13 @@
+ 
+ static void realize_regional_straight_candidate_once(const Board& board, const GlobalRouteResult& global,
+                                          RegionalRouteResult& result, std::stop_token stop_token) {
++  result.straight_scene_evaluated = false;
+   result.spline_candidate_available = false;
+   result.native_realization_manifest_available = false;
+   result.native_realization_manifest.clear();
+   result.spline_candidate_paths.clear();
++  result.native_scene_evaluated = false;
++  result.native_scene_complete = false;
+   if (stop_token.stop_requested()) return;
+   for (auto& assignment : result.bundle_assignments) {
+     assignment.spline_realizations.clear();
+@@ -15155,6 +15172,7 @@
+   oracle_config.grid_pitch = Nanometres{1};
+   ++result.linear_scaffold_checks;
+   const auto proof = probe_quantized_copper_feasibility(scene, candidate, oracle_config, stop_token);
++  result.straight_scene_evaluated = proof.evaluated && proof.all_paths_materialized;
+   result.straight_scene_drc_violations = proof.drc_violations;
+   result.straight_scene_open_connections = proof.open_connections;
+   result.straight_scene_drc_categories.clear();
+@@ -15248,6 +15266,8 @@
+ }
+ 
+ void assess_regional_native_scene(const Board& source, RegionalRouteResult& regional) {
++  regional.native_scene_evaluated = false;
++  regional.native_scene_complete = false;
+   regional.native_scene_conflicts = 0U;
+   regional.native_scene_fixed_conflicts = 0U;
+   std::erase_if(regional.local_routability_diagnoses, [](const auto& diagnosis) {
+@@ -15463,6 +15483,8 @@
+         regional.configured.max_local_routability_diagnoses)
+       regional.local_routability_diagnoses.push_back(std::move(diagnosis));
+   }
++  regional.native_scene_evaluated = true;
++  regional.native_scene_complete = complete;
+   if (!complete || regional.native_scene_conflicts > 0U) {
+     regional.spline_candidate_available = false;
+     regional.spline_candidate_diagnostic =
+@@ -16477,14 +16499,30 @@
+                                                const RegionalRouterConfig& config,
+                                                std::stop_token stop_token,
+                                                RouterTelemetrySink* telemetry) {
++  std::vector<RegionalPhysicalScopeAttempt> scope_attempts;
++  const auto incomplete_assignments = [](const RegionalRouteResult& candidate) {
++    return static_cast<std::size_t>(std::count_if(
++        candidate.bundle_assignments.begin(), candidate.bundle_assignments.end(),
++        [](const auto& assignment) { return !assignment.complete(); }));
++  };
++  const auto record_attempt = [&](const RegionalRouteResult& candidate, std::size_t retry_index) {
++    scope_attempts.push_back({retry_index, false,
++        candidate.native_scene_evaluated, candidate.native_scene_complete,
++        candidate.straight_scene_evaluated, incomplete_assignments(candidate),
++        candidate.straight_scene_open_connections,
++        candidate.straight_scene_evaluated ? candidate.straight_scene_drc_violations
++                                           : candidate.native_scene_conflicts});
++  };
+   auto scoped = config;
+-  auto result = analyze_regional_conflicts_impl(board, global, scoped,
++  auto current = analyze_regional_conflicts_impl(board, global, scoped,
+       config.max_physical_scope_retries, stop_token, telemetry);
++  record_attempt(current, 0U);
++  auto best = current;
+   for (std::size_t pass = 0; pass < config.max_physical_scope_retries &&
+        !stop_token.stop_requested(); ++pass) {
+-    bool added = append_regional_frozen_scope_witnesses(result, scoped);
+-    if (result.native_scene_conflicts > 0U || result.linear_scaffold_rejections > 0U)
+-    for (const auto& diagnosis : result.local_routability_diagnoses) {
++    bool added = append_regional_frozen_scope_witnesses(current, scoped);
++    if (current.native_scene_conflicts > 0U || current.linear_scaffold_rejections > 0U)
++    for (const auto& diagnosis : current.local_routability_diagnoses) {
+       if (diagnosis.locally_resolved || diagnosis.resource.nets.size() < 2U ||
+           (!diagnosis.resource.stable_id.starts_with("native-scene:") &&
+            !diagnosis.resource.stable_id.starts_with("linear-scaffold:"))) continue;
+@@ -16501,11 +16539,70 @@
+     }
+     // Never repeat the same repair scope and constraints hoping for a different result.
+     if (!added) break;
+-    result = analyze_regional_conflicts_impl(board, global, scoped,
++    current = analyze_regional_conflicts_impl(board, global, scoped,
+         config.max_physical_scope_retries - pass - 1U, stop_token, telemetry);
+-    result.physical_scope_retries = pass + 1U;
+-  }
+-  return result;
++    current.physical_scope_retries = pass + 1U;
++    current.physical_scope_retries_explored = pass + 1U;
++    record_attempt(current, pass + 1U);
++    if (regional_checkpoint_better(current, best)) {
++      current.selected_physical_scope_retry = pass + 1U;
++      // The next expansion must use the latest explored scene, even when this scene became the
++      // incumbent.  Copy the checkpoint; moving would leave the witness source unspecified.
++      best = current;
++    }
++  }
++  best.physical_scope_attempts = std::move(scope_attempts);
++  best.physical_scope_retries_explored = best.physical_scope_attempts.empty()
++                                             ? 0U : best.physical_scope_attempts.size() - 1U;
++  for (auto& attempt : best.physical_scope_attempts)
++    attempt.selected = attempt.retry_index == best.selected_physical_scope_retry;
++  if (stop_token.stop_requested() || current.stop_reason == RegionalRouterStopReason::cancelled) {
++    best.stop_reason = RegionalRouterStopReason::cancelled;
++    best.spline_candidate_available = false;
++    best.diagnostic = "regional routing cancelled during physical scope exploration";
++  }
++  return best;
++}
++
++static bool regional_checkpoint_physically_legal(const RegionalRouteResult& candidate) {
++  const bool straight = candidate.configured.enable_straight_realization ||
++                        candidate.straight_scene_trials > 0U;
++  return candidate.complete() && candidate.native_scene_evaluated &&
++         candidate.native_scene_complete && candidate.native_scene_conflicts == 0U &&
++         (!straight || (candidate.straight_scene_evaluated &&
++                        candidate.straight_scene_open_connections == 0U &&
++                        candidate.straight_scene_drc_violations == 0U));
++}
++
++bool regional_checkpoint_better(const RegionalRouteResult& lhs, const RegionalRouteResult& rhs) {
++  const auto incomplete = [](const RegionalRouteResult& candidate) {
++    return static_cast<std::size_t>(std::count_if(
++        candidate.bundle_assignments.begin(), candidate.bundle_assignments.end(),
++        [](const auto& assignment) { return !assignment.complete(); }));
++  };
++  const auto unknown = std::numeric_limits<std::size_t>::max();
++  const auto coverage = [](const RegionalRouteResult& candidate) {
++    return candidate.native_scene_evaluated && candidate.native_scene_complete &&
++           ((!candidate.configured.enable_straight_realization &&
++             candidate.straight_scene_trials == 0U) || candidate.straight_scene_evaluated);
++  };
++  const auto opens = [&](const RegionalRouteResult& candidate) {
++    return candidate.straight_scene_evaluated ? candidate.straight_scene_open_connections : unknown;
++  };
++  const auto errors = [&](const RegionalRouteResult& candidate) {
++    // The straight oracle supersedes native-scene counts. Summing them double-counts the same
++    // collision at two representation levels.
++    if (candidate.straight_scene_evaluated) return candidate.straight_scene_drc_violations;
++    return candidate.native_scene_evaluated ? candidate.native_scene_conflicts : unknown;
++  };
++  return std::tuple{regional_checkpoint_physically_legal(lhs) ? 0U : 1U,
++                    coverage(lhs) ? 0U : 1U, opens(lhs), errors(lhs),
++                    incomplete(lhs), lhs.unmapped_exact_copper_pairs,
++                    lhs.unmapped_clearance_shadow_conflicts, lhs.unmapped_capacity_conflicts} <
++         std::tuple{regional_checkpoint_physically_legal(rhs) ? 0U : 1U,
++                    coverage(rhs) ? 0U : 1U, opens(rhs), errors(rhs),
++                    incomplete(rhs), rhs.unmapped_exact_copper_pairs,
++                    rhs.unmapped_clearance_shadow_conflicts, rhs.unmapped_capacity_conflicts};
+ }
+ 
+ std::vector<RegionalRouteFragmentId>
+@@ -16756,31 +16853,32 @@
+     const auto oracle_opens = [](const RoutingPlanResult& plan) {
+       return plan.quantized_copper_oracle.evaluated
+                  ? plan.quantized_copper_oracle.open_connections
+-                 : std::size_t{0U};
++                 : std::numeric_limits<std::size_t>::max();
+     };
+     const auto oracle_violations = [](const RoutingPlanResult& plan) {
+       return plan.quantized_copper_oracle.evaluated
+                  ? plan.quantized_copper_oracle.drc_violations
+-                 : std::size_t{0U};
++                 : std::numeric_limits<std::size_t>::max();
+     };
+-    return std::tuple{lhs.complete() ? 0U : 1U,
+-                      lhs.coarse_global.unrouted_nets.size(),
+-                      coarse_topology_complete(lhs.coarse_global) ? 0U : 1U,
+-                      lhs.regional_evaluated ? 0U : 1U,
+-                      incomplete_assignments(lhs),
+-                      oracle_opens(lhs),
+-                      oracle_violations(lhs),
+-                      lhs.coarse_global.total_overflow,
+-                      lhs.coarse_global.total_cost} <
+-           std::tuple{rhs.complete() ? 0U : 1U,
+-                      rhs.coarse_global.unrouted_nets.size(),
+-                      coarse_topology_complete(rhs.coarse_global) ? 0U : 1U,
+-                      rhs.regional_evaluated ? 0U : 1U,
+-                      incomplete_assignments(rhs),
+-                      oracle_opens(rhs),
+-                      oracle_violations(rhs),
+-                      rhs.coarse_global.total_overflow,
+-                      rhs.coarse_global.total_cost};
++    const auto gates = [](const RoutingPlanResult& plan) {
++      const bool measured_complete = plan.complete() &&
++          (regional_checkpoint_physically_legal(plan.regional) ||
++           (!plan.regional.spline_candidate_available && plan.quantized_copper_oracle.feasible()));
++      return std::tuple{measured_complete ? 0U : 1U, plan.coarse_global.unrouted_nets.size(),
++                        coarse_topology_complete(plan.coarse_global) ? 0U : 1U,
++                        plan.regional_evaluated ? 0U : 1U};
++    };
++    if (gates(lhs) != gates(rhs)) return gates(lhs) < gates(rhs);
++    // A checked assembled regional scene carries stronger physical evidence than the count of
++    // unassembled assignments.  Preserve it before falling back to the coarse oracle.
++    if (lhs.regional_evaluated && rhs.regional_evaluated) {
++      if (regional_checkpoint_better(lhs.regional, rhs.regional)) return true;
++      if (regional_checkpoint_better(rhs.regional, lhs.regional)) return false;
++    }
++    return std::tuple{oracle_opens(lhs), oracle_violations(lhs), incomplete_assignments(lhs),
++                      lhs.coarse_global.total_overflow, lhs.coarse_global.total_cost} <
++           std::tuple{oracle_opens(rhs), oracle_violations(rhs), incomplete_assignments(rhs),
++                      rhs.coarse_global.total_overflow, rhs.coarse_global.total_cost};
+   };
+   const auto attach_feedback_probes = [&](RoutingPlanResult& candidate) {
+     candidate.feedback_probes = feedback_probes;
+@@ -17334,6 +17432,15 @@
+           ++provisional_exact_promotions_succeeded;
+         }
+       }
++      if (stop_token.stop_requested() ||
++          regional_candidate.regional.stop_reason == RegionalRouterStopReason::cancelled) {
++        regional_candidate.stop_reason = RoutingPlanStopReason::cancelled;
++        regional_candidate.diagnostic = "routing planner cancelled during regional routing";
++        feedback_probe.candidates.push_back(std::move(feedback_candidate));
++        feedback_probes.push_back(std::move(feedback_probe));
++        attach_feedback_probes(regional_candidate);
++        return regional_candidate;
++      }
+       feedback_candidate.regional_incomplete_bundle_assignments = static_cast<std::size_t>(
+           std::count_if(regional_candidate.regional.bundle_assignments.begin(),
+                         regional_candidate.regional.bundle_assignments.end(),
+--- a/include/flux/core/regional_router.hpp
++++ b/include/flux/core/regional_router.hpp
+@@ -862,6 +862,21 @@
+   bool operator==(const RegionalXpbdInvocation&) const = default;
+ };
+ 
++// A physical-scope retry is an exploration, not an implicit replacement for the last assembled
++// scene.  Keep the compact evidence needed to explain which scope became the checkpoint.
++struct RegionalPhysicalScopeAttempt {
++  std::size_t retry_index{0U};
++  bool selected{false};
++  bool native_scene_evaluated{false};
++  bool native_scene_complete{false};
++  bool straight_scene_evaluated{false};
++  std::size_t incomplete_assignments{0U};
++  std::size_t open_connections{0U};
++  std::size_t physical_errors{0U};
++
++  bool operator==(const RegionalPhysicalScopeAttempt&) const = default;
++};
++
+ struct RegionalRouteResult {
+   RegionalRouterConfig configured;
+   std::vector<RegionalRouteFragment> fragments;
+@@ -888,6 +903,9 @@
+   std::vector<RegionalSplineRealization> native_realization_manifest;
+   bool native_realization_manifest_available{false};
+   std::size_t physical_scope_retries{0U};
++  std::size_t physical_scope_retries_explored{0U};
++  std::size_t selected_physical_scope_retry{0U};
++  std::vector<RegionalPhysicalScopeAttempt> physical_scope_attempts;
+   std::size_t linear_scaffold_checks{0U};
+   std::size_t linear_scaffold_rejections{0U};
+   std::size_t straight_scene_trials{0U};
+@@ -898,6 +916,12 @@
+   std::map<std::string, std::size_t> straight_scene_drc_categories;
+   std::size_t native_scene_conflicts{0U};
+   std::size_t native_scene_fixed_conflicts{0U};
++  // Set only after the assembled native/static/via scene has reached copper-rule assessment.
++  // Completeness records whether the manifest covered every published route independently.
++  bool native_scene_evaluated{false};
++  bool native_scene_complete{false};
++  // Straight scenes are evaluated only when the oracle both ran and materialized every path.
++  bool straight_scene_evaluated{false};
+   std::size_t native_arc_fit_failures{0U};
+   std::vector<RegionalMultilayerRoutePlan> multilayer_route_plans;
+   std::size_t complete_via_dependent_routes{0};
+@@ -1366,6 +1390,11 @@
+ // via. Every represented conflict blocks handoff and supplies a repair obligation. Provisional
+ // tracks remain movable, but their movement must be resolved before this transaction is accepted.
+ void assess_regional_native_scene(const Board& board, RegionalRouteResult& regional);
++
++// Feasibility-first ordering for retaining regional scope checkpoints.  Unknown or unassembled
++// scenes never borrow zero-valued physical counters from an evaluated scene.
++[[nodiscard]] bool regional_checkpoint_better(const RegionalRouteResult& lhs,
++                                               const RegionalRouteResult& rhs);
+ // Realizes the selected discrete assignment and accepts only an exact whole-scene copper proof.
+ void realize_regional_straight_candidate(const Board& board, const GlobalRouteResult& global,
+                                          RegionalRouteResult& regional,
+--- a/apps/flux-cli/main.cpp
++++ b/apps/flux-cli/main.cpp
+@@ -3108,6 +3108,40 @@
+                                   regional == nullptr ? 0U : regional->native_scene_conflicts);
+   print_regional_diagnosis_metric("regional_physical_scope_retries",
+                                   regional == nullptr ? 0U : regional->physical_scope_retries);
++  print_regional_diagnosis_metric("regional_physical_scope_retries_explored",
++                                  regional == nullptr ? 0U : regional->physical_scope_retries_explored);
++  print_regional_diagnosis_metric("regional_selected_physical_scope_retry",
++                                  regional == nullptr ? 0U : regional->selected_physical_scope_retry);
++  print_regional_diagnosis_metric("regional_native_scene_evaluated",
++                                  regional && regional->native_scene_evaluated ? 1U : 0U);
++  print_regional_diagnosis_metric("regional_native_scene_complete",
++                                  regional && regional->native_scene_complete ? 1U : 0U);
++  print_regional_diagnosis_metric("regional_straight_scene_evaluated",
++                                  regional && regional->straight_scene_evaluated ? 1U : 0U);
++  std::cout << ",\n  \"regional_physical_scope_attempts\": ";
++  if (regional == nullptr) {
++    std::cout << "null";
++  } else {
++    std::cout << '[';
++    for (std::size_t index = 0U; index < regional->physical_scope_attempts.size(); ++index) {
++      const auto& attempt = regional->physical_scope_attempts[index];
++      std::cout << (index == 0U ? "" : ",") << "{\"retry\":" << attempt.retry_index
++                << ",\"selected\":" << (attempt.selected ? "true" : "false")
++                << ",\"native_evaluated\":" << (attempt.native_scene_evaluated ? "true" : "false")
++                << ",\"native_complete\":" << (attempt.native_scene_complete ? "true" : "false")
++                << ",\"straight_evaluated\":" << (attempt.straight_scene_evaluated ? "true" : "false")
++                << ",\"incomplete_assignments\":" << attempt.incomplete_assignments
++                << ",\"opens\":";
++      if (attempt.straight_scene_evaluated) std::cout << attempt.open_connections;
++      else std::cout << "null";
++      std::cout << ",\"physical_errors\":";
++      if (attempt.straight_scene_evaluated || attempt.native_scene_evaluated)
++        std::cout << attempt.physical_errors;
++      else std::cout << "null";
++      std::cout << '}';
++    }
++    std::cout << ']';
++  }
+   print_regional_diagnosis_metric("regional_source_exact_copper_witnesses",
+                                   regional == nullptr ? 0U : regional->source_exact_copper_witnesses);
+   print_regional_diagnosis_metric("regional_mapped_exact_copper_pairs",
+--- a/tests/unit/core_tests.cpp
++++ b/tests/unit/core_tests.cpp
+@@ -374,10 +374,20 @@
+   const auto unresolved = regional;
+   flux::realize_regional_straight_candidate(board, global, regional);
+   require(regional.spline_candidate_available && regional.native_scene_conflicts == 0U &&
+-              regional.linear_scaffold_checks == 1U && regional.linear_scaffold_rejections == 0U,
++              regional.native_scene_evaluated && regional.native_scene_complete &&
++              regional.straight_scene_evaluated && regional.linear_scaffold_checks == 1U &&
++              regional.linear_scaffold_rejections == 0U,
+           "packed straight lanes must replace colliding abstract copper: " + regional.spline_candidate_diagnostic);
+   require(regional.native_realization_manifest.size() == 2U,
+           "each owned connection needs an explicit segment transaction");
++  auto rebuilt = regional;
++  rebuilt.bundle_assignments.front().selected_templates = {99999U};
++  flux::realize_regional_straight_candidate(board, global, rebuilt);
++  require(!rebuilt.native_scene_evaluated && !rebuilt.native_scene_complete &&
++              !rebuilt.straight_scene_evaluated && !rebuilt.spline_candidate_available &&
++              rebuilt.native_scene_conflicts == 0U && rebuilt.straight_scene_drc_violations == 0U &&
++              flux::regional_checkpoint_better(regional, rebuilt),
++          "an aborted scene rebuild must invalidate previous physical assessment evidence");
+   for (const auto& route : regional.native_realization_manifest) {
+     require(route.straight_realization && route.control_points.empty() &&
+                 !route.continuous_envelope_evaluated && route.native_copper_legal,
+@@ -1568,6 +1578,49 @@
+               knowledge.success_history.front().end == mm(20.0, 20.0),
+           "clean quantized copper must accumulate a bounded directional success prior separately "
+           "from failure pressure");
++}
++
++void regional_scope_checkpoint_ordering_retains_checked_physical_evidence() {
++  auto checked = flux::RegionalRouteResult{};
++  checked.native_scene_evaluated = true;
++  checked.native_scene_complete = true;
++  checked.native_scene_conflicts = 3U;
++  auto unassembled = checked;
++  unassembled.native_scene_evaluated = false;
++  unassembled.native_scene_complete = false;
++  unassembled.native_scene_conflicts = 0U;
++  unassembled.spline_candidate_available = true;
++  require(unassembled.complete(), "fixture must reproduce nominally complete unassessed state");
++  require(flux::regional_checkpoint_better(checked, unassembled),
++          "an assembled native scene must outrank an unassembled retry with zero counters");
++
++  auto better_scene = checked;
++  better_scene.straight_scene_trials = 1U;
++  better_scene.straight_scene_evaluated = true;
++  better_scene.straight_scene_drc_violations = 3U;
++  auto worse_scope = better_scene;
++  worse_scope.straight_scene_drc_violations = 9U;
++  require(flux::regional_checkpoint_better(better_scene, worse_scope),
++          "a worse expanded physical scope must not replace the retained checkpoint");
++
++  auto fewer_opens = better_scene;
++  fewer_opens.straight_scene_drc_violations = 12U;
++  auto more_opens = better_scene;
++  more_opens.straight_scene_open_connections = 1U;
++  require(flux::regional_checkpoint_better(fewer_opens, more_opens),
++          "open connections must be prioritized before DRC/native error counts");
++
++  auto legal = checked;
++  legal.native_scene_conflicts = 0U;
++  legal.spline_candidate_available = true;
++  legal.straight_scene_trials = 1U;
++  legal.straight_scene_evaluated = true;
++  auto rejected = legal;
++  rejected.spline_candidate_available = false;
++  rejected.native_scene_conflicts = 1U;
++  rejected.straight_scene_drc_violations = 1U;
++  require(flux::regional_checkpoint_better(legal, rejected),
++          "a complete legal candidate must beat every rejected scene");
+ }
+ 
+ void straight_track_angles_preserve_off_grid_endpoints_and_clearance() {
+@@ -9097,6 +9150,8 @@
+        regional_capacity_tracks_longitudinal_demand},
+       {"physical_checkpoint_ordering_is_feasibility_first_and_fail_closed",
+        physical_checkpoint_ordering_is_feasibility_first_and_fail_closed},
++      {"regional_scope_checkpoint_ordering_retains_checked_physical_evidence",
++       regional_scope_checkpoint_ordering_retains_checked_physical_evidence},
+       {"routing_xpbd_joint_relaxation_preserves_endpoints_and_reports_stress",
+        routing_xpbd_joint_relaxation_preserves_endpoints_and_reports_stress},
+       {"straight_track_angles_preserve_off_grid_endpoints_and_clearance",

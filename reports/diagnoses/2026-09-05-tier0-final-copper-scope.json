@@ -1,0 +1,139 @@
+{
+  "board": "pt2399_delay",
+  "tier": 0,
+  "stage": "final_validation",
+  "topological_connectivity": true,
+  "final_copper_legal": false,
+  "open_connections": 0,
+  "copper_violation_counts": {
+    "track_track_arc_clearance": 16
+  },
+  "first_copper_violation": {
+    "code": "track_track_arc_clearance",
+    "required_clearance_nm": 450000,
+    "actual_distance_nm": 416556,
+    "object_ids": [
+      "flux-route-kicad-net-17-0-track-6",
+      "flux-route-kicad-net-1-1-regional-native-arc-3"
+    ]
+  },
+  "implicated_regions": [
+    {
+      "kind": "packing_capacity_exceeded",
+      "stage": "final_validation",
+      "resource": "routability:packing_capacity_exceeded:B.Cu:25:53",
+      "severity": 23,
+      "nets": [
+        "kicad-net-1",
+        "kicad-net-17"
+      ]
+    },
+    {
+      "kind": "packing_capacity_exceeded",
+      "stage": "final_validation",
+      "resource": "routability:packing_capacity_exceeded:B.Cu:29:42",
+      "severity": 5,
+      "nets": [
+        "kicad-net-3",
+        "kicad-net-4"
+      ]
+    },
+    {
+      "kind": "packing_capacity_exceeded",
+      "stage": "final_validation",
+      "resource": "routability:packing_capacity_exceeded:B.Cu:29:43",
+      "severity": 10,
+      "nets": [
+        "kicad-net-3",
+        "kicad-net-4"
+      ]
+    },
+    {
+      "kind": "packing_capacity_exceeded",
+      "stage": "final_validation",
+      "resource": "routability:packing_capacity_exceeded:B.Cu:30:42",
+      "severity": 9,
+      "nets": [
+        "kicad-net-3",
+        "kicad-net-4"
+      ]
+    },
+    {
+      "kind": "packing_capacity_exceeded",
+      "stage": "final_validation",
+      "resource": "routability:packing_capacity_exceeded:B.Cu:34:29",
+      "severity": 3,
+      "nets": [
+        "kicad-net-10",
+        "kicad-net-11"
+      ]
+    },
+    {
+      "kind": "packing_capacity_exceeded",
+      "stage": "final_validation",
+      "resource": "routability:packing_capacity_exceeded:B.Cu:34:30",
+      "severity": 10,
+      "nets": [
+        "kicad-net-10",
+        "kicad-net-11"
+      ]
+    },
+    {
+      "kind": "packing_capacity_exceeded",
+      "stage": "final_validation",
+      "resource": "routability:packing_capacity_exceeded:B.Cu:44:32",
+      "severity": 10,
+      "nets": [
+        "kicad-net-7",
+        "kicad-net-8"
+      ]
+    },
+    {
+      "kind": "packing_capacity_exceeded",
+      "stage": "final_validation",
+      "resource": "routability:packing_capacity_exceeded:B.Cu:45:32",
+      "severity": 11,
+      "nets": [
+        "kicad-net-7",
+        "kicad-net-8"
+      ]
+    },
+    {
+      "kind": "packing_capacity_exceeded",
+      "stage": "final_validation",
+      "resource": "routability:packing_capacity_exceeded:B.Cu:50:32",
+      "severity": 11,
+      "nets": [
+        "kicad-net-11",
+        "kicad-net-8"
+      ]
+    },
+    {
+      "kind": "packing_capacity_exceeded",
+      "stage": "final_validation",
+      "resource": "routability:packing_capacity_exceeded:B.Cu:51:32",
+      "severity": 15,
+      "nets": [
+        "kicad-net-11",
+        "kicad-net-8"
+      ]
+    }
+  ],
+  "region_note": "Resource suffixes are 1 mm coalescing tile coordinates, not exact conflict bounds.",
+  "root_hypothesis": "New native-versus-outside-window conflicts are fed back as cost history but cannot create/expand the original global-derived regional graph.",
+  "supporting_metrics": {
+    "final_routability_feedback_attempted": true,
+    "final_routability_feedback_selected": false,
+    "final_routability_feedback_passes": 2,
+    "final_routability_feedback_improvements": 0,
+    "final_routability_diagnoses_consumed": 20,
+    "final_routability_local_geometry_passes": 0,
+    "final_routability_regional_passes": 1,
+    "final_routability_global_passes": 1,
+    "final_routability_repeated_failure_escalations": 1,
+    "final_routability_incremental_detailed_passes": 1
+  },
+  "external_kicad_drc": null,
+  "artifact": "build/frontier-20260905/channel-isolation-detail-one",
+  "candidate_exported": false
+}

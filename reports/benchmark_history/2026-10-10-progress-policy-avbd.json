@@ -1,0 +1,284 @@
+{
+  "date": "2026-10-10",
+  "experiment": "Progress-earned regional search, guarded repair subsets, conflict-aware scheduling and AVBD contact blocks",
+  "git_revision": "94aa691ad89576d1c0ac07a5346020da21fc9d06",
+  "dirty_worktree": true,
+  "baseline_report": "reports/benchmark_history/2026-10-10-regional-acceleration.json",
+  "scope": [
+    "physical-improvement-earned regional work",
+    "fixed assignment preflight before PH fitting",
+    "net-atomic exact-checked repair subset retention",
+    "conflict-aware stable candidate scheduling",
+    "bounded CPU AVBD contact and cord local solves with rigid via groups"
+  ],
+  "configuration": {
+    "curved_routing": true,
+    "terrain_height_evolution": true,
+    "avbd_enabled": true,
+    "avbd_iterations": 12,
+    "avbd_maximum_contacts": 8192,
+    "avbd_maximum_particles": 2048,
+    "avbd_local_backtracking_steps": 12,
+    "regional_initial_work": 1000000,
+    "regional_progress_credit": 1000000,
+    "regional_work_ceiling": 30000000,
+    "avbd_max_workers": 0,
+    "shared_cpu_worker_budget": true,
+    "tier_order": [
+      0,
+      1
+    ],
+    "telemetry_level": "diagnostic",
+    "routing_timeout_seconds": 900,
+    "planning_timeout_seconds": 960,
+    "detailed_timeout_seconds": 960
+  },
+  "validation": {
+    "focused": {
+      "passed": 16,
+      "total": 16,
+      "log": "build/progress-policy-20261010/avbd-bounded-focused.log"
+    },
+    "core": {
+      "passed": 65,
+      "total": 65,
+      "log": "build/progress-policy-20261010/avbd-bounded-unit-fresh.log"
+    },
+    "independent_review": "No production blockers after AVBD stability, via-span and parked-kernel budget fixes; better/worse checkpoint retention fixture remains an optional coverage improvement.",
+    "release_and_viewer_builds": {
+      "release": "passed",
+      "viewer": "passed with warnings as errors",
+      "logs": [
+        "build/progress-policy-20261010/avbd-bounded-release.log",
+        "build/progress-policy-20261010/avbd-bounded-viewer.log"
+      ]
+    }
+  },
+  "limitations": [
+    "Combined requested mechanisms do not establish causal benefit of individual changes.",
+    "AVBD is a bounded CPU proposal solver; GPU AVBD kernels are not implemented.",
+    "Regional acceptance remains provisional until full connectivity and configured KiCad DRC.",
+    "Tier 0 baseline has legal copper but fails strict curved qualification with seven unsmoothed joints.",
+    "Tier 1 terminates without solving its physical conflicts; no detailed final copper or external KiCad DRC was produced. The 799 violations are the internal quantized-copper oracle, not KiCad CLI output."
+  ],
+  "status": "implementation validated; Tier 0 physical baseline preserved, strict curves and Tier 1 remain unqualified",
+  "binary_sha256": {
+    "build/tautening-release/flux-cli": "b4bcb112d225c4bc2ede69d30ceeee44b2961c00e353db41b13a646406475b01",
+    "build/release/flux-cli": "32982148f88007724b7b0df51cd691052300883b66c8837846d4b9c08e24c3d9",
+    "build/viewer/flux-cli": "8d9061ab70db4ae52248a737cc29062bbaf63f5453070a908e6512ae1f607d09"
+  },
+  "implementation_sha256": {
+    "src/routing_engine.cpp": "e4670599011cda47cad3d47372bb5a54c67b1b9185a9d2806eb2b6223f507b91",
+    "src/regional_candidate_policy.cpp": "e94045636022949bfb087b9f8634a8d6ffc3c0cbf47beab5cd66838e5f2a7fb9",
+    "src/regional_router.cpp": "739824f15b6b227d41912b60818c6ba82f94412f60677612113e5548c5ca6684",
+    "src/routing_avbd.cpp": "6165985094c989d9ce001e9bba1513f311ba569da8b08b1267329da071d49f63",
+    "include/flux/core/routing_avbd.hpp": "b545a8872fac5eb4fe057b5946c809cf46e6e71f45a2c7fc0676502e372e6374",
+    "include/flux/core/repair_subset.hpp": "731d18ff2da20f80ff099999ca661d00cfc6733c152f3257eaabbfb8c71a4648",
+    "tests/unit/routing_avbd_tests.cpp": "37cc695b653743f9edc843d36c37e05bb0fbad2a8d22f0d56c5df17ce4756453",
+    "tests/unit/core_tests.cpp": "ebcb7c91abc7d0684632496dcd20d065a9d58c40d15dfa0b83fe1b358cd573c7"
+  },
+  "pilot_runs": [
+    {
+      "tier": 0,
+      "board": "pt2399_delay",
+      "artifacts": "build/progress-policy-avbd-tier0-20261010/tier-0-pt2399_delay",
+      "harness_exit_code": 1,
+      "status": "baseline copper preserved; strict curved qualification remains failed",
+      "planning_seconds": 23.757144533999963,
+      "detail_seconds": 314.8622877240123,
+      "metrics": {
+        "complete": false,
+        "global_complete": false,
+        "open_connections": 0,
+        "copper_violations": 0,
+        "copper_violation_counts": {},
+        "added_tracks": 47,
+        "added_track_beziers": 199,
+        "added_track_arcs": 0,
+        "added_vias": 3,
+        "unrounded_non_junction_bends": 7,
+        "routing_engine_outcome": "exhausted",
+        "routing_engine_regional_work_allowance": 1000000,
+        "routing_engine_regional_work_consumed": 1343897,
+        "routing_engine_regional_work_earned": 0,
+        "routing_engine_regional_work_credit_events": 0,
+        "routing_engine_regional_work_budget_exhaustions": 1
+      },
+      "configured_kicad_drc_violations": 0,
+      "kicad_unconnected_items": 0,
+      "kicad_drc_context": "build/progress-policy-avbd-tier0-20261010/tier-0-pt2399_delay/analysis/detailed-rejected/kicad-drc.context.json",
+      "both_copper_layers_visually_inspected": true,
+      "copper_pngs_byte_identical_to_baseline": true,
+      "visual_observation": "Same smooth detours and straight branches as baseline; existing unsmoothed corners remain. No new loops or oscillations.",
+      "peak_rss_kib": 728840,
+      "before_detail_seconds": 418.485155656992,
+      "detail_runtime_reduction_percent": 24.76142021580172,
+      "measurement_limit": "One combined-feature run; identical copper supports non-regression, not attribution of speedup to AVBD. Search allowance exhausted at a coherent boundary.",
+      "implementation_state": "Before parked-kernel work-budget enforcement correction"
+    },
+    {
+      "tier": 1,
+      "board": "bm_svf",
+      "artifacts": "build/progress-policy-avbd-tier1-20261010/tier-1-bm_svf",
+      "status": "interrupted to correct work-budget enforcement",
+      "observed_work_units": 28170662,
+      "regional_allowance": 1000000,
+      "failure_mechanism": "Preparation continued across ordinary kernel yields because exhaustion was checked only at regional phase decision points.",
+      "final_copper_available": false
+    }
+  ],
+  "runs": [
+    {
+      "tier": 0,
+      "board": "pt2399_delay",
+      "artifacts": "build/progress-policy-avbd-bounded-tier0-20261010/tier-0-pt2399_delay",
+      "harness_exit_code": 1,
+      "status": "baseline copper preserved; strict curved qualification remains failed",
+      "planning_seconds": 23.96681952799554,
+      "detail_seconds": 309.87316603498766,
+      "metrics": {
+        "complete": false,
+        "global_complete": false,
+        "open_connections": 0,
+        "copper_violations": 0,
+        "copper_violation_counts": {},
+        "added_tracks": 47,
+        "added_track_beziers": 199,
+        "added_track_arcs": 0,
+        "added_vias": 3,
+        "unrounded_non_junction_bends": 7,
+        "routing_engine_outcome": "exhausted",
+        "routing_engine_regional_work_allowance": 1000000,
+        "routing_engine_regional_work_consumed": 1000000,
+        "routing_engine_regional_work_earned": 0,
+        "routing_engine_regional_work_credit_events": 0,
+        "routing_engine_regional_work_budget_exhaustions": 1
+      },
+      "configured_kicad_drc_violations": 0,
+      "kicad_unconnected_items": 0,
+      "kicad_drc_context": "build/progress-policy-avbd-bounded-tier0-20261010/tier-0-pt2399_delay/analysis/detailed-rejected/kicad-drc.context.json",
+      "both_copper_layers_visually_inspected": true,
+      "copper_pngs_byte_identical_to_baseline": true,
+      "visual_observation": "Same smooth detours and straight branches as baseline; existing unsmoothed corners remain. No new loops or oscillations.",
+      "peak_rss_kib": 705544,
+      "before_detail_seconds": 418.485155656992,
+      "detail_runtime_reduction_percent": 25.953606275828644,
+      "measurement_limit": "Single combined-feature run, not AVBD-specific causal evidence. Regional budget stopped at exactly 1,000,000 work units; copper unchanged."
+    },
+    {
+      "tier": 1,
+      "board": "bm_svf",
+      "artifacts": "build/progress-policy-avbd-bounded-tier1-20261010/tier-1-bm_svf",
+      "harness_exit_code": 0,
+      "harness_interpretation": "Expected-failure probe completed; 0/1 assessed boards qualified. Topological complete is not physical routing success.",
+      "status": "unqualified: quantized physical copper remains infeasible",
+      "planning_seconds": 396.10681369999656,
+      "detail_seconds": null,
+      "metrics": {
+        "complete": true,
+        "stop_reason": "complete",
+        "paths": 78,
+        "unrouted_nets": 0,
+        "routing_engine_outcome": "exhausted",
+        "clearance_shadow_conflicts": 275,
+        "path_search_expansions": 58768,
+        "routing_engine_regional_work_allowance": 1000000,
+        "routing_engine_regional_work_consumed": 1000000,
+        "routing_engine_regional_work_earned": 0,
+        "routing_engine_regional_work_credit_events": 0,
+        "routing_engine_regional_work_budget_exhaustions": 1
+      },
+      "quantized_copper_oracle": {
+        "configured_grid_pitch_nm": 1,
+        "diagnoses": 310,
+        "drc_violation_counts": {
+          "hole_clearance": 70,
+          "track_clearance": 544,
+          "track_via_clearance": 179,
+          "via_clearance": 6
+        },
+        "drc_violations": 799,
+        "elapsed_us": 157502,
+        "feasible": false,
+        "malformed_paths": 0,
+        "open_connections": 0,
+        "paths_examined": 78,
+        "paths_materialized": 78,
+        "reused_transitions": 2,
+        "tracks": 1329,
+        "unrouted_nets": 0,
+        "vias": 56
+      },
+      "configured_kicad_drc_violations": null,
+      "external_kicad_drc_run": false,
+      "final_copper_available": false,
+      "diagnostic_preview_layers_visually_inspected": true,
+      "visual_observation": "Provisional coarse polylines retain crossings, angular detours and crowded contacts; these are not legalized smooth final copper.",
+      "peak_rss_kib": 759088,
+      "before_planning_seconds": 900.433282,
+      "before_outcome": "timed out",
+      "before_quantized_copper_oracle_violations": 799,
+      "avbd_accepted_plan_counters": {
+        "regional_avbd_capacity_rejections": 0,
+        "regional_avbd_colors": 0,
+        "regional_avbd_contacts": 0,
+        "regional_avbd_duals": 0,
+        "regional_avbd_duplicate_reductions": 0,
+        "regional_avbd_local_block_solves": 0,
+        "regional_avbd_maximum_degree": 0,
+        "regional_avbd_moved_rigid_owners": 0,
+        "regional_avbd_penalty_updates": 0,
+        "regional_avbd_proposals_improved": 0,
+        "regional_avbd_solve_us": 0,
+        "regional_avbd_windows_attempted": 0,
+        "regional_avbd_windows_improved": 0
+      },
+      "interpretation": "Progress budget now cuts off preparation at 1M and lets engine exhaust alternatives in 396s. Physical violations unchanged. No retained AVBD work is reported; this benchmark does not demonstrate AVBD benefit."
+    }
+  ],
+  "tier1_analysis": {
+    "failure_stage": "Regional preparation is stopped before physical scene evaluation; initial global topology remains physically infeasible.",
+    "action_times_seconds": {
+      "initial_global_and_feedback": 89.642335,
+      "regional_preparation": 3.897978,
+      "later_global_and_usped": 301.395072,
+      "all_quantized_probes": 1.034904
+    },
+    "physical_probe_violation_sequence": [
+      799,
+      1234,
+      906,
+      1092,
+      1143
+    ],
+    "regional_portfolio_checks_at_stop": 9,
+    "regional_portfolio_check_limit": 384,
+    "evaluated_regional_scene_observed": false,
+    "avbd_execution_observed": false,
+    "resource_overflow": 0,
+    "clearance_shadow_conflicts": 275,
+    "clearance_shadows_advisory_only": true,
+    "physical_diagnoses_by_layer": {
+      "B.Cu": 215,
+      "F.Cu": 95
+    },
+    "physical_conflict_example": {
+      "nets": [
+        "V_BF",
+        "Net-(U4B--)"
+      ],
+      "layer": "B.Cu",
+      "shared_endpoint_mm": [
+        47.64,
+        86.79
+      ],
+      "clearance_deficit_mm": 0.45
+    },
+    "recommendations_in_order": [
+      "Make preparation resumable and reusable; prepare/evaluate one bounded conflict region before expanding the portfolio. Keep explicit setup and evaluation bounds, shrink the region if needed.",
+      "Give global and USPED retries a progress-earned budget too; probe each connected candidate promptly and retain the best physical incumbent.",
+      "Use exact source-pair physical conflicts to select a small repair region, including relevant via spans; then compare XPBD and AVBD against the same immutable scene.",
+      "Separate evidence-recorded, topology-improved, physically-improved and final-legal telemetry states."
+    ]
+  }
+}

@@ -1,0 +1,153 @@
+{
+    "$schema": "https://schemas.kicad.org/drc.v1.json",
+    "coordinate_units": "mm",
+    "date": "2026-09-07T18:52:59+0800",
+    "included_severities": [
+        "error"
+    ],
+    "kicad_version": "9.0.8",
+    "schematic_parity": [],
+    "source": "picofx_pump.kicad_pcb",
+    "unconnected_items": [
+        {
+            "description": "Missing connection between items",
+            "items": [
+                {
+                    "description": "Track [+5V] on B.Cu, length 1.1280 mm",
+                    "pos": {
+                        "x": 92.598,
+                        "y": 97.678
+                    },
+                    "uuid": "5bbbf009-1fc6-46af-84f8-acfc148404d9"
+                },
+                {
+                    "description": "Track [+5V] on B.Cu, length 1.1280 mm",
+                    "pos": {
+                        "x": 90.17,
+                        "y": 98.806
+                    },
+                    "uuid": "12f0ea5d-fdbf-465a-a789-a6fb90454d9d"
+                }
+            ],
+            "severity": "error",
+            "type": "unconnected_items"
+        }
+    ],
+    "violations": [
+        {
+            "description": "Thermal relief connection to zone incomplete (layer F.Cu; zone min spoke count 2; actual 1)",
+            "items": [
+                {
+                    "description": "Zone [GND] on F.Cu and B.Cu, priority 0",
+                    "pos": {
+                        "x": 202.40625,
+                        "y": 130.175
+                    },
+                    "uuid": "aa23a50a-6fdc-4081-9566-c04efc610f8d"
+                },
+                {
+                    "description": "PTH pad 4 [GND] of MX3",
+                    "pos": {
+                        "x": 112.32525,
+                        "y": 100.33
+                    },
+                    "uuid": "3b1bedee-f924-4586-a84a-3f8d9ad90286"
+                }
+            ],
+            "severity": "error",
+            "type": "starved_thermal"
+        },
+        {
+            "description": "Thermal relief connection to zone incomplete (layer F.Cu; zone min spoke count 2; actual 1)",
+            "items": [
+                {
+                    "description": "Zone [GND] on F.Cu and B.Cu, priority 0",
+                    "pos": {
+                        "x": 202.40625,
+                        "y": 130.175
+                    },
+                    "uuid": "aa23a50a-6fdc-4081-9566-c04efc610f8d"
+                },
+                {
+                    "description": "PTH pad 4 [GND] of MX8",
+                    "pos": {
+                        "x": 174.3075,
+                        "y": 100.33
+                    },
+                    "uuid": "097890c9-38b7-4288-a334-40de914ef72c"
+                }
+            ],
+            "severity": "error",
+            "type": "starved_thermal"
+        },
+        {
+            "description": "Thermal relief connection to zone incomplete (layer F.Cu; zone min spoke count 2; actual 1)",
+            "items": [
+                {
+                    "description": "Zone [GND] on F.Cu and B.Cu, priority 0",
+                    "pos": {
+                        "x": 202.40625,
+                        "y": 130.175
+                    },
+                    "uuid": "aa23a50a-6fdc-4081-9566-c04efc610f8d"
+                },
+                {
+                    "description": "PTH pad 13 [GND] of U1",
+                    "pos": {
+                        "x": 181.85775,
+                        "y": 91.882998
+                    },
+                    "uuid": "11de2fee-25e0-41ed-aaaa-e17c955b599e"
+                }
+            ],
+            "severity": "error",
+            "type": "starved_thermal"
+        },
+        {
+            "description": "Thermal relief connection to zone incomplete (layer F.Cu; zone min spoke count 2; actual 1)",
+            "items": [
+                {
+                    "description": "Zone [GND] on F.Cu and B.Cu, priority 0",
+                    "pos": {
+                        "x": 202.40625,
+                        "y": 130.175
+                    },
+                    "uuid": "aa23a50a-6fdc-4081-9566-c04efc610f8d"
+                },
+                {
+                    "description": "PTH pad 23 [GND] of U1",
+                    "pos": {
+                        "x": 164.07775,
+                        "y": 104.582998
+                    },
+                    "uuid": "666724df-4f48-448d-a3ba-532dbe658f10"
+                }
+            ],
+            "severity": "error",
+            "type": "starved_thermal"
+        },
+        {
+            "description": "Thermal relief connection to zone incomplete (layer F.Cu; zone min spoke count 2; actual 1)",
+            "items": [
+                {
+                    "description": "Zone [GND] on F.Cu and B.Cu, priority 0",
+                    "pos": {
+                        "x": 202.40625,
+                        "y": 130.175
+                    },
+                    "uuid": "aa23a50a-6fdc-4081-9566-c04efc610f8d"
+                },
+                {
+                    "description": "PTH pad 28 [GND] of U1",
+                    "pos": {
+                        "x": 164.07775,
+                        "y": 91.882998
+                    },
+                    "uuid": "cacc4751-dcbb-4d78-9892-0c1d65579a98"
+                }
+            ],
+            "severity": "error",
+            "type": "starved_thermal"
+        }
+    ]
+}

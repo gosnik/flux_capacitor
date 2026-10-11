@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "experiment": "coherent-endpoint-via-quantization",
+  "git_revision": "25e3b884be9b359d9c5bf0cc4fbb6cc836fd4f82",
+  "worktree": "dirty; unrelated prior changes preserved",
+  "cli_sha256": "892d1078ace2857b425ef23c1ffd1a67429156ef1f2c817bf00b27f479186ce4",
+  "before_micro_test": "Failed: one malformed path and one open caused by tearing an off-grid coincident endpoint via chain apart.",
+  "after_micro_test": "Passed: two endpoint via chains materialize as two vias and one DRC-clean connected track with or without endpoint protection. A genuinely lateral source transition remains rejected.",
+  "focused_ctest": {
+    "passed": 45,
+    "failed": 0,
+    "duration_seconds": 101.02,
+    "core_duration_seconds": 90.37,
+    "includes": ["all_core_unit_tests", "benchmark_history_tests", "routing_manifest_contract", "route_kicad_contracts", "detail_kicad_contracts", "KiCad_arc_DRC_fixture", "KiCad_multilayer_DRC_fixture"],
+    "log": "build/coherent-via-verification-20260906/LastTest.log"
+  },
+  "tier_status": "See separate corpus histories; unit tests are not tier qualification.",
+  "all_non_corpus_ctest": {
+    "passed": 121,
+    "failed": 7,
+    "duration_seconds": 177.35,
+    "log": "build/coherent-via-verification-20260906/all-non-corpus-LastTest.log",
+    "preexisting_failures": ["flux_cli_direct_medial_route_demo", "flux_cli_incremental_route_demo", "flux_cli_strict_medial_detail_demo", "flux_cli_incremental_detail_demo", "flux_cli_optimize_demo", "flux_cli_optimize_demo_pareto", "flux_cli_group_optimize_demo"],
+    "differential_check": "All seven have identical exit codes and parsed JSON versus frozen a207a025 baseline after omitting only newly added mapping-count/source-pair fields.",
+    "expectations_relaxed": false
+  }
+}

@@ -1,0 +1,760 @@
+--- a/src/regional_router.cpp
++++ b/src/regional_router.cpp
+@@ -1587,6 +1587,8 @@
+   combined.lane_solver_analytical_rejections += retry.lane_solver_analytical_rejections;
+   combined.lane_solver_budget_exhaustions += retry.lane_solver_budget_exhaustions;
+   combined.partial_lane_capacity_pruned_states += retry.partial_lane_capacity_pruned_states;
++  combined.frozen_copper_via_pruned_states += retry.frozen_copper_via_pruned_states;
++  combined.frozen_copper_via_rejected_states += retry.frozen_copper_via_rejected_states;
+   combined.lane_precedence_rejected_states += retry.lane_precedence_rejected_states;
+   combined.confined_anisotropic_erosion_checks += retry.confined_anisotropic_erosion_checks;
+   combined.confined_anisotropic_erosion_accepted += retry.confined_anisotropic_erosion_accepted;
+@@ -1799,7 +1801,10 @@
+   invalid_choice,
+   terminal_pair,
+   via_pair,
+-  terminal_via
++  terminal_via,
++  // The active regional window treats this retained fragment as immutable. This is distinct
++  // from a malformed candidate: another via site can remain a legal access assignment.
++  frozen_copper_via
+ };
+ 
+ [[nodiscard]] bool regional_via_spans_overlap(const RegionalViaChoice& first,
+@@ -1897,6 +1902,14 @@
+   bool exhausted{false};
+   std::optional<std::pair<std::size_t, std::size_t>> via_pair_blocker;
+   std::optional<std::pair<std::size_t, std::size_t>> terminal_via_blocker;
++  struct FrozenCopperViaConflict {
++    std::pair<NetId, std::size_t> via_region;
++    RegionalRouteFragmentId blocker;
++    LayerId layer;
++    Nanometres clearance_deficit;
++    std::string code;
++  };
++  std::optional<FrozenCopperViaConflict> frozen_copper_conflict;
+ 
+   [[nodiscard]] bool legal() const { return failure == RegionalAccessFailureReason::none; }
+ };
+@@ -2019,6 +2032,58 @@
+                : net_widths.emplace(net, resolve_net_routing_rules(board, net).track_width)
+                      .first->second;
+   };
++  // This is deliberately restricted to the window's frozen-copper contract. Owned routes
++  // still receive lane packing and continuous displacement, so their coarse centerlines cannot
++  // reject an otherwise legal selected-via assignment here.
++  std::vector<const RegionalRouteFragment*> frozen_fragments;
++  if (regional.configured.frozen_copper_context) {
++    frozen_fragments.reserve(regional.fragments.size());
++    for (const auto& fragment : regional.fragments) {
++      if (!std::binary_search(window.owned_fragments.begin(), window.owned_fragments.end(),
++                              fragment.id) &&
++          fragment.start != fragment.end && fragment.width.value() > 0) {
++        frozen_fragments.push_back(&fragment);
++      }
++    }
++  }
++  struct FrozenCopperViaCandidateConflict {
++    const RegionalRouteFragment* blocker{nullptr};
++    Nanometres clearance_deficit;
++    std::string_view code;
++  };
++  const auto frozen_copper_conflict = [&](const RegionalViaChoice* via)
++      -> std::optional<FrozenCopperViaCandidateConflict> {
++    if (via == nullptr) {
++      return std::nullopt;
++    }
++    for (const auto* fragment : frozen_fragments) {
++      if (fragment->id.net == via->net ||
++          std::find(via->span.begin(), via->span.end(), fragment->layer) == via->span.end()) {
++        continue;
++      }
++      const auto via_diameter = static_cast<long double>(via->diameter.value());
++      const auto fragment_width = static_cast<long double>(fragment->width.value());
++      const auto copper_required =
++          (via_diameter + fragment_width) / 2.0L +
++          static_cast<long double>(pairwise_clearance(via->net, fragment->id.net).value());
++      const auto drill_required =
++          (static_cast<long double>(via->drill.value()) + fragment_width) / 2.0L +
++          static_cast<long double>(board.rules.hole_clearance.value());
++      const auto required = std::max(copper_required, drill_required);
++      const auto actual =
++          geometry::point_segment_distance_nm(via->site, fragment->start, fragment->end);
++      if (actual < required) {
++        const auto deficit = std::clamp<long double>(
++            std::ceil(required - actual), 0.0L,
++            static_cast<long double>(std::numeric_limits<std::int64_t>::max()));
++        return FrozenCopperViaCandidateConflict{
++            fragment, Nanometres{static_cast<std::int64_t>(deficit)},
++            drill_required > copper_required ? "frozen-via-hole-clearance"
++                                             : "frozen-via-copper-clearance"};
++      }
++    }
++    return std::nullopt;
++  };
+   for (std::size_t first = 0U; first < terminal_choices.size(); ++first) {
+     const auto* lhs = terminal_choices[first];
+     for (std::size_t second = first + 1U; second < terminal_choices.size(); ++second) {
+@@ -2104,6 +2169,12 @@
+   const auto terminal_legal = [&](const RegionalViaChoice* via) {
+     return terminal_conflict(via) == nullptr;
+   };
++  const auto frozen_copper_legal = [&](const RegionalViaChoice* via) {
++    return !frozen_copper_conflict(via).has_value();
++  };
++  const auto base_legal = [&](const RegionalViaChoice* via) {
++    return terminal_legal(via) && frozen_copper_legal(via);
++  };
+   const auto assigned_conflict =
+       [&](const RegionalViaChoice* via,
+           const std::vector<const RegionalViaChoice*>& assigned) -> const RegionalViaChoice* {
+@@ -2145,6 +2216,13 @@
+         result.terminal_via_blocker = std::pair{terminal->id, candidate->id};
+         continue;
+       }
++      if (const auto frozen = frozen_copper_conflict(candidate); frozen) {
++        result.failure = RegionalAccessFailureReason::frozen_copper_via;
++        result.frozen_copper_conflict = {{candidate->net, candidate->region_id},
++                                         frozen->blocker->id, frozen->blocker->layer,
++                                         frozen->clearance_deficit, std::string(frozen->code)};
++        continue;
++      }
+       if (const auto* prior = assigned_conflict(candidate, assigned); prior != nullptr) {
+         result.failure = RegionalAccessFailureReason::via_pair;
+         result.via_pair_blocker = std::minmax(prior->id, candidate->id);
+@@ -2153,20 +2231,20 @@
+       assigned.push_back(candidate);
+       bool forward_legal = true;
+       for (std::size_t future = variable + 1U; future < ordered_variables.size(); ++future) {
+-        const auto has_terminal_legal_option =
++        const auto has_base_legal_option =
+             std::any_of(ordered_variables[future].candidates.begin(),
+-                        ordered_variables[future].candidates.end(), terminal_legal);
++                        ordered_variables[future].candidates.end(), base_legal);
+         const auto has_compatible_option = std::any_of(
+             ordered_variables[future].candidates.begin(),
+             ordered_variables[future].candidates.end(), [&](const auto* option) {
+-              return terminal_legal(option) && compatible_with_assigned(option, assigned);
++              return base_legal(option) && compatible_with_assigned(option, assigned);
+             });
+         if (!has_compatible_option) {
+-          result.failure = has_terminal_legal_option ? RegionalAccessFailureReason::via_pair
+-                                                     : RegionalAccessFailureReason::terminal_via;
+-          if (has_terminal_legal_option) {
++          result.failure = has_base_legal_option ? RegionalAccessFailureReason::via_pair
++                                                  : RegionalAccessFailureReason::terminal_via;
++          if (has_base_legal_option) {
+             for (const auto* option : ordered_variables[future].candidates) {
+-              if (!terminal_legal(option)) {
++              if (!base_legal(option)) {
+                 continue;
+               }
+               if (const auto* prior = assigned_conflict(option, assigned); prior != nullptr) {
+@@ -2175,7 +2253,23 @@
+               }
+             }
+           } else {
++            const auto frozen = std::find_if(
++                ordered_variables[future].candidates.begin(),
++                ordered_variables[future].candidates.end(), [&](const auto* option) {
++                  return terminal_legal(option) && !frozen_copper_legal(option);
++                });
++            if (frozen != ordered_variables[future].candidates.end()) {
++              result.failure = RegionalAccessFailureReason::frozen_copper_via;
++              const auto conflict = frozen_copper_conflict(*frozen);
++              result.frozen_copper_conflict = {{(*frozen)->net, (*frozen)->region_id},
++                                               conflict->blocker->id, conflict->blocker->layer,
++                                               conflict->clearance_deficit,
++                                               std::string(conflict->code)};
++            }
+             for (const auto* option : ordered_variables[future].candidates) {
++              if (result.failure == RegionalAccessFailureReason::frozen_copper_via) {
++                break;
++              }
+               if (const auto* terminal = terminal_conflict(option); terminal != nullptr) {
+                 result.terminal_via_blocker = std::pair{terminal->id, option->id};
+                 break;
+@@ -2206,6 +2300,56 @@
+   return result;
+ }
+ 
++void record_frozen_copper_access_witness(
++    std::vector<RegionalFrozenCopperConflict>& witnesses, const RegionalAccessSelection& access,
++    const RegionalRouteResult& regional, const RegionalRoutingWindow& window,
++    const std::vector<RegionalRouteTemplate>& templates, const std::vector<std::size_t>& selected,
++    std::size_t maximum_witnesses) {
++  if (access.failure != RegionalAccessFailureReason::frozen_copper_via ||
++      !access.frozen_copper_conflict || maximum_witnesses == 0U) {
++    return;
++  }
++  const auto owned = [&](const RegionalRouteFragmentId& id) {
++    return std::binary_search(window.owned_fragments.begin(), window.owned_fragments.end(), id);
++  };
++  if (owned(access.frozen_copper_conflict->blocker)) {
++    return;
++  }
++  std::set<RegionalRouteFragmentId> candidates;
++  for (const auto template_id : selected) {
++    if (template_id >= templates.size() || !owned(templates[template_id].fragment)) {
++      continue;
++    }
++    const auto matches_region = std::any_of(
++        templates[template_id].via_choices.begin(), templates[template_id].via_choices.end(),
++        [&](const auto via_id) {
++          const auto via = std::find_if(regional.via_choices.begin(), regional.via_choices.end(),
++                                        [&](const auto& item) { return item.id == via_id; });
++          return via != regional.via_choices.end() &&
++                 std::pair{via->net, via->region_id} == access.frozen_copper_conflict->via_region;
++        });
++    if (matches_region &&
++        templates[template_id].fragment.net != access.frozen_copper_conflict->blocker.net) {
++      candidates.insert(templates[template_id].fragment);
++    }
++  }
++  for (const auto& candidate : candidates) {
++    RegionalFrozenCopperConflict witness{candidate, access.frozen_copper_conflict->blocker,
++                                          access.frozen_copper_conflict->layer,
++                                          access.frozen_copper_conflict->clearance_deficit,
++                                          access.frozen_copper_conflict->code};
++    const auto prior = std::find_if(witnesses.begin(), witnesses.end(), [&](const auto& item) {
++      return item.candidate == witness.candidate && item.blocker == witness.blocker &&
++             item.layer == witness.layer && item.code == witness.code;
++    });
++    if (prior != witnesses.end()) {
++      prior->clearance_deficit = std::max(prior->clearance_deficit, witness.clearance_deficit);
++    } else if (witnesses.size() < maximum_witnesses) {
++      witnesses.push_back(std::move(witness));
++    }
++  }
++}
++
+ [[nodiscard]] bool polygon_bounds_overlap(const Polygon& first, const Polygon& second) {
+   const auto first_prepared = geometry::prepare_polygon(first);
+   const auto second_prepared = geometry::prepare_polygon(second);
+@@ -2703,7 +2847,8 @@
+     return route_template.terminal_entry_choice || route_template.terminal_exit_choice ||
+            !route_template.via_choices.empty();
+   };
+-  const auto record_access_result = [&](const RegionalAccessSelection& access) {
++  const auto record_access_result = [&](const RegionalAccessSelection& access,
++                                        const std::vector<std::size_t>& selected) {
+     result.access_assignment_states += access.states;
+     result.access_assignment_exhaustions += access.exhausted ? 1U : 0U;
+     if (access.legal() || access.exhausted) {
+@@ -2720,6 +2865,12 @@
+     case RegionalAccessFailureReason::terminal_via:
+       ++result.terminal_via_pruned_states;
+       break;
++    case RegionalAccessFailureReason::frozen_copper_via:
++      ++result.frozen_copper_via_pruned_states;
++      record_frozen_copper_access_witness(
++          result.frozen_copper_conflicts, access, regional, window, templates, selected,
++          regional.configured.max_access_blockers_per_window);
++      break;
+     case RegionalAccessFailureReason::invalid_choice:
+     case RegionalAccessFailureReason::none:
+       break;
+@@ -2783,7 +2934,7 @@
+     const auto access = select_access_geometry(
+         board, regional, window, templates, {pair.first, pair.second},
+         regional.configured.max_access_assignment_states, true);
+-    record_access_result(access);
++    record_access_result(access, {pair.first, pair.second});
+     const auto supported = access.legal() || access.exhausted;
+     pairwise_access_support.emplace(pair, supported);
+     return supported;
+@@ -2929,7 +3080,7 @@
+             const auto access = select_access_geometry(
+                 board, regional, window, templates, selected,
+                 regional.configured.max_access_assignment_states);
+-            record_access_result(access);
++            record_access_result(access, selected);
+             if (!access.legal() && !access.exhausted) {
+               return;
+             }
+@@ -3109,7 +3260,7 @@
+         const auto access = select_access_geometry(
+             board, regional, window, templates, selected,
+             regional.configured.max_access_assignment_states);
+-        record_access_result(access);
++        record_access_result(access, selected);
+         if (!access.legal() && !access.exhausted) continue;
+       }
+       if (std::find(result.choices.begin(), result.choices.end(), accelerated) ==
+@@ -6275,6 +6426,7 @@
+                        {"local_channel_occupancy", regional.configured.local_channel_occupancy},
+                        {"shared_channel_copper", regional.configured.shared_channel_copper},
+                        {"centerline_channel_cuts", regional.configured.centerline_channel_cuts},
++                       {"frozen_copper_context", regional.configured.frozen_copper_context},
+                        {"phase", json::string(phase)}, {"window", window.id},
+                        {"max_states", regional.configured.max_bundle_search_states},
+                        {"max_access_states", regional.configured.max_access_assignment_states},
+@@ -7342,12 +7494,14 @@
+         generate_consistent_bundle_choices(board, result, window, assignment.templates,
+                                            candidates_by_fragment,
+                                            result.configured.max_bundle_search_states, false);
++    assignment.frozen_copper_conflicts = portfolio.frozen_copper_conflicts;
+     const auto demand_scopes = regional_channel_demand_scopes(result.fragments, result.channels,
+         assignment.templates, result.configured.local_channel_occupancy,
+         result.configured.centerline_channel_cuts);
+     const auto copper_aliases = regional_template_copper_aliases(result.fragments,
+         assignment.templates, result.configured.shared_channel_copper);
+     result.partial_lane_capacity_pruned_states += portfolio.lane_capacity_pruned_states;
++    result.frozen_copper_via_pruned_states += portfolio.frozen_copper_via_pruned_states;
+     bool has_fitting_bundle = false;
+     std::size_t lane_states = 0U;
+     for (const auto& choice : portfolio.choices) {
+@@ -7364,10 +7518,20 @@
+         }
+       }
+       if (!coupled_template_selection_legal(board, window, assignment.templates, selected) ||
+-          !run_layer_selection_legal(assignment.templates, selected) ||
+-          !select_access_geometry(board, result, window, assignment.templates, selected,
+-                                  result.configured.max_access_assignment_states)
+-               .legal()) {
++          !run_layer_selection_legal(assignment.templates, selected)) {
++        continue;
++      }
++      const auto access = select_access_geometry(board, result, window, assignment.templates, selected,
++                                                 result.configured.max_access_assignment_states);
++      if (!access.legal()) {
++        if (!access.exhausted &&
++            access.failure == RegionalAccessFailureReason::frozen_copper_via) {
++          ++assignment.frozen_copper_via_rejected_states;
++          ++result.frozen_copper_via_rejected_states;
++          record_frozen_copper_access_witness(
++              assignment.frozen_copper_conflicts, access, result, window, assignment.templates,
++              selected, result.configured.max_access_blockers_per_window);
++        }
+         continue;
+       }
+       bool choice_fits = true;
+@@ -7858,12 +8022,16 @@
+       assignment.partial_terminal_pair_pruned_states = portfolio.terminal_pair_pruned_states;
+       assignment.partial_via_pair_pruned_states = portfolio.via_pair_pruned_states;
+       assignment.partial_terminal_via_pruned_states = portfolio.terminal_via_pruned_states;
++      assignment.partial_frozen_copper_via_pruned_states =
++          portfolio.frozen_copper_via_pruned_states;
++      assignment.frozen_copper_conflicts = portfolio.frozen_copper_conflicts;
+       assignment.partial_lane_capacity_pruned_states = portfolio.lane_capacity_pruned_states;
+       assignment.partial_run_layer_pruned_states = portfolio.run_layer_pruned_states;
+       assignment.partial_coupled_pruned_states = portfolio.coupled_pruned_states;
+       assignment.partial_forward_domain_wipeouts = portfolio.forward_domain_wipeouts;
+       assignment.partial_pairwise_access_checks = portfolio.pairwise_access_checks;
+       result.partial_lane_capacity_pruned_states += portfolio.lane_capacity_pruned_states;
++      result.frozen_copper_via_pruned_states += portfolio.frozen_copper_via_pruned_states;
+       assignment.partial_access_blockers = portfolio.access_blockers;
+       bundle_budget_exhausted = portfolio.exhausted;
+       for (const auto& choice : portfolio.choices) {
+@@ -7925,6 +8093,15 @@
+           case RegionalAccessFailureReason::terminal_via:
+             ++assignment.terminal_via_rejected_states;
+             break;
++          case RegionalAccessFailureReason::frozen_copper_via:
++            ++assignment.frozen_copper_via_rejected_states;
++            ++result.frozen_copper_via_rejected_states;
++            if (!access.exhausted) {
++              record_frozen_copper_access_witness(
++                  assignment.frozen_copper_conflicts, access, result, window, assignment.templates,
++                  selected, result.configured.max_access_blockers_per_window);
++            }
++            break;
+           case RegionalAccessFailureReason::none:
+             break;
+           }
+@@ -10233,7 +10410,6 @@
+       candidate.selected_template_conflicts = shortlist[rank].template_conflicts;
+       candidate.selected_residual_conflicts = shortlist[rank].residual_conflicts;
+       candidate.spline_realizations.clear();
+-      candidate.frozen_copper_conflicts.clear();
+       candidate.spline_candidate_rank = rank;
+       candidate.spline_candidate_heuristic_rank = shortlist[rank].candidate_heuristic_rank;
+       candidate.spline_candidate_learned_score = shortlist[rank].candidate_learned_score;
+@@ -10281,7 +10457,6 @@
+     std::uint64_t adaptive_pair_us = 0U;
+     std::uint64_t post_polish_us = 0U;
+     std::uint64_t quantization_us = 0U;
+-    assignment.frozen_copper_conflicts.clear();
+     if (telemetry != nullptr) {
+       RouterTelemetryEvent progress;
+       progress.kind = RouterTelemetryEventKind::search_summary;
+@@ -12704,7 +12879,20 @@
+       result.native_arc_fit_failures += native_assessment.fit_failures;
+       result.native_arc_copper_violations += native_assessment.violations;
+       result.native_arc_legal_windows += native_assessment.legal() ? 1U : 0U;
+-      assignment.frozen_copper_conflicts = native_assessment.frozen_conflicts;
++      for (const auto& witness : native_assessment.frozen_conflicts) {
++        const auto prior = std::find_if(
++            assignment.frozen_copper_conflicts.begin(), assignment.frozen_copper_conflicts.end(),
++            [&](const auto& item) {
++              return item.candidate == witness.candidate && item.blocker == witness.blocker &&
++                     item.layer == witness.layer && item.code == witness.code;
++            });
++        if (prior == assignment.frozen_copper_conflicts.end()) {
++          assignment.frozen_copper_conflicts.push_back(witness);
++        } else {
++          prior->clearance_deficit =
++              std::max(prior->clearance_deficit, witness.clearance_deficit);
++        }
++      }
+     } else {
+       native_assessment.route_legal.resize(routes.size(), true);
+       for (std::size_t index = 0U; index < routes.size(); ++index)
+@@ -13415,7 +13603,6 @@
+       promoted_wave.emplace(assignment.window_id, assignment.spline_fallback_waves);
+       assignment.spline_candidate_reserve = std::move(remaining_reserve);
+       assignment.spline_realizations.clear();
+-      assignment.frozen_copper_conflicts.clear();
+       assignment.stop_reason = RegionalBundleStopReason::complete;
+       assignment.joint_spline_candidate = false;
+       if (telemetry != nullptr) {
+@@ -14411,6 +14598,8 @@
+           ", terminal_pair=" + std::to_string(assignment.partial_terminal_pair_pruned_states) +
+           ", via_pair=" + std::to_string(assignment.partial_via_pair_pruned_states) +
+           ", terminal_via=" + std::to_string(assignment.partial_terminal_via_pruned_states) +
++          ", frozen_copper_via=" +
++          std::to_string(assignment.partial_frozen_copper_via_pruned_states) +
+           ", lane_capacity=" + std::to_string(assignment.partial_lane_capacity_pruned_states) +
+           ", run_layer=" + std::to_string(assignment.partial_run_layer_pruned_states) +
+           ", coupled=" + std::to_string(assignment.partial_coupled_pruned_states) +
+@@ -14662,6 +14851,10 @@
+       ", partial_lane_capacity_pruned=" +
+       std::to_string(result.partial_lane_capacity_pruned_states) +
+       ", partial_access_pruned=" + std::to_string(partial_access_pruned) +
++      ", frozen_copper_via_pruned=" +
++      std::to_string(result.frozen_copper_via_pruned_states) +
++      ", frozen_copper_via_rejected=" +
++      std::to_string(result.frozen_copper_via_rejected_states) +
+       ", attributed_access_blockers=" + std::to_string(attributed_access_blockers) +
+       ", terminal_navmesh=" + std::to_string(result.accepted_terminal_navmesh_templates) + "/" +
+       std::to_string(result.terminal_navmesh_template_checks) +
+@@ -16328,6 +16521,8 @@
+       std::size_t retry_lane_analytical_rejections = 0U;
+       std::size_t retry_lane_budget_exhaustions = 0U;
+       std::size_t retry_partial_lane_capacity_pruned = 0U;
++      std::size_t retry_frozen_copper_via_pruned = 0U;
++      std::size_t retry_frozen_copper_via_rejected = 0U;
+       std::size_t retry_lane_precedence_rejections = 0U;
+       emit_progress("regional-analysis:residual-cones",
+                     "residual conflict cones constructed: cones=" + std::to_string(cones_built) +
+@@ -16377,6 +16572,8 @@
+         retry_lane_analytical_rejections += cone.lane_solver_analytical_rejections;
+         retry_lane_budget_exhaustions += cone.lane_solver_budget_exhaustions;
+         retry_partial_lane_capacity_pruned += cone.partial_lane_capacity_pruned_states;
++        retry_frozen_copper_via_pruned += cone.frozen_copper_via_pruned_states;
++        retry_frozen_copper_via_rejected += cone.frozen_copper_via_rejected_states;
+         retry_lane_precedence_rejections += cone.lane_precedence_rejected_states;
+         const auto complete_cone_transaction =
+             !cone.bundle_assignments.empty() &&
+@@ -16456,6 +16653,8 @@
+       result.lane_solver_analytical_rejections += retry_lane_analytical_rejections;
+       result.lane_solver_budget_exhaustions += retry_lane_budget_exhaustions;
+       result.partial_lane_capacity_pruned_states += retry_partial_lane_capacity_pruned;
++      result.frozen_copper_via_pruned_states += retry_frozen_copper_via_pruned;
++      result.frozen_copper_via_rejected_states += retry_frozen_copper_via_rejected;
+       result.lane_precedence_rejected_states += retry_lane_precedence_rejections;
+       result.residual_conflict_cone_retries = recomputed == 0U ? 0U : 1U;
+       result.residual_conflict_cones_built = cones_built;
+--- a/include/flux/core/regional_router.hpp
++++ b/include/flux/core/regional_router.hpp
+@@ -547,6 +547,7 @@
+ struct RegionalBundleChoicePortfolio {
+   std::vector<std::vector<std::size_t>> choices;
+   std::vector<RegionalAccessBlocker> access_blockers;
++  std::vector<RegionalFrozenCopperConflict> frozen_copper_conflicts;
+   std::size_t states{0};
+   std::size_t access_pruned_states{0};
+   std::size_t access_assignment_states{0};
+@@ -554,6 +555,7 @@
+   std::size_t terminal_pair_pruned_states{0};
+   std::size_t via_pair_pruned_states{0};
+   std::size_t terminal_via_pruned_states{0};
++  std::size_t frozen_copper_via_pruned_states{0};
+   std::size_t lane_capacity_pruned_states{0};
+   std::size_t run_layer_pruned_states{0};
+   std::size_t coupled_pruned_states{0};
+@@ -675,6 +677,7 @@
+   std::size_t partial_terminal_pair_pruned_states{0};
+   std::size_t partial_via_pair_pruned_states{0};
+   std::size_t partial_terminal_via_pruned_states{0};
++  std::size_t partial_frozen_copper_via_pruned_states{0};
+   std::size_t partial_lane_capacity_pruned_states{0};
+   std::size_t partial_run_layer_pruned_states{0};
+   std::size_t partial_coupled_pruned_states{0};
+@@ -689,6 +692,7 @@
+   std::size_t terminal_pair_rejected_states{0};
+   std::size_t via_pair_rejected_states{0};
+   std::size_t terminal_via_rejected_states{0};
++  std::size_t frozen_copper_via_rejected_states{0};
+   std::size_t packing_rejected_states{0};
+   std::size_t selected_via_alternative_switches{0};
+   std::size_t access_assignment_exhaustions{0};
+@@ -961,6 +965,8 @@
+   std::size_t lane_solver_analytical_rejections{0};
+   std::size_t lane_solver_budget_exhaustions{0};
+   std::size_t partial_lane_capacity_pruned_states{0};
++  std::size_t frozen_copper_via_pruned_states{0};
++  std::size_t frozen_copper_via_rejected_states{0};
+   std::size_t refittable_terminal_width_fragments{0};
+   std::size_t fixed_resource_width_fragments{0};
+   std::size_t via_site_candidate_checks{0};
+--- a/apps/flux-cli/main.cpp
++++ b/apps/flux-cli/main.cpp
+@@ -1784,6 +1784,10 @@
+   print_lane_solver_metric("regional_partial_lane_capacity_pruned_states",
+                            regional == nullptr ? 0U
+                                                : regional->partial_lane_capacity_pruned_states);
++  print_lane_solver_metric("regional_frozen_copper_via_pruned_states",
++                           regional == nullptr ? 0U : regional->frozen_copper_via_pruned_states);
++  print_lane_solver_metric("regional_frozen_copper_via_rejected_states",
++                           regional == nullptr ? 0U : regional->frozen_copper_via_rejected_states);
+   std::cout << ",\n  \"regional_complete_bundle_assignments\": ";
+   if (regional == nullptr) {
+     std::cout << "null";
+@@ -2372,6 +2376,8 @@
+                 << ",\"partial_via_pair_pruned\":" << assignment->partial_via_pair_pruned_states
+                 << ",\"partial_terminal_via_pruned\":"
+                 << assignment->partial_terminal_via_pruned_states
++                << ",\"partial_frozen_copper_via_pruned\":"
++                << assignment->partial_frozen_copper_via_pruned_states
+                 << ",\"partial_access_blockers\":[";
+       for (std::size_t blocker_index = 0U;
+            blocker_index < assignment->partial_access_blockers.size(); ++blocker_index) {
+@@ -2430,6 +2436,8 @@
+           << ",\"terminal_pair_rejected\":" << assignment->terminal_pair_rejected_states
+           << ",\"via_pair_rejected\":" << assignment->via_pair_rejected_states
+           << ",\"terminal_via_rejected\":" << assignment->terminal_via_rejected_states
++          << ",\"frozen_copper_via_rejected\":"
++          << assignment->frozen_copper_via_rejected_states
+           << ",\"packing_rejected\":" << assignment->packing_rejected_states
+           << ",\"selected_template_conflicts\":" << assignment->selected_template_conflicts
+           << ",\"selected_residual_conflicts\":" << assignment->selected_residual_conflicts
+@@ -2627,6 +2635,9 @@
+       "regional_partial_terminal_via_pruned_bundle_states",
+       [](const auto& assignment) { return assignment.partial_terminal_via_pruned_states; });
+   print_rejected_bundle_states(
++      "regional_partial_frozen_copper_via_pruned_bundle_states",
++      [](const auto& assignment) { return assignment.partial_frozen_copper_via_pruned_states; });
++  print_rejected_bundle_states(
+       "regional_partial_lane_capacity_pruned_bundle_states",
+       [](const auto& assignment) { return assignment.partial_lane_capacity_pruned_states; });
+   print_rejected_bundle_states(
+@@ -2648,6 +2659,9 @@
+       "regional_terminal_via_rejected_bundle_states",
+       [](const auto& assignment) { return assignment.terminal_via_rejected_states; });
+   print_rejected_bundle_states(
++      "regional_frozen_copper_via_rejected_bundle_states",
++      [](const auto& assignment) { return assignment.frozen_copper_via_rejected_states; });
++  print_rejected_bundle_states(
+       "regional_packing_rejected_bundle_states",
+       [](const auto& assignment) { return assignment.packing_rejected_states; });
+   print_rejected_bundle_states("regional_access_assignment_states", [](const auto& assignment) {
+--- a/tests/unit/core_tests.cpp
++++ b/tests/unit/core_tests.cpp
+@@ -4257,6 +4257,170 @@
+           "complete-leaf access checks must still certify the actual chosen runup representative");
+ }
+ 
++void frozen_foreign_copper_rejects_selected_vias_before_spline_selection() {
++  Board board;
++  board.outline = rectangle(0, 0, 40, 40);
++  board.layers = {{LayerId{"F.Cu"}, "F.Cu", LayerKind::copper, 0},
++                  {LayerId{"B.Cu"}, "B.Cu", LayerKind::copper, 1},
++                  {LayerId{"In1.Cu"}, "In1.Cu", LayerKind::copper, 2}};
++  const NetId candidate_net{"via-owner"};
++  const NetId frozen_net{"frozen-lane"};
++  board.nets = {{candidate_net, "VIA_OWNER"}, {frozen_net, "FROZEN_LANE"}};
++
++  flux::RegionalRouteResult regional;
++  regional.configured.frozen_copper_context = true;
++  flux::RegionalRouteFragment candidate;
++  candidate.id = {candidate_net, 0U, 0U, 0U};
++  candidate.layer = LayerId{"F.Cu"};
++  candidate.start = mm(5.0, 10.0);
++  candidate.end = mm(20.0, 10.0);
++  candidate.width = Nanometres::from_mm(0.25);
++  candidate.clearance = Nanometres::from_mm(0.2);
++  flux::RegionalRouteFragment frozen;
++  frozen.id = {frozen_net, 0U, 0U, 0U};
++  frozen.layer = LayerId{"F.Cu"};
++  frozen.start = mm(10.0, 5.0);
++  frozen.end = mm(10.0, 15.0);
++  frozen.width = Nanometres::from_mm(0.25);
++  frozen.clearance = Nanometres::from_mm(0.2);
++  regional.fragments = {candidate, frozen};
++
++  flux::RegionalRoutingWindow window;
++  window.id = 9U;
++  window.fragments = {candidate.id};
++  window.owned_fragments = window.fragments;
++
++  flux::RegionalViaChoice selected;
++  selected.id = 0U;
++  selected.region_id = 0U;
++  selected.net = candidate_net;
++  selected.site = mm(10.15, 10.0);
++  selected.span = {LayerId{"F.Cu"}, LayerId{"B.Cu"}};
++  selected.diameter = Nanometres::from_mm(0.7);
++  selected.drill = Nanometres::from_mm(0.3);
++  selected.selected_global_site = true;
++  auto alternative = selected;
++  alternative.id = 1U;
++  alternative.site = mm(20.0, 10.0);
++  alternative.selected_global_site = false;
++  regional.via_choices = {selected, alternative};
++
++  flux::RegionalRouteTemplate route;
++  route.id = 0U;
++  route.fragment = candidate.id;
++  route.routing_layer = LayerId{"F.Cu"};
++  route.selected_global_topology = true;
++  route.via_choices = {selected.id};
++  const std::vector<flux::RegionalRouteTemplate> templates{route};
++  const std::vector<std::vector<std::size_t>> domains{{0U}};
++  const auto select = [&] {
++    return flux::enumerate_regional_bundle_choices(board, regional, window, templates, domains,
++                                                    16U);
++  };
++
++  const auto alternative_selected = select();
++  require(alternative_selected.choices.size() == 1U &&
++              alternative_selected.access_pruned_states == 0U,
++          "a frozen foreign lane must reject only the colliding selected via and preserve a legal "
++          "same-region alternative before spline realization");
++
++  regional.via_choices.pop_back();
++  const auto fixed_site_rejected = select();
++  require(fixed_site_rejected.choices.empty() &&
++              fixed_site_rejected.frozen_copper_via_pruned_states > 0U &&
++              !fixed_site_rejected.exhausted,
++          "a fixed selected via must not survive access selection through immutable foreign "
++          "copper");
++  require(fixed_site_rejected.frozen_copper_conflicts.size() == 1U &&
++              fixed_site_rejected.frozen_copper_conflicts.front().candidate == candidate.id &&
++              fixed_site_rejected.frozen_copper_conflicts.front().blocker == frozen.id &&
++              fixed_site_rejected.frozen_copper_conflicts.front().layer == LayerId{"F.Cu"} &&
++              fixed_site_rejected.frozen_copper_conflicts.front().clearance_deficit ==
++                  Nanometres::from_mm(0.525) &&
++              fixed_site_rejected.frozen_copper_conflicts.front().code ==
++                  "frozen-via-copper-clearance",
++          "a frozen-via rejection must preserve its owned candidate, exact foreign blocker, "
++          "layer, deficit and clearance authority");
++  regional.windows = {window};
++  flux::RegionalBundleAssignment failed_assignment;
++  failed_assignment.window_id = window.id;
++  failed_assignment.stop_reason = flux::RegionalBundleStopReason::spline_realization_failed;
++  failed_assignment.frozen_copper_conflicts = fixed_site_rejected.frozen_copper_conflicts;
++  regional.bundle_assignments = {failed_assignment};
++  flux::RegionalRouterConfig scope_config;
++  scope_config.frozen_copper_context = true;
++  scope_config.expand_frozen_copper_scope = true;
++  require(flux::append_regional_frozen_scope_witnesses(regional, scope_config) &&
++              scope_config.frozen_copper_scope_witnesses ==
++                  fixed_site_rejected.frozen_copper_conflicts,
++          "an early frozen-via witness must create an exact ownership-expansion obligation");
++  scope_config.frozen_copper_scope_witnesses.clear();
++  regional.windows.front().owned_fragments.push_back(frozen.id);
++  std::sort(regional.windows.front().owned_fragments.begin(),
++            regional.windows.front().owned_fragments.end());
++  require(!flux::append_regional_frozen_scope_witnesses(regional, scope_config),
++          "an owned frozen fragment must never become a foreign scope-expansion witness");
++  regional.windows.front().owned_fragments = {candidate.id};
++
++  regional.configured.frozen_copper_context = false;
++  require(select().choices.size() == 1U,
++          "the frozen-copper access predicate must remain disabled outside the explicit context");
++  regional.configured.frozen_copper_context = true;
++
++  window.owned_fragments.push_back(frozen.id);
++  std::sort(window.owned_fragments.begin(), window.owned_fragments.end());
++  require(select().choices.size() == 1U,
++          "a movable owned lane must remain available to later packing instead of rejecting its "
++          "coarse centerline");
++  window.owned_fragments = {candidate.id};
++
++  regional.fragments.back().layer = LayerId{"In1.Cu"};
++  require(select().choices.size() == 1U,
++          "a frozen lane outside the selected via span must not constrain the access site");
++  regional.fragments.back().layer = LayerId{"F.Cu"};
++
++  regional.via_choices.front().site = mm(10.675, 10.0);
++  require(select().choices.size() == 1U,
++          "an exact copper-clearance boundary must remain legal under the strict DRC predicate");
++  regional.via_choices.front().site = mm(10.8, 10.0);
++  board.rules.hole_clearance = Nanometres::from_mm(0.8);
++  require(select().choices.empty(),
++          "via drill clearance against frozen foreign copper must use the source DRC rule when "
++          "it exceeds the via-copper envelope");
++
++  board.rules.hole_clearance = Nanometres{};
++  regional.via_choices.front().site = mm(10.15, 10.0);
++  auto second_candidate = candidate;
++  second_candidate.id.fragment_index = 1U;
++  second_candidate.start = mm(5.0, 11.0);
++  second_candidate.end = mm(20.0, 11.0);
++  regional.fragments.push_back(second_candidate);
++  auto second_route = route;
++  second_route.id = 1U;
++  second_route.fragment = second_candidate.id;
++  flux::RegionalRoutingWindow shared_window = window;
++  shared_window.fragments = {candidate.id, second_candidate.id};
++  shared_window.owned_fragments = shared_window.fragments;
++  std::sort(shared_window.owned_fragments.begin(), shared_window.owned_fragments.end());
++  const auto shared_via_rejected = flux::enumerate_regional_bundle_choices(
++      board, regional, shared_window, {route, second_route}, {{0U}, {1U}}, 16U);
++  require(shared_via_rejected.choices.empty() &&
++              shared_via_rejected.frozen_copper_conflicts.size() == 2U &&
++              std::set<flux::RegionalRouteFragmentId>{
++                  shared_via_rejected.frozen_copper_conflicts[0].candidate,
++                  shared_via_rejected.frozen_copper_conflicts[1].candidate} ==
++                  std::set<flux::RegionalRouteFragmentId>{candidate.id, second_candidate.id},
++          "every selected owned fragment incident to one rejected via region must retain its "
++          "own frozen-copper witness");
++  regional.windows = {shared_window};
++  regional.bundle_assignments.front().frozen_copper_conflicts =
++      shared_via_rejected.frozen_copper_conflicts;
++  scope_config.frozen_copper_scope_witnesses.clear();
++  require(flux::append_regional_frozen_scope_witnesses(regional, scope_config) &&
++              scope_config.frozen_copper_scope_witnesses.size() == 2U,
++          "scope expansion must preserve every owned incident fragment under the witness budget");
++}
++
+ void regional_spline_tiers_are_selected_breadth_first() {
+   std::vector<flux::RegionalBundleAssignment> assignments(5U);
+   assignments[0].window_id = 3U;
+@@ -9283,6 +9447,8 @@
+        exact_via_witnesses_create_regional_repair_scope},
+       {"regional_bundle_forward_checking_preserves_access_solutions",
+        regional_bundle_forward_checking_preserves_access_solutions},
++      {"frozen_foreign_copper_rejects_selected_vias_before_spline_selection",
++       frozen_foreign_copper_rejects_selected_vias_before_spline_selection},
+       {"parallel_spline_workers_shutdown_after_short_optimizations",
+        parallel_spline_workers_shutdown_after_short_optimizations},
+       {"exact_copper_witnesses_preserve_branch_identity",
+--- a/tools/replay_regional_bundle.cpp
++++ b/tools/replay_regional_bundle.cpp
+@@ -198,6 +198,8 @@
+     flux::RegionalRouteResult regional;
+     regional.configured.max_access_assignment_states = index(context.at("max_access_states"));
+     regional.configured.max_access_blockers_per_window = index(context.at("max_access_blockers"));
++    if (const auto* frozen = context.as_object().if_contains("frozen_copper_context"))
++      regional.configured.frozen_copper_context = frozen->as_bool();
+     flux::RegionalRoutingWindow window;
+     window.id = index(context.at("window"));
+     for (const auto& x : context.at("nets").as_array())
+@@ -345,6 +347,7 @@
+                 {"recorded_max_states", index(context.at("max_states"))},
+                 {"replay_max_states", maximum_states.value_or(index(context.at("max_states")))},
+                 {"window", window.id},
++                {"frozen_copper_context", regional.configured.frozen_copper_context},
+                 {"forward_checking", forward},
+                 {"resource_forward_checking", resources},
+                 {"local_channel_occupancy", local},
+@@ -373,6 +376,7 @@
+                 {"terminal_pair_pruned", result.terminal_pair_pruned_states},
+                 {"via_pair_pruned", result.via_pair_pruned_states},
+                 {"terminal_via_pruned", result.terminal_via_pruned_states},
++                {"frozen_copper_via_pruned", result.frozen_copper_via_pruned_states},
+                 {"lane_capacity_pruned", result.lane_capacity_pruned_states},
+                 {"run_layer_pruned", result.run_layer_pruned_states},
+                 {"coupled_pruned", result.coupled_pruned_states},

@@ -1,4 +1,5 @@
 #include "flux/core/copper_geometry.hpp"
+#include "flux/core/board_free_space.hpp"
 #include "flux/core/detailed_router.hpp"
 #include "flux/core/drc.hpp"
 #include "flux/core/geometry.hpp"
@@ -7,9 +8,14 @@
 #include "flux/core/integrated_optimizer.hpp"
 #include "flux/core/navmesh_route.hpp"
 #include "flux/core/pns_router.hpp"
+#include "flux/core/quantized_copper_oracle.hpp"
+#include "flux/core/regional_candidate_ranker.hpp"
 #include "flux/core/regional_router.hpp"
+#include "flux/core/regional_repair_scheduler.hpp"
 #include "flux/core/router_telemetry.hpp"
 #include "flux/core/routing_compute.hpp"
+#include "flux/core/routing_feedback.hpp"
+#include "flux/core/routing_engine.hpp"
 #include "flux/core/routing_rules.hpp"
 #include "flux/core/spline_route.hpp"
 #include "flux/io/kicad_export.hpp"
@@ -32,6 +38,7 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <mutex>
 #include <iterator>
 #include <limits>
 #include <numeric>
@@ -72,11 +79,14 @@ public:
   [[nodiscard]] bool accepts(flux::RouterTelemetryLevel) const noexcept override { return true; }
 
   [[nodiscard]] bool try_emit(flux::RouterTelemetryEvent event) noexcept override {
+    std::lock_guard lock(events_mutex_);
     events.push_back(std::move(event));
     return true;
   }
 
   std::vector<flux::RouterTelemetryEvent> events;
+private:
+  std::mutex events_mutex_;
 };
 
 [[noreturn]] void fail(const std::string& message) { throw std::runtime_error(message); }
@@ -85,6 +95,69 @@ void require(bool condition, const std::string& message) {
   if (!condition) {
     fail(message);
   }
+}
+
+void regional_candidate_ranker_is_schema_bound_and_deterministic() {
+  const std::string model = R"JSON({
+    "schema_version": 1,
+    "feature_names": [
+      "heuristic_rank", "template_count", "via_count", "cross_section_count",
+      "via_alternative_switches", "template_conflicts", "residual_conflicts",
+      "alternative_template_count", "selected_global_template_count", "distinct_layer_count",
+      "total_channel_steps", "total_layer_transitions", "total_topology_cost",
+      "total_lower_bound_length_mm", "minimum_lane_slack_mm", "contested_via_count",
+      "maximum_via_competitors", "bundle_search_states"
+    ],
+    "base_score": 0.25,
+    "trees": [{"nodes": [
+      {"id": 0, "feature": 0, "threshold": 1.5, "yes": 1, "no": 2, "missing": 2},
+      {"id": 1, "leaf": 2.0},
+      {"id": 2, "leaf": -1.0}
+    ]}]
+  })JSON";
+  std::string diagnostic;
+  const auto ranker = flux::RegionalCandidateRanker::load_json(model, diagnostic);
+  flux::RegionalCandidateFeatureVector preferred{};
+  preferred[0] = 1.0;
+  auto deferred = preferred;
+  deferred[0] = 2.0;
+  require(ranker && diagnostic.empty() && ranker->tree_count() == 1U &&
+              std::abs(ranker->score(preferred) - 2.25) < 1.0e-12 &&
+              std::abs(ranker->score(deferred) + 0.75) < 1.0e-12,
+          "the inference-only ranker must preserve exported split semantics");
+
+  auto incompatible = model;
+  const auto feature = incompatible.find("heuristic_rank");
+  incompatible.replace(feature, std::string("heuristic_rank").size(), "renamed_feature");
+  diagnostic.clear();
+  require(!flux::RegionalCandidateRanker::load_json(incompatible, diagnostic) &&
+              diagnostic.find("feature schema") != std::string::npos,
+          "a model trained against another feature contract must fail closed");
+
+  const auto observation_path =
+      std::filesystem::temp_directory_path() /
+      ("flux-regional-candidate-observation-" +
+       std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".jsonl");
+  flux::RegionalCandidateTrainingObservation observation;
+  observation.board_revision = "fixture";
+  observation.query_id = "fixture:0:1";
+  observation.window_id = 1U;
+  observation.features = preferred;
+  observation.complete = true;
+  observation.realization_us = 42U;
+  diagnostic.clear();
+  const auto appended = flux::append_regional_candidate_training_observation(
+      observation_path, observation, diagnostic);
+  std::ifstream observation_stream(observation_path);
+  const std::string serialized((std::istreambuf_iterator<char>(observation_stream)),
+                               std::istreambuf_iterator<char>());
+  std::error_code remove_error;
+  std::filesystem::remove(observation_path, remove_error);
+  require(appended && diagnostic.empty() && !remove_error &&
+              serialized.find("\"query_id\":\"fixture:0:1\"") != std::string::npos &&
+              serialized.find("\"complete\":true") != std::string::npos &&
+              serialized.ends_with('\n'),
+          "candidate outcomes must be emitted as independently parseable append-only JSONL");
 }
 
 [[nodiscard]] Point mm(double x, double y) {
@@ -122,6 +195,1635 @@ void require(bool condition, const std::string& message) {
   return board;
 }
 
+void routing_engine_resumes_and_requires_current_external_validation() {
+  const auto board = two_pad_board();
+  flux::RoutingEngineConfig config;
+  config.copper_scaffold.enabled = false; // Exercise regional decision-point semantics.
+  config.planner.global.grid_pitch = Nanometres::from_mm(5.0);
+  config.planner.global.max_iterations = 1U;
+  config.planner.global.max_pin_escape_grid_radius = 2U;
+  config.planner.global.max_pin_access_nodes_per_terminal = 32U;
+  config.planner.max_routability_feedback_retries = 0U;
+  config.max_actions = 8U;
+  std::size_t yielded_steps = 0U;
+  auto run = [&](flux::RoutingEngine& engine, std::size_t work) {
+    for (std::size_t step = 0U; step < 100'000U && !engine.terminal(); ++step) {
+      const auto result = engine.advance({.work_units = work,
+                                          .time_slice = std::chrono::milliseconds{10}});
+      if (result.outcome == flux::RoutingEngineOutcome::yielded) {
+        ++yielded_steps;
+        require(!result.accepted_checkpoint_changed, "yield must not commit partial copper");
+      }
+      if (result.outcome == flux::RoutingEngineOutcome::awaiting_external_validation ||
+          result.outcome == flux::RoutingEngineOutcome::awaiting_materialization) return;
+    }
+  };
+  flux::RoutingEngine small(board, board, config);
+  config.speculative_preparation = false;
+  CollectingTelemetrySink engine_telemetry;
+  flux::RoutingEngine large(board, board, config, &engine_telemetry);
+  run(small, 1U);
+  run(large, 100'000U);
+  require(small.state().outcome == flux::RoutingEngineOutcome::awaiting_external_validation &&
+              large.state().outcome == flux::RoutingEngineOutcome::awaiting_external_validation,
+          "internally legal copper must wait for external DRC, not report completion");
+  require(small.selected_detailed() && large.selected_detailed() &&
+              small.selected_detailed()->complete() && large.selected_detailed()->complete() &&
+              small.selected_plan()->paths == large.selected_plan()->paths &&
+              small.selected_detailed()->candidate == large.selected_detailed()->candidate,
+          "changing cooperative slice size must preserve routing and copper");
+  require(small.state().live_copper_terrain_revision > 0U &&
+              small.state().live_copper_terrain_features > 0U &&
+              !small.state().live_copper_terrain.provisional &&
+              small.state().live_copper_terrain_exact_replacements > 0U &&
+              small.state().live_copper_terrain == large.state().live_copper_terrain,
+          "completed materialization must replace provisional terrain with slice-independent copper");
+  require(yielded_steps > 0U, "small slices must exercise actual suspended kernel progress");
+  require(small.state().decision_points > 0U &&
+              small.state().decision_points == large.state().decision_points &&
+              small.state().speculative_preparations_started == 1U &&
+              large.state().speculative_preparations_started == 0U,
+          "semantic decisions must be telemetry/slice independent with one optional preparation worker");
+  if (small.selected_plan()->regional.spline_candidate_available) {
+    require(small.state().tightening_actions == 1U && large.state().tightening_actions == 1U,
+            "a completed curved candidate must receive exactly one bounded tightening action");
+    const auto tightening = std::find_if(small.state().attempts.begin(), small.state().attempts.end(),
+        [](const auto& attempt) { return attempt.action == flux::RoutingEngineAction::tighten_routes; });
+    const auto materialize = std::find_if(small.state().attempts.begin(), small.state().attempts.end(),
+        [](const auto& attempt) { return attempt.action == flux::RoutingEngineAction::materialize_copper; });
+    require(tightening < materialize, "tightening must precede final copper materialization");
+  }
+  auto limited_config = config;
+  limited_config.max_actions = small.state().attempts.size() - small.state().tightening_actions;
+  flux::RoutingEngine limited(board, board, limited_config);
+  run(limited, 100'000U);
+  require(limited.state().outcome == flux::RoutingEngineOutcome::awaiting_external_validation &&
+              limited.state().tightening_actions == 0U,
+          "optional tightening must reserve the final action for copper materialization");
+  const auto generation = small.state().generation;
+  small.acknowledge_external_validation(generation + 1U, true);
+  require(small.state().outcome == flux::RoutingEngineOutcome::awaiting_external_validation,
+          "stale external validation must not authorize a different copper revision");
+  small.acknowledge_external_validation(generation, true);
+  require(small.state().outcome == flux::RoutingEngineOutcome::complete,
+          "current passing external DRC should complete the engine");
+  flux::RoutabilityDiagnosis rejection;
+  rejection.resource.stable_id = "external-test-clearance";
+  rejection.resource.nets = {NetId{"net-1"}};
+  rejection.suggested_relaxation = flux::RoutabilityRelaxation::change_corridor;
+  large.acknowledge_external_validation(large.state().generation, false, {rejection});
+  require(large.state().outcome == flux::RoutingEngineOutcome::progressed &&
+              large.state().next_action != flux::RoutingEngineAction::none &&
+              (!large.selected_detailed() || !large.selected_detailed()->complete()),
+          "external rejection must revoke acceptance and schedule evidence-directed repair");
+}
+
+void routing_engine_distinguishes_deadline_cancellation_and_budget() {
+  const auto board = two_pad_board();
+  flux::RoutingEngineConfig config;
+  config.copper_scaffold.enabled = false; // Exercise regional decision-point semantics.
+  config.max_actions = 0U;
+  flux::RoutingEngine exhausted(board, board, config);
+  require(exhausted.advance().outcome == flux::RoutingEngineOutcome::exhausted &&
+              exhausted.selected_plan() == nullptr,
+          "zero action budget must exhaust without claiming infeasibility or routing");
+  config.max_actions = 4U;
+  std::stop_source cancellation;
+  cancellation.request_stop();
+  flux::RoutingEngine cancelled(board, board, config);
+  require(cancelled.advance({}, cancellation.get_token()).outcome ==
+              flux::RoutingEngineOutcome::cancelled,
+          "caller cancellation must remain distinct from budget exhaustion");
+  config.planner.global.grid_pitch = Nanometres::from_mm(5.0);
+  config.planner.global.max_iterations = 1U;
+  config.planner.max_routability_feedback_retries = 0U;
+  config.max_decision_points = 1U;
+  flux::RoutingEngine bounded(board, board, config);
+  for (std::size_t step = 0; step < 10000U && !bounded.terminal(); ++step)
+    static_cast<void>(bounded.advance({.work_units = 100000U}));
+  require(bounded.state().outcome == flux::RoutingEngineOutcome::exhausted &&
+              bounded.state().decision_points == 1U &&
+              !bounded.state().attempts.empty() &&
+              bounded.state().attempts.back().interrupted_at_decision &&
+              !bounded.state().accepted_detailed,
+          "semantic decision limit must stop unevaluated search without publishing copper");
+  // Legacy credit settings must not prevent a first physical realization. Runtime and
+  // explicit action/decision bounds remain limits, not progress-earned permission.
+  auto experiment_config = config;
+  experiment_config.max_actions = 32U;
+  experiment_config.max_decision_points = 4096U;
+  experiment_config.planner.global.max_iterations = 12U;
+  experiment_config.preparation_work_units = 0U;
+  experiment_config.initial_regional_work_units = 0U;
+  experiment_config.regional_work_units_per_improvement = 0U;
+  experiment_config.max_regional_work_units = 0U;
+  experiment_config.initial_global_retry_attempts = 0U;
+  experiment_config.max_changed_context_retries = 0U;
+  experiment_config.global_retry_attempts_per_improvement = 0U;
+  flux::RoutingEngine experiments(board, board, experiment_config);
+  for (std::size_t step = 0U; step < 10000U && !experiments.terminal(); ++step) {
+    const auto result = experiments.advance({.work_units = 100000U});
+    if (result.outcome == flux::RoutingEngineOutcome::awaiting_external_validation) break;
+  }
+  require(experiments.state().outcome == flux::RoutingEngineOutcome::awaiting_external_validation &&
+              experiments.selected_detailed() && experiments.selected_detailed()->complete(),
+          "zero legacy credits must not starve physical realization of a routable board");
+  config.shared_deadline = std::chrono::milliseconds{1};
+  flux::RoutingEngine timed(board, board, config);
+  std::this_thread::sleep_for(std::chrono::milliseconds{20});
+  require(timed.advance().outcome == flux::RoutingEngineOutcome::timed_out &&
+              timed.selected_detailed() == nullptr,
+          "shared deadline must stop before work and retain no invented copper");
+}
+
+void routing_engine_explores_supported_physical_families() {
+  const auto board = two_pad_board();
+  flux::RoutingEngineConfig config;
+  // This fixture exercises fallback-family dispatch, not the constructive shortcut.
+  config.copper_scaffold.enabled = false;
+  config.planner.curved_tracks = true;
+  config.planner.global.grid_pitch = Nanometres::from_mm(5.0);
+  config.planner.global.max_iterations = 12U;
+  config.planner.global.max_pin_escape_grid_radius = 2U;
+  config.planner.global.max_pin_access_nodes_per_terminal = 32U;
+  config.planner.max_routability_feedback_retries = 0U;
+  config.planner.regional.xpbd.iterations = 1U;
+  config.planner.regional.max_confined_anisotropic_erosion_checks = 1U;
+  config.max_actions = 32U;
+  flux::RoutingEngine engine(board, board, config);
+  bool probe = false, xpbd = false, erosion = false, usped = false;
+  for (std::size_t step = 0U; step < 100'000U && !engine.terminal(); ++step) {
+    const auto result = engine.advance({.work_units = 10'000U});
+    if (result.outcome == flux::RoutingEngineOutcome::yielded) continue;
+    const auto& state = engine.state();
+    if (state.working_plan) {
+      if (result.action == flux::RoutingEngineAction::regional_realization &&
+          state.working_plan->regional_evaluated)
+        require(state.working_plan->regional.configured.enable_xpbd_relaxation &&
+                    state.working_plan->regional.configured.enable_avbd_relaxation,
+                "the first regional action must retain joint XPBD and AVBD eligibility");
+      if (result.action == flux::RoutingEngineAction::probe_quantized_copper)
+        probe = state.working_plan->quantized_copper_oracle.evaluated;
+      if (result.action == flux::RoutingEngineAction::xpbd_repair)
+        xpbd = state.working_plan->regional.configured.enable_xpbd_relaxation;
+      if (result.action == flux::RoutingEngineAction::confined_erosion_repair)
+        erosion = state.working_plan->regional.configured.max_confined_anisotropic_erosion_checks == 1U;
+      if (result.action == flux::RoutingEngineAction::usped_global_replan) {
+        usped = state.working_plan->coarse_global.configured_global_navmesh_usped.enabled;
+        require(state.working_plan->coarse_global.configured_live_copper_terrain_revision > 0U &&
+                    !state.working_plan->coarse_global.configured_live_copper_terrain.features.empty(),
+                "global replans must consume copper feedback produced by earlier engine actions");
+      }
+    }
+    if (probe && xpbd && erosion && usped) break;
+    if (result.outcome == flux::RoutingEngineOutcome::awaiting_external_validation) {
+      // The oracle deliberately rejects this otherwise legal fixture. Repeated identical
+      // evidence must exercise different eligible families rather than replay one local action.
+      flux::RoutabilityDiagnosis rejection;
+      rejection.resource.stable_id = "oracle-repeated-physical-conflict";
+      rejection.resource.nets = {NetId{"net-1"}};
+      rejection.suggested_relaxation = flux::RoutabilityRelaxation::change_corridor;
+      engine.acknowledge_external_validation(state.generation, false, {rejection});
+    }
+  }
+  require(probe && xpbd && erosion && usped,
+          "bounded exploration must dispatch quantized, XPBD, erosion and USPED kernels with actual configurations");
+}
+
+void routing_engine_scaffold_progress_preserves_external_validation_gate() {
+  const auto board = two_pad_board();
+  flux::RoutingEngineConfig config;
+  config.planner.global.grid_pitch = Nanometres::from_mm(5.0);
+  config.planner.global.max_iterations = 1U;
+  config.max_actions = 12U;
+  flux::RoutingEngine engine(board, board, config);
+  for (std::size_t step = 0U; step < 10000U && !engine.terminal(); ++step) {
+    const auto result = engine.advance({.work_units = 1000U});
+    if (result.outcome == flux::RoutingEngineOutcome::awaiting_external_validation) break;
+  }
+  const auto& state = engine.state();
+  require(state.legal_scaffold && state.legal_scaffold->complete &&
+              state.legal_scaffold->request_count == 1U &&
+              state.legal_scaffold->satisfied_indices.size() == 1U &&
+              std::any_of(state.attempts.begin(), state.attempts.end(), [](const auto& attempt) {
+                return attempt.action == flux::RoutingEngineAction::construct_copper_scaffold && attempt.accepted;
+              }),
+          "checked scaffold connections must be retained and counted as accepted physical progress");
+  require(state.outcome == flux::RoutingEngineOutcome::awaiting_external_validation &&
+              engine.selected_detailed() && engine.selected_detailed()->complete(),
+          "constructive scaffold completion must still await external validation");
+  const auto generation = state.generation;
+  engine.acknowledge_external_validation(generation + 1U, true);
+  require(engine.state().outcome == flux::RoutingEngineOutcome::awaiting_external_validation,
+          "stale validation cannot accept scaffold materialization");
+  engine.acknowledge_external_validation(generation, true);
+  require(engine.state().outcome == flux::RoutingEngineOutcome::complete,
+          "current passing external validation must complete scaffold routing");
+}
+
+void routing_engine_cancels_a_live_continuation() {
+  const auto board = two_pad_board();
+  flux::RoutingEngineConfig config;
+  config.planner.global.grid_pitch = Nanometres::from_mm(5.0);
+  config.planner.global.max_iterations = 1U;
+  flux::RoutingEngine engine(board, board, config);
+  const auto first = engine.advance({.work_units = 1U});
+  require(first.outcome == flux::RoutingEngineOutcome::yielded,
+          "fixture must hold a suspended global search");
+  std::stop_source stop;
+  stop.request_stop();
+  require(engine.advance({}, stop.get_token()).outcome == flux::RoutingEngineOutcome::cancelled &&
+              engine.state().attempts.empty() && !engine.selected_plan(),
+          "cancellation must discard in-flight transaction without committing its partial outputs");
+  config.shared_deadline = std::chrono::milliseconds{1};
+  flux::RoutingEngine timed(board, board, config);
+  for (std::size_t step = 0U; step < 100'000U && !timed.terminal(); ++step)
+    static_cast<void>(timed.advance({.work_units = 1U}));
+  require(timed.state().outcome == flux::RoutingEngineOutcome::timed_out,
+          "deadline during an active continuation must not be labelled caller cancellation");
+}
+
+void quantized_copper_oracle_exposes_physical_conflicts_and_via_chains() {
+  // Keep exercising nontrivial snapping even when normal feedback preserves native coordinates.
+  flux::QuantizedCopperOracleConfig coarse_config;
+  coarse_config.grid_pitch = Nanometres{100000};
+  auto crossing_board = two_pad_board();
+  const NetId crossing_net{"net-2"};
+  crossing_board.nets.push_back({crossing_net, "CROSSING", 0});
+  const auto crossing_terminal = [&](std::string id, Point position) {
+    Footprint footprint;
+    footprint.id = ObjectId{id};
+    footprint.reference = id;
+    footprint.position = position;
+    footprint.courtyard = local_rectangle(2.0, 2.0);
+    footprint.pads = {
+        {ObjectId{id + "-pad"}, crossing_net, Point{}, {LayerId{"F.Cu"}}}};
+    return footprint;
+  };
+  crossing_board.footprints.push_back(crossing_terminal("U3", mm(50.0, 20.0)));
+  crossing_board.footprints.push_back(crossing_terminal("U4", mm(50.0, 60.0)));
+
+  flux::GlobalRouteResult crossing;
+  crossing.paths = {
+      flux::GlobalRoutePath{NetId{"net-1"},
+                            0U,
+                            {{mm(20.0, 40.0), LayerId{"F.Cu"}},
+                             {mm(80.0, 40.0), LayerId{"F.Cu"}}}},
+      flux::GlobalRoutePath{crossing_net,
+                            0U,
+                            {{mm(50.0, 20.0), LayerId{"F.Cu"}},
+                             {mm(50.0, 60.0), LayerId{"F.Cu"}}}}};
+  const auto rejected = flux::probe_quantized_copper_feasibility(crossing_board, crossing, coarse_config);
+  require(rejected.evaluated && rejected.all_paths_materialized &&
+              !rejected.exact_copper_legal && rejected.drc_violations > 0U &&
+              std::any_of(rejected.diagnoses.begin(), rejected.diagnoses.end(),
+                          [&](const auto& diagnosis) {
+                            return diagnosis.stage ==
+                                       flux::RoutabilityFailureStage::quantization &&
+                                   diagnosis.resource.nets.size() == 2U;
+                          }),
+          "fine-grid oracle must expose a mutually illegal quantized allocation before PH");
+
+  auto via_board = two_pad_board();
+  flux::GlobalRouteResult via_chain;
+  flux::GlobalRoutePath via_path;
+  via_path.net = NetId{"net-1"};
+  via_path.points = {{mm(20.0, 40.0), LayerId{"F.Cu"}},
+                     {mm(40.04, 40.0), LayerId{"F.Cu"}},
+                     {mm(40.04, 40.0), LayerId{"B.Cu"}},
+                     {mm(60.04, 40.0), LayerId{"B.Cu"}},
+                     {mm(60.04, 40.0), LayerId{"F.Cu"}},
+                     {mm(80.0, 40.0), LayerId{"F.Cu"}}};
+  via_chain.paths = {std::move(via_path)};
+  const auto accepted = flux::probe_quantized_copper_feasibility(via_board, via_chain, coarse_config);
+  require(accepted.feasible() && accepted.generated_tracks == 3U &&
+              accepted.generated_vias == 2U && accepted.drc_violations == 0U,
+          "fine-grid oracle must represent a complete F.Cu -> B.Cu -> F.Cu via chain as legal "
+          "quantized copper: " +
+              accepted.diagnostic);
+  auto endpoint_board = two_pad_board();
+  endpoint_board.footprints.front().position = mm(20.04, 40.03);
+  endpoint_board.footprints.back().position = mm(80.04, 40.03);
+  endpoint_board.layers.back().stack_order = 3U;
+  endpoint_board.layers.push_back({LayerId{"In1.Cu"}, "In1.Cu", LayerKind::copper, 1});
+  endpoint_board.layers.push_back({LayerId{"In2.Cu"}, "In2.Cu", LayerKind::copper, 2});
+  auto endpoint_chain = via_chain;
+  endpoint_chain.paths.front().points = {
+      {mm(20.04, 40.03), LayerId{"F.Cu"}},
+      {mm(20.04, 40.03), LayerId{"In1.Cu"}},
+      {mm(20.04, 40.03), LayerId{"B.Cu"}},
+      {mm(80.04, 40.03), LayerId{"B.Cu"}},
+      {mm(80.04, 40.03), LayerId{"In1.Cu"}},
+      {mm(80.04, 40.03), LayerId{"F.Cu"}}};
+  for (const bool preserve : {true, false}) {
+    auto endpoint_config = coarse_config;
+    endpoint_config.preserve_path_endpoints = preserve;
+    const auto endpoints = flux::probe_quantized_copper_feasibility(
+        endpoint_board, endpoint_chain, endpoint_config);
+    require(endpoints.feasible() && endpoints.malformed_paths == 0U &&
+                endpoints.generated_vias == 2U && endpoints.generated_tracks == 1U,
+            "coincident multilayer endpoint chains must quantize as one anchored site: " +
+                std::to_string(endpoints.malformed_paths) + "; " + endpoints.diagnostic);
+  }
+  auto disconnected_source = via_chain;
+  disconnected_source.paths.front().points[2].position.x += Nanometres{1};
+  const auto disconnected = flux::probe_quantized_copper_feasibility(via_board, disconnected_source, coarse_config);
+  require(!disconnected.all_paths_materialized && disconnected.malformed_paths == 1U,
+          "rounding two distinct source sites together must not legalize a lateral layer jump");
+
+  // Interior source holes are immutable electrical anchors, not new via candidates.
+  for (const bool use_pad : {false, true}) {
+    auto anchored_board = via_board;
+    anchored_board.rules.hole_to_hole_clearance = Nanometres{250000};
+    for (const auto x : {40.04, 60.04}) {
+      const auto id = "source-anchor-" + std::to_string(x);
+      if (use_pad) {
+        auto footprint = anchored_board.footprints.front();
+        footprint.id = ObjectId{id};
+        footprint.reference = id;
+        footprint.position = mm(x, 40.0);
+        auto& pad = footprint.pads.front();
+        pad.id = ObjectId{id + "-pad"};
+        pad.layers = {LayerId{"F.Cu"}, LayerId{"B.Cu"}};
+        pad.plated = true;
+        pad.drill_width = Nanometres{600000};
+        pad.drill_height = pad.drill_width;
+        anchored_board.footprints.push_back(std::move(footprint));
+      } else {
+        anchored_board.vias.push_back(flux::Via{ObjectId{id}, NetId{"net-1"}, mm(x, 40.0),
+            Nanometres{600000}, Nanometres{300000}, {LayerId{"F.Cu"}, LayerId{"B.Cu"}}, true});
+      }
+    }
+    for (const bool preserve_endpoints : {false, true}) {
+      auto anchor_config = coarse_config;
+      anchor_config.preserve_path_endpoints = preserve_endpoints;
+      const auto anchored = flux::probe_quantized_copper_feasibility(
+          anchored_board, via_chain, anchor_config);
+      require(anchored.feasible() && anchored.reused_same_net_transitions == 2U &&
+                  anchored.generated_vias == 0U && anchored.generated_tracks == 3U,
+              "quantization must preserve exact source-owned interior holes without duplicate vias");
+    }
+    if (use_pad) {
+      for (const int invalid_kind : {0, 1, 2}) {
+        auto invalid_anchor = anchored_board;
+        auto& pad = invalid_anchor.footprints.back().pads.front();
+        if (invalid_kind == 0) {
+          invalid_anchor.nets.push_back({NetId{"other-net"}, "OTHER", 0});
+          pad.net = NetId{"other-net"};
+        } else if (invalid_kind == 1) {
+          pad.plated = false;
+        } else {
+          pad.layers = {LayerId{"F.Cu"}};
+        }
+        const auto refused = flux::probe_quantized_copper_feasibility(invalid_anchor, via_chain, coarse_config);
+        require(!refused.feasible() && refused.reused_same_net_transitions == 1U &&
+                    refused.generated_vias == 1U,
+                "wrong-net, unplated or layer-incomplete holes must not certify a reused transition");
+      }
+    }
+  }
+
+  // A foreign source via is an immutable obstacle.  This deliberately uses one copper layer:
+  // before the planar reclassification, via-site feedback can only charge layer-transition
+  // edges, so no history edge is prepared at all.
+  auto fixed_via_board = two_pad_board();
+  fixed_via_board.layers.resize(1U);
+  fixed_via_board.nets.push_back({NetId{"fixed-via-net"}, "FIXED_VIA", 0});
+  fixed_via_board.vias.push_back(
+      {ObjectId{"fixed-source-via"}, NetId{"fixed-via-net"}, mm(50.0, 40.5),
+       Nanometres::from_mm(0.6), Nanometres::from_mm(0.3), {LayerId{"F.Cu"}}, true});
+  flux::GlobalRouteResult fixed_via_trace;
+  fixed_via_trace.paths = {flux::GlobalRoutePath{NetId{"net-1"}, 0U,
+      {{mm(20.0, 40.0), LayerId{"F.Cu"}}, {mm(80.0, 40.0), LayerId{"F.Cu"}}}}};
+  const auto fixed_via_rejected =
+      flux::probe_quantized_copper_feasibility(fixed_via_board, fixed_via_trace);
+  const auto fixed_via_diagnosis = std::find_if(
+      fixed_via_rejected.diagnoses.begin(), fixed_via_rejected.diagnoses.end(), [](const auto& diagnosis) {
+        return diagnosis.kind == flux::RoutabilityFailureKind::quantization_clearance &&
+               diagnosis.suggested_relaxation == flux::RoutabilityRelaxation::change_corridor &&
+               diagnosis.resource.nets == std::vector<NetId>{NetId{"net-1"}};
+      });
+  require(!fixed_via_rejected.feasible() && fixed_via_rejected.generated_tracks == 1U &&
+              fixed_via_rejected.generated_vias == 0U &&
+              fixed_via_rejected.drc_violation_counts.contains("track_via_clearance") &&
+              fixed_via_diagnosis != fixed_via_rejected.diagnoses.end() &&
+              fixed_via_diagnosis->resource.bounds.minimum.x > Nanometres::from_mm(49.0) &&
+              fixed_via_diagnosis->resource.bounds.maximum.x < Nanometres::from_mm(51.0) &&
+              fixed_via_diagnosis->resource.bounds.minimum.y > Nanometres::from_mm(39.0) &&
+              fixed_via_diagnosis->resource.bounds.maximum.y < Nanometres::from_mm(41.0) &&
+              !fixed_via_diagnosis->resource.bounds.contains(mm(20.0, 40.0)),
+          "a generated trace blocked by an immutable source via must retain its DRC rejection "
+          "while localizing a planar corridor change to the fixed obstacle");
+  auto nearly_clear_via_board = fixed_via_board;
+  nearly_clear_via_board.vias.front().position = mm(50.0, 40.624);
+  const auto nearly_clear_via =
+      flux::probe_quantized_copper_feasibility(nearly_clear_via_board, fixed_via_trace);
+  require(nearly_clear_via.drc_violation_counts.contains("track_via_clearance") &&
+              std::any_of(nearly_clear_via.diagnoses.begin(), nearly_clear_via.diagnoses.end(),
+                          [](const auto& diagnosis) {
+                            return diagnosis.kind == flux::RoutabilityFailureKind::quantization_clearance &&
+                                diagnosis.suggested_relaxation == flux::RoutabilityRelaxation::change_corridor &&
+                                diagnosis.resource.bounds.maximum.x - diagnosis.resource.bounds.minimum.x <
+                                    Nanometres::from_mm(2.0);
+                          }),
+          "a small fixed-via clearance shortfall must not fall back to the whole trace bounds");
+  flux::RoutabilityKnowledge fixed_via_knowledge;
+  flux::accumulate_routability_knowledge(fixed_via_knowledge, fixed_via_rejected.diagnoses);
+  GlobalRouterConfig fixed_via_feedback;
+  // The default 0.25 mm trace plus 0.20 mm clearance requires at least a 0.45 mm
+  // planar grid.  This 0.50 mm lattice also has edges crossing the localized witness.
+  fixed_via_feedback.grid_pitch = Nanometres::from_mm(0.5);
+  fixed_via_feedback.max_iterations = 1U;
+  fixed_via_feedback.routability_history = fixed_via_knowledge.history;
+  const auto fixed_via_feedback_route = flux::route_global(fixed_via_board, fixed_via_feedback);
+  require(std::any_of(fixed_via_knowledge.history.begin(), fixed_via_knowledge.history.end(),
+                      [](const auto& entry) {
+                        return entry.kind == flux::RoutabilityFailureKind::quantization_clearance &&
+                               entry.suggested_relaxation ==
+                                   flux::RoutabilityRelaxation::change_corridor;
+                      }) &&
+              fixed_via_feedback_route.stop_reason != flux::GlobalRouterStopReason::invalid_input &&
+              fixed_via_feedback_route.configured_grid_pitch == Nanometres::from_mm(0.5) &&
+              fixed_via_feedback_route.routability_history_edges > 0U,
+          "immutable source-via trace conflicts must accumulate onto planar routing edges");
+
+  // DrillShape applies pad-local drill offsets and the placed footprint transform.  The
+  // non-plated source hole must therefore use that world-space geometry when it localizes the
+  // generated trace's hole-clearance feedback.
+  auto fixed_hole_board = two_pad_board();
+  fixed_hole_board.layers.resize(1U);
+  fixed_hole_board.rules.hole_clearance = Nanometres::from_mm(0.2);
+  fixed_hole_board.nets.push_back({NetId{"fixed-hole-net"}, "FIXED_HOLE", 0});
+  Footprint fixed_hole;
+  fixed_hole.id = ObjectId{"fixed-drilled-pad"};
+  fixed_hole.reference = "FIXED_HOLE";
+  fixed_hole.position = mm(50.0, 40.0);
+  fixed_hole.rotation = Microdegrees::from_degrees(90.0);
+  fixed_hole.pads = {{ObjectId{"fixed-drilled-pad-hole"}, NetId{"fixed-hole-net"},
+                      mm(0.2, -0.1), {LayerId{"F.Cu"}}, flux::PadShape::circle,
+                      Nanometres::from_mm(1.0), Nanometres::from_mm(1.0), Nanometres{0},
+                      Microdegrees::from_degrees(90.0), Nanometres::from_mm(0.6),
+                      Nanometres::from_mm(0.6), mm(0.1, 0.0), false}};
+  const auto fixed_hole_position =
+      flux::pad_drill_world_position(fixed_hole, fixed_hole.pads.front());
+  fixed_hole_board.footprints.push_back(fixed_hole);
+  flux::GlobalRouteResult fixed_hole_trace;
+  fixed_hole_trace.paths = {flux::GlobalRoutePath{NetId{"net-1"}, 0U,
+      {{Point{Nanometres::from_mm(20.0), fixed_hole_position.y}, LayerId{"F.Cu"}},
+       {Point{Nanometres::from_mm(80.0), fixed_hole_position.y}, LayerId{"F.Cu"}}}}};
+  const auto fixed_hole_rejected =
+      flux::probe_quantized_copper_feasibility(fixed_hole_board, fixed_hole_trace);
+  const auto fixed_hole_diagnosis = std::find_if(
+      fixed_hole_rejected.diagnoses.begin(), fixed_hole_rejected.diagnoses.end(), [](const auto& diagnosis) {
+        return diagnosis.kind == flux::RoutabilityFailureKind::quantization_clearance &&
+               diagnosis.suggested_relaxation == flux::RoutabilityRelaxation::change_corridor &&
+               diagnosis.detail.find("hole_clearance") != std::string::npos;
+      });
+  require(!fixed_hole_rejected.feasible() && fixed_hole_rejected.generated_tracks == 1U &&
+              fixed_hole_rejected.generated_vias == 0U &&
+              fixed_hole_rejected.drc_violation_counts.contains("hole_clearance") &&
+              fixed_hole_diagnosis != fixed_hole_rejected.diagnoses.end() &&
+              fixed_hole_diagnosis->resource.bounds.contains(fixed_hole_position) &&
+              !fixed_hole_diagnosis->resource.bounds.contains(
+                  Point{Nanometres::from_mm(20.0), fixed_hole_position.y}),
+          "a generated trace blocked by a transformed fixed drill must request a local planar "
+          "corridor change");
+}
+
+void straight_regional_lanes_require_exact_copper_proof() {
+  auto board = two_pad_board();
+  board.footprints.clear();
+  board.nets = {{NetId{"a"}, "a", 0}, {NetId{"b"}, "b", 0}};
+  flux::GlobalRouteResult global;
+  flux::RegionalRouteResult regional;
+  flux::RegionalRoutingWindow window;
+  window.id = 0U;
+  flux::RegionalBundleAssignment assignment;
+  assignment.window_id = 0U;
+  assignment.stop_reason = flux::RegionalBundleStopReason::complete;
+  for (std::size_t i = 0; i < 2; ++i) {
+    flux::RegionalRouteFragment fragment;
+    fragment.id = {board.nets[i].id, i, 0U, 0U};
+    fragment.layer = LayerId{"F.Cu"};
+    fragment.start = mm(20, i == 0 ? 39.5 : 40.5);
+    fragment.end = mm(80, i == 0 ? 39.5 : 40.5);
+    fragment.width = Nanometres{250000};
+    fragment.clearance = Nanometres{200000};
+    regional.fragments.push_back(fragment);
+    window.fragments.push_back(fragment.id);
+    window.owned_fragments.push_back(fragment.id);
+    flux::RegionalRouteTemplate route_template;
+    route_template.id = i;
+    route_template.fragment = fragment.id;
+    route_template.routing_layer = fragment.layer;
+    assignment.templates.push_back(route_template);
+    assignment.selected_templates.push_back(i);
+    // Both abstract paths share the central copper. The chosen packed lanes must replace it.
+    flux::GlobalRoutePath path;
+    path.net = fragment.id.net;
+    path.connection_index = i;
+    path.points = {{fragment.start, fragment.layer}, {mm(35, 40), fragment.layer},
+                   {mm(65, 40), fragment.layer}, {fragment.end, fragment.layer}};
+    global.paths.push_back(path);
+  }
+  assignment.packed_cross_sections.push_back(flux::pack_regional_cross_section(
+      regional.fragments, window.fragments, LayerId{"F.Cu"}, mm(50, 38), mm(50, 42),
+      Nanometres{4000000}));
+  regional.windows = {window};
+  regional.bundle_assignments = {assignment};
+  const auto unresolved = regional;
+  flux::realize_regional_straight_candidate(board, global, regional);
+  require(regional.spline_candidate_available && regional.native_scene_conflicts == 0U &&
+              regional.native_scene_evaluated && regional.native_scene_complete &&
+              regional.straight_scene_evaluated && regional.linear_scaffold_checks == 1U &&
+              regional.linear_scaffold_rejections == 0U,
+          "packed straight lanes must replace colliding abstract copper: " + regional.spline_candidate_diagnostic);
+  require(regional.native_realization_manifest.size() == 2U,
+          "each owned connection needs an explicit segment transaction");
+  auto rebuilt = regional;
+  rebuilt.bundle_assignments.front().selected_templates = {99999U};
+  flux::realize_regional_straight_candidate(board, global, rebuilt);
+  require(!rebuilt.native_scene_evaluated && !rebuilt.native_scene_complete &&
+              !rebuilt.straight_scene_evaluated && !rebuilt.spline_candidate_available &&
+              rebuilt.native_scene_conflicts == 0U && rebuilt.straight_scene_drc_violations == 0U &&
+              flux::regional_checkpoint_better(regional, rebuilt),
+          "an aborted scene rebuild must invalidate previous physical assessment evidence");
+  for (const auto& route : regional.native_realization_manifest) {
+    require(route.straight_realization && route.control_points.empty() &&
+                !route.continuous_envelope_evaluated && route.native_copper_legal,
+            "straight copper must not claim a PH certificate");
+    for (const auto& piece : route.native_pieces) {
+      const auto dx = std::abs(piece.end.x.value() - piece.start.x.value());
+      const auto dy = std::abs(piece.end.y.value() - piece.start.y.value());
+      require(piece.kind == flux::SplineFittedPieceKind::segment &&
+                  (dx == 0 || dy == 0 || dx == dy), "all generated pieces must have ordinary angles");
+    }
+  }
+  auto alternative = unresolved;
+  auto detour = alternative.bundle_assignments.front().templates.front();
+  detour.id = 2U;
+  detour.selected_global_topology = false;
+  detour.topology_centerline = {regional.fragments.front().start, mm(50, 81),
+                                regional.fragments.front().end};
+  alternative.bundle_assignments.front().templates.push_back(detour);
+  alternative.bundle_assignments.front().selected_templates = {2U, 1U};
+  flux::RegionalBundleSelection source_selection;
+  source_selection.templates = {0U, 1U};
+  source_selection.packed_cross_sections = unresolved.bundle_assignments.front().packed_cross_sections;
+  alternative.bundle_assignments.front().spline_candidate_shortlist = {source_selection};
+  flux::realize_regional_straight_candidate(board, global, alternative);
+  require(alternative.spline_candidate_available && alternative.straight_scene_trials == 2U &&
+              alternative.straight_source_fallback_selected,
+          "exact copper must recover the retained source-topology lane assignment when a detour fails");
+  auto blocked = unresolved;
+  board.tracks.push_back({ObjectId{"wall"}, NetId{"b"}, LayerId{"F.Cu"},
+                           mm(50, 38), mm(50, 42), Nanometres{250000}, true});
+  flux::realize_regional_straight_candidate(board, global, blocked);
+  require(!blocked.spline_candidate_available && blocked.native_scene_conflicts > 0U &&
+              blocked.linear_scaffold_rejections == 1U,
+          "a discrete fitting lane order must not accept a static copper collision");
+  const auto diagnoses = flux::diagnose_regional_routability(blocked);
+  require(!diagnoses.empty() && std::none_of(diagnoses.begin(), diagnoses.end(), [](const auto& diagnosis) {
+            return diagnosis.stage == flux::RoutabilityFailureStage::spline_realization ||
+                   diagnosis.stage == flux::RoutabilityFailureStage::local_pns;
+          }), "straight failures must retain exact copper evidence without inventing absent PH/PNS failures");
+  auto cancelled = unresolved;
+  std::stop_source stop;
+  stop.request_stop();
+  flux::realize_regional_straight_candidate(board, global, cancelled, stop.get_token());
+  require(!cancelled.spline_candidate_available, "cancelled straight realization must fail closed");
+}
+
+void straight_elbow_alternatives_preserve_exact_copper_contract() {
+  for (const auto transform : {0, 1, 2, 3}) {
+    for (const bool coupled : {false, true}) {
+      const auto point = [transform](double x, double y) {
+        if (transform & 1) x = 60.0 - x;
+        return (transform & 2) ? mm(60.0 - y, x) : mm(x, y);
+      };
+      Board board;
+      board.source_revision = "staggered-octilinear-elbows";
+      board.outline = rectangle(0, 0, 60, 60);
+      const LayerId layer{"F.Cu"};
+      board.layers = {{layer, "F.Cu", LayerKind::copper, 0}};
+      board.nets = {{NetId{"a"}, "A", 0}, {NetId{"b"}, "B", 0},
+                    {NetId{"0-unrelated"}, "Unrelated", 0}};
+      flux::GlobalRouteResult global;
+      flux::RegionalRouteResult scene;
+      for (std::size_t i = 0; i < 4U; ++i) {
+        flux::RegionalRouteFragment fragment;
+        const auto net_index = i < 2U ? i : i == 2U ? 0U : 2U;
+        fragment.id = {board.nets[net_index].id, i == 0U ? 1U : 0U, 0U, 0U};
+        fragment.layer = layer;
+        fragment.start = i < 2U ? point(20.0 + i, 20.0) : point(40.0, i == 2U ? 40.0 : 50.0);
+        fragment.end = i < 2U ? point(30.0 + i, 26.0) : point(50.0, i == 2U ? 40.0 : 56.0);
+        if (coupled && i == 3U) {
+          fragment.start = point(45.0, 35.0);
+          fragment.end = point(45.0, 45.0);
+        }
+        // The earlier-sorting extra fragments test both filters: same-net axis-aligned copper
+        // has no elbow alternative, and unrelated non-octilinear copper has no physical conflict.
+        fragment.width = Nanometres::from_mm((transform & 1) ? 0.15 : 0.10);
+        fragment.clearance = Nanometres::from_mm(0.10);
+        fragment.explicit_width = true;
+        scene.fragments.push_back(fragment);
+        flux::RegionalRoutingWindow window;
+        window.id = i;
+        window.fragments = {fragment.id};
+        window.owned_fragments = {fragment.id};
+        scene.windows.push_back(window);
+        flux::RegionalRouteTemplate route_template;
+        route_template.id = 0U;
+        route_template.fragment = fragment.id;
+        route_template.routing_layer = layer;
+        route_template.selected_global_topology = true;
+        flux::RegionalBundleAssignment assignment;
+        assignment.window_id = i;
+        assignment.templates = {route_template};
+        assignment.selected_templates = {0U};
+        assignment.stop_reason = flux::RegionalBundleStopReason::complete;
+        scene.bundle_assignments.push_back(assignment);
+        global.paths.push_back({fragment.id.net, fragment.id.connection_index, {{fragment.start, layer}, {fragment.end, layer}}});
+      }
+      if (coupled) {
+        // A second, axis-aligned conflict needs a retained template after the elbow repair.
+        // Accepting that template must not silently regenerate the old colliding A/B elbows.
+        auto detour = scene.bundle_assignments.back().templates.front();
+        detour.id = 1U;
+        detour.selected_global_topology = false;
+        detour.topology_centerline = {point(45, 35), point(55, 35), point(55, 45), point(45, 45)};
+        scene.bundle_assignments.back().templates.push_back(detour);
+        flux::RegionalBundleSelection selection;
+        selection.templates = {1U};
+        scene.bundle_assignments.back().spline_candidate_shortlist.push_back(selection);
+      }
+      auto baseline = scene;
+      flux::realize_regional_straight_candidate(board, global, baseline);
+      require(baseline.straight_scene_evaluated && baseline.straight_scene_drc_violations > 0U &&
+                  !baseline.spline_candidate_available,
+              "fixed diagonal-first elbows must reproduce the staggered overlap");
+      // Reserve alternatives are now eligible, but geometry retains its two-probe warmup:
+      // the first elbow may fail while the complementary fragment probe succeeds.
+      auto reserve_template = scene.bundle_assignments.front().templates.front();
+      reserve_template.id = 1U;
+      reserve_template.selected_global_topology = false;
+      reserve_template.topology_centerline = {scene.fragments.front().start, scene.fragments.front().end};
+      scene.bundle_assignments.front().templates.push_back(reserve_template);
+      flux::RegionalBundleSelection unused_reserve;
+      unused_reserve.templates = {1U};
+      scene.bundle_assignments.front().spline_candidate_reserve.push_back(unused_reserve);
+      const std::size_t budget = coupled ? 6U : 2U;
+      scene.configured.max_straight_portfolio_checks = budget;
+      flux::realize_regional_straight_candidate(board, global, scene);
+      require(scene.spline_candidate_available && scene.native_scene_complete &&
+                  scene.native_scene_conflicts == 0U && scene.straight_scene_evaluated &&
+                  scene.straight_scene_drc_violations == 0U && scene.straight_scene_open_connections == 0U &&
+                  scene.straight_scene_geometry_checks == 2U && scene.straight_scene_geometry_improvements == 1U &&
+                  scene.straight_scene_portfolio_checks > 0U && scene.straight_scene_portfolio_checks <= budget &&
+                  scene.native_realization_manifest.size() == 4U,
+              "bounded complementary elbows must clear the full scene under reflection/rotation: " +
+                  std::to_string(transform) + "/coupled=" + std::to_string(coupled));
+      if (coupled) {
+        require(scene.bundle_assignments.back().selected_templates == std::vector<std::size_t>{1U},
+                "a retained template and a geometry alternative must coexist in the accepted scene");
+      }
+      for (const auto& route : scene.native_realization_manifest) {
+        const auto fragment = std::find_if(scene.fragments.begin(), scene.fragments.end(),
+            [&](const auto& item) { return item.id == route.fragment; });
+        require(fragment != scene.fragments.end() && route.width == fragment->width &&
+                    route.layer == fragment->layer && route.centerline.front() == fragment->start &&
+                    route.centerline.back() == fragment->end,
+                "elbow alternatives must preserve source width, layer and boundary endpoints");
+        for (std::size_t i = 1; i < route.centerline.size(); ++i) {
+          const auto dx = std::abs(route.centerline[i].x.value() - route.centerline[i - 1U].x.value());
+          const auto dy = std::abs(route.centerline[i].y.value() - route.centerline[i - 1U].y.value());
+          require(dx == 0 || dy == 0 || dx == dy, "elbow alternatives must remain integer octilinear copper");
+        }
+      }
+    }
+  }
+}
+
+void straight_scene_portfolio_replays_retained_window_alternative() {
+  Board board;
+  board.source_revision = "straight-portfolio-fixture";
+  board.outline = rectangle(0.0, 0.0, 100.0, 80.0);
+  const LayerId front{"F.Cu"};
+  board.layers = {{front, "F.Cu", LayerKind::copper, 0U}};
+  const NetId a{"portfolio-a"}, b{"portfolio-b"};
+  board.nets = {{a, "A", 0}, {b, "B", 0}};
+  const auto terminal = [&](std::string id, NetId net, Point position) {
+    Footprint footprint;
+    footprint.id = ObjectId{id};
+    footprint.reference = id;
+    footprint.position = position;
+    footprint.courtyard = local_rectangle(1.0, 1.0);
+    footprint.pads = {{ObjectId{id + "-pad"}, std::move(net), Point{}, {front}}};
+    return footprint;
+  };
+  board.footprints = {terminal("a1", a, mm(20, 40)), terminal("a2", a, mm(80, 40)),
+                      terminal("b1", b, mm(50, 20)), terminal("b2", b, mm(50, 60))};
+  const auto fragment = [&](NetId net, Point start, Point end) {
+    flux::RegionalRouteFragment value;
+    value.id = {std::move(net), 0U, 0U, 0U};
+    value.layer = front;
+    value.start = start;
+    value.end = end;
+    value.width = Nanometres::from_mm(0.25);
+    value.clearance = Nanometres::from_mm(0.2);
+    return value;
+  };
+  const auto a_fragment = fragment(a, mm(20, 40), mm(80, 40));
+  const auto b_fragment = fragment(b, mm(50, 20), mm(50, 60));
+  flux::GlobalRouteResult global;
+  global.paths = {{a, 0U, {{a_fragment.start, front}, {a_fragment.end, front}}},
+                  {b, 0U, {{b_fragment.start, front}, {b_fragment.end, front}}}};
+  flux::RegionalRouteResult regional;
+  regional.fragments = {a_fragment, b_fragment};
+  flux::RegionalRoutingWindow a_window;
+  a_window.id = 0U;
+  a_window.fragments = {a_fragment.id};
+  a_window.owned_fragments = {a_fragment.id};
+  flux::RegionalRoutingWindow b_window;
+  b_window.id = 1U;
+  b_window.fragments = {b_fragment.id};
+  b_window.owned_fragments = {b_fragment.id};
+  regional.windows = {a_window, b_window};
+  flux::RegionalRouteTemplate a_template;
+  a_template.id = 0U;
+  a_template.fragment = a_fragment.id;
+  a_template.routing_layer = front;
+  a_template.selected_global_topology = true;
+  flux::RegionalRouteTemplate b_crossing;
+  b_crossing.id = 0U;
+  b_crossing.fragment = b_fragment.id;
+  b_crossing.routing_layer = front;
+  b_crossing.selected_global_topology = true;
+  auto b_dogleg = b_crossing;
+  b_dogleg.id = 1U;
+  b_dogleg.selected_global_topology = false;
+  b_dogleg.topology_centerline = {b_fragment.start, mm(60, 30), mm(85, 30),
+                                 mm(85, 50), mm(75, 60), b_fragment.end};
+  flux::RegionalBundleAssignment a_assignment;
+  a_assignment.window_id = 0U;
+  a_assignment.templates = {a_template};
+  a_assignment.selected_templates = {0U};
+  a_assignment.stop_reason = flux::RegionalBundleStopReason::complete;
+  flux::RegionalBundleAssignment b_assignment;
+  b_assignment.window_id = 1U;
+  b_assignment.templates = {b_crossing, b_dogleg};
+  b_assignment.selected_templates = {0U};
+  b_assignment.selected_template_conflicts = 1U;
+  b_assignment.stop_reason = flux::RegionalBundleStopReason::complete;
+  flux::RegionalBundleSelection dogleg_selection;
+  dogleg_selection.templates = {1U};
+  b_assignment.spline_candidate_shortlist = {dogleg_selection};
+  regional.bundle_assignments = {a_assignment, b_assignment};
+  const auto retained = regional;
+  flux::realize_regional_straight_candidate(board, global, regional);
+  require(!regional.spline_candidate_available && regional.straight_scene_evaluated &&
+              regional.straight_scene_portfolio_checks == 0U,
+          "the default straight transaction must retain selected crossing copper without replaying "
+          "a portfolio alternative");
+  auto enabled = retained;
+  enabled.configured.max_straight_portfolio_checks = 1U;
+  flux::realize_regional_straight_candidate(board, global, enabled);
+  require(enabled.spline_candidate_available && enabled.straight_scene_portfolio_checks == 1U &&
+              enabled.straight_scene_portfolio_improvements == 1U &&
+              enabled.straight_scene_drc_violations == 0U &&
+              enabled.straight_scene_open_connections == 0U &&
+              enabled.bundle_assignments[1].selected_templates == dogleg_selection.templates &&
+              std::all_of(enabled.native_realization_manifest.begin(),
+                          enabled.native_realization_manifest.end(), [](const auto& route) {
+                            return route.straight_realization && route.control_points.empty();
+                          }),
+          "one retained B dogleg must repair the complete A/B straight scene without changing "
+          "A into a curved realization");
+  require(std::none_of(enabled.local_routability_diagnoses.begin(),
+                      enabled.local_routability_diagnoses.end(), [](const auto& diagnosis) {
+                        return diagnosis.resource.stable_id.starts_with("straight-scene:") ||
+                               diagnosis.resource.stable_id.starts_with("native-scene:");
+                      }),
+          "a repaired scene must not retain discarded copper conflicts for upstream feedback");
+  require(enabled.validated_copper_scene.data != nullptr,
+          "a certified regional scene must retain exact immutable copper");
+  flux::RoutingPlanResult scene_plan;
+  scene_plan.coarse_global = global;
+  scene_plan.coarse_global.stop_reason = flux::GlobalRouterStopReason::complete;
+  scene_plan.regional = enabled;
+  scene_plan.paths = enabled.spline_candidate_paths;
+  scene_plan.stop_reason = flux::RoutingPlanStopReason::complete;
+  flux::DetailedRouterConfig scene_config;
+  scene_config.restrict_straight_track_angles = true;
+  scene_config.continuous_refinement = false;
+  scene_config.pull_tight_45_degrees = false;
+  const auto handed_off = flux::materialize_detailed_route(board, scene_plan, scene_config);
+  require(handed_off.complete() && handed_off.reused_validated_regional_scene &&
+              handed_off.candidate->tracks == enabled.validated_copper_scene.data->scene.tracks &&
+              handed_off.candidate->vias == enabled.validated_copper_scene.data->scene.vias,
+          "detailed handoff must reuse exact regional primitives and pass final DRC/connectivity");
+  auto transformed_config = scene_config;
+  transformed_config.pull_tight_45_degrees = true;
+  const auto transformed = flux::materialize_detailed_route(board, scene_plan, transformed_config);
+  require(!transformed.reused_validated_regional_scene,
+          "requested geometry transforms must decline cached scene reuse");
+  auto edited_source = board;
+  edited_source.rules.default_clearance = Nanometres::from_mm(0.3);
+  const auto stale_source = flux::materialize_detailed_route(edited_source, scene_plan, scene_config);
+  require(!stale_source.reused_validated_regional_scene,
+          "source edits under an unchanged revision must invalidate regional scene reuse");
+  auto edited_routes = scene_plan;
+  edited_routes.regional.spline_candidate_paths.front().points.front().position = mm(21, 40);
+  const auto stale_routes = flux::materialize_detailed_route(board, edited_routes, scene_config);
+  require(!stale_routes.reused_validated_regional_scene,
+          "selected-route edits must invalidate regional scene reuse");
+  auto tampered = scene_plan;
+  auto tampered_scene = std::make_shared<flux::RegionalCopperSceneData>(
+      *enabled.validated_copper_scene.data);
+  auto illegal = tampered_scene->scene.tracks.front();
+  illegal.id = ObjectId{"injected-conflicting-track"};
+  illegal.net = b;
+  tampered_scene->scene.tracks.push_back(illegal);
+  tampered.regional.validated_copper_scene.data = tampered_scene;
+  const auto rechecked = flux::materialize_detailed_route(board, tampered, scene_config);
+  require(rechecked.reused_validated_regional_scene && !rechecked.complete() &&
+              !rechecked.copper_drc.ok(),
+          "stored scene evidence must never bypass final represented-copper DRC");
+  auto rejected_then_legal = retained;
+  auto& alternatives = rejected_then_legal.bundle_assignments[1];
+  auto first_crossing = b_dogleg;
+  first_crossing.id = 2U;
+  first_crossing.topology_centerline = {b_fragment.start, mm(60, 30),
+                                       mm(60, 50), b_fragment.end};
+  auto second_crossing = b_dogleg;
+  second_crossing.id = 3U;
+  second_crossing.topology_centerline = {b_fragment.start, mm(40, 30),
+                                        mm(40, 50), b_fragment.end};
+  alternatives.templates.push_back(first_crossing);
+  alternatives.templates.push_back(second_crossing);
+  auto first_rejected = dogleg_selection;
+  first_rejected.templates = {2U};
+  auto second_rejected = dogleg_selection;
+  second_rejected.templates = {3U};
+  alternatives.spline_candidate_shortlist = {first_rejected, second_rejected, dogleg_selection};
+  rejected_then_legal.configured.max_straight_portfolio_checks = 3U;
+  flux::realize_regional_straight_candidate(board, global, rejected_then_legal);
+  require(rejected_then_legal.spline_candidate_available &&
+              rejected_then_legal.straight_scene_preview_checks == 3U &&
+              rejected_then_legal.straight_scene_portfolio_checks == 1U &&
+              rejected_then_legal.straight_scene_portfolio_improvements == 1U &&
+              rejected_then_legal.straight_scene_trials == 2U &&
+              rejected_then_legal.linear_scaffold_checks == 2U &&
+              rejected_then_legal.linear_scaffold_rejections == 1U,
+          "physical previews must prioritize the compatible bend before full-scene proof "
+          "while retaining exact accounting and the original rejection");
+  auto reserve_only = retained;
+  reserve_only.bundle_assignments[1].spline_candidate_shortlist.clear();
+  reserve_only.bundle_assignments[1].spline_candidate_reserve = {dogleg_selection};
+  reserve_only.configured.max_straight_portfolio_checks = 1U;
+  flux::realize_regional_straight_candidate(board, global, reserve_only);
+  require(reserve_only.spline_candidate_available && reserve_only.straight_scene_reserve_candidates == 1U,
+          "an empty shortlist must not hide a physically useful reserve candidate");
+  auto reserve_escape = retained;
+  reserve_escape.bundle_assignments[1].templates = {b_crossing, b_dogleg, first_crossing, second_crossing};
+  reserve_escape.bundle_assignments[1].spline_candidate_shortlist = {first_rejected, second_rejected};
+  reserve_escape.bundle_assignments[1].spline_candidate_reserve = {dogleg_selection};
+  reserve_escape.configured.max_straight_portfolio_checks = 2U;
+  flux::realize_regional_straight_candidate(board, global, reserve_escape);
+  require(reserve_escape.spline_candidate_available && reserve_escape.straight_scene_reserve_candidates == 1U &&
+              reserve_escape.straight_scene_portfolio_checks <= 2U,
+          "a full shortlist must not starve the retained physical escape reserve");
+  auto cancelled = retained;
+  cancelled.configured.max_straight_portfolio_checks = 1U;
+  std::stop_source stop;
+  stop.request_stop();
+  flux::realize_regional_straight_candidate(board, global, cancelled, stop.get_token());
+  require(!cancelled.spline_candidate_available && cancelled.straight_scene_portfolio_checks == 0U,
+          "a cancelled portfolio replay must not publish a partially rebuilt straight scene");
+
+  // Both retained moves are necessary. A's lowered lane still crosses the original B;
+  // B's detour crosses the original A twice. Together they are disjoint. A greedy
+  // one-window improvement cannot leave this physical local minimum.
+  auto coupled = retained;
+  auto a_lowered = a_template;
+  a_lowered.id = 1U;
+  a_lowered.selected_global_topology = false;
+  a_lowered.topology_centerline = {a_fragment.start, mm(20, 30), mm(80, 30), a_fragment.end};
+  auto b_around = b_dogleg;
+  b_around.topology_centerline = {b_fragment.start, mm(10, 20), mm(10, 50), mm(40, 50),
+                                 mm(40, 35), mm(60, 35), mm(60, 60), b_fragment.end};
+  coupled.bundle_assignments[0].templates.push_back(a_lowered);
+  coupled.bundle_assignments[0].spline_candidate_shortlist = {dogleg_selection};
+  coupled.bundle_assignments[1].templates[1] = b_around;
+  auto only_a = coupled;
+  only_a.bundle_assignments[1].spline_candidate_shortlist.clear();
+  only_a.configured.max_straight_portfolio_checks = 3U;
+  flux::realize_regional_straight_candidate(board, global, only_a);
+  require(!only_a.spline_candidate_available && only_a.straight_scene_portfolio_improvements == 0U,
+          "the lowered A lane alone must not improve the crossing scene");
+  auto only_b = coupled;
+  only_b.bundle_assignments[0].spline_candidate_shortlist.clear();
+  only_b.configured.max_straight_portfolio_checks = 3U;
+  flux::realize_regional_straight_candidate(board, global, only_b);
+  require(!only_b.spline_candidate_available && only_b.straight_scene_portfolio_improvements == 0U &&
+              only_b.straight_scene_portfolio_checks == 1U && only_b.linear_scaffold_checks >= 2U,
+          "the B detour alone must not improve the crossing scene");
+  auto too_small = coupled;
+  too_small.configured.max_straight_portfolio_checks = 1U;
+  flux::realize_regional_straight_candidate(board, global, too_small);
+  require(!too_small.spline_candidate_available && too_small.straight_scene_portfolio_checks == 1U,
+          "coordinated search must obey the shared exact-check bound");
+  coupled.configured.max_straight_portfolio_checks = 3U;
+  flux::realize_regional_straight_candidate(board, global, coupled);
+  require(coupled.spline_candidate_available,
+          "paired retained moves must find legal copper when neither single move improves it");
+  require(coupled.native_scene_complete &&
+              coupled.native_scene_conflicts == 0U && coupled.straight_scene_drc_violations == 0U &&
+              coupled.straight_scene_open_connections == 0U &&
+              coupled.straight_scene_joint_portfolio_checks == 1U &&
+              coupled.straight_scene_preview_checks == 3U &&
+              coupled.straight_scene_portfolio_checks == 1U &&
+              coupled.straight_scene_portfolio_improvements == 1U &&
+              coupled.linear_scaffold_checks == 2U && coupled.linear_scaffold_rejections == 1U &&
+              coupled.bundle_assignments[0].selected_templates == dogleg_selection.templates &&
+              coupled.bundle_assignments[1].selected_templates == dogleg_selection.templates,
+          "a paired transaction must escape the one-window local minimum with exact clean copper");
+}
+
+void regional_repair_scheduler_preserves_exploration() {
+  std::array<flux::RegionalRepairFamilyObservation, 4U> observations{};
+  for (auto& entry : observations) entry.available = true;
+  flux::RegionalRepairSchedulerState state;
+  for (std::uint8_t i = 0; i < 4U; ++i) {
+    const auto decision = flux::schedule_regional_repair_family(observations, state);
+    require(decision.family == static_cast<flux::RegionalRepairFamily>(i) &&
+                decision.reason == flux::RegionalRepairScheduleReason::warmup,
+            "each eligible repair family must receive a warmup attempt");
+    ++observations[i].attempts;
+  }
+  observations[0] = {true, 20U, 20U, 5U};
+  observations[1] = {true, 1U, 1U, 10U};
+  observations[2] = {true, 20U, 0U, 1U};
+  observations[3] = {true, 20U, 0U, 1U};
+  state.decisions = 4U;
+  require(flux::schedule_regional_repair_family(observations, state).family ==
+              flux::RegionalRepairFamily::geometry,
+          "productive families must receive work according to improvement per deterministic work unit");
+  state.decisions = 7U;
+  const auto exploration = flux::schedule_regional_repair_family(observations, state);
+  require(exploration.family == flux::RegionalRepairFamily::single &&
+              exploration.reason == flux::RegionalRepairScheduleReason::exploration,
+          "low-yield families must remain eligible through bounded exploration");
+  for (auto& entry : observations) entry.accepted_physical_error_reduction = 0U;
+  std::array<bool, 4U> seen{};
+  for (std::size_t i = 0; i < 16U; ++i) {
+    auto decision = flux::schedule_regional_repair_family(observations, state);
+    require(decision.family.has_value(), "available repair families must remain schedulable");
+    const auto index = flux::regional_repair_family_index(*decision.family);
+    seen[index] = true;
+    ++observations[index].attempts;
+  }
+  require(std::all_of(seen.begin(), seen.end(), [](bool value) { return value; }),
+          "zero-yield exploration must not starve a repair family");
+}
+
+void regional_access_cache_is_bounded_without_changing_solutions() {
+  Board board;
+  const LayerId layer{"F.Cu"};
+  board.layers = {{layer, "F.Cu", LayerKind::copper, 0U}};
+  board.outline = rectangle(0, 0, 40, 40);
+  flux::RegionalRouteResult regional;
+  flux::RegionalRoutingWindow window;
+  std::vector<flux::RegionalRouteTemplate> templates;
+  std::vector<std::vector<std::size_t>> domains;
+  for (std::size_t i = 0; i < 13U; ++i) {
+    const NetId net{"cache-" + std::to_string(i)};
+    board.nets.push_back({net, net.value(), 0});
+    flux::RegionalRouteFragment fragment;
+    fragment.id = {net, 0U, 0U, 0U};
+    fragment.layer = layer;
+    fragment.start = mm(5, static_cast<double>(i + 1U));
+    fragment.end = mm(15, static_cast<double>(i + 1U));
+    fragment.width = Nanometres::from_mm(0.25);
+    fragment.clearance = Nanometres::from_mm(0.2);
+    regional.fragments.push_back(fragment);
+    window.fragments.push_back(fragment.id);
+    window.owned_fragments.push_back(fragment.id);
+    std::vector<std::size_t> domain;
+    for (std::size_t option = 0; option < 2U; ++option) {
+      flux::RegionalRouteTemplate route;
+      route.id = templates.size();
+      route.fragment = fragment.id;
+      route.routing_layer = layer;
+      domain.push_back(route.id);
+      templates.push_back(route);
+    }
+    domains.push_back(std::move(domain));
+  }
+  std::sort(window.owned_fragments.begin(), window.owned_fragments.end());
+  const auto choices = flux::enumerate_regional_bundle_choices(
+      board, regional, window, templates, domains, 20'000U);
+  require(!choices.exhausted && choices.choices.size() == 8'192U &&
+              choices.access_selection_cache_entries_peak == 4'096U &&
+              choices.access_selection_cache_capacity_skipped_insertions > 0U,
+          "bounded access memoization must retain every feasible choice after its storage cap");
+}
+
+void regional_performance_samples_preserve_submicrosecond_work() {
+  flux::RegionalPerformanceMicroseconds measured;
+  for (std::size_t i = 0; i < 4'000U; ++i) measured.add_nanoseconds(250U);
+  require(static_cast<std::uint64_t>(measured) == 1'000U,
+          "short measurements must accumulate before converting to microseconds");
+  flux::RegionalPerformanceMicroseconds first, second;
+  first.add_nanoseconds(750U);
+  second.add_nanoseconds(750U);
+  first += second;
+  require(static_cast<std::uint64_t>(first) == 1U,
+          "aggregation must preserve fractional microseconds across attempts");
+  first += std::uint64_t{2U};
+  require(static_cast<std::uint64_t>(first) == 3U,
+          "legacy microsecond increments must retain their units");
+  require(first == measured,
+          "wall-clock observations must remain excluded from semantic route equality");
+}
+
+void fixed_template_copper_pruning_is_conservative() {
+  Board board;
+  board.source_revision = "fixed-template-compatibility";
+  board.outline = rectangle(0.0, 0.0, 40.0, 40.0);
+  const LayerId front{"F.Cu"};
+  const NetId a{"fixed-a"}, b{"fixed-b"};
+  board.layers = {{front, "F.Cu", LayerKind::copper, 0U}};
+  board.nets = {{a, "A", 0}, {b, "B", 0}};
+  flux::RegionalRouteResult regional;
+  regional.configured.enable_straight_realization = true;
+  regional.configured.enable_spline_realization = false;
+  flux::RegionalRoutingWindow window;
+  std::vector<flux::RegionalRouteTemplate> templates;
+  for (std::size_t i = 0; i < 2; ++i) {
+    flux::RegionalRouteFragment fragment;
+    fragment.id = {i == 0 ? a : b, 0U, 0U, 0U};
+    fragment.layer = front;
+    fragment.start = i == 0 ? mm(10,20) : mm(20,10);
+    fragment.end = i == 0 ? mm(30,20) : mm(20,30);
+    fragment.width = Nanometres::from_mm(0.25);
+    fragment.clearance = Nanometres::from_mm(0.2);
+    regional.fragments.push_back(fragment);
+    window.fragments.push_back(fragment.id);
+    window.owned_fragments.push_back(fragment.id);
+    flux::RegionalRouteTemplate route;
+    route.id = i;
+    route.selected_global_topology = false;
+    route.fragment = fragment.id;
+    route.routing_layer = front;
+    route.topology_centerline = {fragment.start, fragment.end};
+    templates.push_back(route);
+  }
+  auto legal = templates[1];
+  legal.id = 2U;
+  legal.topology_centerline = {mm(20,10), mm(35,10), mm(35,30), mm(20,30)};
+  templates.push_back(legal);
+  const std::vector<std::vector<std::size_t>> domains{{0U}, {1U,2U}};
+  const auto pruned = flux::enumerate_regional_bundle_choices(board, regional, window,
+                                                             templates, domains, 128U);
+  require(pruned.fixed_geometry_compatibility_checks > 0U &&
+              pruned.fixed_geometry_compatibility_rejections > 0U &&
+              !pruned.choices.empty() &&
+              std::all_of(pruned.choices.begin(), pruned.choices.end(), [](const auto& choice) {
+                return choice == std::vector<std::size_t>{0U,1U};
+              }),
+          "fixed crossing copper must be rejected before access search while retaining the legal detour");
+  auto deformable = regional;
+  deformable.configured.enable_straight_realization = false;
+  deformable.configured.enable_spline_realization = true;
+  const auto unknown = flux::enumerate_regional_bundle_choices(board, deformable, window,
+                                                              templates, domains, 128U);
+  require(unknown.fixed_geometry_compatibility_checks == 0U,
+          "potentially deformable curved templates cannot be rejected as fixed copper");
+  auto non_octilinear = templates;
+  non_octilinear[0].topology_centerline = {mm(10,20), mm(30,25)};
+  const auto elbow_unknown = flux::enumerate_regional_bundle_choices(
+      board, regional, window, non_octilinear, domains, 128U);
+  require(elbow_unknown.fixed_geometry_compatibility_checks == 0U,
+          "a chord that will gain an elbow is not a fixed physical realization");
+  auto boundary = templates;
+  boundary.resize(2U);
+  boundary[0].topology_centerline = {mm(10,10), mm(30,10)};
+  boundary[1].topology_centerline = {mm(10,10.45), mm(30,10.45)};
+  const auto touching = flux::enumerate_regional_bundle_choices(
+      board, regional, window, boundary, {{0U},{1U}}, 128U);
+  require(!touching.choices.empty() && touching.fixed_geometry_compatibility_rejections == 0U,
+          "exact legal clearance equality must remain feasible");
+}
+
+void straight_joint_three_window_repair_escapes_pairwise_minimum() {
+  Board board;
+  board.source_revision = "three-window-cycle";
+  board.outline = rectangle(0.0, 0.0, 100.0, 80.0);
+  const std::array<LayerId, 3> layers{LayerId{"F.Cu"}, LayerId{"In1.Cu"}, LayerId{"B.Cu"}};
+  const std::array<NetId, 3> nets{NetId{"cycle-a"}, NetId{"cycle-b"}, NetId{"cycle-c"}};
+  for (std::size_t i = 0; i < 3; ++i) {
+    board.layers.push_back({layers[i], layers[i].value(), LayerKind::copper, static_cast<std::uint32_t>(i)});
+    board.nets.push_back({nets[i], nets[i].value(), 0});
+  }
+  flux::GlobalRouteResult global;
+  flux::RegionalRouteResult seed;
+  for (std::size_t net = 0; net < 3; ++net) {
+    flux::RegionalRoutingWindow window;
+    window.id = net;
+    flux::RegionalBundleAssignment assignment;
+    assignment.window_id = net;
+    assignment.stop_reason = flux::RegionalBundleStopReason::complete;
+    for (std::size_t part = 0; part < 2; ++part) {
+      // Three copies of the two-window trap form a cycle. In each layer the horizontal
+      // alternate alone ties the original, the vertical alternate worsens it, and both clear it.
+      const auto layer = layers[part == 0 ? net : (net + 2) % 3];
+      flux::RegionalRouteFragment fragment;
+      fragment.id = {nets[net], part, 0U, 0U};
+      fragment.layer = layer;
+      fragment.start = part == 0 ? mm(20, 40) : mm(50, 20);
+      fragment.end = part == 0 ? mm(80, 40) : mm(50, 60);
+      fragment.width = Nanometres::from_mm(0.25);
+      fragment.clearance = Nanometres::from_mm(0.2);
+      seed.fragments.push_back(fragment);
+      window.fragments.push_back(fragment.id);
+      window.owned_fragments.push_back(fragment.id);
+      global.paths.push_back({nets[net], part, {{fragment.start, layer}, {fragment.end, layer}}});
+      flux::RegionalRouteTemplate original;
+      original.id = part;
+      original.fragment = fragment.id;
+      original.routing_layer = layer;
+      original.selected_global_topology = true;
+      assignment.templates.push_back(original);
+    }
+    for (std::size_t part = 0; part < 2; ++part) {
+      auto alternative = assignment.templates[part];
+      alternative.id = part + 2;
+      alternative.selected_global_topology = false;
+      alternative.topology_centerline = part == 0
+          ? std::vector<Point>{mm(20,40), mm(20,30), mm(80,30), mm(80,40)}
+          : std::vector<Point>{mm(50,20), mm(10,20), mm(10,50), mm(40,50),
+                               mm(40,35), mm(60,35), mm(60,60), mm(50,60)};
+      assignment.templates.push_back(alternative);
+    }
+    assignment.selected_templates = {0U, 1U};
+    flux::RegionalBundleSelection alternative;
+    alternative.templates = {2U, 3U};
+    assignment.spline_candidate_shortlist = {alternative};
+    seed.windows.push_back(std::move(window));
+    seed.bundle_assignments.push_back(std::move(assignment));
+  }
+  auto pairwise = seed;
+  pairwise.configured.max_straight_portfolio_checks = 12U;
+  pairwise.configured.max_straight_joint_windows = 2U;
+  flux::realize_regional_straight_candidate(board, global, pairwise);
+  require(!pairwise.spline_candidate_available && pairwise.straight_scene_portfolio_improvements == 0U,
+          "no single or paired move may improve the cyclic three-window fixture");
+  auto coordinated = seed;
+  coordinated.configured.max_straight_portfolio_checks = 12U;
+  flux::realize_regional_straight_candidate(board, global, coordinated);
+  require(coordinated.spline_candidate_available && coordinated.native_scene_complete &&
+              coordinated.native_scene_conflicts == 0U &&
+              coordinated.straight_scene_drc_violations == 0U &&
+              coordinated.straight_scene_open_connections == 0U &&
+              coordinated.straight_scene_multi_window_checks > 0U &&
+              coordinated.straight_scene_multi_window_improvements == 1U &&
+              coordinated.straight_scene_portfolio_checks <= 12U,
+          "one connected three-window transaction must escape the pairwise minimum with legal copper");
+  require(coordinated.straight_scene_search_outcome ==
+              flux::RegionalStraightSearchOutcome::found_legal_candidate,
+          "a fully validated joint candidate must report physical success");
+  for (const auto& assignment : coordinated.bundle_assignments)
+    require(assignment.selected_templates == std::vector<std::size_t>{2U, 3U},
+            "the joint transaction must atomically retain all three topology changes");
+  auto impossible = seed;
+  for (auto& assignment : impossible.bundle_assignments) {
+    assignment.templates[2].topology_centerline = {mm(20,40), mm(80,40)};
+    assignment.templates[3].topology_centerline = {mm(50,20), mm(50,60)};
+  }
+  impossible.configured.max_straight_portfolio_checks = 12U;
+  flux::realize_regional_straight_candidate(board, global, impossible);
+  require(!impossible.spline_candidate_available && impossible.straight_scene_pool_complete &&
+              impossible.straight_scene_pool_states == 8U &&
+              impossible.straight_scene_search_outcome ==
+                  flux::RegionalStraightSearchOutcome::retained_fixed_pool_exhausted,
+          "all eight fixed retained combinations must be checked before declaring pool exhaustion");
+  auto bounded = seed;
+  bounded.configured.max_straight_portfolio_checks = 1U;
+  flux::realize_regional_straight_candidate(board, global, bounded);
+  require(bounded.straight_scene_portfolio_checks <= 1U,
+          "multi-window repair must never exceed the existing exact-check budget");
+  require(bounded.straight_scene_search_outcome ==
+              flux::RegionalStraightSearchOutcome::budget_or_scope_unknown,
+          "an exhausted budget must not be described as an infeasible candidate pool");
+}
+
+void straight_regional_layer_adapters_preserve_connectivity() {
+  auto board = two_pad_board();
+  board.footprints.back().pads.front().layers = {LayerId{"B.Cu"}};
+  const auto net = board.nets.front().id;
+  const LayerId front{"F.Cu"}, back{"B.Cu"};
+  flux::GlobalRouteResult global;
+  flux::GlobalRoutePath path;
+  path.net = net;
+  path.points = {{mm(20, 40), front}, {mm(40, 40), front},
+                 {mm(40, 40), back}, {mm(80, 40), back}};
+  global.paths = {path};
+  flux::RegionalRouteResult regional;
+  flux::RegionalRouteFragment fragment;
+  fragment.id = {net, 0U, 0U, 0U};
+  fragment.layer = front;
+  fragment.start = mm(20, 40);
+  fragment.end = mm(40, 40);
+  fragment.width = Nanometres{250000};
+  fragment.clearance = Nanometres{200000};
+  fragment.begins_at_terminal = true;
+  regional.fragments = {fragment};
+  flux::RegionalRoutingWindow window;
+  window.id = 0U;
+  window.fragments = {fragment.id};
+  window.owned_fragments = {fragment.id};
+  regional.windows = {window};
+  flux::RegionalViaChoice entry;
+  entry.id = 0U;
+  entry.region_id = 0U;
+  entry.net = net;
+  entry.site = mm(35, 40);
+  entry.span = {front, back};
+  entry.diameter = Nanometres{600000};
+  entry.drill = Nanometres{300000};
+  auto exit = entry;
+  exit.id = 1U;
+  exit.region_id = 1U;
+  exit.site = mm(40, 40);
+  exit.selected_global_site = true;
+  regional.via_choices = {entry, exit};
+  flux::RegionalRouteTemplate route_template;
+  route_template.fragment = fragment.id;
+  route_template.routing_layer = back;
+  route_template.selected_global_topology = false;
+  route_template.entry_via_choice = entry.id;
+  route_template.exit_via_choice = exit.id;
+  route_template.topology_centerline = {entry.site, exit.site};
+  flux::RegionalBundleAssignment assignment;
+  assignment.window_id = 0U;
+  assignment.templates = {route_template};
+  assignment.selected_templates = {0U};
+  assignment.selected_via_choices = {entry.id, exit.id};
+  assignment.stop_reason = flux::RegionalBundleStopReason::complete;
+  regional.bundle_assignments = {assignment};
+  const auto unresolved = regional;
+  flux::realize_regional_straight_candidate(board, global, regional);
+  require(regional.spline_candidate_available && regional.straight_collapsed_via_adapters == 1U &&
+              regional.planned_via_transitions == 1U && regional.straight_scene_open_connections == 0U,
+          "an alternate layer joining the source continuation must form one legal via: " +
+              regional.spline_candidate_diagnostic);
+  // A front-only branch at the removed return adapter still needs real copper. Eliminating a
+  // redundant geometric transition cannot authorize dropping that electrical obligation.
+  auto branch = board.footprints.front();
+  branch.id = ObjectId{"branch"};
+  branch.reference = "branch";
+  branch.position = mm(40, 40);
+  branch.pads.front().id = ObjectId{"branch-pad"};
+  board.footprints.push_back(branch);
+  auto disconnected = unresolved;
+  flux::realize_regional_straight_candidate(board, global, disconnected);
+  require(!disconnected.spline_candidate_available && disconnected.straight_scene_open_connections > 0U,
+          "removing an adapter must never silently disconnect an intermediate-layer branch");
+}
+
+void regional_fragment_compression_preserves_tree_junctions() {
+  auto board = two_pad_board();
+  auto third = board.footprints.front();
+  third.id = ObjectId{"branch"};
+  third.reference = "branch";
+  third.position = mm(50, 60);
+  third.pads.front().id = ObjectId{"branch-pad"};
+  board.footprints.push_back(third);
+  const auto net = board.nets.front().id;
+  const LayerId front{"F.Cu"};
+  flux::GlobalRouteResult global;
+  flux::GlobalRoutePath trunk;
+  trunk.net = net;
+  trunk.points = {{mm(20, 40), front}, {mm(50, 40), front}, {mm(80, 40), front}};
+  auto branch = trunk;
+  branch.connection_index = 1U;
+  branch.points = {{mm(50, 60), front}, {mm(50, 40), front}};
+  global.paths = {trunk, branch};
+  flux::RegionalRouterConfig config;
+  config.enable_spline_realization = false;
+  auto regional = flux::analyze_regional_conflicts(board, global, config);
+  std::vector<flux::RegionalRouteFragment> trunk_fragments;
+  for (const auto& fragment : regional.fragments)
+    if (fragment.id.connection_index == 0U) trunk_fragments.push_back(fragment);
+  require(trunk_fragments.size() == 2U && trunk_fragments[0].end == mm(50, 40) &&
+              trunk_fragments[1].start == mm(50, 40) &&
+              trunk_fragments[0].last_source_segment == 0U &&
+              trunk_fragments[1].first_source_segment == 1U,
+          "collinear compression must retain a same-net connection endpoint and source-edge identity");
+  flux::RegionalRoutingWindow window;
+  window.id = 0U;
+  flux::RegionalBundleAssignment assignment;
+  assignment.window_id = 0U;
+  assignment.stop_reason = flux::RegionalBundleStopReason::complete;
+  for (std::size_t i = 0; i < trunk_fragments.size(); ++i) {
+    const auto& fragment = trunk_fragments[i];
+    window.fragments.push_back(fragment.id);
+    window.owned_fragments.push_back(fragment.id);
+    flux::RegionalRouteTemplate route_template;
+    route_template.id = i;
+    route_template.fragment = fragment.id;
+    route_template.routing_layer = front;
+    assignment.templates.push_back(route_template);
+    assignment.selected_templates.push_back(i);
+    const auto x = i == 0U ? 35.0 : 65.0;
+    assignment.packed_cross_sections.push_back(flux::pack_regional_cross_section(
+        regional.fragments, {fragment.id}, front, mm(x, 39.6), mm(x, 41.6), Nanometres{2000000}));
+  }
+  regional.windows = {window};
+  regional.bundle_assignments = {assignment};
+  flux::realize_regional_straight_candidate(board, global, regional);
+  require(regional.spline_candidate_available && regional.straight_scene_open_connections == 0U,
+          "moving both sides of a tree trunk to new lanes must preserve the fixed branch contact: " +
+              regional.spline_candidate_diagnostic);
+}
+
+void regional_capacity_tracks_longitudinal_demand() {
+  // Duplicate tree branches are two connection owners but one copper lane.
+  {
+    auto board = two_pad_board();
+    board.footprints.clear();
+    board.nets.clear();
+    flux::RegionalRouteResult regional;
+    flux::RegionalRoutingWindow window;
+    flux::RegionalChannel channel;
+    channel.id = 7;
+    channel.layer = LayerId{"F.Cu"};
+    flux::RegionalCrossSection section;
+    section.first_wall = mm(11, 39.4);
+    section.second_wall = mm(11, 40.6);
+    section.usable_width = Nanometres{1200000};
+    channel.cross_sections = {section};
+    std::vector<flux::RegionalRouteTemplate> templates;
+    for (std::size_t i = 0; i < 3; ++i) {
+      const NetId net{i < 2 ? "tree" : "other"};
+      if (i != 1) board.nets.push_back({net, net.value(), 0});
+      flux::RegionalRouteFragment f;
+      f.id = {net, i, 0, 0};
+      f.layer = channel.layer;
+      f.start = mm(10, 40);
+      f.end = mm(12, 40);
+      f.width = Nanometres{250000};
+      f.clearance = Nanometres{200000};
+      regional.fragments.push_back(f);
+      window.fragments.push_back(f.id);
+      window.owned_fragments.push_back(f.id);
+      channel.occupants.push_back(f.id);
+      flux::RegionalRouteTemplate t;
+      t.id = i;
+      t.fragment = f.id;
+      t.routing_layer = channel.layer;
+      t.channel_sequence = {channel.id};
+      t.layer_sequence = {channel.layer};
+      templates.push_back(t);
+    }
+    window.nets = {NetId{"tree"}, NetId{"other"}};
+    regional.channels = {channel};
+    for (const bool forward : {false, true}) {
+      regional.configured.enable_bundle_resource_forward_checking = forward;
+      regional.configured.shared_channel_copper = false;
+      require(flux::enumerate_regional_bundle_choices(board, regional, window, templates,
+                  {{0}, {1}, {2}}, 256, forward).choices.empty(),
+              "legacy demand must reproduce double charging of an identical tree branch");
+      regional.configured.shared_channel_copper = true;
+      require(flux::enumerate_regional_bundle_choices(board, regional, window, templates,
+                  {{0}, {1}, {2}}, 256, forward).choices.size() == 1,
+              "capacity and resource forward checking must share exact same-net copper");
+      auto distinct = regional;
+      distinct.fragments[1].start.y = Nanometres{40000001};
+      require(flux::enumerate_regional_bundle_choices(board, distinct, window, templates,
+                  {{0}, {1}, {2}}, 256, forward).choices.empty(),
+              "independent same-net branches must retain their own physical demand");
+      auto diverse = templates;
+      auto alternate = templates.front();
+      alternate.id = diverse.size();
+      alternate.selected_global_topology = false;
+      alternate.topology_centerline = {mm(10, 40.1), mm(12, 40.1)};
+      diverse.push_back(std::move(alternate));
+      for (const auto& domain : {std::vector<std::size_t>{0, 3},
+                                 std::vector<std::size_t>{3, 0}}) {
+        const auto recovered = flux::enumerate_regional_bundle_choices(board, regional, window,
+            diverse, {domain, {1}, {2}}, 256, forward);
+        require(recovered.choices.size() == 1 && !recovered.exhausted,
+                "backtracking must restore shared occupancy for both alternative orders");
+      }
+    }
+    flux::GlobalRouteResult global;
+    for (const auto& f : regional.fragments) {
+      flux::GlobalRoutePath path;
+      path.net = f.id.net;
+      path.connection_index = f.id.connection_index;
+      auto start = f.start;
+      auto end = f.end;
+      if (path.net == NetId{"other"}) {
+        start.y = start.y + Nanometres{100000};
+        end.y = end.y + Nanometres{100000};
+      }
+      path.points = {{start, f.layer}, {end, f.layer}};
+      global.paths.push_back(std::move(path));
+    }
+    flux::RegionalRouterConfig config;
+    config.shared_channel_copper = true;
+    config.enable_spline_realization = false;
+    config.enable_xpbd_relaxation = false;
+    config.enable_xpbd_feedback = false;
+    config.max_alternative_template_checks = 1;
+    config.max_joint_repair_windows = 1;
+    config.max_same_layer_detour_checks = 0;
+    config.max_confined_anisotropic_erosion_checks = 0;
+    config.physical_conflict_witnesses =
+        flux::probe_quantized_copper_feasibility(board, global).diagnoses;
+    require(!config.physical_conflict_witnesses.empty(),
+            "shared-lane fixture must provide exact conflicts to regional scope construction");
+    const auto packed = flux::analyze_regional_conflicts(board, global, config);
+    require(packed.candidate_pipeline_stats.access_selection_cache_hits > 0U &&
+                packed.candidate_pipeline_stats.access_selection_cache_hits ==
+                    packed.candidate_pipeline_stats.access_selection_cache_avoided_calls &&
+                packed.candidate_pipeline_stats.access_selection_cache_entries_peak <= 4096U,
+            "forward-checked access leaves must be reused within the unchanged window context");
+    bool saw_shared_lane = false;
+    for (const auto& assignment : packed.bundle_assignments) {
+      for (const auto& section : assignment.packed_cross_sections) {
+        std::vector<std::int64_t> offsets;
+        for (const auto& p : section.placements)
+          if (p.fragment.net == NetId{"tree"}) offsets.push_back(p.center_offset_nm);
+        if (offsets.size() < 2) continue;
+        saw_shared_lane = true;
+        require(std::all_of(offsets.begin(), offsets.end(), [&](const auto offset) {
+                  return offset == offsets.front();
+                }), "identical branch owners must receive the same physical lane target");
+      }
+    }
+    require(saw_shared_lane && packed.fragments.size() == 3,
+            "shared lane packing must retain both original connection owners: fragments=" +
+                std::to_string(packed.fragments.size()) + ", windows=" +
+                std::to_string(packed.windows.size()) + ", assignments=" +
+                std::to_string(packed.bundle_assignments.size()) + ", channels=" +
+                std::to_string(packed.channels.size()) + "; " + packed.diagnostic);
+  }
+  for (const bool mirror : {false, true}) {
+    auto board = two_pad_board();
+    board.footprints.clear();
+    board.nets.clear();
+    flux::RegionalRouteResult regional;
+    flux::RegionalRoutingWindow window;
+    flux::RegionalChannel channel;
+    channel.id = 7U;
+    channel.layer = LayerId{"F.Cu"};
+    std::vector<flux::RegionalRouteTemplate> templates;
+    std::vector<std::vector<std::size_t>> domains;
+    for (std::size_t i = 0; i < 4U; ++i) {
+      const NetId net{"longitudinal-" + std::to_string(i)};
+      board.nets.push_back({net, net.value(), 0});
+      flux::RegionalRouteFragment fragment;
+      fragment.id = {net, 0U, 0U, 0U};
+      fragment.layer = channel.layer;
+      fragment.start = mm(10.0 + 5.0 * i, 40.0);
+      fragment.end = mm(12.0 + 5.0 * i, 40.0);
+      fragment.width = Nanometres{250000};
+      fragment.clearance = Nanometres{200000};
+      regional.fragments.push_back(fragment);
+      window.fragments.push_back(fragment.id);
+      window.owned_fragments.push_back(fragment.id);
+      window.nets.push_back(net);
+      channel.occupants.push_back(fragment.id);
+      flux::RegionalCrossSection section;
+      section.first_wall = mm(11.0 + 5.0 * i, 39.6);
+      section.second_wall = mm(11.0 + 5.0 * i, 40.4);
+      if (mirror) std::swap(section.first_wall, section.second_wall);
+      section.usable_width = Nanometres{800000};
+      channel.cross_sections.push_back(section);
+      flux::RegionalRouteTemplate route;
+      route.id = i;
+      route.fragment = fragment.id;
+      route.routing_layer = channel.layer;
+      route.layer_sequence = {channel.layer};
+      route.channel_sequence = {channel.id};
+      templates.push_back(route);
+      domains.push_back({i});
+    }
+    regional.channels = {channel};
+    regional.configured.local_channel_occupancy = false;
+    require(flux::enumerate_regional_bundle_choices(board, regional, window, templates,
+                domains, 256U, false).choices.empty(),
+            "whole-channel capacity must reproduce false rejection of remote sequential lanes");
+    const auto scopes = flux::regional_channel_demand_scopes(regional.fragments,
+                                                            regional.channels, templates);
+    require(scopes.size() == 4U, "remote runs must have four separate demand scopes");
+    for (const auto& scope : scopes) {
+      require(scope.localized && scope.template_indices.size() == 1U &&
+                  scope.cross_section_indices.size() == 1U,
+              "each longitudinal run must have localized, inspectable support");
+      const auto& section = channel.cross_sections[scope.cross_section_indices.front()];
+      require(flux::pack_regional_cross_section(regional.fragments,
+                  {templates[scope.template_indices.front()].fragment}, channel.layer,
+                  section.first_wall, section.second_wall, section.usable_width).physically_fits,
+              "every localized cohort must fit the unchanged physical lane-width model");
+    }
+    regional.configured.local_channel_occupancy = true;
+    for (const bool forward : {false, true}) {
+      regional.configured.enable_bundle_resource_forward_checking = forward;
+      const auto accepted = flux::enumerate_regional_bundle_choices(board, regional, window,
+          templates, domains, 256U, forward);
+      require(accepted.choices.size() == 1U && !accepted.exhausted,
+              "local resource demand must retain the complete longitudinal allocation");
+    }
+    // Move the second run onto the first section: 1.10 mm demand cannot fit 0.80 mm.
+    auto competing = regional;
+    competing.fragments[1].start = competing.fragments[0].start;
+    competing.fragments[1].end = competing.fragments[0].end;
+    for (const bool forward : {false, true}) {
+      const auto rejected = flux::enumerate_regional_bundle_choices(board, competing, window,
+          templates, domains, 256U, forward);
+      require(rejected.choices.empty(), "true simultaneous lane overflow must still be rejected");
+    }
+    auto unknown = regional;
+    for (auto& section : unknown.channels.front().cross_sections)
+      section.second_wall = section.first_wall;
+    require(flux::regional_channel_demand_scopes(unknown.fragments, unknown.channels,
+                templates).size() == 1U &&
+                flux::enumerate_regional_bundle_choices(board, unknown, window, templates,
+                    domains, 256U, false).choices.empty(),
+            "missing wall geometry must retain the conservative legacy capacity guard");
+    // The centerline misses the wall, but its width/clearance envelope reaches it.
+    auto near = regional;
+    near.fragments[1].start = mm(11.1, 40.5);
+    near.fragments[1].end = mm(11.2, 40.6);
+    const auto near_scopes = flux::regional_channel_demand_scopes(near.fragments,
+                                                                near.channels, templates);
+    require(std::any_of(near_scopes.begin(), near_scopes.end(), [](const auto& scope) {
+              return std::find(scope.template_indices.begin(), scope.template_indices.end(), 0U) != scope.template_indices.end() &&
+                     std::find(scope.template_indices.begin(), scope.template_indices.end(), 1U) != scope.template_indices.end();
+            }), "envelope-only contact outside a finite wall must not hide transverse demand");
+    // Two distant finite channels may have the same normal coordinate. Each
+    // branch has positive local support, but neither consumes the other's wall.
+    auto lateral = regional;
+    lateral.fragments[1].start = mm(10.0, 50.0);
+    lateral.fragments[1].end = mm(12.0, 50.0);
+    auto& remote_wall = lateral.channels.front().cross_sections[1];
+    remote_wall.first_wall = mm(11.0, 49.6);
+    remote_wall.second_wall = mm(11.0, 50.4);
+    if (mirror) std::swap(remote_wall.first_wall, remote_wall.second_wall);
+    const auto lateral_scopes = flux::regional_channel_demand_scopes(lateral.fragments,
+                                                                   lateral.channels, templates);
+    require(std::all_of(lateral_scopes.begin(), lateral_scopes.end(), [](const auto& scope) {
+              return scope.template_indices.size() == 1U;
+            }), "remote finite walls must not couple laterally separated branches");
+    require(flux::enumerate_regional_bundle_choices(board, lateral, window, templates,
+                domains, 256U, true).choices.size() == 1U,
+            "local physical support must preserve laterally separated feasible demand");
+  }
+}
+
+void physical_probe_preserves_native_coordinate_clearance() {
+  for (const double reflection : {1.0, -1.0}) {
+    for (const bool source_legal : {false, true}) {
+      auto board = two_pad_board();
+      board.rules.default_track_width = Nanometres{250000};
+      board.rules.minimum_clearance = Nanometres{200000};
+      board.rules.copper_to_edge_clearance = Nanometres{200000};
+      const auto boundary = source_legal ? 39.71 : 39.75;
+      board.outline = reflection > 0.0 ? rectangle(boundary, 0.0, 100.0, 80.0)
+                                       : rectangle(-100.0, 0.0, -boundary, 80.0);
+      board.footprints.front().position = mm(reflection * 41.0, 20.0);
+      board.footprints.back().position = mm(reflection * 41.0, 60.0);
+      const auto run_x = reflection * (source_legal ? 40.04 : 40.06);
+      flux::GlobalRouteResult global;
+      global.paths = {flux::GlobalRoutePath{NetId{"net-1"}, 0U,
+          {{board.footprints.front().position, LayerId{"F.Cu"}},
+           {mm(run_x, 30.0), LayerId{"F.Cu"}},
+           {mm(run_x, 50.0), LayerId{"F.Cu"}},
+           {board.footprints.back().position, LayerId{"F.Cu"}}}}};
+      const auto native = flux::probe_quantized_copper_feasibility(board, global);
+      flux::QuantizedCopperOracleConfig coarse_config;
+      coarse_config.grid_pitch = Nanometres{100000};
+      const auto coarse = flux::probe_quantized_copper_feasibility(board, global, coarse_config);
+      require(native.configured_grid_pitch == Nanometres{1} &&
+                  coarse.configured_grid_pitch == coarse_config.grid_pitch &&
+                  native.all_paths_materialized && coarse.all_paths_materialized &&
+                  native.open_connections == 0U && coarse.open_connections == 0U,
+              "both explicit coarse and default native probes must retain connected geometry");
+      require(native.feasible() == source_legal && coarse.feasible() != source_legal,
+              "physical feedback must neither invent nor conceal clearance errors by coarse "
+              "rounding, including mirrored geometry");
+      const auto& rejected = source_legal ? coarse : native;
+      require(rejected.drc_violation_counts.contains("track_edge_clearance") &&
+                  !rejected.diagnoses.empty(),
+              "the illegal representation must retain exact edge-conflict feedback");
+    }
+  }
+}
+
 void source_bound_board_rules_control_geometry_and_hole_clearance() {
   auto source = two_pad_board();
   const std::string snapshot = R"((flux_kicad_netclass_snapshot
@@ -157,24 +1859,31 @@ void source_bound_board_rules_control_geometry_and_hole_clearance() {
               applied.project_revision == "sha256:project-fixture",
           "a version-3 KiCad snapshot must atomically bind project fabrication rules");
   const auto resolved = flux::resolve_net_routing_rules(*applied.board, NetId{"net-1"});
-  require(resolved.clearance == Nanometres{250000} &&
-              resolved.track_width == Nanometres{300000} &&
+  require(resolved.clearance == Nanometres{250000} && resolved.track_width == Nanometres{300000} &&
               resolved.via_drill == Nanometres{300000} &&
               resolved.via_diameter == Nanometres{600000} &&
               applied.board->rules.copper_to_edge_clearance == Nanometres{350000},
           "project floors must raise generated copper dimensions without rewriting class values");
 
   auto board = *applied.board;
-  board.tracks = {
-      {ObjectId{"same-net-hole-neighbour"}, NetId{"net-1"}, LayerId{"F.Cu"}, mm(39.5, 40.3),
-       mm(40.5, 40.3), Nanometres{100'000}, false},
-      {ObjectId{"foreign-hole-neighbour"}, NetId{"net-2"}, LayerId{"F.Cu"}, mm(39.5, 39.7),
-       mm(40.5, 39.7), Nanometres{100'000}, false}};
-  board.vias = {
-      {ObjectId{"hole-a"}, NetId{"net-1"}, mm(40.0, 40.0), Nanometres{600000},
-       Nanometres{300000}, {LayerId{"F.Cu"}, LayerId{"B.Cu"}}, false},
-      {ObjectId{"hole-b"}, NetId{"net-1"}, mm(40.5, 40.0), Nanometres{600000},
-       Nanometres{300000}, {LayerId{"F.Cu"}, LayerId{"B.Cu"}}, false}};
+  board.tracks = {{ObjectId{"same-net-hole-neighbour"}, NetId{"net-1"}, LayerId{"F.Cu"},
+                   mm(39.5, 40.3), mm(40.5, 40.3), Nanometres{100'000}, false},
+                  {ObjectId{"foreign-hole-neighbour"}, NetId{"net-2"}, LayerId{"F.Cu"},
+                   mm(39.5, 39.7), mm(40.5, 39.7), Nanometres{100'000}, false}};
+  board.vias = {{ObjectId{"hole-a"},
+                 NetId{"net-1"},
+                 mm(40.0, 40.0),
+                 Nanometres{600000},
+                 Nanometres{300000},
+                 {LayerId{"F.Cu"}, LayerId{"B.Cu"}},
+                 false},
+                {ObjectId{"hole-b"},
+                 NetId{"net-1"},
+                 mm(40.5, 40.0),
+                 Nanometres{600000},
+                 Nanometres{300000},
+                 {LayerId{"F.Cu"}, LayerId{"B.Cu"}},
+                 false}};
   const auto whole = flux::check_copper_rules(board);
   const auto has_hole_violation = [](const auto& report) {
     return std::any_of(report.violations.begin(), report.violations.end(), [](const auto& item) {
@@ -182,26 +1891,22 @@ void source_bound_board_rules_control_geometry_and_hole_clearance() {
     });
   };
   require(has_hole_violation(whole) &&
-              has_hole_violation(
-                  flux::check_dynamic_copper_rules(board, {ObjectId{"hole-b"}})),
+              has_hole_violation(flux::check_dynamic_copper_rules(board, {ObjectId{"hole-b"}})),
           "hole-to-hole clearance must remain mechanical across same-net vias in whole and "
           "dynamic exact DRC");
   const auto has_hole_clearance_for = [](const auto& report, std::string_view id) {
     return std::any_of(report.violations.begin(), report.violations.end(), [&](const auto& item) {
       return item.kind == flux::CopperViolationKind::hole_clearance &&
-             std::find(item.object_ids.begin(), item.object_ids.end(), id) !=
-                 item.object_ids.end();
+             std::find(item.object_ids.begin(), item.object_ids.end(), id) != item.object_ids.end();
     });
   };
   require(has_hole_clearance_for(whole, "foreign-hole-neighbour") &&
               !has_hole_clearance_for(whole, "same-net-hole-neighbour") &&
               has_hole_clearance_for(
-                  flux::check_dynamic_copper_rules(
-                      board, {ObjectId{"foreign-hole-neighbour"}}),
+                  flux::check_dynamic_copper_rules(board, {ObjectId{"foreign-hole-neighbour"}}),
                   "foreign-hole-neighbour") &&
               !has_hole_clearance_for(
-                  flux::check_dynamic_copper_rules(
-                      board, {ObjectId{"same-net-hole-neighbour"}}),
+                  flux::check_dynamic_copper_rules(board, {ObjectId{"same-net-hole-neighbour"}}),
                   "same-net-hole-neighbour"),
           "hole clearance must use exact hole-to-copper boundaries on traversed layers and exempt "
           "same-net copper in whole and dynamic DRC");
@@ -219,9 +1924,13 @@ void source_bound_board_rules_control_geometry_and_hole_clearance() {
   slot.plated = false;
   slotted.pads = {slot};
   board.footprints.push_back(slotted);
-  board.vias.push_back(
-      {ObjectId{"near-slot"}, NetId{"net-1"}, mm(60.7, 40.0), Nanometres{600'000},
-       Nanometres{300'000}, {LayerId{"F.Cu"}, LayerId{"B.Cu"}}, false});
+  board.vias.push_back({ObjectId{"near-slot"},
+                        NetId{"net-1"},
+                        mm(60.7, 40.0),
+                        Nanometres{600'000},
+                        Nanometres{300'000},
+                        {LayerId{"F.Cu"}, LayerId{"B.Cu"}},
+                        false});
   const auto slotted_report = flux::check_copper_rules(board);
   require(std::none_of(slotted_report.violations.begin(), slotted_report.violations.end(),
                        [](const auto& item) {
@@ -231,12 +1940,24 @@ void source_bound_board_rules_control_geometry_and_hole_clearance() {
                        }),
           "milled oval holes must not be treated as mechanically drilled hole-to-hole pairs");
 
-  const flux::DrillShape oval{ObjectId{"oval"}, NetId{}, mm(0.0, 0.0), Nanometres{1'000'000},
-                              Nanometres{400'000}, Microdegrees{0},
-                              flux::DrillOwnerKind::pad, {LayerId{"F.Cu"}}, false};
-  const flux::DrillShape circle{ObjectId{"circle"}, NetId{}, mm(0.7, 0.0), Nanometres{300'000},
-                                Nanometres{300'000}, Microdegrees{0},
-                                flux::DrillOwnerKind::via, {LayerId{"F.Cu"}}, true};
+  const flux::DrillShape oval{ObjectId{"oval"},
+                              NetId{},
+                              mm(0.0, 0.0),
+                              Nanometres{1'000'000},
+                              Nanometres{400'000},
+                              Microdegrees{0},
+                              flux::DrillOwnerKind::pad,
+                              {LayerId{"F.Cu"}},
+                              false};
+  const flux::DrillShape circle{ObjectId{"circle"},
+                                NetId{},
+                                mm(0.7, 0.0),
+                                Nanometres{300'000},
+                                Nanometres{300'000},
+                                Microdegrees{0},
+                                flux::DrillOwnerKind::via,
+                                {LayerId{"F.Cu"}},
+                                true};
   require(std::abs(flux::drill_to_drill_boundary_distance_nm(oval, circle) - 50'000.0L) < 1.0L,
           "oval drill spacing must use the exact capsule boundary rather than a bounding circle");
 }
@@ -323,6 +2044,19 @@ void file_import_preserves_project_minimum_rules() {
   }
 }
 
+void units_remain_exact_and_saturating() {
+  require(Nanometres::from_mm(1.2345674).value() == 1'234'567,
+          "millimetres must quantize to integer nanometres");
+  require(Nanometres::from_mm(-0.0000006).value() == -1,
+          "negative conversion must round symmetrically");
+  require(Microdegrees::from_degrees(-90.0).value() == 270'000'000,
+          "angles must normalize into one positive turn");
+  require(flux::geometry::transform_point(mm(4.45, -0.25), mm(48.0, 47.0),
+                                          Microdegrees::from_degrees(90.0),
+                                          BoardSide::front) == mm(47.75, 42.55),
+          "positive KiCad footprint rotation must follow its downward-Y board coordinates");
+}
+
 void multisource_terminal_membership_preserves_access_preference_order() {
   auto board = two_pad_board();
   board.outline = rectangle(0.0, 0.0, 20.0, 20.0);
@@ -354,17 +2088,159 @@ void multisource_terminal_membership_preserves_access_preference_order() {
           "adaptive terminal membership must preserve exact connected copper legality");
 }
 
-void units_remain_exact_and_saturating() {
-  require(Nanometres::from_mm(1.2345674).value() == 1'234'567,
-          "millimetres must quantize to integer nanometres");
-  require(Nanometres::from_mm(-0.0000006).value() == -1,
-          "negative conversion must round symmetrically");
-  require(Microdegrees::from_degrees(-90.0).value() == 270'000'000,
-          "angles must normalize into one positive turn");
-  require(flux::geometry::transform_point(mm(4.45, -0.25), mm(48.0, 47.0),
-                                          Microdegrees::from_degrees(90.0),
-                                          BoardSide::front) == mm(47.75, 42.55),
-          "positive KiCad footprint rotation must follow its downward-Y board coordinates");
+void failed_spline_chains_retry_against_committed_copper() {
+  auto board = two_pad_board();
+  board.nets.push_back({NetId{"net-2"}, "OUTER", 0});
+  board.footprints[0].position = mm(20.0, 20.0);
+  board.footprints[1].position = mm(40.0, 40.0);
+  for (auto& footprint : board.footprints) {
+    footprint.courtyard = local_rectangle(0.15, 0.15);
+    footprint.pads.front().width = Nanometres{250000};
+    footprint.pads.front().height = Nanometres{250000};
+  }
+  for (std::size_t index = 0U; index < 2U; ++index) {
+    auto footprint = board.footprints[index];
+    footprint.id = ObjectId{"outer-" + std::to_string(index)};
+    footprint.reference = footprint.id.value();
+    footprint.pads.front().id = ObjectId{footprint.id.value() + "-pad"};
+    footprint.pads.front().net = NetId{"net-2"};
+    footprint.position = index == 0U ? mm(20.0, 19.5) : mm(40.5, 40.0);
+    board.footprints.push_back(std::move(footprint));
+  }
+  flux::GlobalRouteResult global;
+  global.stop_reason = GlobalRouterStopReason::complete;
+  global.paths = {
+      flux::GlobalRoutePath{NetId{"net-1"}, 0U,
+          {{mm(20,20), LayerId{"F.Cu"}}, {mm(40,20), LayerId{"F.Cu"}},
+           {mm(40,40), LayerId{"F.Cu"}}}},
+      flux::GlobalRoutePath{NetId{"net-2"}, 0U,
+          {{mm(20,19.5), LayerId{"F.Cu"}}, {mm(40.5,19.5), LayerId{"F.Cu"}},
+           {mm(40.5,40), LayerId{"F.Cu"}}}}};
+  flux::DetailedRouterConfig config;
+  config.pull_tight_45_degrees = false;
+  config.continuous_refinement = false;
+  config.circular_arc_refinement = true;
+  // Isolate PH committed-context retries from the later residual fillet postpass.
+  config.residual_bend_repair = false;
+  config.spline_minimum_bend_radius = Nanometres::from_mm(1.0);
+  config.spline_control_corridor = Nanometres::from_mm(1.0);
+  config.retry_failed_spline_routes_after_commits = false;
+  const auto single_pass = flux::materialize_detailed_route(board, global, config);
+  require(!single_pass.complete() && single_pass.unrounded_non_junction_bends == 1U &&
+              single_pass.spline_parallel_route_commits == 1U && single_pass.copper_drc.ok(),
+          "nested-corner control must expose one stale-context failure after one legal commit: " +
+              single_pass.diagnostic + "/commits=" + std::to_string(single_pass.spline_parallel_route_commits) +
+              "/unrounded=" + std::to_string(single_pass.unrounded_non_junction_bends) +
+              "/drc=" + std::to_string(single_pass.copper_drc.violation_count()));
+  config.retry_failed_spline_routes_after_commits = true;
+  const auto result = flux::materialize_detailed_route(board, global, config);
+  require(result.complete() && result.copper_drc.ok() &&
+              result.connectivity.open_connections == 0U &&
+              result.spline_committed_context_retry_tasks == 1U &&
+              result.spline_committed_context_retry_commits == 1U,
+          "a failed outer bend must be reconsidered after its inner neighbour is rounded: " +
+              result.diagnostic);
+}
+
+void dense_candidate_grid_requires_enforced_physical_clearance() {
+  auto board = two_pad_board();
+  board.rules.minimum_track_width = Nanometres{700000};
+  GlobalRouterConfig config;
+  config.grid_pitch = Nanometres{500000};
+  config.max_iterations = 1U;
+  config.max_expansions_per_connection = 50000U;
+  config.allow_dense_candidate_grid = false;
+  const auto conservative = flux::route_global(board, config);
+  require(conservative.stop_reason == GlobalRouterStopReason::invalid_input &&
+              conservative.diagnostic.find("planar grid") != std::string::npos,
+          "dense candidate samples must remain an explicit opt-in");
+  config.allow_dense_candidate_grid = true;
+  for (const bool advisory : {false, true}) {
+    auto unsafe = config;
+    unsafe.reserve_sampled_route_clearance = advisory;
+    unsafe.clearance_shadows_advisory_only = advisory;
+    const auto rejected = flux::route_global(board, unsafe);
+    require(rejected.stop_reason == GlobalRouterStopReason::invalid_input,
+            "dense samples cannot rely on missing or advisory physical conflict enforcement");
+  }
+  const auto routed = flux::route_global(board, config);
+  require(routed.complete() && routed.configured_dense_candidate_grid &&
+              routed.configured_grid_pitch == Nanometres{500000} &&
+              routed.clearance_shadow_overflow == 0U,
+          "a wide trace must remain routable on denser, physically guarded candidate samples: " +
+              routed.diagnostic);
+  const auto detailed = flux::materialize_detailed_route(board, routed);
+  require(detailed.complete() && detailed.copper_drc.violation_count() == 0U,
+          "dense candidate sampling must still produce exact legal copper: " + detailed.diagnostic);
+  require(detailed.candidate && !detailed.candidate->tracks.empty() &&
+              std::all_of(detailed.candidate->tracks.begin(), detailed.candidate->tracks.end(),
+                          [](const auto& track) { return track.width >= Nanometres{700000}; }),
+          "the sampling experiment must not narrow generated copper");
+  board.nets.push_back({NetId{"net-2"}, "NEIGHBOUR", 0});
+  for (std::size_t i = 0; i < 2U; ++i) {
+    auto terminal = board.footprints[i];
+    terminal.id = ObjectId{"neighbour-" + std::to_string(i)};
+    terminal.reference = terminal.id.value();
+    terminal.position.y += Nanometres{2000000};
+    terminal.pads.front().id = ObjectId{terminal.id.value() + "-pad"};
+    terminal.pads.front().net = NetId{"net-2"};
+    board.footprints.push_back(std::move(terminal));
+  }
+  flux::GlobalRouteResult conflicting;
+  flux::GlobalRoutePath first;
+  first.net = NetId{"net-1"};
+  first.points = {{mm(20, 40), LayerId{"F.Cu"}}, {mm(80, 40), LayerId{"F.Cu"}}};
+  flux::GlobalRoutePath second;
+  second.net = NetId{"net-2"};
+  second.points = {{mm(20, 42), LayerId{"F.Cu"}}, {mm(30, 42), LayerId{"F.Cu"}},
+                   {mm(30, 40.5), LayerId{"F.Cu"}}, {mm(70, 40.5), LayerId{"F.Cu"}},
+                   {mm(70, 42), LayerId{"F.Cu"}}, {mm(80, 42), LayerId{"F.Cu"}}};
+  conflicting.paths = {std::move(first), std::move(second)};
+  const auto rejected_copper = flux::probe_quantized_copper_feasibility(board, conflicting);
+  require(!rejected_copper.feasible() && rejected_copper.open_connections == 0U &&
+              rejected_copper.drc_violations > 0U,
+          "different occupied grid lines cannot certify overlapping wide copper as legal");
+  flux::QuantizedCopperOracleConfig bounded_diagnoses;
+  bounded_diagnoses.max_diagnoses = 1U;
+  const auto bounded = flux::probe_quantized_copper_feasibility(board, conflicting, bounded_diagnoses);
+  const auto raw_count = std::accumulate(
+      bounded.drc_violation_counts.begin(), bounded.drc_violation_counts.end(), std::size_t{0},
+      [](std::size_t count, const auto& entry) { return count + entry.second; });
+  require(raw_count == bounded.drc_violations &&
+              bounded.drc_violation_counts == rejected_copper.drc_violation_counts &&
+              bounded.drc_violation_counts.contains("track_clearance"),
+          "raw DRC categories must survive diagnosis coalescing and truncation");
+}
+
+void default_planar_pitch_uses_scoped_source_rules() {
+  auto board = two_pad_board();
+  GlobalRouterConfig config;
+  require(flux::minimum_legal_planar_grid_pitch(board, config) == Nanometres{450000},
+          "the default floor must combine resolved trace width and clearance");
+  board.rules.minimum_track_width = Nanometres{700000};
+  require(flux::minimum_legal_planar_grid_pitch(board, config) == Nanometres{900000},
+          "project fabrication minima must determine the automatic floor");
+  for (const auto crossing_safe : {false, true}) {
+    config.allow_diagonal_grid_edges = !crossing_safe;
+    config.allow_crossing_safe_diagonal_grid_edges = crossing_safe;
+    require(flux::minimum_legal_planar_grid_pitch(board, config) == Nanometres{1272793},
+            "either diagonal mode must round sqrt(2) copper spacing upward to a legal integer");
+  }
+  config.allow_diagonal_grid_edges = false;
+  config.allow_crossing_safe_diagonal_grid_edges = false;
+  config.max_iterations = 1U;
+  require(flux::route_global(board, config).stop_reason == GlobalRouterStopReason::invalid_input,
+          "an explicit undersized library pitch must still fail validation");
+  board.tracks.push_back({ObjectId{"already-connected"}, NetId{"net-1"}, LayerId{"F.Cu"},
+                          mm(20,40), mm(80,40), Nanometres{700000}, false});
+  require(flux::minimum_legal_planar_grid_pitch(board, config) == Nanometres{0},
+          "completed nets must not inflate an unscoped routing lattice");
+  config.selected_nets = {NetId{"net-1"}};
+  require(flux::minimum_legal_planar_grid_pitch(board, config) == Nanometres{900000},
+          "explicit selected scope must retain its physical spacing even for connected nets");
+  board.rules.minimum_track_width = Nanometres{std::numeric_limits<std::int64_t>::max()};
+  require(!flux::minimum_legal_planar_grid_pitch(board, config),
+          "unrepresentable required spacing must fail closed rather than overflow");
 }
 
 void dimensioned_pathfinder_pressure_preserves_units_and_group_fairness() {
@@ -597,8 +2473,8 @@ void physical_checkpoint_ordering_is_feasibility_first_and_fail_closed() {
   const auto derived_via_lattice = flux::route_global(board, fine_planar_lattice);
   require(derived_via_lattice.stop_reason != GlobalRouterStopReason::invalid_input &&
               derived_via_lattice.configured_via_site_pitch == Nanometres{0},
-          "an omitted via pitch must derive a rule-safe coarse sublattice instead of invalidating "
-          "a finer planar route grid");
+          "an omitted via pitch must retain dense candidate sites and defer selected-site spacing "
+          "to exact via occupancy instead of invalidating a finer planar route grid");
 
   invalid = {};
   invalid.grid_pitch = Nanometres::from_mm(5.0);
@@ -698,6 +2574,169 @@ void physical_checkpoint_ordering_is_feasibility_first_and_fail_closed() {
           "from failure pressure");
 }
 
+void regional_scope_checkpoint_ordering_retains_checked_physical_evidence() {
+  auto checked = flux::RegionalRouteResult{};
+  checked.native_scene_evaluated = true;
+  checked.native_scene_complete = true;
+  checked.native_scene_conflicts = 3U;
+  checked.native_scene_total_conflicts = 3U;
+  auto unassembled = checked;
+  unassembled.native_scene_evaluated = false;
+  unassembled.native_scene_complete = false;
+  unassembled.native_scene_conflicts = 0U;
+  unassembled.spline_candidate_available = true;
+  require(!unassembled.complete(), "an unassessed candidate must not claim physical completion");
+  require(flux::regional_checkpoint_better(checked, unassembled),
+          "an assembled native scene must outrank an unassembled retry with zero counters");
+
+  auto better_scene = checked;
+  better_scene.straight_scene_trials = 1U;
+  better_scene.straight_scene_evaluated = true;
+  better_scene.straight_scene_drc_violations = 3U;
+  auto worse_scope = better_scene;
+  worse_scope.straight_scene_drc_violations = 9U;
+  require(flux::regional_checkpoint_better(better_scene, worse_scope),
+          "a worse expanded physical scope must not replace the retained checkpoint");
+
+  auto fewer_opens = better_scene;
+  fewer_opens.straight_scene_drc_violations = 12U;
+  auto more_opens = better_scene;
+  more_opens.straight_scene_open_connections = 1U;
+  require(flux::regional_checkpoint_better(fewer_opens, more_opens),
+          "open connections must be prioritized before DRC/native error counts");
+
+  auto legal = checked;
+  legal.native_scene_conflicts = 0U;
+  legal.native_scene_total_conflicts = 0U;
+  legal.spline_candidate_available = true;
+  legal.straight_scene_trials = 1U;
+  legal.straight_scene_evaluated = true;
+  auto rejected = legal;
+  rejected.spline_candidate_available = false;
+  rejected.native_scene_conflicts = 1U;
+  rejected.native_scene_total_conflicts = 1U;
+  rejected.straight_scene_drc_violations = 1U;
+  require(flux::regional_checkpoint_better(legal, rejected),
+          "a complete legal candidate must beat every rejected scene");
+}
+
+void straight_track_angles_preserve_off_grid_endpoints_and_clearance() {
+  auto board = two_pad_board();
+  board.footprints.back().position = mm(80.3, 42.7);
+  Keepout first_elbow_obstacle;
+  first_elbow_obstacle.id = ObjectId{"first-elbow-obstacle"};
+  first_elbow_obstacle.area = rectangle(20.8, 40.8, 21.2, 41.2);
+  first_elbow_obstacle.layers = {LayerId{"F.Cu"}};
+  first_elbow_obstacle.prohibit.tracks = true;
+  board.keepouts.push_back(first_elbow_obstacle);
+  flux::GlobalRouteResult global;
+  global.stop_reason = flux::GlobalRouterStopReason::complete;
+  global.paths = {flux::GlobalRoutePath{NetId{"net-1"}, 0U,
+                  {{mm(20.0, 40.0), LayerId{"F.Cu"}},
+                   {mm(80.3, 42.7), LayerId{"F.Cu"}}}}};
+  flux::DetailedRouterConfig config;
+  config.continuous_refinement = false;
+  config.pull_tight_45_degrees = false;
+  config.restrict_straight_track_angles = true;
+  const auto detailed = flux::materialize_detailed_route(board, global, config);
+  const auto ordinary = [](const auto& track) {
+    const auto dx = std::abs(track.end.x.value() - track.start.x.value());
+    const auto dy = std::abs(track.end.y.value() - track.start.y.value());
+    return dx == 0 || dy == 0 || dx == dy;
+  };
+  require(detailed.complete() && detailed.candidate && detailed.copper_drc.ok() &&
+              detailed.connectivity.open_connections == 0U &&
+              detailed.straight_angle_segments_converted == 1U &&
+              detailed.straight_angle_candidate_checks >= 2U &&
+              detailed.candidate->tracks.size() == 2U && detailed.candidate->track_arcs.empty() &&
+              std::all_of(detailed.candidate->tracks.begin(), detailed.candidate->tracks.end(), ordinary),
+          "an obstructed first octilinear elbow must select a legal alternate while retaining "
+          "exact off-grid pad contacts: " + detailed.diagnostic);
+  auto anchored = board;
+  const auto via_position = mm(50.15, 41.35);
+  anchored.vias.push_back(flux::Via{ObjectId{"mid-span-via"}, NetId{"net-1"}, via_position,
+                                   Nanometres::from_mm(0.6), Nanometres::from_mm(0.3),
+                                   {LayerId{"F.Cu"}, LayerId{"B.Cu"}}, false});
+  const auto with_via = flux::materialize_detailed_route(anchored, global, config);
+  require(with_via.complete() && with_via.candidate && with_via.copper_drc.ok() &&
+              with_via.candidate->vias == anchored.vias &&
+              std::count_if(with_via.candidate->tracks.begin(), with_via.candidate->tracks.end(),
+                            [&](const auto& track) {
+                              return track.start == via_position || track.end == via_position;
+                            }) >= 2 &&
+              std::all_of(with_via.candidate->tracks.begin(), with_via.candidate->tracks.end(), ordinary),
+          "angle conversion must keep an exact interior same-net via as an electrical junction");
+  auto blocked = board;
+  blocked.keepouts.front().area = rectangle(49.0, 39.0, 51.0, 44.0);
+  const auto rejected = flux::materialize_detailed_route(blocked, global, config);
+  require(!rejected.complete() && rejected.straight_angle_segments_unresolved == 1U,
+          "failure of all bounded ordinary-angle adapters must never accept arbitrary copper");
+}
+
+void soft_capacity_cuts_exclude_legally_separated_shadows() {
+  Board hard_capacity_source;
+  hard_capacity_source.source_revision = "hard-capacity-risk-fixture";
+  hard_capacity_source.outline = rectangle(0.0, 0.0, 100.0, 80.0);
+  hard_capacity_source.layers = {{LayerId{"F.Cu"}, "F.Cu", LayerKind::copper, 0}};
+  hard_capacity_source.nets = {{NetId{"hard-a"}, "HARD_A", 0}, {NetId{"hard-b"}, "HARD_B", 0}};
+  hard_capacity_source.rules.default_track_width = Nanometres::from_mm(0.35);
+  const auto hard_terminal = [](std::string id, const NetId& net, Point position) {
+    Footprint footprint;
+    footprint.id = ObjectId{id};
+    footprint.reference = id;
+    footprint.position = position;
+    footprint.courtyard = local_rectangle(0.1, 0.1);
+    flux::Pad pad;
+    pad.id = ObjectId{id + "-pad"};
+    pad.net = net;
+    pad.layers = {LayerId{"F.Cu"}};
+    pad.shape = flux::PadShape::rectangle;
+    pad.width = Nanometres::from_mm(0.1);
+    pad.height = Nanometres::from_mm(0.1);
+    footprint.pads.push_back(std::move(pad));
+    return footprint;
+  };
+  hard_capacity_source.footprints = {hard_terminal("HA1", NetId{"hard-a"}, mm(20.0, 35.0)),
+                                     hard_terminal("HA2", NetId{"hard-a"}, mm(80.0, 35.0)),
+                                     hard_terminal("HB1", NetId{"hard-b"}, mm(20.0, 45.0)),
+                                     hard_terminal("HB2", NetId{"hard-b"}, mm(80.0, 45.0))};
+  Keepout hard_upper;
+  hard_upper.id = ObjectId{"hard-upper"};
+  hard_upper.area = rectangle(30.0, 0.0, 70.0, 39.3);
+  hard_upper.layers = {LayerId{"F.Cu"}};
+  hard_upper.prohibit.tracks = true;
+  hard_upper.prohibit.vias = true;
+  auto hard_lower = hard_upper;
+  hard_lower.id = ObjectId{"hard-lower"};
+  hard_lower.area = rectangle(30.0, 40.7, 70.0, 80.0);
+  hard_capacity_source.keepouts = {std::move(hard_upper), std::move(hard_lower)};
+  GlobalRouterConfig hard_capacity_config;
+  hard_capacity_config.grid_pitch = Nanometres::from_mm(1.0);
+  hard_capacity_config.max_iterations = 2U;
+  hard_capacity_config.max_expansions_per_connection = 50'000U;
+  // Two ordinary seeds plus the mandatory hydraulic family; RRT is disabled below.
+  hard_capacity_config.max_static_seed_candidates_per_connection = 3U;
+  hard_capacity_config.use_static_seed_rrt_connect_alternatives = false;
+  hard_capacity_config.use_voronoi_allocation_resources = true;
+  hard_capacity_config.atomic_complete_net_routing = true;
+  hard_capacity_config.hard_capacity_start_iteration = 2U;
+  hard_capacity_config.max_hard_capacity_ripup_attempts_per_pass = 2U;
+  hard_capacity_config.max_hard_capacity_ripup_nets_per_attempt = 1U;
+  hard_capacity_config.max_hard_capacity_conflict_set_states_per_attempt = 16U;
+  hard_capacity_config.rollback_failed_hard_capacity_ripup = true;
+  hard_capacity_config.defer_hard_capacity_ripup_victims_to_pass_tail = true;
+  hard_capacity_source.rules.default_via_diameter = Nanometres::from_mm(3.0);
+  const auto hard_capacity_route = flux::route_global(hard_capacity_source, hard_capacity_config);
+  require(hard_capacity_route.hard_capacity_soft_cut_routes > 0U &&
+              hard_capacity_route.hard_capacity_soft_cut_blockers > 0U &&
+              hard_capacity_route.hard_capacity_soft_cut_legal_shadow_observations > 0U,
+          "a broad via-sized shadow must retain true bottleneck blockers while excluding legal "
+          "track-clearance observations: probes=" +
+              std::to_string(hard_capacity_route.hard_capacity_soft_cut_routes) + ", blockers=" +
+              std::to_string(hard_capacity_route.hard_capacity_soft_cut_blockers) + ", excluded=" +
+              std::to_string(hard_capacity_route.hard_capacity_soft_cut_legal_shadow_observations));
+}
+
 void global_to_detailed_route_is_transactional_and_capacity_gated() {
   const auto source = two_pad_board();
   GlobalRouterConfig diversified_config;
@@ -710,6 +2749,11 @@ void global_to_detailed_route_is_transactional_and_capacity_gated() {
   diversified_config.single_lane_direct_voronoi_resources = true;
   diversified_config.priority_nets = {NetId{"net-1"}};
   const auto diversified_route = flux::route_global(source, diversified_config);
+  const auto inherited_corridor_capacity = std::any_of(
+      diversified_route.resource_usage.begin(), diversified_route.resource_usage.end(),
+      [](const auto& usage) {
+        return usage.kind == flux::RoutingResourceKind::planar_edge && usage.capacity > 1U;
+      });
   require(diversified_route.configured_diversify_pin_access_rings &&
               diversified_route.configured_single_lane_direct_voronoi_resources &&
               diversified_route.configured_priority_nets == diversified_config.priority_nets &&
@@ -724,8 +2768,440 @@ void global_to_detailed_route_is_transactional_and_capacity_gated() {
               diversified_route.diversified_pin_access_nodes > 0U &&
               diversified_route.terminals_with_diversified_pin_access > 0U &&
               diversified_route.additional_successful_pin_access_rings > 0U &&
-              diversified_route.failed_pin_escapes == 0U,
-          "bounded later-ring portals must remain exact-legal and observable");
+              diversified_route.failed_pin_escapes == 0U && inherited_corridor_capacity,
+          "bounded later-ring portals must remain exact-legal and observable, and straight "
+          "free-space samples must inherit physical parallel-lane corridor capacity");
+  flux::RoutingPlannerConfig promoted_config;
+  require(promoted_config.full_strength_first_pass,
+          "the public planner must default to the full physics/repair policy");
+  promoted_config.curved_tracks = true; // Explicit coverage of the retained curved planner.
+  promoted_config.global = diversified_config;
+  promoted_config.global.max_iterations = 2U;
+  promoted_config.max_routability_feedback_retries = 1U;
+  promoted_config.oracle_first_feedback = true;
+  promoted_config.clearance_shadows_advisory = false;
+  const auto promoted_plan = flux::plan_routes(source, promoted_config);
+  const auto promoted_detail = flux::materialize_detailed_route(source, promoted_plan);
+  const auto promoted_incremental =
+      flux::materialize_detailed_route_incremental(source, promoted_plan, promoted_detail);
+  flux::PersistentRoutingSessionConfig session_config;
+  session_config.planner = promoted_config;
+  const auto persistent_session =
+      flux::run_persistent_routing_session(source, source, session_config);
+  require(!promoted_plan.coarse_global.configured_clearance_shadows_advisory_only &&
+              promoted_plan.complete() && promoted_plan.provisional_exact_promotions_attempted == 1U &&
+              promoted_plan.provisional_exact_promotions_succeeded == 1U &&
+              promoted_plan.feedback_probes.size() == 1U &&
+              promoted_plan.feedback_probes.front().candidates.size() == 1U &&
+              promoted_plan.feedback_probes.front().candidates.front().provisional_plan_complete &&
+              promoted_plan.feedback_probes.front().candidates.front().exact_promotion_attempted &&
+              promoted_plan.feedback_probes.front().candidates.front().exact_promotion_succeeded &&
+              promoted_detail.complete() && promoted_incremental.complete() &&
+              persistent_session.routing.complete() && persistent_session.detailed.complete(),
+          "an iteration-zero discrete regional solution must be promoted through the full "
+          "regional transaction before terminating, and its exact copper must support "
+          "incremental rematerialization");
+
+  // Exact interleaved epoch scheduling is retained as a legacy-control regression.
+  auto full_strength_config = promoted_config;
+  full_strength_config.oracle_first_feedback = false;
+  full_strength_config.full_strength_first_pass = true;
+  full_strength_config.global.max_iterations = 8U;
+  full_strength_config.max_routability_feedback_retries = 2U;
+  const auto full_strength_plan = flux::plan_routes_legacy(source, full_strength_config);
+  require(full_strength_plan.complete() && !full_strength_plan.feedback_probes.empty() &&
+              full_strength_plan.feedback_probes.front().global_epoch_iterations == 1U &&
+              !full_strength_plan.feedback_probes.front().intermediate_regional_probe &&
+              full_strength_plan.coarse_global.configured_bidirectional_route_growth_start_iteration == 1U &&
+              full_strength_plan.coarse_global.configured_max_hard_capacity_ripup_attempts_per_pass >= 8U &&
+              full_strength_plan.coarse_global.configured_global_navmesh_usped.enabled &&
+              full_strength_plan.regional.configured.enable_spline_realization &&
+              full_strength_plan.regional.configured.max_physical_scope_retries ==
+                  full_strength_config.regional.max_physical_scope_retries &&
+              !full_strength_plan.coarse_global.configured_clearance_shadows_advisory_only &&
+              flux::materialize_detailed_route(source, full_strength_plan).complete(),
+          "full-strength mode must certify the seed with its full scope budget before later negotiation");
+  auto straight_config = full_strength_config;
+  straight_config.curved_tracks = false;
+  straight_config.global.single_lane_direct_voronoi_resources = false;
+  const auto straight_plan = flux::plan_routes_legacy(source, straight_config);
+  const auto straight_detail = flux::materialize_detailed_route(source, straight_plan);
+  require(straight_plan.complete() && straight_detail.complete() &&
+              !straight_plan.regional.configured.enable_spline_realization &&
+              !straight_plan.coarse_global.configured_navmesh_funnel_spline_seeds &&
+              straight_plan.coarse_global.configured_single_lane_direct_voronoi_resources &&
+              straight_plan.provisional_exact_promotions_attempted == 0U &&
+              straight_detail.added_track_arcs == 0U &&
+              straight_detail.attempted_quintic_ph_runs == 0U &&
+              flux::RoutingPlannerConfig{}.curved_tracks,
+          "explicit straight routing must survive curved defaults and full-strength scheduling without spline promotion");
+  auto one_epoch_config = full_strength_config;
+  one_epoch_config.global.max_iterations = 1U;
+  const auto one_epoch_plan = flux::plan_routes_legacy(source, one_epoch_config);
+  require(one_epoch_plan.complete() && full_strength_plan.feedback_probes.size() == 1U &&
+              full_strength_plan.paths == one_epoch_plan.paths,
+          "a larger retry budget must preserve an already certifiable initial routing seed");
+  full_strength_config.global.max_iterations = 2U;
+  const auto short_full_strength = flux::plan_routes_legacy(source, full_strength_config);
+  require(short_full_strength.complete() && short_full_strength.cumulative_global_iterations <= 2U &&
+              short_full_strength.feedback_probes.front().global_epoch_iterations == 1U,
+          "default full repair must clamp retry upper bounds without exceeding a short caller budget");
+
+  // A regional PH candidate has already crossed the continuous-to-manufacturing boundary. Its
+  // exact native primitive must survive detailed handoff rather than being reconstructed from the
+  // diagnostic tessellation and optimized a second time.
+  flux::RoutingPlanResult native_plan;
+  native_plan.coarse_global = promoted_plan.coarse_global;
+  native_plan.coarse_global.unrouted_nets.clear();
+  native_plan.coarse_global.unaccepted_selected_voronoi_lane_transitions = 0U;
+  native_plan.coarse_global.stop_reason = flux::GlobalRouterStopReason::complete;
+  flux::GlobalRoutePath native_path{NetId{"net-1"},
+                                    0U,
+                                    {{mm(20.0, 40.0), LayerId{"F.Cu"}},
+                                     {mm(50.0, 30.0), LayerId{"F.Cu"}},
+                                     {mm(80.0, 40.0), LayerId{"F.Cu"}}}};
+  native_plan.regional.spline_candidate_paths = {native_path};
+  native_plan.regional.spline_candidate_available = true;
+  // This handoff fixture represents an assessed regional transaction. Detailed materialization
+  // independently checks the supplied native pieces, including the invalid variants below.
+  native_plan.regional.native_scene_evaluated = true;
+  native_plan.regional.native_scene_complete = true;
+  flux::RegionalSplineRealization native_realization;
+  native_realization.fragment = {NetId{"net-1"}, 0U, 0U, 0U};
+  native_realization.replacement_end = mm(80.0, 40.0);
+  native_realization.layer = LayerId{"F.Cu"};
+  native_realization.centerline = {mm(20.0, 40.0), mm(50.0, 30.0), mm(80.0, 40.0)};
+  native_realization.native_pieces = {
+      flux::SplineFittedPiece{flux::SplineFittedPieceKind::circular_arc, mm(20.0, 40.0),
+                              mm(50.0, 30.0), mm(80.0, 40.0), 0.0L, 1.0L}};
+  native_realization.width = Nanometres::from_mm(0.25);
+  native_realization.native_copper_legal = true;
+  native_realization.mutually_legal = true;
+  native_realization.quantized_mutually_legal = true;
+  native_realization.topology_legal = true;
+  native_realization.shape_legal = true;
+  flux::RegionalBundleAssignment native_assignment;
+  native_assignment.spline_realizations = {native_realization};
+  native_assignment.stop_reason = flux::RegionalBundleStopReason::complete;
+  native_plan.regional.bundle_assignments = {native_assignment};
+  flux::RegionalRoutingWindow initial_native_owner;
+  initial_native_owner.id = native_assignment.window_id;
+  initial_native_owner.owned_fragments = {native_realization.fragment};
+  native_plan.regional.windows = {initial_native_owner};
+  native_plan.paths = {native_path};
+  native_plan.stop_reason = flux::RoutingPlanStopReason::complete;
+  flux::DetailedRouterConfig native_config;
+  native_config.track_width = Nanometres::from_mm(0.25);
+  native_config.circular_arc_refinement = true;
+  native_config.pull_tight_45_degrees = false;
+  native_config.continuous_refinement = false;
+  const auto native_detail = flux::materialize_detailed_route(source, native_plan, native_config);
+  require(native_detail.complete() && native_detail.candidate &&
+              native_detail.regional_native_spline_runs_materialized == 1U &&
+              native_detail.regional_native_track_arcs_materialized == 1U &&
+              native_detail.candidate->track_arcs.size() == 1U &&
+              native_detail.candidate->track_arcs.front().start == mm(20.0, 40.0) &&
+              native_detail.candidate->track_arcs.front().middle == mm(50.0, 30.0) &&
+              native_detail.candidate->track_arcs.front().end == mm(80.0, 40.0),
+          "the exact regional native arc must cross detailed materialization byte-for-byte as "
+          "connected DRC-clean copper");
+  auto native_adapter_plan = native_plan;
+  auto first_adapter = native_realization;
+  first_adapter.centerline = {mm(20.0, 40.0), mm(50.0, 30.0)};
+  first_adapter.replacement_end = mm(50.0, 30.0);
+  first_adapter.native_pieces = {
+      flux::SplineFittedPiece{flux::SplineFittedPieceKind::segment, mm(20.0, 40.0),
+                              mm(35.0, 35.0), mm(50.0, 30.0), 0.0L, 1.0L}};
+  auto second_adapter = native_realization;
+  second_adapter.fragment.fragment_index = 1U;
+  second_adapter.centerline = {mm(50.0, 30.0), mm(80.0, 40.0)};
+  second_adapter.native_pieces = {
+      flux::SplineFittedPiece{flux::SplineFittedPieceKind::segment, mm(50.0, 30.0),
+                              mm(65.0, 35.0), mm(80.0, 40.0), 0.0L, 1.0L}};
+  native_adapter_plan.regional.bundle_assignments.front().spline_realizations = {first_adapter, second_adapter};
+  native_adapter_plan.regional.windows.front().owned_fragments = {first_adapter.fragment, second_adapter.fragment};
+  const auto native_adapter_detail =
+      flux::materialize_detailed_route(source, native_adapter_plan, native_config);
+  require(native_adapter_detail.complete() && native_adapter_detail.candidate &&
+              native_adapter_detail.regional_native_track_segments_materialized == 2U &&
+              native_adapter_detail.fitted_cubic_beziers > 0U &&
+              native_adapter_detail.unrounded_non_junction_bends == 0U &&
+              !native_adapter_detail.candidate->track_beziers.empty() &&
+              native_adapter_detail.connectivity.open_connections == 0U &&
+              native_adapter_detail.copper_drc.ok(),
+          "native straight adapters must enter board-level PH realization as connected cubic copper instead of freezing a degree-two bend: " +
+              native_adapter_detail.diagnostic + "; native_segments=" +
+              std::to_string(native_adapter_detail.regional_native_track_segments_materialized) +
+              "; tasks=" + std::to_string(native_adapter_detail.spline_parallel_route_tasks));
+  auto fallback_adapter_config = native_config;
+  fallback_adapter_config.max_spline_navmesh_search_expansions_per_run = 1U;
+  fallback_adapter_config.spline_minimum_bend_radius = Nanometres::from_mm(1.0);
+  const auto fallback_adapter_detail =
+      flux::materialize_detailed_route(source, native_adapter_plan, fallback_adapter_config);
+  require(fallback_adapter_detail.complete() &&
+              fallback_adapter_detail.spline_navmesh_certificate_fallbacks > 0U &&
+              fallback_adapter_detail.unrounded_non_junction_bends == 0U,
+          "fallback corridor must certify enough legal width for the required bend radius: " +
+              fallback_adapter_detail.diagnostic);
+  auto limited_native = native_config;
+  limited_native.max_circular_arcs = 0U;
+  require(!flux::materialize_detailed_route(source, native_plan, limited_native).complete(),
+          "regional native primitives must obey the aggregate detailed arc budget");
+  limited_native = native_config;
+  limited_native.spline_arc_fit_tolerance = Nanometres{1'000};
+  require(!flux::materialize_detailed_route(source, native_plan, limited_native).complete(),
+          "a coarser regional fit certificate must not satisfy a tighter detailed policy");
+  auto shared_native_plan = native_plan;
+  flux::RegionalRoutingWindow owner_window;
+  owner_window.id = 10U;
+  owner_window.owned_fragments = {native_realization.fragment};
+  flux::RegionalRoutingWindow context_window;
+  context_window.id = 11U;
+  shared_native_plan.regional.windows = {owner_window, context_window};
+  shared_native_plan.regional.bundle_assignments.front().window_id = owner_window.id;
+  auto context_assignment = native_assignment;
+  context_assignment.window_id = context_window.id;
+  // Frozen context may differ from the owner's eventual curve. It must never be emitted.
+  context_assignment.spline_realizations.front().centerline[1] = mm(50.0, 32.0);
+  shared_native_plan.regional.bundle_assignments.push_back(context_assignment);
+  const auto shared_native =
+      flux::materialize_detailed_route(source, shared_native_plan, native_config);
+  require(shared_native.complete() && shared_native.regional_native_spline_runs_materialized == 1U,
+          "a shared regional boundary must have exactly one owning copper writer");
+  auto reversed_native_plan = native_plan;
+  std::reverse(reversed_native_plan.regional.spline_candidate_paths.front().points.begin(),
+               reversed_native_plan.regional.spline_candidate_paths.front().points.end());
+  reversed_native_plan.paths = reversed_native_plan.regional.spline_candidate_paths;
+  const auto reversed_native =
+      flux::materialize_detailed_route(source, reversed_native_plan, native_config);
+  require(reversed_native.complete() &&
+              reversed_native.candidate->track_arcs.front().start ==
+                  native_realization.centerline.back() &&
+              reversed_native.candidate->track_arcs.front().end ==
+                  native_realization.centerline.front(),
+          "native ownership must preserve exact copper under reversed path orientation");
+  auto wrong_width_plan = native_plan;
+  wrong_width_plan.regional.bundle_assignments.front().spline_realizations.front().width =
+      Nanometres::from_mm(0.3);
+  require(!flux::materialize_detailed_route(source, wrong_width_plan, native_config).complete(),
+          "native geometry may not bypass selected route width provenance");
+  auto scene_source = source;
+  scene_source.nets.push_back({NetId{"outside-net"}, "OUTSIDE", 0U});
+  // A local stub is owned, but its same-net continuation is still an obstacle to other nets.
+  // Omitting the entire net makes the vertical replacement falsely appear locally legal.
+  flux::RegionalRouteResult frozen_regional;
+  flux::RegionalRouteFragment stub;
+  stub.id = {NetId{"outside-net"}, 0U, 0U, 0U};
+  stub.layer = LayerId{"F.Cu"};
+  stub.start = mm(40.0, 35.0);
+  stub.end = mm(45.0, 35.0);
+  stub.width = Nanometres::from_mm(0.25);
+  stub.clearance = Nanometres::from_mm(0.2);
+  auto continuation = stub;
+  continuation.id.fragment_index = 1U;
+  continuation.start = stub.end;
+  continuation.end = mm(60.0, 35.0);
+  frozen_regional.fragments = {stub, continuation};
+  flux::RegionalRoutingWindow frozen_window;
+  frozen_window.id = 7U;
+  frozen_window.owned_fragments = {stub.id};
+  frozen_regional.windows = {frozen_window};
+  const auto source_track_count = scene_source.tracks.size();
+  auto frozen_scene = flux::build_regional_frozen_copper_context(scene_source, frozen_regional, 7U);
+  require(frozen_scene && frozen_scene->tracks.size() == source_track_count + 1U &&
+              frozen_scene->tracks.back().start == continuation.start &&
+              scene_source.tracks.size() == source_track_count,
+          "frozen context excludes only owned fragments and never mutates source copper");
+  const flux::TrackSegment crossing{ObjectId{"frozen-test-candidate"}, source.nets.front().id,
+      LayerId{"F.Cu"}, mm(50.0, 30.0), mm(50.0, 40.0), stub.width, false};
+  frozen_scene->tracks.push_back(crossing);
+  require(!flux::check_copper_rules(*frozen_scene).violations.empty(),
+          "untouched same-net continuation must expose an otherwise invisible local crossing");
+  frozen_regional.windows.front().owned_fragments.push_back(continuation.id);
+  auto jointly_owned = flux::build_regional_frozen_copper_context(scene_source, frozen_regional, 7U);
+  require(jointly_owned && jointly_owned->tracks.size() == source_track_count,
+          "joint ownership removes both replaced fragments from frozen context");
+  jointly_owned->tracks.push_back(crossing);
+  require(flux::check_copper_rules(*jointly_owned).violations.empty(),
+          "the synthetic candidate must be legal without the untouched continuation");
+  require(!flux::build_regional_frozen_copper_context(scene_source, frozen_regional, 99U),
+          "unknown frozen-context ownership must fail closed");
+  frozen_regional.windows.front().owned_fragments = {stub.id};
+  frozen_regional.fragments.back().layer = LayerId{"B.Cu"};
+  auto other_layer = flux::build_regional_frozen_copper_context(scene_source, frozen_regional, 7U);
+  other_layer->tracks.push_back(crossing);
+  require(flux::check_copper_rules(*other_layer).violations.empty(),
+          "frozen planar copper on another layer must not obstruct a legal crossing");
+  std::map<std::string, flux::RegionalRouteFragmentId> frozen_provenance;
+  const auto attributed_scene = flux::build_regional_frozen_copper_context(
+      scene_source, frozen_regional, 7U, &frozen_provenance);
+  require(attributed_scene && frozen_provenance.size() == 1U &&
+              frozen_provenance.at(attributed_scene->tracks.back().id.value()) == continuation.id,
+          "generated frozen-copper IDs must preserve exact fragment provenance");
+  auto candidate_fragment = stub;
+  candidate_fragment.id.net = source.nets.front().id;
+  frozen_regional.fragments.push_back(candidate_fragment);
+  frozen_regional.windows.front().owned_fragments.push_back(candidate_fragment.id);
+  flux::RegionalBundleAssignment failed_frozen;
+  failed_frozen.window_id = 7U;
+  failed_frozen.stop_reason = flux::RegionalBundleStopReason::spline_realization_failed;
+  failed_frozen.frozen_copper_conflicts.push_back({candidate_fragment.id, continuation.id,
+      LayerId{"B.Cu"}, Nanometres{200000}, "synthetic-clearance"});
+  frozen_regional.bundle_assignments = {failed_frozen};
+  const auto outside_diagnoses = flux::diagnose_regional_routability(frozen_regional);
+  require(std::any_of(outside_diagnoses.begin(), outside_diagnoses.end(), [&](const auto& d) {
+            return d.kind == flux::RoutabilityFailureKind::shove_deadlock &&
+                d.resource.layer == LayerId{"B.Cu"} &&
+                d.clearance_deficit == Nanometres{200000} &&
+                d.suggested_relaxation == flux::RoutabilityRelaxation::change_corridor &&
+                std::find(d.resource.nets.begin(), d.resource.nets.end(), candidate_fragment.id.net) !=
+                    d.resource.nets.end() &&
+                std::find(d.resource.nets.begin(), d.resource.nets.end(), continuation.id.net) !=
+                    d.resource.nets.end();
+          }),
+          "failed physical repair must feed both candidate and outside-blocker nets upstream");
+  flux::RegionalRouterConfig scope_config;
+  scope_config.frozen_copper_context = true;
+  scope_config.expand_frozen_copper_scope = true;
+  require(!flux::regional_frozen_scope_retry_pending(frozen_regional, scope_config, 2U),
+          "early ownership expansion is opt-in until benchmarked");
+  scope_config.prioritize_frozen_scope_expansion = true;
+  require(flux::regional_frozen_scope_retry_pending(frozen_regional, scope_config, 2U) &&
+              scope_config.frozen_copper_scope_witnesses.empty(),
+          "a new outside witness schedules expansion without mutating the current scope");
+  require(!flux::regional_frozen_scope_retry_pending(frozen_regional, scope_config, 0U),
+          "the final allowed scope must retain all same-scope repair algorithms");
+  frozen_regional.spline_candidate_available = true;
+  require(!flux::regional_frozen_scope_retry_pending(frozen_regional, scope_config, 2U),
+          "a certified candidate must not be replaced by a scope retry");
+  frozen_regional.spline_candidate_available = false;
+  require(flux::append_regional_frozen_scope_witnesses(frozen_regional, scope_config) &&
+              scope_config.frozen_copper_scope_witnesses.size() == 1U &&
+              scope_config.frozen_copper_scope_witnesses.front().blocker == continuation.id,
+          "an unresolved candidate must carry its exact outside fragment across layer changes");
+  require(!flux::append_regional_frozen_scope_witnesses(frozen_regional, scope_config),
+          "repeated identical frozen conflicts must not spend another scope retry");
+  require(!flux::regional_frozen_scope_retry_pending(frozen_regional, scope_config, 1U),
+          "duplicate witnesses must not bypass the remaining local repair search");
+  scope_config.frozen_copper_scope_witnesses.clear();
+  frozen_regional.bundle_assignments.front().stop_reason = flux::RegionalBundleStopReason::complete;
+  require(flux::diagnose_regional_routability(frozen_regional).empty(),
+          "a now-legal candidate must not rip up its former outside blocker");
+  require(!flux::append_regional_frozen_scope_witnesses(frozen_regional, scope_config),
+          "rejections from a now-legal candidate must not enlarge scope");
+  frozen_regional.bundle_assignments.front().stop_reason = flux::RegionalBundleStopReason::spline_realization_failed;
+  frozen_regional.windows.front().owned_fragments.push_back(continuation.id);
+  require(!flux::append_regional_frozen_scope_witnesses(frozen_regional, scope_config),
+          "already jointly owned fragments must not be treated as outside blockers");
+  auto scene_regional = native_plan.regional;
+  scene_regional.native_realization_manifest_available = true;
+  scene_regional.native_realization_manifest = {native_realization};
+  flux::GlobalRoutePath outside_path{
+      NetId{"outside-net"},
+      0U,
+      {{mm(50.0, 20.0), LayerId{"F.Cu"}}, {mm(50.0, 50.0), LayerId{"F.Cu"}}}};
+  scene_regional.spline_candidate_paths.push_back(outside_path);
+  flux::assess_regional_native_scene(scene_source, scene_regional);
+  require(
+      scene_regional.native_scene_conflicts > 0U &&
+          scene_regional.native_scene_fixed_conflicts == 0U &&
+          !scene_regional.spline_candidate_available && !scene_regional.complete() &&
+          !scene_regional.local_routability_diagnoses.empty(),
+      "outside-window provisional copper must become a repair obligation, not an accepted handoff");
+  require(std::any_of(scene_regional.local_routability_diagnoses.begin(),
+                      scene_regional.local_routability_diagnoses.end(), [](const auto& diagnosis) {
+        return diagnosis.resource.stable_id.starts_with("native-scene:") &&
+               diagnosis.detail.find("object=") != std::string::npos &&
+               diagnosis.detail.find("provisional=yes") != std::string::npos;
+      }), "last native-scene diagnoses must preserve materialized object provenance");
+  auto outside_native = native_realization;
+  outside_native.fragment.net = outside_path.net;
+  outside_native.centerline = {mm(50.0, 20.0), mm(50.0, 50.0)};
+  outside_native.native_pieces = {
+      {flux::SplineFittedPieceKind::segment, mm(50.0, 20.0), {}, mm(50.0, 50.0), 0.0L, 1.0L}};
+  scene_regional.native_realization_manifest.push_back(outside_native);
+  flux::assess_regional_native_scene(scene_source, scene_regional);
+  require(scene_regional.native_scene_fixed_conflicts > 0U &&
+              !scene_regional.spline_candidate_available,
+          "two independently legal native windows must not publish a mutually conflicting scene");
+  auto via_scene = native_plan.regional;
+  via_scene.native_realization_manifest_available = true;
+  via_scene.native_realization_manifest = {native_realization};
+  outside_path.points = {{mm(50.0, 20.0), LayerId{"F.Cu"}},
+                         {mm(50.0, 30.0), LayerId{"F.Cu"}},
+                         {mm(50.0, 30.0), LayerId{"B.Cu"}},
+                         {mm(50.0, 50.0), LayerId{"B.Cu"}}};
+  via_scene.spline_candidate_paths.push_back(outside_path);
+  flux::assess_regional_native_scene(scene_source, via_scene);
+  require(via_scene.native_scene_fixed_conflicts > 0U && !via_scene.spline_candidate_available,
+          "proposed via copper must participate in the assembled native acceptance scene");
+  // Planar centres fit, but a proposed via's larger envelope does not. This is the local
+  // candidate-scene gap: both the new via and a neighbouring curve need checking together.
+  auto via_source = scene_source;
+  via_source.tracks.push_back({ObjectId{"__flux-candidate-via-0"}, source.nets.front().id,
+      LayerId{"B.Cu"}, mm(40.0, 35.0), mm(60.0, 35.0), stub.width, false});
+  flux::RegionalViaChoice proposed;
+  proposed.net = NetId{"outside-net"};
+  proposed.site = mm(50.0, 34.5);
+  proposed.span = {LayerId{"F.Cu"}, LayerId{"B.Cu"}};
+  const auto via_rules = flux::resolve_net_routing_rules(via_source, proposed.net);
+  auto planar_scene = via_source;
+  planar_scene.tracks.push_back({ObjectId{"planar-via-run"}, proposed.net, LayerId{"B.Cu"},
+      mm(49.0, 34.5), mm(51.0, 34.5), stub.width, false});
+  require(flux::check_copper_rules(planar_scene).violations.empty(),
+          "parallel 0.25 mm traces 0.5 mm apart must fit the synthetic channel");
+  std::map<std::string, std::vector<flux::RegionalRouteFragmentId>> via_owners;
+  std::vector<std::pair<flux::RegionalRouteFragmentId, flux::RegionalViaChoice>> selected_vias{
+      {stub.id, proposed}, {continuation.id, proposed}};
+  auto local_vias = flux::build_regional_candidate_via_context(via_source, selected_vias, via_owners);
+  require(local_vias && local_vias->vias.size() == via_source.vias.size() + 1U &&
+              via_owners.size() == 1U && via_owners.begin()->second.size() == 2U &&
+              local_vias->vias.back().diameter == via_rules.via_diameter &&
+              local_vias->vias.back().drill == via_rules.via_drill &&
+              local_vias->vias.back().id != via_source.tracks.back().id &&
+              via_source.vias.size() == scene_source.vias.size(),
+          "local candidate vias use assembly rules, preserve source, and deduplicate all owners");
+  const auto local_via_drc = flux::check_copper_rules(*local_vias);
+  require(std::any_of(local_via_drc.violations.begin(), local_via_drc.violations.end(),
+              [](const auto& violation) { return violation.kind == flux::CopperViolationKind::track_via_clearance; }),
+          "candidate via copper must expose a collision invisible to planar local validation");
+  auto reused_vias = flux::build_regional_candidate_via_context(*local_vias, selected_vias, via_owners);
+  require(reused_vias && reused_vias->vias.size() == local_vias->vias.size() && via_owners.empty(),
+          "existing same-net span-covering vias must be reused, not duplicated");
+  auto pad_via_source = via_source;
+  Footprint via_pad;
+  via_pad.id = ObjectId{"candidate-via-pad-owner"};
+  via_pad.position = proposed.site;
+  flux::Pad plated_via_pad{ObjectId{"candidate-via-pad"}, proposed.net, Point{}, proposed.span};
+  plated_via_pad.plated = true;
+  plated_via_pad.drill_width = Nanometres::from_mm(0.6);
+  plated_via_pad.drill_height = plated_via_pad.drill_width;
+  via_pad.pads.push_back(plated_via_pad);
+  pad_via_source.footprints.push_back(via_pad);
+  auto reused_pad = flux::build_regional_candidate_via_context(pad_via_source, selected_vias, via_owners);
+  require(reused_pad && reused_pad->vias.size() == pad_via_source.vias.size() && via_owners.empty(),
+          "a same-net plated hole covering the full span must replace a candidate via");
+  pad_via_source.footprints.back().pads.back().plated = false;
+  auto unplated_pad = flux::build_regional_candidate_via_context(pad_via_source, selected_vias, via_owners);
+  require(unplated_pad && unplated_pad->vias.size() == pad_via_source.vias.size() + 1U,
+          "an unplated hole must not falsely provide a copper layer transition");
+  selected_vias.front().second.span = {LayerId{"F.Cu"}};
+  require(!flux::build_regional_candidate_via_context(via_source, selected_vias, via_owners) &&
+              via_owners.empty(), "invalid candidate via spans must fail closed");
+  flux::RoutabilityDiagnosis local_diagnosis;
+  local_diagnosis.suggested_relaxation =
+      flux::RoutabilityRelaxation::increase_local_clearance_margin;
+  flux::RoutabilityDiagnosis regional_diagnosis;
+  regional_diagnosis.suggested_relaxation = flux::RoutabilityRelaxation::change_via_site;
+  flux::RoutabilityDiagnosis global_diagnosis;
+  global_diagnosis.suggested_relaxation = flux::RoutabilityRelaxation::replan_global_topology;
+  require(flux::materialization_feedback_scope(local_diagnosis) ==
+                  flux::MaterializationFeedbackResult::Scope::local_geometry &&
+              flux::materialization_feedback_scope(regional_diagnosis) ==
+                  flux::MaterializationFeedbackResult::Scope::regional &&
+              flux::materialization_feedback_scope(global_diagnosis) ==
+                  flux::MaterializationFeedbackResult::Scope::global,
+          "exact failures must dispatch to their nearest capable feedback loop");
   auto branched_source = source;
   auto third_terminal = source.footprints.front();
   third_terminal.id = ObjectId{"U3-branch"};
@@ -741,6 +3217,7 @@ void global_to_detailed_route_is_transactional_and_capacity_gated() {
       flux::materialize_detailed_route(branched_source, branched_route, branched_detail_config);
   require(branched_route.complete() && branched_route.static_seed_complete_trees >= 1U &&
               branched_route.static_seed_tree_joins >= 1U &&
+              branched_route.static_seed_tree_attachment_nodes >= 1U &&
               branched_route.iteration_zero_paths == 2U &&
               branched_detail.connectivity.open_connections == 0U,
           "later branches must attach only to the first terminal portal that acquired physical "
@@ -876,6 +3353,29 @@ void global_to_detailed_route_is_transactional_and_capacity_gated() {
   require(policy_changed_route.reused_nets.empty() && policy_changed_route.reused_paths == 0U &&
               !policy_changed_route.rerouted_nets.empty(),
           "incremental routing must invalidate later-ring paths when access policy changes");
+
+  auto terrain_changed_config = diversified_config;
+  auto terrain_copper = source;
+  terrain_copper.tracks.push_back({ObjectId{"live-terrain-test"}, NetId{"foreign-copper"},
+                                   LayerId{"F.Cu"}, mm(48.0, 50.0), mm(48.0, 52.0),
+                                   Nanometres::from_mm(0.25), false});
+  terrain_changed_config.live_copper_terrain =
+      flux::make_live_copper_terrain_snapshot(terrain_copper, true, 4096U);
+  terrain_changed_config.live_copper_terrain_revision = 1U;
+  const auto terrain_changed_route = flux::route_global_incremental(
+      source, diversified_route, {}, terrain_changed_config, {}, nullptr, true);
+  require(terrain_changed_route.reused_nets.empty() &&
+              terrain_changed_route.reused_paths == 0U &&
+              !terrain_changed_route.rerouted_nets.empty() &&
+              terrain_changed_route.configured_live_copper_terrain ==
+                  terrain_changed_config.live_copper_terrain,
+          "changed copper terrain must regenerate even otherwise preserved incremental routes");
+  const auto terrain_ripped_route = flux::route_global_incremental(
+      source, terrain_changed_route, {}, diversified_config, {}, nullptr, true);
+  require(terrain_ripped_route.reused_paths == 0U &&
+              !terrain_ripped_route.rerouted_nets.empty() &&
+              terrain_ripped_route.configured_live_copper_terrain.features.empty(),
+          "ripped copper must invalidate old proposals and remove their occupancy snapshot");
 
   auto trapped_source = source;
   trapped_source.nets.push_back(Net{NetId{"blocker-net"}, "BLOCKER", 0});
@@ -1476,8 +3976,8 @@ void global_to_detailed_route_is_transactional_and_capacity_gated() {
   const auto unfilled_route = flux::route_global(unfilled_source, refillable_config);
   const auto unfilled_default_detail =
       flux::materialize_detailed_route(unfilled_source, unfilled_route);
-  const auto unfilled_provisional_detail = flux::materialize_detailed_route(
-      unfilled_source, unfilled_route, refillable_detail_config);
+  const auto unfilled_provisional_detail =
+      flux::materialize_detailed_route(unfilled_source, unfilled_route, refillable_detail_config);
   require(!immutable_fill_route.complete() && refillable_route.complete() &&
               immutable_fill_route.bidirectional_route_growth_enabled &&
               immutable_fill_route.configured_bidirectional_route_growth_start_iteration == 1U &&
@@ -1507,12 +4007,56 @@ void global_to_detailed_route_is_transactional_and_capacity_gated() {
   contradictory_zone_source.zones.front().fills = {
       flux::CopperZoneFill{LayerId{"F.Cu"}, rectangle(45.0, 0.0, 55.0, 80.0), {}}};
   const auto contradictory_validation = flux::validate_board(contradictory_zone_source);
-  require(!contradictory_validation.ok() &&
-              std::any_of(contradictory_validation.issues.begin(),
-                          contradictory_validation.issues.end(), [](const auto& issue) {
-                            return issue.code == "contradictory_zone_refill_state";
-                          }),
+  require(!contradictory_validation.ok() && std::any_of(contradictory_validation.issues.begin(),
+                                                        contradictory_validation.issues.end(),
+                                                        [](const auto& issue) {
+                                                          return issue.code ==
+                                                                 "contradictory_zone_refill_state";
+                                                        }),
           "saved physical copper and a requires-refill marker must be mutually exclusive");
+}
+
+void arc_free_space_preserves_the_unswept_region() {
+  auto board = two_pad_board();
+  board.footprints.clear();
+  const flux::TrackArc arc{
+      ObjectId{"arc-obstacle"}, NetId{"net-1"}, LayerId{"F.Cu"},           mm(20.0, 30.0),
+      mm(50.0, 31.0),           mm(80.0, 30.0), Nanometres::from_mm(0.25), false};
+  const auto parameters = flux::geometry::circular_arc_parameters(arc.start, arc.middle, arc.end);
+  require(parameters.has_value(), "shallow arc fixture must be valid");
+  for (const bool reversed : {false, true}) {
+    auto oriented = arc;
+    if (reversed)
+      std::swap(oriented.start, oriented.end);
+    board.track_arcs = {oriented};
+    const auto free = flux::extract_polygonal_board_free_space(
+        board, {LayerId{"F.Cu"}, NetId{"net-1"}, true, false, false});
+    require(free.complete() && !free.domain.obstacles.empty() &&
+                free.domain.obstacles.size() == free.obstacle_ids.size() &&
+                free.domain.obstacles.size() == free.obstacle_nets.size(),
+            "arc envelope pieces must retain obstacle attribution");
+    const auto covered = [&](Point point) {
+      return std::any_of(free.domain.obstacles.begin(), free.domain.obstacles.end(),
+                         [&](const auto& polygon) {
+                           return flux::geometry::locate_point(polygon, point) !=
+                                  flux::geometry::PointLocation::outside;
+                         });
+    };
+    require(!covered(mm(50.0, 10.0)),
+            "the unoccupied interior of a shallow arc's supporting circle must remain free");
+    for (std::size_t sample = 0U; sample <= 100U; ++sample) {
+      const auto angle = parameters->start_angle_radians +
+                         parameters->sweep_radians * static_cast<long double>(sample) / 100.0L;
+      for (const auto offset : {-125'000.0L, 0.0L, 125'000.0L}) {
+        const auto radius = parameters->radius_nm + offset;
+        const Point point{Nanometres{static_cast<std::int64_t>(
+                              std::llround(parameters->center_x_nm + radius * std::cos(angle)))},
+                          Nanometres{static_cast<std::int64_t>(
+                              std::llround(parameters->center_y_nm + radius * std::sin(angle)))}};
+        require(covered(point), "conservative arc envelope must contain both copper boundaries");
+      }
+    }
+  }
 }
 
 void quintic_ph_geometry_preserves_invariants_and_exact_offsets() {
@@ -1528,8 +4072,7 @@ void quintic_ph_geometry_preserves_invariants_and_exact_offsets() {
           "centripetal parameter selection must retain order and de-emphasize a long chord");
 
   auto local_rebuild = flux::make_quintic_ph_route(
-      {mm(0.0, 0.0), mm(4.0, 1.0), mm(8.0, 0.0), mm(12.0, 1.0), mm(16.0, 0.0),
-       mm(20.0, 0.5)});
+      {mm(0.0, 0.0), mm(4.0, 1.0), mm(8.0, 0.0), mm(12.0, 1.0), mm(16.0, 0.0), mm(20.0, 0.5)});
   require(local_rebuild.has_value(), "local PH rebuild fixture must interpolate");
   auto complete_rebuild = *local_rebuild;
   local_rebuild->control_points[2U].y += mm_value(0.35L);
@@ -1628,6 +4171,50 @@ void quintic_ph_geometry_preserves_invariants_and_exact_offsets() {
       flux::make_quintic_ph_route({mm(0.0, 0.0), mm(8.0, 0.0), mm(14.0, 5.0), mm(22.0, 5.0)});
   require(chain.has_value() && chain->tangent_continuous && chain->segments.size() == 3U,
           "multi-segment PH interpolation must construct a C1 chain");
+  flux::NativeSplineFitConfig one_pass_native_fit;
+  one_pass_native_fit.maximum_refinement_attempts = 1U;
+  flux::NativeSplineFitStats native_fit_stats;
+  const auto native_fit =
+      flux::fit_quintic_ph_to_native_copper(*chain, one_pass_native_fit, {}, &native_fit_stats);
+  require(!native_fit.empty() && flux::native_spline_max_join_angle(native_fit) <= 0.035L,
+          "native fitting must bound quantized arc/line join angles independently of PH G1/G2");
+  require(native_fit_stats.attempts == 1U && native_fit_stats.peak_samples >= 2U,
+          "native fitting diagnostics must expose the bounded refinement and sample workload");
+  for (std::size_t sample = 0U; sample <= 128U; ++sample) {
+    const auto evaluated =
+        flux::evaluate_quintic_ph(*chain, static_cast<long double>(sample) / 128.0L);
+    const Point point{Nanometres{static_cast<std::int64_t>(std::llround(evaluated.x))},
+                      Nanometres{static_cast<std::int64_t>(std::llround(evaluated.y))}};
+    auto distance = std::numeric_limits<long double>::infinity();
+    for (const auto& piece : native_fit)
+      distance = std::min(
+          distance, piece.kind == flux::SplineFittedPieceKind::circular_arc
+                        ? flux::geometry::point_circular_arc_distance_nm(point, piece.start,
+                                                                         piece.middle, piece.end)
+                        : flux::geometry::point_segment_distance_nm(point, piece.start, piece.end));
+    require(distance <= 40'002.0L,
+            "tangent-matched native fitting must also retain the PH positional tolerance");
+  }
+  one_pass_native_fit.maximum_pieces = 1U;
+  require(flux::fit_quintic_ph_to_native_copper(*chain, one_pass_native_fit).empty(),
+          "biarc fitting must fail closed when its native piece budget cannot fit the route");
+  const std::vector<flux::SplineFittedPiece> kink{
+      {flux::SplineFittedPieceKind::segment, mm(0.0, 0.0), {}, mm(1.0, 0.0), 0.0L, 0.5L},
+      {flux::SplineFittedPieceKind::segment, mm(1.0, 0.0), {}, mm(1.0, 1.0), 0.5L, 1.0L}};
+  require(flux::native_spline_max_join_angle(kink) > 1.5L,
+          "native smoothness validation must detect positional-only right-angle joins");
+  auto cancelled_chain = *chain;
+  const auto original_segments = cancelled_chain.segments;
+  std::stop_source cancelled_promotion;
+  cancelled_promotion.request_stop();
+  require(!flux::enforce_quintic_ph_continuity(cancelled_chain, flux::PHJoinContinuity::curvature,
+                                               1.0e-10L, 24U, cancelled_promotion.get_token()) &&
+              std::equal(cancelled_chain.segments.begin(), cancelled_chain.segments.end(),
+                         original_segments.begin(), original_segments.end(),
+                         [](const auto& a, const auto& b) {
+                           return a.bezier == b.bezier && a.preimage == b.preimage;
+                         }),
+          "cancelled G2 promotion must leave the G1 candidate unchanged");
   for (std::size_t join = 1U; join < chain->segments.size(); ++join) {
     const auto& left = chain->segments[join - 1U].bezier;
     const auto& right = chain->segments[join].bezier;
@@ -1656,11 +4243,49 @@ void quintic_ph_geometry_preserves_invariants_and_exact_offsets() {
       {mm_value(5.0L), -mm_value(5.0L)}, {mm_value(5.0L), mm_value(5.0L)}, {0.0L, mm_value(10.0L)},
       {0.0L, mm_value(10.0L)});
   require(horizontal && vertical, "orthogonal PH intersection fixtures must interpolate");
+  const auto far_parallel = flux::interpolate_quintic_ph_segment(
+      {0.0L, mm_value(2.0L)}, {mm_value(10.0L), mm_value(2.0L)},
+      {mm_value(10.0L), 0.0L}, {mm_value(10.0L), 0.0L});
+  require(far_parallel.has_value(), "parallel PH clearance fixture must interpolate");
+  const auto horizontal_certificate = flux::prepare_quintic_ph_segment_certificate(*horizontal);
+  const auto repeated_horizontal_certificate =
+      flux::prepare_quintic_ph_segment_certificate(*horizontal);
+  const auto vertical_certificate = flux::prepare_quintic_ph_segment_certificate(*vertical);
+  const auto far_parallel_certificate =
+      flux::prepare_quintic_ph_segment_certificate(*far_parallel);
+  flux::PHCenterlineClearanceStats separated_stats;
+  const auto separated_verdict = flux::certify_quintic_ph_segment_clearance(
+      horizontal_certificate, far_parallel_certificate, mm_value(0.5L), Nanometres{10},
+      16'384U, &separated_stats);
+  flux::PHCenterlineClearanceStats collision_stats;
+  const auto collision_verdict = flux::certify_quintic_ph_segment_clearance(
+      horizontal_certificate, vertical_certificate, mm_value(0.5L), Nanometres{10}, 16'384U,
+      &collision_stats);
+  const auto tangent_parallel = flux::interpolate_quintic_ph_segment(
+      {0.0L, mm_value(0.5L)}, {mm_value(10.0L), mm_value(0.5L)},
+      {mm_value(10.0L), 0.0L}, {mm_value(10.0L), 0.0L});
+  require(tangent_parallel.has_value(), "near-tangent PH precision fixture must interpolate");
+  flux::PHCenterlineClearanceStats tangent_stats;
+  const auto tangent_verdict = flux::certify_quintic_ph_segment_clearance(
+      flux::prepare_quintic_ph_segment_certificate(*horizontal, 1U),
+      flux::prepare_quintic_ph_segment_certificate(*tangent_parallel, 1U), mm_value(0.5L),
+      Nanometres{0}, 16U, &tangent_stats);
+  require(horizontal_certificate.geometry_fingerprint ==
+                  repeated_horizontal_certificate.geometry_fingerprint &&
+              separated_verdict == flux::PHCenterlineClearanceVerdict::separated &&
+              separated_stats.double_separation_proofs > 0U &&
+              collision_verdict == flux::PHCenterlineClearanceVerdict::colliding &&
+              collision_stats.long_double_collision_proofs > 0U &&
+              tangent_verdict == flux::PHCenterlineClearanceVerdict::ambiguous &&
+              tangent_stats.multiprecision_comparisons > 0U,
+          "prepared PH certificate trees must deterministically prove common separated and "
+          "colliding curve pairs and reserve multiprecision for degenerate contacts before "
+          "rational-offset isolation");
   flux::PHOffsetIntersectionStats offset_stats;
-  const auto intersections = flux::intersect_quintic_ph_offsets(
-      flux::make_quintic_ph_offset(*horizontal, 0.0L),
-      flux::make_quintic_ph_offset(*vertical, 0.0L), Nanometres{10}, 18U, 64U, 1'000'000U,
-      &offset_stats);
+  const auto intersections =
+      flux::intersect_quintic_ph_offsets(flux::make_quintic_ph_offset(*horizontal, 0.0L),
+                                         flux::make_quintic_ph_offset(*vertical, 0.0L),
+                                         Nanometres{10}, 18U, 64U, 1'000'000U, &offset_stats);
   require(std::any_of(intersections.begin(), intersections.end(),
                       [&](const auto& intersection) {
                         return std::hypotl(intersection.position.x - mm_value(5.0L),
@@ -1671,10 +4296,10 @@ void quintic_ph_geometry_preserves_invariants_and_exact_offsets() {
               !offset_stats.node_budget_exhausted,
           "rational-offset certificates must expose subdivision work and budget exhaustion");
   flux::PHOffsetIntersectionStats exhausted_offset_stats;
-  static_cast<void>(flux::intersect_quintic_ph_offsets(
-      flux::make_quintic_ph_offset(*horizontal, 0.0L),
-      flux::make_quintic_ph_offset(*vertical, 0.0L), Nanometres{10}, 18U, 64U, 1U,
-      &exhausted_offset_stats));
+  static_cast<void>(
+      flux::intersect_quintic_ph_offsets(flux::make_quintic_ph_offset(*horizontal, 0.0L),
+                                         flux::make_quintic_ph_offset(*vertical, 0.0L),
+                                         Nanometres{10}, 18U, 64U, 1U, &exhausted_offset_stats));
   require(exhausted_offset_stats.node_budget_exhausted,
           "bounded rational-offset isolation must explicitly report an exhausted node budget");
   const auto displaced_intersections = flux::intersect_quintic_ph_offsets(
@@ -1695,17 +4320,20 @@ void quintic_ph_geometry_preserves_invariants_and_exact_offsets() {
            a.maximum_y_nm >= b.minimum_y_nm && b.maximum_y_nm >= a.minimum_y_nm;
   };
   require(horizontal_hulls.size() == 16U && far_vertical_hulls.size() == 16U &&
-              std::none_of(horizontal_hulls.begin(), horizontal_hulls.end(), [&](const auto& a) {
-                return std::any_of(far_vertical_hulls.begin(), far_vertical_hulls.end(),
-                                   [&](const auto& b) { return hulls_overlap(a, b); });
-              }),
+              std::none_of(horizontal_hulls.begin(), horizontal_hulls.end(),
+                           [&](const auto& a) {
+                             return std::any_of(far_vertical_hulls.begin(),
+                                                far_vertical_hulls.end(),
+                                                [&](const auto& b) { return hulls_overlap(a, b); });
+                           }),
           "fixed-depth rational-offset hulls must conservatively reject separated curves");
 
-  flux::PHInterpolationConfig c2;
-  c2.continuity = flux::PHJoinContinuity::curvature;
-  const auto c2_line = flux::make_quintic_ph_route({mm(0.0, 0.0), mm(5.0, 0.0), mm(10.0, 0.0)}, c2);
-  require(c2_line && c2_line->curvature_continuous,
-          "explicit higher-order PH joining must certify a curvature-continuous case");
+  flux::PHInterpolationConfig g2;
+  g2.continuity = flux::PHJoinContinuity::curvature;
+  const auto g2_line = flux::make_quintic_ph_route({mm(0.0, 0.0), mm(5.0, 0.0), mm(10.0, 0.0)}, g2);
+  require(g2_line && g2_line->curvature_continuous &&
+              flux::quintic_ph_max_curvature_jump(*g2_line) <= g2.curvature_tolerance_per_nm,
+          "explicit geometric-G2 PH joining must certify scalar curvature continuity");
 
   auto cell_crossing = flux::make_quintic_ph_route({mm(0.0, 0.0), mm(10.0, 0.0), mm(20.0, 0.0)});
   Polygon left_cell;
@@ -1900,6 +4528,362 @@ void constrained_ph_rebound_avoids_inter_sample_obstacle() {
               "/moves=" + std::to_string(optimized.accepted_control_moves) +
               "/sample-clearance=" + std::to_string(sampled_clearance_failures) +
               "/min-speed=" + std::to_string(static_cast<double>(minimum_sample_speed)));
+
+  flux::RegionalViaChoice via;
+  via.net = NetId{"via-net"};
+  via.site = mm(20.0, 10.5);
+  via.span = {LayerId{"F.Cu"}, LayerId{"B.Cu"}};
+  via.diameter = Nanometres::from_mm(0.6);
+  const auto trace_width = Nanometres::from_mm(0.25);
+  const auto trace_clearance = Nanometres::from_mm(0.2);
+  const auto via_clearance = [&](flux::SplineVector point) {
+    return flux::regional_candidate_via_clearance(NetId{"trace-net"}, LayerId{"B.Cu"},
+        trace_width, trace_clearance, point, {via}, trace_clearance);
+  };
+  const auto probe = via_clearance({20'000'000.0L, 10'000'000.0L});
+  require(std::abs(probe.clearance_nm + 125'000.0L) < 0.5L && probe.obstacle_normal.y < 0,
+          "via guidance must use copper radius plus half trace width and maximum clearance");
+  const std::vector<flux::RoutingComputePoint> via_queries(64U,
+      {20'000'000, 10'000'000, 325'000, 1U, 0U});
+  const std::vector<flux::RoutingComputeSegment> via_disks(64U,
+      {20'000'000, 10'500'000, 20'000'000, 10'500'000, 500'000, 1U, 1U});
+  for (const bool prefer_gpu : {false, true}) {
+    const auto broad = flux::probe_routing_proximity(via_queries, via_disks, 1'024, prefer_gpu);
+    require(broad.ok() && broad.queries.size() == via_queries.size() &&
+                std::all_of(broad.queries.begin(), broad.queries.end(),
+                    [](const auto& item) { return item.possible_conflict; }),
+            "CPU/GPU proximity must preserve candidate-via disks as collision candidates");
+  }
+  require(std::isinf(flux::regional_candidate_via_clearance(via.net, LayerId{"B.Cu"},
+              trace_width, trace_clearance, {20'000'000.0L, 10'000'000.0L}, {via}, trace_clearance).clearance_nm) &&
+          std::isinf(flux::regional_candidate_via_clearance(NetId{"trace-net"}, LayerId{"In1.Cu"},
+              trace_width, trace_clearance, {20'000'000.0L, 10'000'000.0L}, {via}, trace_clearance).clearance_nm),
+          "same-net copper and layers outside the via span must not create guidance pressure");
+  auto via_spline = flux::make_quintic_ph_route(std::vector<Point>{mm(10.0, 10.0), mm(30.0, 10.0)});
+  require(via_spline && flux::set_quintic_ph_corridor(*via_spline, {corridor}),
+          "via-guided rebound must preserve the original selected corridor");
+  require(!flux::certify_quintic_ph_continuous_envelope(*via_spline, Nanometres{0}, via_clearance).legal,
+          "the unsmoothed trace must expose the inter-sample via envelope collision");
+  auto bounded_via_spline = *via_spline;
+  flux::SplineTrajectoryOptimizationConfig regional_budget;
+  regional_budget.control_step = Nanometres::from_mm(0.2);
+  regional_budget.gradient_probe_step = Nanometres::from_mm(0.04);
+  regional_budget.maximum_corridor_displacement = Nanometres::from_mm(2.0);
+  regional_budget.samples = 32U;
+  regional_budget.maximum_iterations = 2U;
+  regional_budget.maximum_candidate_checks = 64U;
+  const auto bounded_via = flux::optimize_quintic_ph_trajectory(
+      bounded_via_spline, regional_budget, via_clearance);
+  require(bounded_via.accepted && bounded_via.legal && !bounded_via.budget_exhausted &&
+              flux::certify_quintic_ph_continuous_envelope(
+                  bounded_via_spline, Nanometres{0}, via_clearance).legal,
+          "the ordinary regional two-iteration/64-check budget must solve the isolated via rebound");
+  const auto via_optimized = flux::optimize_quintic_ph_trajectory(*via_spline, config, via_clearance);
+  require(via_optimized.accepted && flux::certify_quintic_ph_shape(*via_spline).legal &&
+              flux::certify_quintic_ph_continuous_envelope(*via_spline, Nanometres{0}, via_clearance).legal,
+          "existing trajectory optimisation must bend around a full via envelope without changing topology");
+  Board native_via_board;
+  native_via_board.outline = rectangle(0.0, 0.0, 40.0, 20.0);
+  native_via_board.layers = {{LayerId{"F.Cu"}, "F.Cu", LayerKind::copper, 0},
+                             {LayerId{"B.Cu"}, "B.Cu", LayerKind::copper, 1}};
+  native_via_board.nets = {{NetId{"trace-net"}, "TRACE", 0}, {via.net, "VIA", 0}};
+  native_via_board.vias.push_back({ObjectId{"obstacle-via"}, via.net, via.site,
+      via.diameter, Nanometres::from_mm(0.3), via.span, false});
+  const auto via_native = flux::fit_quintic_ph_to_native_copper(*via_spline, {});
+  require(!via_native.empty(), "via rebound must have a native copper realization");
+  for (std::size_t index = 0; index < via_native.size(); ++index) {
+    const auto& piece = via_native[index];
+    const ObjectId id{"via-rebound-" + std::to_string(index)};
+    if (piece.kind == flux::SplineFittedPieceKind::circular_arc)
+      native_via_board.track_arcs.push_back({id, NetId{"trace-net"}, LayerId{"B.Cu"},
+          piece.start, piece.middle, piece.end, trace_width, false});
+    else
+      native_via_board.tracks.push_back({id, NetId{"trace-net"}, LayerId{"B.Cu"},
+          piece.start, piece.end, trace_width, false});
+  }
+  require(flux::check_copper_rules(native_via_board).violations.empty(),
+          "via-guided rebound must remain legal after fitting actual copper arcs and segments");
+}
+
+void curved_ph_materialization_is_exact_and_drc_clean() {
+  auto curved_source = two_pad_board();
+  curved_source.nets.push_back(Net{NetId{"arc-blocker-net"}, "ARC_BLOCKER", 0});
+  curved_source.tracks.push_back(
+      flux::TrackSegment{ObjectId{"arc-radius-blocker"}, NetId{"arc-blocker-net"}, LayerId{"F.Cu"},
+                         mm(49.3, 40.39), mm(49.3, 40.7), Nanometres::from_mm(0.1), true});
+  flux::GlobalRouteResult curved_global;
+  curved_global.stop_reason = GlobalRouterStopReason::complete;
+  flux::GlobalRoutePath curved_path;
+  curved_path.net = NetId{"net-1"};
+  curved_path.points = {{mm(20.0, 40.0), LayerId{"F.Cu"}},
+                        {mm(50.0, 40.0), LayerId{"F.Cu"}},
+                        {mm(50.0, 60.0), LayerId{"F.Cu"}},
+                        {mm(80.0, 60.0), LayerId{"F.Cu"}},
+                        {mm(80.0, 40.0), LayerId{"F.Cu"}}};
+  curved_global.paths.push_back(std::move(curved_path));
+  const auto curved_seed = flux::make_quintic_ph_route(std::vector<Point>{
+      mm(20.0, 40.0), mm(50.0, 40.0), mm(50.0, 60.0), mm(80.0, 60.0), mm(80.0, 40.0)});
+  require(curved_seed.has_value(), "curved materialization fixture must form a spline seed");
+  const auto curved_seed_shape = flux::certify_quintic_ph_shape(*curved_seed);
+  flux::DetailedRouterConfig curved_config;
+  curved_config.pull_tight_45_degrees = false;
+  curved_config.continuous_refinement = false;
+  curved_config.circular_arc_refinement = true;
+  curved_config.spline_minimum_bend_radius = Nanometres{0};
+  curved_config.maximum_circular_arc_radius = Nanometres::from_mm(1.0);
+  const auto curved = flux::materialize_detailed_route(curved_source, curved_global, curved_config);
+  require(curved.complete() && curved.candidate && curved.fitted_cubic_beziers > 0U &&
+              !curved.candidate->track_beziers.empty() &&
+              curved.attempted_quintic_ph_runs > 0U &&
+              curved.spline_g2_promotion_attempts > 0U &&
+              curved.spline_g2_promotions > 0U &&
+              curved.spline_g2_promotions + curved.spline_g2_fallbacks ==
+                  curved.spline_g2_promotion_attempts &&
+              curved.adaptive_spline_tessellation_samples > curved.fitted_circular_arcs &&
+              curved.unrounded_non_junction_bends == 0U && curved.copper_drc.ok(),
+          "a bent route must be adaptively fitted from a quintic PH curve to connected DRC-clean "
+          "native cubic copper: " +
+              std::to_string(curved.adaptive_spline_tessellation_samples) + "/" +
+              std::to_string(curved.fitted_cubic_beziers) +
+              "/runs=" + std::to_string(curved.attempted_quintic_ph_runs) + "/" +
+              std::to_string(curved.fitted_quintic_ph_runs) +
+              "/g2=" + std::to_string(curved.spline_g2_promotions) + "/" +
+              std::to_string(curved.spline_g2_promotion_attempts) +
+              "/complete=" + std::to_string(curved.complete()) +
+              "/nav=" + std::to_string(curved.spline_navmesh_routes) + "/" +
+              std::to_string(curved.spline_navmesh_failures) +
+              "/traj=" + std::to_string(curved.spline_trajectory_accepted) + "/" +
+              std::to_string(curved.spline_trajectory_initial_violations) + "->" +
+              std::to_string(curved.spline_trajectory_final_violations) + "/" +
+              std::to_string(curved.spline_trajectory_initial_shape_violations) + "->" +
+              std::to_string(curved.spline_trajectory_final_shape_violations) + "/continuous=" +
+              std::to_string(curved.spline_trajectory_initial_continuous_violations) + "->" +
+              std::to_string(curved.spline_trajectory_final_continuous_violations) +
+              "/moves=" + std::to_string(curved.spline_trajectory_control_moves) +
+              "/checks=" + std::to_string(curved.spline_trajectory_candidate_checks) + "/" +
+              std::to_string(curved_seed_shape.self_intersections) + "/" +
+              std::to_string(curved_seed_shape.cusps) + "/" +
+              std::to_string(curved_seed_shape.station_reversals) + "/" +
+              std::to_string(curved_seed_shape.excess_turn_violations) + "/" +
+              curved.spline_navmesh_last_diagnostic + "/topology=" +
+              curved.spline_navmesh_last_topology_diagnostic + "/" + curved.diagnostic);
+
+  curved_config.defer_saved_zone_fill_clearance_to_refill = true;
+  const auto refillable_curve =
+      flux::materialize_detailed_route(curved_source, curved_global, curved_config);
+  require(refillable_curve.provisional_zone_refill_candidate() && refillable_curve.candidate &&
+              refillable_curve.fitted_cubic_beziers > 0U &&
+              !refillable_curve.candidate->track_beziers.empty() &&
+              !refillable_curve.fallback_polyline_materialization,
+          "a legal curved refill candidate must remain provisional without being mistaken for a "
+          "failed curved transaction");
+}
+
+void exact_copper_witnesses_preserve_branch_identity() {
+  Board board;
+  board.outline = rectangle(0, 0, 30, 30);
+  board.layers = {{LayerId{"F.Cu"}, "F.Cu", LayerKind::copper, 0}};
+  board.nets = {{NetId{"a"}, "A", 1}, {NetId{"b"}, "B", 2}};
+  flux::GlobalRoutePath carrier;
+  carrier.net = NetId{"a"};
+  carrier.points = {{mm(10, 15), LayerId{"F.Cu"}}, {mm(20, 15), LayerId{"F.Cu"}}};
+  auto tap = carrier;
+  tap.connection_index = 1U;
+  tap.points = {{mm(15, 20), LayerId{"F.Cu"}}, {mm(15, 15), LayerId{"F.Cu"}}};
+  auto crossing = carrier;
+  crossing.net = NetId{"b"};
+  crossing.points = {{mm(10, 10), LayerId{"F.Cu"}}, {mm(20, 20), LayerId{"F.Cu"}}};
+  flux::RegionalRouterConfig config;
+  config.enable_spline_realization = false;
+  config.enable_terminal_portal_templates = false;
+  config.max_alternative_template_checks = 1U;
+  config.max_joint_alternative_template_checks = 1U;
+  config.max_local_layer_bypass_checks = 1U;
+  config.max_same_layer_detour_checks = 0U;
+  config.max_confined_anisotropic_erosion_checks = 0U;
+  for (const bool split : {false, true}) {
+    flux::GlobalRouteResult global;
+    global.stop_reason = GlobalRouterStopReason::complete;
+    global.paths = {carrier, tap, crossing};
+    if (split) {
+      global.paths.front().points.insert(global.paths.front().points.begin() + 1,
+                                         {mm(15, 15), LayerId{"F.Cu"}});
+      std::reverse(global.paths.begin(), global.paths.end());
+    }
+    flux::QuantizedCopperOracleConfig oracle_config;
+    oracle_config.diagnosis_coalescing_pitch = Nanometres::from_mm(100);
+    const auto oracle = flux::probe_quantized_copper_feasibility(board, global, oracle_config);
+    require(!oracle.exact_copper_legal && oracle.diagnoses.size() == 2U,
+            "junction must expose both carrier/crossing and tap/crossing diagnoses");
+    const auto pair_count = std::accumulate(oracle.diagnoses.begin(), oracle.diagnoses.end(),
+        std::size_t{0}, [](auto count, const auto& d) { return count + d.source_segment_pairs.size(); });
+    require(pair_count == (split ? 3U : 2U),
+            "spatial coalescing must retain distinct exact segment pairs");
+    config.physical_conflict_witnesses = oracle.diagnoses;
+    const auto observed = flux::analyze_regional_conflicts(board, global, config);
+    require(observed.mapped_exact_copper_pairs == pair_count &&
+                observed.unmapped_exact_copper_pairs == 0U && observed.conflict_edges.size() == pair_count &&
+                observed.windows.size() == 1U &&
+                observed.windows.front().owned_fragments.size() == (split ? 4U : 3U),
+            "exact provenance must own both junction branches and retain an explicit shared vertex");
+    for (auto& d : config.physical_conflict_witnesses)
+      for (auto& pair : d.source_segment_pairs) pair.first.segment_index = 100U;
+    const auto stale_index = flux::analyze_regional_conflicts(board, global, config);
+    require(stale_index.conflict_edges.empty() && stale_index.unmapped_exact_copper_pairs == pair_count,
+            "stale edge identity must not fall back to a nearby unrelated branch");
+    config.physical_conflict_witnesses = oracle.diagnoses;
+    for (auto& d : config.physical_conflict_witnesses)
+      for (auto& pair : d.source_segment_pairs) pair.first.start = mm(1, 1);
+    const auto stale_geometry = flux::analyze_regional_conflicts(board, global, config);
+    require(stale_geometry.conflict_edges.empty() &&
+                stale_geometry.unmapped_exact_copper_pairs == pair_count,
+            "matching edge numbers cannot authorize provenance from changed source geometry");
+    config.physical_conflict_witnesses = oracle.diagnoses;
+    for (auto& d : config.physical_conflict_witnesses) d.resource.layer = LayerId{"B.Cu"};
+    const auto wrong_layer = flux::analyze_regional_conflicts(board, global, config);
+    require(wrong_layer.conflict_edges.empty() && wrong_layer.unmapped_exact_copper_pairs == pair_count,
+            "typed planar provenance must not cross the reported conflict layer");
+    config.physical_conflict_witnesses = oracle.diagnoses;
+    auto changed = global;
+    for (auto& path : changed.paths)
+      if (path.net == carrier.net && path.connection_index == carrier.connection_index)
+        path.points.front().position = mm(9, 15);
+    const auto stale_subsegment = flux::analyze_regional_conflicts(board, changed, config);
+    require(stale_subsegment.unmapped_exact_copper_pairs == 1U &&
+                stale_subsegment.mapped_exact_copper_pairs == pair_count - 1U,
+            "old endpoints inside an enlarged collinear fragment must still match the current source edge");
+  }
+}
+
+void exact_copper_witnesses_create_missing_regional_scope() {
+  Board board;
+  board.source_revision = "exact-witness-scope";
+  board.outline = rectangle(0.0, 0.0, 30.0, 30.0);
+  board.layers = {{LayerId{"F.Cu"}, "F.Cu", LayerKind::copper, 0}};
+  board.nets = {{NetId{"a"}, "A", 1}, {NetId{"b"}, "B", 2}};
+  flux::GlobalRouteResult global;
+  global.stop_reason = GlobalRouterStopReason::complete;
+  flux::GlobalRoutePath a;
+  a.net = NetId{"a"};
+  a.points = {{mm(10, 10), LayerId{"F.Cu"}}, {mm(20, 20), LayerId{"F.Cu"}}};
+  auto b = a;
+  b.net = NetId{"b"};
+  b.points = {{mm(10, 20), LayerId{"F.Cu"}}, {mm(20, 10), LayerId{"F.Cu"}}};
+  global.paths = {a, b};
+  flux::RegionalRouterConfig config;
+  config.enable_spline_realization = false;
+  config.enable_terminal_portal_templates = false;
+  config.max_alternative_template_checks = 1U;
+  config.max_joint_alternative_template_checks = 1U;
+  config.max_local_layer_bypass_checks = 1U;
+  config.max_same_layer_detour_checks = 0U;
+  config.max_confined_anisotropic_erosion_checks = 0U;
+  const auto unobserved = flux::analyze_regional_conflicts(board, global, config);
+  require(unobserved.conflict_edges.empty() && unobserved.windows.empty(),
+          "the synthetic global checkpoint deliberately has no sampled conflict witnesses");
+  flux::RoutabilityDiagnosis witness;
+  witness.kind = flux::RoutabilityFailureKind::packing_capacity_exceeded;
+  witness.stage = flux::RoutabilityFailureStage::final_validation;
+  witness.resource = {"exact-crossing", LayerId{"F.Cu"}, {mm(14, 14), mm(16, 16)},
+                      {NetId{"b"}, NetId{"a"}, NetId{"a"}}};
+  witness.clearance_deficit = Nanometres::from_mm(0.4);
+  config.physical_conflict_witnesses = {witness};
+  const auto observed = flux::analyze_regional_conflicts(board, global, config);
+  require(observed.source_exact_copper_witnesses == 1U &&
+              observed.mapped_exact_copper_pairs == 1U &&
+              observed.unmapped_exact_copper_pairs == 0U &&
+              observed.conflict_edges.size() == 1U && !observed.windows.empty() &&
+              observed.conflict_edges.front().exact_copper_sample_count == 1U &&
+              observed.conflict_edges.front().capacity_sample_count == 0U &&
+              observed.conflict_edges.front().peak_clearance_deficit == witness.clearance_deficit,
+          "exact DRC net pairs and bounds must create a regional repair window without inventing "
+          "sampled capacity evidence: " + std::to_string(observed.source_exact_copper_witnesses) +
+              "/" + std::to_string(observed.mapped_exact_copper_pairs) + "/" +
+              std::to_string(observed.unmapped_exact_copper_pairs) + "/edges=" +
+              std::to_string(observed.conflict_edges.size()) + "/windows=" +
+              std::to_string(observed.windows.size()) + "; " + observed.diagnostic);
+  config.physical_conflict_witnesses.front().resource.layer = LayerId{"B.Cu"};
+  {
+    auto coupled_board = board;
+    coupled_board.nets.push_back({NetId{"c"}, "c"});
+    auto coupled_global = global;
+    auto c = a;
+    c.net = NetId{"c"};
+    c.points = {{mm(10, 18), LayerId{"F.Cu"}}, {mm(20, 18), LayerId{"F.Cu"}}};
+    coupled_global.paths.push_back(c);
+    auto coupled_config = config;
+    auto second = witness;
+    second.resource = {"second-exact-crossing", LayerId{"F.Cu"}, {mm(11, 17), mm(13, 19)},
+                       {NetId{"b"}, NetId{"c"}}};
+    coupled_config.physical_conflict_witnesses = {witness, second};
+    const auto coupled = flux::analyze_regional_conflicts(coupled_board, coupled_global, coupled_config);
+    require(coupled.mapped_exact_copper_pairs == 2 && coupled.windows.size() == 1 &&
+                coupled.windows.front().owned_fragments.size() == 3,
+            "a physical three-net component must not split into separately owned articulation windows");
+    // One oversized interaction plus an independent eligible crossing. The required global
+    // replan must not wait for native search in the unrelated window, nor erase its fragments.
+    coupled_board.nets.push_back({NetId{"d"}, "d"});
+    coupled_board.nets.push_back({NetId{"e"}, "e"});
+    auto d = a;
+    d.net = NetId{"d"};
+    d.points = {{mm(22, 22), LayerId{"F.Cu"}}, {mm(28, 28), LayerId{"F.Cu"}}};
+    auto e = d;
+    e.net = NetId{"e"};
+    e.points = {{mm(22, 28), LayerId{"F.Cu"}}, {mm(28, 22), LayerId{"F.Cu"}}};
+    coupled_global.paths.push_back(d);
+    coupled_global.paths.push_back(e);
+    auto independent = witness;
+    independent.resource = {"independent-crossing", LayerId{"F.Cu"}, {mm(24, 24), mm(26, 26)},
+                            {NetId{"d"}, NetId{"e"}}};
+    coupled_config.physical_conflict_witnesses.push_back(independent);
+    coupled_config.max_nets_per_window = 2U;
+    coupled_config.prioritize_frozen_scope_expansion = true;
+    const auto inspection = flux::analyze_regional_conflicts(
+        coupled_board, coupled_global, coupled_config);
+    require(inspection.windows.size() == 2U && !inspection.channels.empty(),
+            "decomposition-only inspection must still build the independent eligible corridor");
+    coupled_config.enable_spline_realization = true;
+    const auto escalated = flux::analyze_regional_conflicts(
+        coupled_board, coupled_global, coupled_config);
+    require(!escalated.complete() && !escalated.spline_candidate_available &&
+                escalated.windows.size() == 2U && escalated.fragments.size() == 5U &&
+                escalated.channels.empty() && escalated.alternative_template_checks == 0U &&
+                escalated.joint_spline_candidates_evaluated == 0U &&
+                escalated.bundle_assignments.size() == 1U &&
+                escalated.bundle_assignments.front().stop_reason ==
+                    flux::RegionalBundleStopReason::window_ineligible,
+            "an oversized required scope must fail closed before unrelated portfolio/native work");
+    const auto oversized_diagnoses = flux::diagnose_regional_routability(escalated);
+    require(std::any_of(oversized_diagnoses.begin(), oversized_diagnoses.end(), [](const auto& item) {
+              return item.suggested_relaxation == flux::RoutabilityRelaxation::replan_global_topology &&
+                     item.resource.nets.size() == 3U;
+            }), "scope-size escalation must retain the exact affected net set for global feedback");
+  }
+  const auto wrong_layer = flux::analyze_regional_conflicts(board, global, config);
+  require(!wrong_layer.complete() && wrong_layer.conflict_edges.empty() && wrong_layer.unmapped_exact_copper_pairs == 1U,
+          "an exact planar witness cannot be attributed to a different layer");
+  auto identified_board = board;
+  identified_board.layers.push_back({LayerId{"B.Cu"}, "B.Cu", LayerKind::copper, 1});
+  auto identified_global = global;
+  for (auto& point : identified_global.paths.back().points) point.layer = LayerId{"B.Cu"};
+  auto identified_config = config;
+  identified_config.physical_conflict_witnesses.clear();
+  identified_config.frozen_copper_context = true;
+  identified_config.expand_frozen_copper_scope = true;
+  identified_config.frozen_copper_scope_witnesses = {
+      {{NetId{"a"}, 0U, 0U, 0U}, {NetId{"b"}, 0U, 0U, 0U}, LayerId{"B.Cu"},
+       Nanometres::from_mm(0.4), "candidate-layer-crossing"}};
+  const auto identified = flux::analyze_regional_conflicts(
+      identified_board, identified_global, identified_config);
+  require(identified.mapped_exact_copper_pairs == 1U &&
+              identified.unmapped_exact_copper_pairs == 0U &&
+              identified.windows.size() == 1U && identified.windows.front().owned_fragments.size() == 2U,
+          "candidate-layer conflicts with exact original IDs must create joint ownership across layers");
+  config.physical_conflict_witnesses.front() = witness;
+  config.physical_conflict_witnesses.front().resource.nets = {NetId{"a"}, NetId{"missing"}};
+  const auto missing = flux::analyze_regional_conflicts(board, global, config);
+  require(missing.conflict_edges.empty() && missing.unmapped_exact_copper_pairs == 1U,
+          "unknown exact witness owners must be explicitly unmapped");
 }
 
 void parallel_spline_workers_shutdown_after_short_optimizations() {
@@ -1918,6 +4902,887 @@ void parallel_spline_workers_shutdown_after_short_optimizations() {
     require(route.has_value(), "worker lifecycle fixture must construct a valid route");
     const auto result = flux::optimize_quintic_ph_trajectory(*route, config, {});
     require(result.legal, "short parallel optimization must retain legal geometry");
+  }
+}
+
+void exact_via_witnesses_create_regional_repair_scope() {
+  Board board;
+  board.outline = rectangle(0, 0, 40, 40);
+  board.layers = {{LayerId{"F.Cu"}, "F.Cu", LayerKind::copper, 0},
+                  {LayerId{"B.Cu"}, "B.Cu", LayerKind::copper, 1}};
+  board.nets = {{NetId{"approach-a"}, "a"}, {NetId{"approach-b"}, "b"}};
+  flux::GlobalRouteResult global;
+  global.paths = {
+      flux::GlobalRoutePath{NetId{"approach-a"}, 0U,
+          {{mm(20, 19.35), LayerId{"B.Cu"}}, {mm(20, 20), LayerId{"B.Cu"}},
+           {mm(20, 20), LayerId{"F.Cu"}}, {mm(20, 21.335), LayerId{"F.Cu"}}}},
+      flux::GlobalRoutePath{NetId{"approach-b"}, 0U,
+          {{mm(20.65, 16.385), LayerId{"F.Cu"}}, {mm(20.65, 20), LayerId{"F.Cu"}},
+           {mm(20.65, 20), LayerId{"B.Cu"}}, {mm(20, 20.65), LayerId{"B.Cu"}}}}};
+  flux::RegionalRouterConfig config;
+  config.enable_spline_realization = false;
+  config.max_bundle_search_states = 8;
+  config.max_alternative_template_checks = 1;
+  config.max_joint_alternative_template_checks = 1;
+  config.max_same_layer_detour_checks = 0;
+  config.max_physical_scope_retries = 0;
+  config.physical_conflict_witnesses = flux::probe_quantized_copper_feasibility(board, global).diagnoses;
+  const auto regional = flux::analyze_regional_conflicts(board, global, config);
+  require(config.physical_conflict_witnesses.size() == 2U &&
+              std::all_of(config.physical_conflict_witnesses.begin(),
+                          config.physical_conflict_witnesses.end(), [](const auto& witness) {
+                return witness.kind == flux::RoutabilityFailureKind::via_site_exhausted &&
+                       witness.suggested_relaxation ==
+                           flux::RoutabilityRelaxation::change_via_site &&
+                       witness.source_segment_pairs.size() == 1U;
+              }), "the microcase must isolate exact via failures without track-track conflicts");
+  require(regional.source_exact_copper_witnesses == 2U &&
+              regional.mapped_exact_copper_pairs == 2U &&
+              regional.unmapped_exact_copper_pairs == 0U && !regional.windows.empty() &&
+              !regional.complete(),
+          "exact via failures must create scope or remain explicitly unresolved, never disappear");
+  auto reversed_global = global;
+  std::reverse(reversed_global.paths.begin(), reversed_global.paths.end());
+  require(flux::probe_quantized_copper_feasibility(board, reversed_global).diagnoses ==
+              config.physical_conflict_witnesses,
+          "via repair ownership and common layer must not depend on path enumeration order");
+  auto unavailable_layer = config;
+  for (auto& witness : unavailable_layer.physical_conflict_witnesses)
+    witness.resource.layer = LayerId{"In1.Cu"};
+  const auto unmapped = flux::analyze_regional_conflicts(board, global, unavailable_layer);
+  require(unmapped.source_exact_copper_witnesses == 2U &&
+              unmapped.unmapped_exact_copper_pairs == 2U && !unmapped.complete(),
+          "a via witness without a matching routing layer must remain explicitly unresolved");
+}
+
+void regional_bundle_forward_checking_preserves_access_solutions() {
+  Board board;
+  board.outline = rectangle(0, 0, 100, 100);
+  board.layers = {{LayerId{"F.Cu"}, "F.Cu", LayerKind::copper, 0},
+                  {LayerId{"B.Cu"}, "B.Cu", LayerKind::copper, 1}};
+  flux::RegionalRouteResult regional;
+  // This fixture compares the historical DFS propagation controls. HC composition is tested
+  // separately and must not change what the explicit forward-checking ablation measures.
+  regional.configured.enable_bounded_hc_composition = false;
+  flux::RegionalRoutingWindow window;
+  std::vector<flux::RegionalRouteTemplate> templates;
+  std::vector<std::vector<std::size_t>> domains;
+  flux::RegionalChannel channel;
+  flux::RegionalCrossSection section;
+  section.usable_width = Nanometres::from_mm(100);
+  channel.cross_sections.push_back(section);
+  regional.channels.push_back(channel);
+  // Eleven unconstrained binary choices separate an early bad escape from its last blocker.
+  // The original bounded DFS spends its whole budget below the bad escape. Forward checking
+  // must reach the good escape while retaining every feasible combination of unrelated routes.
+  for (std::size_t slot = 0; slot < 12; ++slot) {
+    const NetId net{"escape-" + std::to_string(slot)};
+    board.nets.push_back({net, net.value()});
+    flux::RegionalRouteFragment fragment;
+    fragment.id = {net, 0, 0, 0};
+    fragment.layer = LayerId{"F.Cu"};
+    fragment.width = Nanometres::from_mm(0.25);
+    fragment.clearance = Nanometres::from_mm(0.2);
+    regional.fragments.push_back(fragment);
+    window.fragments.push_back(fragment.id);
+    window.owned_fragments.push_back(fragment.id);
+    window.nets.push_back(net);
+    std::vector<std::size_t> domain;
+    for (std::size_t option = 0; option < 2; ++option) {
+      flux::RegionalRouteTemplate route;
+      route.id = templates.size();
+      route.fragment = fragment.id;
+      route.routing_layer = fragment.layer;
+      route.channel_sequence = {0};
+      if (slot == 0 || slot == 11) {
+        flux::RegionalTerminalChoice terminal;
+        terminal.id = regional.terminal_choices.size();
+        terminal.net = net;
+        terminal.layer = fragment.layer;
+        terminal.width = fragment.width;
+        terminal.access_path = slot == 11
+                                   ? std::vector<Point>{mm(15, 5), mm(15, 15)}
+                                   : std::vector<Point>{mm(10, option ? 30 : 10),
+                                                        mm(20, option ? 30 : 10)};
+        route.terminal_entry_choice = terminal.id;
+        regional.terminal_choices.push_back(terminal);
+      }
+      domain.push_back(route.id);
+      templates.push_back(route);
+    }
+    domains.push_back(domain);
+  }
+  std::sort(window.owned_fragments.begin(), window.owned_fragments.end());
+  const auto control = flux::enumerate_regional_bundle_choices(
+      board, regional, window, templates, domains, 128, false);
+  require(control.exhausted && !control.choices.empty() &&
+              std::all_of(control.choices.begin(), control.choices.end(),
+                          [](const auto& choice) { return choice.front() == 0; }),
+          "the bounded control must remain trapped under the conflicting terminal escape");
+  const auto checked = flux::enumerate_regional_bundle_choices(
+      board, regional, window, templates, domains, 128);
+  require(!checked.choices.empty() && checked.forward_domain_wipeouts > 0 &&
+              checked.terminal_pair_pruned_states > 0 &&
+              std::all_of(checked.choices.begin(), checked.choices.end(),
+                          [](const auto& choice) { return choice.front() == 1; }),
+          "forward checking must reach the feasible escape within the identical state bound");
+  const auto exhaustive = flux::enumerate_regional_bundle_choices(
+      board, regional, window, templates, domains, 10000);
+  require(!exhaustive.exhausted && exhaustive.choices.size() == 2048,
+          "early access propagation must retain every combination below the legal escape");
+
+  // Replace the terminal contradiction with a late channel-capacity contradiction. The
+  // physical rule is unchanged; propagating it must skip a doomed prefix before enumeration.
+  auto narrow = regional.channels.front();
+  narrow.id = 1;
+  narrow.cross_sections.front().usable_width = Nanometres::from_mm(0.65);
+  regional.channels.push_back(narrow);
+  for (auto& route : templates) route.terminal_entry_choice.reset();
+  templates.front().channel_sequence = {1};
+  templates[22].channel_sequence = {1};
+  templates[23].channel_sequence = {1};
+  regional.configured.enable_bundle_resource_forward_checking = false;
+  const auto capacity_trapped = flux::enumerate_regional_bundle_choices(
+      board, regional, window, templates, domains, 128);
+  require(capacity_trapped.exhausted && capacity_trapped.choices.empty(),
+          "access-only propagation must reproduce the late capacity ordering trap");
+  regional.configured.enable_bundle_resource_forward_checking = true;
+  const auto capacity_checked = flux::enumerate_regional_bundle_choices(
+      board, regional, window, templates, domains, 128);
+  require(!capacity_checked.choices.empty() && capacity_checked.forward_capacity_rejections > 0 &&
+              capacity_checked.forward_domain_wipeouts > 0 &&
+              std::all_of(capacity_checked.choices.begin(), capacity_checked.choices.end(),
+                          [](const auto& choice) { return choice.front() == 1; }),
+          "resource propagation must reach the capacity-feasible escape under the same bound");
+  const auto capacity_exhaustive = flux::enumerate_regional_bundle_choices(
+      board, regional, window, templates, domains, 10000);
+  require(!capacity_exhaustive.exhausted && capacity_exhaustive.choices.size() == 2048,
+          "resource propagation must preserve every capacity-feasible combination");
+  regional.configured.enable_bundle_resource_forward_checking = false;
+  for (auto& route : templates) route.channel_sequence = {0};
+
+  // The existing DFS requires one nominated site per physical via region even when access
+  // geometry can relocate it. Propagate that identity into distant future fragments too.
+  auto& last_fragment = regional.fragments.back();
+  last_fragment.id = regional.fragments.front().id;
+  last_fragment.id.fragment_index = 1;
+  window.fragments.back() = last_fragment.id;
+  window.owned_fragments = window.fragments;
+  std::sort(window.owned_fragments.begin(), window.owned_fragments.end());
+  templates[22].fragment = last_fragment.id;
+  templates[23].fragment = last_fragment.id;
+  for (std::size_t i = 0; i < 2; ++i) {
+    flux::RegionalViaChoice via;
+    via.id = i;
+    via.net = regional.fragments.front().id.net;
+    via.site = mm(i ? 20 : 10, 10);
+    via.span = {LayerId{"F.Cu"}, LayerId{"B.Cu"}};
+    via.diameter = Nanometres::from_mm(0.6);
+    via.drill = Nanometres::from_mm(0.3);
+    via.selected_global_site = true;
+    regional.via_choices.push_back(via);
+    templates[i].via_choices = {i};
+    templates[22 + i].via_choices = {1};
+  }
+  const auto identity_trapped = flux::enumerate_regional_bundle_choices(
+      board, regional, window, templates, domains, 128);
+  require(identity_trapped.exhausted && identity_trapped.choices.empty(),
+          "access-only propagation must reproduce the nominated via-identity ordering trap");
+  regional.configured.enable_bundle_resource_forward_checking = true;
+  const auto identity_checked = flux::enumerate_regional_bundle_choices(
+      board, regional, window, templates, domains, 128);
+  require(!identity_checked.choices.empty() && identity_checked.forward_via_identity_rejections > 0 &&
+              std::all_of(identity_checked.choices.begin(), identity_checked.choices.end(),
+                          [](const auto& choice) { return choice.front() == 1; }),
+          "resource propagation must reach the common nominated via site within the same bound");
+  const auto identity_exhaustive = flux::enumerate_regional_bundle_choices(
+      board, regional, window, templates, domains, 10000);
+  require(!identity_exhaustive.exhausted && identity_exhaustive.choices.size() == 2048,
+          "resource propagation must retain every identity-consistent combination");
+  regional.configured.enable_bundle_resource_forward_checking = false;
+  regional.via_choices.clear();
+
+  // A pair of nominated vias may collide while the selected global topology can legally
+  // relocate one. The partial query must use its full domain, not just the nominated sites.
+  regional.fragments.resize(2);
+  window.fragments.resize(2);
+  window.owned_fragments = window.fragments;
+  std::sort(window.owned_fragments.begin(), window.owned_fragments.end());
+  templates.resize(2);
+  for (std::size_t i = 0; i < 2; ++i) {
+    templates[i].id = i;
+    templates[i].fragment = regional.fragments[i].id;
+    templates[i].terminal_entry_choice.reset();
+    templates[i].via_choices = {i};
+    flux::RegionalViaChoice via;
+    via.id = i;
+    via.region_id = i;
+    via.net = regional.fragments[i].id.net;
+    via.site = mm(10, 10);
+    via.span = {LayerId{"F.Cu"}, LayerId{"B.Cu"}};
+    via.diameter = Nanometres::from_mm(0.6);
+    via.drill = Nanometres::from_mm(0.3);
+    via.selected_global_site = true;
+    regional.via_choices.push_back(via);
+  }
+  auto relocated = regional.via_choices.back();
+  relocated.id = 2;
+  relocated.site = mm(20, 20);
+  relocated.selected_global_site = false;
+  regional.via_choices.push_back(relocated);
+  domains = {{0}, {1}};
+  const auto movable = flux::enumerate_regional_bundle_choices(
+      board, regional, window, templates, domains, 100);
+  require(movable.choices.size() == 1 && movable.access_pruned_states == 0,
+          "a colliding nominated via must keep its legal relocation domain");
+  regional.configured.max_access_assignment_states = 1;
+  const auto unknown = flux::enumerate_regional_bundle_choices(
+      board, regional, window, templates, domains, 100);
+  require(unknown.choices.size() == 1 && unknown.access_assignment_exhaustions > 0 &&
+              unknown.access_pruned_states == 0 && unknown.access_selection_cache_entries_peak == 0U,
+          "an exhausted access subproblem must remain unknown and cannot prune the topology");
+  regional.configured.max_access_assignment_states = 2048;
+  regional.via_choices.pop_back();
+  const auto impossible = flux::enumerate_regional_bundle_choices(
+      board, regional, window, templates, domains, 100);
+  require(impossible.choices.empty() && impossible.via_pair_pruned_states > 0 &&
+              !impossible.exhausted,
+          "a proved collision between fixed via domains must be rejected before a complete leaf");
+
+  // Two fragments nominate the same physical via but different runup representatives. The
+  // earlier fragment supplies the legal representative in the complete selection. A pair
+  // containing only the later fragment and a foreign via must not reject that completion.
+  regional.via_choices[1].site = mm(20, 10);
+  auto bad_runup = regional.via_choices.front();
+  bad_runup.id = 2;
+  bad_runup.attached_runups.push_back(
+      {LayerId{"F.Cu"}, mm(25, 10), {mm(25, 10), mm(10, 10)}});
+  regional.via_choices.push_back(bad_runup);
+  auto third_fragment = regional.fragments.front();
+  third_fragment.id.fragment_index = 1;
+  regional.fragments.push_back(third_fragment);
+  for (auto& f : regional.fragments) f.explicit_width = true;
+  window.fragments.push_back(third_fragment.id);
+  window.owned_fragments = window.fragments;
+  std::sort(window.owned_fragments.begin(), window.owned_fragments.end());
+  auto third_template = templates.front();
+  third_template.id = 2;
+  third_template.fragment = third_fragment.id;
+  third_template.via_choices = {2};
+  templates.push_back(third_template);
+  domains = {{0}, {1}, {2}};
+  const auto equivalent_runups = flux::enumerate_regional_bundle_choices(
+      board, regional, window, templates, domains, 100);
+  require(equivalent_runups.choices.size() == 1,
+          "pair pruning must allow an earlier fragment's legal equivalent via representative");
+  domains = {{1}, {2}};
+  const auto bad_complete_runup = flux::enumerate_regional_bundle_choices(
+      board, regional, window, templates, domains, 100);
+  require(bad_complete_runup.choices.empty() && bad_complete_runup.via_pair_pruned_states > 0,
+          "complete-leaf access checks must still certify the actual chosen runup representative");
+}
+
+void frozen_foreign_copper_rejects_selected_vias_before_spline_selection() {
+  Board board;
+  board.outline = rectangle(0, 0, 40, 40);
+  board.layers = {{LayerId{"F.Cu"}, "F.Cu", LayerKind::copper, 0},
+                  {LayerId{"B.Cu"}, "B.Cu", LayerKind::copper, 1},
+                  {LayerId{"In1.Cu"}, "In1.Cu", LayerKind::copper, 2}};
+  const NetId candidate_net{"via-owner"};
+  const NetId frozen_net{"frozen-lane"};
+  board.nets = {{candidate_net, "VIA_OWNER"}, {frozen_net, "FROZEN_LANE"}};
+
+  flux::RegionalRouteResult regional;
+  regional.configured.frozen_copper_context = true;
+  flux::RegionalRouteFragment candidate;
+  candidate.id = {candidate_net, 0U, 0U, 0U};
+  candidate.layer = LayerId{"F.Cu"};
+  candidate.start = mm(5.0, 10.0);
+  candidate.end = mm(20.0, 10.0);
+  candidate.width = Nanometres::from_mm(0.25);
+  candidate.clearance = Nanometres::from_mm(0.2);
+  flux::RegionalRouteFragment frozen;
+  frozen.id = {frozen_net, 0U, 0U, 0U};
+  frozen.layer = LayerId{"F.Cu"};
+  frozen.start = mm(10.0, 5.0);
+  frozen.end = mm(10.0, 15.0);
+  frozen.width = Nanometres::from_mm(0.25);
+  frozen.clearance = Nanometres::from_mm(0.2);
+  regional.fragments = {candidate, frozen};
+
+  flux::RegionalRoutingWindow window;
+  window.id = 9U;
+  window.fragments = {candidate.id};
+  window.owned_fragments = window.fragments;
+
+  flux::RegionalViaChoice selected;
+  selected.id = 0U;
+  selected.region_id = 0U;
+  selected.net = candidate_net;
+  selected.site = mm(10.15, 10.0);
+  selected.span = {LayerId{"F.Cu"}, LayerId{"B.Cu"}};
+  selected.diameter = Nanometres::from_mm(0.7);
+  selected.drill = Nanometres::from_mm(0.3);
+  selected.selected_global_site = true;
+  auto alternative = selected;
+  alternative.id = 1U;
+  alternative.site = mm(20.0, 10.0);
+  alternative.selected_global_site = false;
+  regional.via_choices = {selected, alternative};
+
+  flux::RegionalRouteTemplate route;
+  route.id = 0U;
+  route.fragment = candidate.id;
+  route.routing_layer = LayerId{"F.Cu"};
+  route.selected_global_topology = true;
+  route.via_choices = {selected.id};
+  const std::vector<flux::RegionalRouteTemplate> templates{route};
+  const std::vector<std::vector<std::size_t>> domains{{0U}};
+  const auto select = [&] {
+    return flux::enumerate_regional_bundle_choices(board, regional, window, templates, domains,
+                                                    16U);
+  };
+
+  const auto alternative_selected = select();
+  require(alternative_selected.choices.size() == 1U &&
+              alternative_selected.access_pruned_states == 0U,
+          "a frozen foreign lane must reject only the colliding selected via and preserve a legal "
+          "same-region alternative before spline realization");
+
+  regional.via_choices.pop_back();
+  const auto fixed_site_rejected = select();
+  require(fixed_site_rejected.choices.empty() &&
+              fixed_site_rejected.frozen_copper_via_pruned_states > 0U &&
+              !fixed_site_rejected.exhausted,
+          "a fixed selected via must not survive access selection through immutable foreign "
+          "copper");
+  require(fixed_site_rejected.frozen_copper_conflicts.size() == 1U &&
+              fixed_site_rejected.frozen_copper_conflicts.front().candidate == candidate.id &&
+              fixed_site_rejected.frozen_copper_conflicts.front().blocker == frozen.id &&
+              fixed_site_rejected.frozen_copper_conflicts.front().layer == LayerId{"F.Cu"} &&
+              fixed_site_rejected.frozen_copper_conflicts.front().clearance_deficit ==
+                  Nanometres::from_mm(0.525) &&
+              fixed_site_rejected.frozen_copper_conflicts.front().code ==
+                  "frozen-via-copper-clearance",
+          "a frozen-via rejection must preserve its owned candidate, exact foreign blocker, "
+          "layer, deficit and clearance authority");
+  regional.configured.enable_spline_realization = false;
+  regional.configured.enable_straight_realization = true;
+  require(select().choices.size() == 1U,
+          "straight whole-scene realization must not reject a via against a foreign coarse "
+          "fragment that another window may replace");
+  regional.configured.enable_spline_realization = true;
+  regional.configured.enable_straight_realization = false;
+
+  // A foreign coarse centreline can cross A's selected via, yet be replaced by B's legal
+  // dogleg in the assembled straight transaction. The source has no copper to retain.
+  Board transaction_board;
+  transaction_board.outline = rectangle(0, 0, 40, 40);
+  transaction_board.layers = {{LayerId{"F.Cu"}, "F.Cu", LayerKind::copper, 0},
+                              {LayerId{"B.Cu"}, "B.Cu", LayerKind::copper, 1}};
+  const NetId transaction_a{"transaction-a"};
+  const NetId transaction_b{"transaction-b"};
+  transaction_board.nets = {{transaction_a, "A", 0}, {transaction_b, "B", 0}};
+  transaction_board.rules.default_via_diameter = Nanometres::from_mm(0.7);
+  transaction_board.rules.default_via_drill = Nanometres::from_mm(0.3);
+  const auto transaction_rules = flux::resolve_net_routing_rules(transaction_board, transaction_a);
+  require(transaction_rules.via_diameter == Nanometres::from_mm(0.7) &&
+              transaction_rules.via_drill == Nanometres::from_mm(0.3),
+          "the transaction fixture must resolve the selected via's actual source rule");
+  const auto terminal = [](std::string id, const NetId& net, Point position,
+                           std::vector<LayerId> layers) {
+    Footprint footprint;
+    footprint.id = ObjectId{id};
+    footprint.reference = id;
+    footprint.position = position;
+    footprint.courtyard = local_rectangle(1.0, 1.0);
+    footprint.pads = {{ObjectId{id + "-pad"}, net, Point{}, std::move(layers)}};
+    return footprint;
+  };
+  transaction_board.footprints = {
+      terminal("a-front", transaction_a, mm(5, 10), {LayerId{"F.Cu"}}),
+      terminal("a-back", transaction_a, mm(5, 9), {LayerId{"B.Cu"}}),
+      terminal("b-start", transaction_b, mm(10, 5), {LayerId{"F.Cu"}}),
+      terminal("b-end", transaction_b, mm(10, 15), {LayerId{"F.Cu"}})};
+  flux::GlobalRouteResult transaction_global;
+  transaction_global.paths = {
+      {transaction_a, 0U, {{mm(5, 10), LayerId{"F.Cu"}}, {mm(10.15, 10), LayerId{"F.Cu"}},
+                           {mm(10.15, 10), LayerId{"B.Cu"}}, {mm(9.15, 9), LayerId{"B.Cu"}},
+                           {mm(5, 9), LayerId{"B.Cu"}}}},
+      {transaction_b, 0U, {{mm(10, 5), LayerId{"F.Cu"}}, {mm(10, 15), LayerId{"F.Cu"}}}}};
+  const auto coarse_transaction_oracle =
+      flux::probe_quantized_copper_feasibility(transaction_board, transaction_global);
+  require(transaction_board.tracks.empty() && transaction_board.vias.empty() &&
+              coarse_transaction_oracle.drc_violations > 0U &&
+              coarse_transaction_oracle.open_connections == 0U,
+          "the original foreign coarse centreline and selected via must be illegal without "
+          "being retained as source copper");
+  flux::RegionalRouteResult transaction_regional;
+  transaction_regional.configured.frozen_copper_context = true;
+  transaction_regional.configured.enable_spline_realization = false;
+  transaction_regional.configured.enable_straight_realization = true;
+  const auto make_fragment = [](flux::RegionalRouteFragmentId id, LayerId layer, Point start, Point end,
+                                std::size_t first_segment) {
+    flux::RegionalRouteFragment fragment;
+    fragment.id = std::move(id);
+    fragment.layer = std::move(layer);
+    fragment.start = start;
+    fragment.end = end;
+    fragment.width = Nanometres::from_mm(0.25);
+    fragment.clearance = Nanometres::from_mm(0.2);
+    fragment.first_source_segment = first_segment;
+    fragment.last_source_segment = first_segment;
+    return fragment;
+  };
+  const auto a_front = make_fragment({transaction_a, 0U, 0U, 0U}, LayerId{"F.Cu"},
+                                     mm(5, 10), mm(10.15, 10), 0U);
+  const auto a_back = make_fragment({transaction_a, 0U, 0U, 1U}, LayerId{"B.Cu"},
+                                    mm(10.15, 10), mm(5, 9), 2U);
+  const auto b_original = make_fragment({transaction_b, 0U, 0U, 0U}, LayerId{"F.Cu"},
+                                        mm(10, 5), mm(10, 15), 0U);
+  transaction_regional.fragments = {a_front, a_back, b_original};
+  flux::RegionalViaChoice transaction_via;
+  transaction_via.id = 0U;
+  transaction_via.region_id = 0U;
+  transaction_via.net = transaction_a;
+  transaction_via.site = mm(10.15, 10);
+  transaction_via.span = {LayerId{"F.Cu"}, LayerId{"B.Cu"}};
+  transaction_via.diameter = Nanometres::from_mm(0.7);
+  transaction_via.drill = Nanometres::from_mm(0.3);
+  transaction_via.selected_global_site = true;
+  transaction_regional.via_choices = {transaction_via};
+  flux::RegionalRoutingWindow transaction_window_a;
+  transaction_window_a.id = 0U;
+  transaction_window_a.fragments = {a_front.id, a_back.id};
+  transaction_window_a.owned_fragments = transaction_window_a.fragments;
+  flux::RegionalRoutingWindow transaction_window_b;
+  transaction_window_b.id = 1U;
+  transaction_window_b.fragments = {b_original.id};
+  transaction_window_b.owned_fragments = transaction_window_b.fragments;
+  transaction_regional.windows = {transaction_window_a, transaction_window_b};
+  flux::RegionalRouteTemplate a_front_template;
+  a_front_template.id = 0U;
+  a_front_template.fragment = a_front.id;
+  a_front_template.routing_layer = LayerId{"F.Cu"};
+  a_front_template.selected_global_topology = true;
+  a_front_template.exit_via_choice = 0U;
+  flux::RegionalRouteTemplate a_back_template;
+  a_back_template.id = 1U;
+  a_back_template.fragment = a_back.id;
+  a_back_template.routing_layer = LayerId{"B.Cu"};
+  a_back_template.selected_global_topology = false;
+  a_back_template.entry_via_choice = 0U;
+  a_back_template.topology_centerline = {mm(10.15, 10), mm(9.15, 9), mm(5, 9)};
+  flux::RegionalBundleAssignment transaction_assignment_a;
+  transaction_assignment_a.window_id = transaction_window_a.id;
+  transaction_assignment_a.templates = {a_front_template, a_back_template};
+  transaction_assignment_a.selected_templates = {0U, 1U};
+  transaction_assignment_a.selected_via_choices = {0U};
+  transaction_assignment_a.stop_reason = flux::RegionalBundleStopReason::complete;
+  flux::RegionalRouteTemplate b_template;
+  b_template.id = 0U;
+  b_template.fragment = b_original.id;
+  b_template.routing_layer = LayerId{"F.Cu"};
+  b_template.selected_global_topology = false;
+  b_template.topology_centerline = {mm(10, 5), mm(10, 8), mm(11, 9),
+                                    mm(11, 11), mm(10, 12), mm(10, 15)};
+  flux::RegionalBundleAssignment transaction_assignment_b;
+  transaction_assignment_b.window_id = transaction_window_b.id;
+  transaction_assignment_b.templates = {b_template};
+  transaction_assignment_b.selected_templates = {0U};
+  transaction_assignment_b.stop_reason = flux::RegionalBundleStopReason::complete;
+  transaction_regional.bundle_assignments = {transaction_assignment_a, transaction_assignment_b};
+  flux::realize_regional_straight_candidate(transaction_board, transaction_global,
+                                             transaction_regional);
+  require(transaction_regional.spline_candidate_available &&
+              transaction_regional.native_scene_evaluated && transaction_regional.native_scene_complete &&
+              transaction_regional.native_scene_conflicts == 0U &&
+              transaction_regional.straight_scene_open_connections == 0U &&
+              transaction_regional.straight_scene_drc_violations == 0U &&
+              transaction_regional.native_realization_manifest.size() == 3U &&
+              std::any_of(transaction_regional.native_realization_manifest.begin(),
+                          transaction_regional.native_realization_manifest.end(), [&](const auto& route) {
+                            return route.fragment == b_original.id && route.centerline ==
+                                b_template.topology_centerline;
+                          }),
+          "the assembled straight transaction must replace B's colliding coarse line with its "
+          "dogleg and certify the resulting copper scene");
+  auto finalized_transaction = transaction_global;
+  finalized_transaction.paths = transaction_regional.spline_candidate_paths;
+  const auto finalized_transaction_oracle =
+      flux::probe_quantized_copper_feasibility(transaction_board, finalized_transaction);
+  require(finalized_transaction_oracle.drc_violations == 0U &&
+              finalized_transaction_oracle.open_connections == 0U,
+          "the whole-scene quantized oracle must certify the assembled dogleg transaction");
+  regional.windows = {window};
+  flux::RegionalBundleAssignment failed_assignment;
+  failed_assignment.window_id = window.id;
+  failed_assignment.stop_reason = flux::RegionalBundleStopReason::spline_realization_failed;
+  failed_assignment.frozen_copper_conflicts = fixed_site_rejected.frozen_copper_conflicts;
+  regional.bundle_assignments = {failed_assignment};
+  flux::RegionalRouterConfig scope_config;
+  scope_config.frozen_copper_context = true;
+  scope_config.expand_frozen_copper_scope = true;
+  require(flux::append_regional_frozen_scope_witnesses(regional, scope_config) &&
+              scope_config.frozen_copper_scope_witnesses ==
+                  fixed_site_rejected.frozen_copper_conflicts,
+          "an early frozen-via witness must create an exact ownership-expansion obligation");
+  scope_config.frozen_copper_scope_witnesses.clear();
+  regional.windows.front().owned_fragments.push_back(frozen.id);
+  std::sort(regional.windows.front().owned_fragments.begin(),
+            regional.windows.front().owned_fragments.end());
+  require(!flux::append_regional_frozen_scope_witnesses(regional, scope_config),
+          "an owned frozen fragment must never become a foreign scope-expansion witness");
+  regional.windows.front().owned_fragments = {candidate.id};
+
+  regional.configured.frozen_copper_context = false;
+  require(select().choices.size() == 1U,
+          "the frozen-copper access predicate must remain disabled outside the explicit context");
+  regional.configured.frozen_copper_context = true;
+
+  window.owned_fragments.push_back(frozen.id);
+  std::sort(window.owned_fragments.begin(), window.owned_fragments.end());
+  require(select().choices.size() == 1U,
+          "a movable owned lane must remain available to later packing instead of rejecting its "
+          "coarse centerline");
+  window.owned_fragments = {candidate.id};
+
+  regional.fragments.back().layer = LayerId{"In1.Cu"};
+  require(select().choices.size() == 1U,
+          "a frozen lane outside the selected via span must not constrain the access site");
+  regional.fragments.back().layer = LayerId{"F.Cu"};
+
+  regional.via_choices.front().site = mm(10.675, 10.0);
+  require(select().choices.size() == 1U,
+          "an exact copper-clearance boundary must remain legal under the strict DRC predicate");
+  regional.via_choices.front().site = mm(10.8, 10.0);
+  board.rules.hole_clearance = Nanometres::from_mm(0.8);
+  require(select().choices.empty(),
+          "via drill clearance against frozen foreign copper must use the source DRC rule when "
+          "it exceeds the via-copper envelope");
+
+  board.rules.hole_clearance = Nanometres{};
+  regional.via_choices.front().site = mm(10.15, 10.0);
+  auto second_candidate = candidate;
+  second_candidate.id.fragment_index = 1U;
+  second_candidate.start = mm(5.0, 11.0);
+  second_candidate.end = mm(20.0, 11.0);
+  regional.fragments.push_back(second_candidate);
+  auto second_route = route;
+  second_route.id = 1U;
+  second_route.fragment = second_candidate.id;
+  auto third_candidate = candidate;
+  third_candidate.id.fragment_index = 2U;
+  third_candidate.start = mm(5.0, 12.0);
+  third_candidate.end = mm(20.0, 12.0);
+  regional.fragments.push_back(third_candidate);
+  auto third_route = route;
+  third_route.id = 2U;
+  third_route.fragment = third_candidate.id;
+  flux::RegionalRoutingWindow shared_window = window;
+  shared_window.fragments = {candidate.id, second_candidate.id, third_candidate.id};
+  shared_window.owned_fragments = shared_window.fragments;
+  std::sort(shared_window.owned_fragments.begin(), shared_window.owned_fragments.end());
+  const auto shared_via_rejected = flux::enumerate_regional_bundle_choices(
+      board, regional, shared_window, {route, second_route, third_route}, {{0U}, {1U}, {2U}}, 16U);
+  require(shared_via_rejected.choices.empty() &&
+              shared_via_rejected.frozen_copper_conflicts.size() == 3U &&
+              std::set<flux::RegionalRouteFragmentId>{
+                  shared_via_rejected.frozen_copper_conflicts[0].candidate,
+                  shared_via_rejected.frozen_copper_conflicts[1].candidate,
+                  shared_via_rejected.frozen_copper_conflicts[2].candidate} ==
+                  std::set<flux::RegionalRouteFragmentId>{candidate.id, second_candidate.id,
+                                                           third_candidate.id},
+          "a pairwise forward rejection must retain the third owned fragment incident to the "
+          "same rejected via region");
+  regional.windows = {shared_window};
+  regional.bundle_assignments.front().frozen_copper_conflicts =
+      shared_via_rejected.frozen_copper_conflicts;
+  scope_config.frozen_copper_scope_witnesses.clear();
+  require(flux::append_regional_frozen_scope_witnesses(regional, scope_config) &&
+              scope_config.frozen_copper_scope_witnesses.size() == 3U,
+          "scope expansion must preserve every owned incident fragment under the witness budget");
+  regional.bundle_assignments.front().native_frozen_copper_conflicts = {
+      {candidate.id, frozen.id, LayerId{"B.Cu"}, Nanometres{1}, "native-candidate"}};
+  scope_config.frozen_copper_scope_witnesses.clear();
+  require(flux::append_regional_frozen_scope_witnesses(regional, scope_config) &&
+              scope_config.frozen_copper_scope_witnesses.size() == 4U,
+          "scope expansion must retain both access-search and current native-candidate evidence");
+
+  // Access forward checking can reject this via group before its final fragment is selected.
+  // Witness collection must still retain the whole owned domain, and must not inherit the
+  // unrelated access-blocker cap of sixteen individual fragments.
+  std::vector<flux::RegionalRouteFragment> wide_group_fragments;
+  std::vector<flux::RegionalRouteTemplate> wide_group_templates;
+  flux::RegionalRoutingWindow wide_group_window = window;
+  for (std::size_t index = 0U; index < 17U; ++index) {
+    auto group_fragment = candidate;
+    group_fragment.id.fragment_index = index + 10U;
+    group_fragment.start.y += Nanometres{static_cast<std::int64_t>(index * 10'000U)};
+    group_fragment.end.y += Nanometres{static_cast<std::int64_t>(index * 10'000U)};
+    wide_group_fragments.push_back(group_fragment);
+    auto group_template = route;
+    group_template.id = index;
+    group_template.fragment = group_fragment.id;
+    wide_group_templates.push_back(group_template);
+    wide_group_window.fragments.push_back(group_fragment.id);
+    wide_group_window.owned_fragments.push_back(group_fragment.id);
+  }
+  regional.fragments.insert(regional.fragments.end(), wide_group_fragments.begin(),
+                            wide_group_fragments.end());
+  std::sort(wide_group_window.owned_fragments.begin(), wide_group_window.owned_fragments.end());
+  wide_group_window.owned_fragments.erase(
+      std::unique(wide_group_window.owned_fragments.begin(), wide_group_window.owned_fragments.end()),
+      wide_group_window.owned_fragments.end());
+  std::vector<std::vector<std::size_t>> wide_group_domains;
+  for (std::size_t index = 0U; index < wide_group_templates.size(); ++index)
+    wide_group_domains.push_back({index});
+  const auto wide_group_rejected = flux::enumerate_regional_bundle_choices(
+      board, regional, wide_group_window, wide_group_templates, wide_group_domains, 256U);
+  std::set<flux::RegionalRouteFragmentId> wide_group_candidates;
+  for (const auto& witness : wide_group_rejected.frozen_copper_conflicts)
+    wide_group_candidates.insert(witness.candidate);
+  require(wide_group_rejected.choices.empty() && wide_group_candidates.size() == 17U,
+          "a partial forward rejection must retain all seventeen owned fragments incident to "
+          "the rejected via group, without the sixteen-blocker truncation");
+}
+
+void regional_spline_tiers_are_selected_breadth_first() {
+  std::vector<flux::RegionalBundleAssignment> assignments(5U);
+  assignments[0].window_id = 3U;
+  assignments[0].stop_reason = flux::RegionalBundleStopReason::complete;
+  assignments[0].spline_candidate_reserve.push_back({});
+  assignments[1].window_id = 1U;
+  assignments[1].stop_reason = flux::RegionalBundleStopReason::spline_realization_failed;
+  assignments[1].spline_candidate_reserve.push_back({});
+  assignments[2].window_id = 2U;
+  assignments[2].stop_reason = flux::RegionalBundleStopReason::spline_realization_failed;
+  assignments[3].window_id = 4U;
+  assignments[3].stop_reason = flux::RegionalBundleStopReason::spline_realization_failed;
+  assignments[3].spline_candidate_reserve.push_back({});
+  assignments[3].spline_fallback_waves = 1U;
+  assignments[4] = assignments[1];
+
+  require(flux::select_regional_spline_tier_windows(assignments, 0U) ==
+              std::vector<std::size_t>({3U, 1U, 2U, 4U}),
+          "the active tier must retain every window once in stable assignment order");
+  require(flux::select_regional_spline_tier_windows(assignments, 1U) ==
+              std::vector<std::size_t>({1U}),
+          "fallback wave one must contain only failed windows with an unconsumed reserve");
+  assignments[1].spline_fallback_waves = 1U;
+  assignments[4].spline_fallback_waves = 1U;
+  require(flux::select_regional_spline_tier_windows(assignments, 2U) ==
+              std::vector<std::size_t>({1U, 4U}),
+          "the next wave must admit each still-failed reserve window exactly once");
+}
+
+void adaptive_portal_direction_is_independent_of_path_sampling() {
+  // Unequal neighboring cells share a vertical portal but their centers need not align.
+  // Inserting collinear points must not change which side of that portal the path occupies.
+  flux::NavMeshTopologyGate gate;
+  gate.left_boundary = mm(3.0, 0.0);
+  gate.right_boundary = mm(3.0, 1.0);
+  gate.from_center = mm(2.0, 0.5);
+  gate.to_center = mm(4.0, 0.75);
+  const auto signature = flux::make_navmesh_topology_signature({gate});
+  const std::vector<Point> coarse{mm(2.0, 0.95), mm(4.0, 0.95)};
+  const std::vector<Point> sampled{coarse.front(), mm(2.99, 0.95), mm(3.01, 0.95), coarse.back()};
+  require(flux::validate_navmesh_topology_signature(signature, coarse).preserved &&
+              flux::validate_navmesh_topology_signature(signature, sampled).preserved,
+          "a skew-center adaptive portal must accept the same forward crossing before and after "
+          "collinear subdivision");
+  auto reversed = sampled;
+  std::reverse(reversed.begin(), reversed.end());
+  require(flux::validate_navmesh_topology_signature(signature, reversed).reason ==
+              flux::NavMeshTopologyCheckReason::reversed_gate,
+          "portal-normal orientation must still reject reverse traversal");
+  const std::vector<Point> repeated{mm(2.0, 0.95), mm(4.0, 0.95), mm(2.0, 0.95), mm(4.0, 0.95)};
+  require(flux::validate_navmesh_topology_signature(signature, repeated).reason ==
+              flux::NavMeshTopologyCheckReason::repeated_gate,
+          "portal-normal orientation must still reject multiple crossings");
+  const std::vector<Point> tangent{mm(2.0, 0.95), mm(3.0, 0.95), mm(2.0, 0.5)};
+  require(!flux::validate_navmesh_topology_signature(signature, tangent).preserved,
+          "touching a portal without changing sides is not a crossing");
+  std::swap(gate.left_boundary, gate.right_boundary);
+  require(flux::validate_navmesh_topology_signature(
+              flux::make_navmesh_topology_signature({gate}), sampled).preserved,
+          "boundary vertex order must not override the directed cell transition");
+}
+
+void short_terminal_dogleg_has_a_regular_ph_realization() {
+  const std::vector<Point> points{mm(26.0, 24.0), mm(26.0, 36.5), mm(26.5, 36.5),
+                                  mm(26.5, 37.0), mm(31.5, 37.0), mm(31.5, 37.5),
+                                  mm(32.5, 37.5), mm(32.5, 41.0), mm(32.54, 41.0)};
+  std::string diagnostic;
+  std::size_t legal_starts = 0U;
+  for (const auto guard_nm :
+       {1LL, 5'000LL, 10'000LL, 20'000LL, 50'000LL, 100'000LL, 250'000LL, 500'000LL}) {
+    const auto candidate = flux::make_corner_rounded_quintic_ph_route(points, Nanometres{guard_nm});
+    if (!candidate) {
+      diagnostic += std::to_string(guard_nm) + ":missing;";
+      continue;
+    }
+    const auto shape = flux::certify_quintic_ph_shape(*candidate);
+    legal_starts += shape.legal ? 1U : 0U;
+    diagnostic += std::to_string(guard_nm) + ":" + std::to_string(shape.violations()) + "/" +
+                  std::to_string(shape.unintended_inflections) + "/" +
+                  std::to_string(candidate->control_points.size()) + ";";
+  }
+  require(legal_starts > 0U,
+          "an extreme short terminal run-up must retain at least one regular, non-wiggling PH "
+          "interpolation start: " +
+              diagnostic);
+
+  auto source = two_pad_board();
+  source.footprints.front().position = points.front();
+  source.footprints.back().position = points.back();
+  flux::GlobalRouteResult global;
+  global.stop_reason = GlobalRouterStopReason::complete;
+  flux::GlobalRoutePath path;
+  path.net = NetId{"net-1"};
+  for (const auto point : points)
+    path.points.push_back({point, LayerId{"F.Cu"}});
+  global.paths.push_back(std::move(path));
+  flux::DetailedRouterConfig config;
+  config.pull_tight_45_degrees = false;
+  config.continuous_refinement = false;
+  config.circular_arc_refinement = true;
+  config.spline_minimum_bend_radius = Nanometres{0};
+  const auto detailed = flux::materialize_detailed_route(source, global, config);
+  const auto retained_planning_stub =
+      detailed.candidate &&
+      std::any_of(
+          detailed.candidate->tracks.begin(), detailed.candidate->tracks.end(),
+          [&](const auto& track) {
+            return track.net == NetId{"net-1"} &&
+                   ((track.start == points[points.size() - 2U] && track.end == points.back()) ||
+                    (track.end == points[points.size() - 2U] && track.start == points.back()));
+          });
+  require(detailed.complete() && detailed.candidate && detailed.fitted_quintic_ph_runs > 0U &&
+              detailed.unrounded_non_junction_bends == 0U && !retained_planning_stub,
+          "a sub-cell planning run-up may not impose a mandatory pad tangent when its exact "
+          "same-homotopy replacement chord is legal: " +
+              detailed.diagnostic + "/" + detailed.spline_navmesh_last_topology_diagnostic);
+}
+
+void fallback_corridor_preserves_curvature_room() {
+  auto source = two_pad_board();
+  Keepout center;
+  center.id = ObjectId{"fallback-corner-obstacle"};
+  center.area = rectangle(23.0, 31.0, 77.0, 45.0);
+  center.layers = {LayerId{"F.Cu"}};
+  center.prohibit.tracks = true;
+  center.prohibit.vias = true;
+  source.keepouts.push_back(std::move(center));
+  flux::GlobalRouteResult global;
+  global.stop_reason = GlobalRouterStopReason::complete;
+  flux::GlobalRoutePath path;
+  path.net = NetId{"net-1"};
+  for (const auto point : {mm(20.0, 40.0), mm(20.0, 30.0),
+                           mm(80.0, 30.0), mm(80.0, 40.0)})
+    path.points.push_back({point, LayerId{"F.Cu"}});
+  global.paths.push_back(std::move(path));
+  flux::DetailedRouterConfig config;
+  config.pull_tight_45_degrees = false;
+  config.continuous_refinement = false;
+  config.circular_arc_refinement = true;
+  config.max_spline_navmesh_search_expansions_per_run = 1U;
+  config.spline_minimum_bend_radius = Nanometres::from_mm(1.0);
+  const auto detailed = flux::materialize_detailed_route(source, global, config);
+  require(detailed.complete() && detailed.candidate &&
+              detailed.spline_navmesh_certificate_fallbacks > 0U &&
+              detailed.unrounded_non_junction_bends == 0U && detailed.copper_drc.ok() &&
+              detailed.connectivity.open_connections == 0U,
+          "right-angle source-corridor fallback must retain space for a legal minimum-radius curve: " +
+              detailed.diagnostic + "/" + detailed.spline_navmesh_last_topology_diagnostic);
+}
+
+void fallback_corridor_retains_one_sided_bend_room() {
+  auto source = two_pad_board();
+  // The vertical approach is only 50 micrometres from the offset board edge,
+  // but there is ample room on its right for a one-millimetre-radius bend.
+  source.outline = rectangle(19.325, 0.0, 100.0, 80.0);
+  for (auto& footprint : source.footprints) {
+    footprint.courtyard = local_rectangle(0.15, 0.15);
+    footprint.pads.front().width = Nanometres{250000};
+    footprint.pads.front().height = Nanometres{250000};
+  }
+  flux::GlobalRouteResult global;
+  global.stop_reason = GlobalRouterStopReason::complete;
+  flux::GlobalRoutePath path;
+  path.net = NetId{"net-1"};
+  for (const auto point : {mm(20.0, 40.0), mm(20.0, 30.0),
+                           mm(80.0, 30.0), mm(80.0, 40.0)})
+    path.points.push_back({point, LayerId{"F.Cu"}});
+  global.paths.push_back(std::move(path));
+  flux::DetailedRouterConfig config;
+  config.pull_tight_45_degrees = false;
+  config.continuous_refinement = false;
+  config.circular_arc_refinement = true;
+  config.max_spline_navmesh_search_expansions_per_run = 1U;
+  config.spline_minimum_bend_radius = Nanometres::from_mm(1.0);
+  for (unsigned reflection = 0U; reflection < 4U; ++reflection) {
+    auto reflected_source = source;
+    auto reflected_global = global;
+    const auto reflect = [reflection](Point point) {
+      if (reflection & 1U)
+        point.x = Nanometres{100000000 - point.x.value()};
+      if (reflection & 2U)
+        point.y = Nanometres{80000000 - point.y.value()};
+      return point;
+    };
+    if (reflection & 1U)
+      reflected_source.outline = rectangle(0.0, 0.0, 80.675, 80.0);
+    for (auto& footprint : reflected_source.footprints)
+      footprint.position = reflect(footprint.position);
+    for (auto& point : reflected_global.paths.front().points)
+      point.position = reflect(point.position);
+    const auto detailed = flux::materialize_detailed_route(reflected_source, reflected_global, config);
+    require(detailed.complete() && detailed.candidate &&
+                detailed.spline_navmesh_certificate_fallbacks > 0U &&
+                detailed.unrounded_non_junction_bends == 0U && detailed.copper_drc.ok() &&
+                detailed.connectivity.open_connections == 0U,
+            "an edge-constrained source corridor must preserve independently legal inward room: " +
+                std::to_string(reflection) + "/" + detailed.diagnostic + "/" +
+                detailed.spline_last_materialization_diagnostic);
+  }
+}
+
+void corner_blends_preserve_straight_run_tangents() {
+  for (const auto sign : {-1.0L, 1.0L}) {
+    const std::vector<Point> points{mm(10.0 * sign, 10.0), mm(20.0 * sign, 10.0),
+                                    mm(20.0 * sign, 30.0), mm(10.0 * sign, 30.0)};
+    const auto ordinary = flux::make_corner_rounded_quintic_ph_route(
+        points, Nanometres::from_mm(1.0));
+    auto aligned = flux::make_run_aligned_quintic_ph_route(points, Nanometres::from_mm(1.0));
+    require(ordinary && aligned, "both corner seed families must interpolate the micro-route");
+    const auto maximum_outward = [sign](const auto& route) {
+      long double result = -std::numeric_limits<long double>::infinity();
+      for (std::size_t i = 0U; i <= 512U; ++i)
+        result = std::max(result, sign * flux::evaluate_quintic_ph(route, i / 512.0L).x);
+      return result;
+    };
+    require(maximum_outward(*ordinary) > 20050000.0L,
+            "bisector shoulder tangents must reproduce an outward bow beyond a 50um margin");
+    const auto check = [&] {
+      require(aligned->tangent_continuous && maximum_outward(*aligned) <= 20000000.01L &&
+                  flux::certify_quintic_ph_shape(*aligned).legal,
+              "run-aligned shoulders must keep the connecting PH run straight and regular");
+      require(aligned->node_tangent_directions.size() == aligned->control_points.size(),
+              "Hermite direction constraints must stay aligned with interpolation nodes");
+    };
+    check();
+    require(flux::rebuild_quintic_ph_route(*aligned), "aligned seed must rebuild");
+    check();
+    require(flux::insert_quintic_ph_interpolation_node(*aligned, 0.5L),
+            "the straight PH span must support exact adaptive insertion");
+    check();
+    require(flux::rebuild_quintic_ph_route(*aligned), "inserted direction constraints must rebuild");
+    check();
+    auto malformed = *aligned;
+    malformed.node_tangent_directions.pop_back();
+    require(!flux::rebuild_quintic_ph_route(malformed),
+            "misaligned Hermite direction metadata must fail closed");
   }
 }
 
@@ -1973,6 +5838,57 @@ void obstacle_aware_diagonals_and_curves_remain_capacity_and_drc_gated() {
           "opposite exact-legal cell diagonals must be discoverable but share one hard physical "
           "crossing resource whose two negotiated participants retain their own attribution");
 
+  auto oracle_owned_config = crossing_config;
+  oracle_owned_config.clearance_shadows_advisory_only = true;
+  const auto oracle_owned = flux::route_global(crossing, oracle_owned_config);
+  flux::RoutabilityProbeConfig advisory_probe_config;
+  advisory_probe_config.clearance_shadows_contribute_to_history = false;
+  const auto advisory_shadow_diagnoses =
+      flux::probe_global_routability(oracle_owned, advisory_probe_config);
+  const auto exact_oracle = flux::probe_quantized_copper_feasibility(crossing, oracle_owned);
+  flux::RoutabilityKnowledge oracle_owned_knowledge;
+  flux::accumulate_routability_knowledge(oracle_owned_knowledge, advisory_shadow_diagnoses,
+                                        advisory_probe_config);
+  flux::accumulate_routability_knowledge(oracle_owned_knowledge, exact_oracle.diagnoses,
+                                        advisory_probe_config);
+  require(oracle_owned.configured_clearance_shadows_advisory_only &&
+              oracle_owned.clearance_shadow_overflow > 0U &&
+              oracle_owned.clearance_shadow_conflicts.size() <=
+                  crossed.clearance_shadow_conflicts.size() &&
+              oracle_owned.clearance_shadow_raster_samples ==
+                  oracle_owned.clearance_shadow_conflicts.size() +
+                      oracle_owned.clearance_shadow_coalesced_samples &&
+              oracle_owned.total_overflow == oracle_owned.sampled_overflow &&
+              oracle_owned.clearance_shadow_history_increment == 0U &&
+              oracle_owned.peak_clearance_shadow_history_increment == 0U &&
+              !oracle_owned.residual_conflict_groups.empty() &&
+              std::any_of(advisory_shadow_diagnoses.begin(), advisory_shadow_diagnoses.end(),
+                          [](const auto& diagnosis) {
+                            return !diagnosis.contributes_to_history &&
+                                   diagnosis.detail.find("selected copper envelopes overlap") !=
+                                       std::string::npos;
+                          }) &&
+              !exact_oracle.feasible() && !exact_oracle.diagnoses.empty() &&
+              !oracle_owned_knowledge.history.empty() &&
+              std::any_of(oracle_owned_knowledge.history.begin(),
+                          oracle_owned_knowledge.history.end(), [](const auto& entry) {
+                            return entry.stage == flux::RoutabilityFailureStage::quantization;
+                          }),
+          "oracle-owned physical feasibility must retain coalesced shadow scope evidence while "
+          "charging only typed exact-copper no-goods: configured=" +
+              std::to_string(oracle_owned.configured_clearance_shadows_advisory_only) +
+              ", shadows=" + std::to_string(oracle_owned.clearance_shadow_overflow) + "/" +
+              std::to_string(crossed.clearance_shadow_overflow) +
+              ", overflow=" + std::to_string(oracle_owned.total_overflow) + "/" +
+              std::to_string(oracle_owned.sampled_overflow) +
+              ", shadow-history=" +
+              std::to_string(oracle_owned.clearance_shadow_history_increment) +
+              ", groups=" + std::to_string(oracle_owned.residual_conflict_groups.size()) +
+              ", shadow-diag=" + std::to_string(advisory_shadow_diagnoses.size()) +
+              ", exact=" + std::to_string(exact_oracle.feasible()) + "/" +
+              std::to_string(exact_oracle.diagnoses.size()) +
+              ", history=" + std::to_string(oracle_owned_knowledge.history.size()));
+
   auto diversified_crossing_config = crossing_config;
   diversified_crossing_config.max_iterations = 6U;
   diversified_crossing_config.atomic_complete_net_routing = true;
@@ -2016,12 +5932,48 @@ void obstacle_aware_diagonals_and_curves_remain_capacity_and_drc_gated() {
   flux::RegionalRouterConfig terminal_portal_config;
   // The broad fixture repeats regional analysis for determinism and telemetry. Keep the optional
   // terminal topology portfolio out of this deliberately impossible one-layer crossing; its
-  // production-scale fallback is exercised by the routing corpus instead.
+  // production-scale fallback is exercised by the routing corpus instead. XPBD has its own
+  // focused CPU/GPU test above; disable it here because this assertion compares complete results,
+  // including deliberately non-deterministic host timing telemetry, across three repeated runs.
   terminal_portal_config.enable_terminal_portal_templates = false;
+  terminal_portal_config.enable_xpbd_relaxation = false;
+  terminal_portal_config.enable_xpbd_feedback = false;
   terminal_portal_config.max_same_layer_detour_checks = 0U;
+  terminal_portal_config.max_confined_anisotropic_erosion_checks = 4U;
+  terminal_portal_config.confined_anisotropic_erosion_flow.relaxation_iterations = 128U;
+  terminal_portal_config.confined_anisotropic_erosion_flow.droplet_batches = 1U;
+  terminal_portal_config.confined_anisotropic_erosion_flow.droplets_per_batch = 64U;
+  terminal_portal_config.confined_anisotropic_erosion_flow.maximum_steps_per_droplet = 128U;
+  const auto preflight_rejected = flux::analyze_regional_conflicts(crossing, crossed, terminal_portal_config);
+  require(preflight_rejected.linear_scaffold_checks > 0 &&
+              preflight_rejected.linear_scaffold_rejections > 0 &&
+              preflight_rejected.spline_interpolation_portfolio_candidates == 0 &&
+              !preflight_rejected.complete(),
+          "an impossible fixed one-layer scaffold with joint relaxation disabled must fail before PH portfolios");
+  // The remainder deliberately exercises legacy PH rejection telemetry on this impossible
+  // crossing. Disable only its new early gate; the production gate is asserted immediately above.
+  terminal_portal_config.require_legal_linear_scaffold = false;
   CollectingTelemetrySink regional_candidate_telemetry;
   const auto regional = flux::analyze_regional_conflicts(crossing, crossed, terminal_portal_config,
                                                          {}, &regional_candidate_telemetry);
+  const auto has_context_modes = [](const auto& events, bool spline, bool straight) {
+    return std::any_of(events.begin(), events.end(), [&](const auto& event) {
+      if (event.kind != flux::RouterTelemetryEventKind::search_summary ||
+          !event.stable_id.starts_with("regional-bundle-context:"))
+        return false;
+      return event.detail.find("\"schema\":4") != std::string::npos &&
+             event.detail.find(std::string{"\"enable_spline_realization\":"} +
+                               (spline ? "true" : "false")) != std::string::npos &&
+             event.detail.find(std::string{"\"enable_straight_realization\":"} +
+                               (straight ? "true" : "false")) != std::string::npos;
+    });
+  };
+  auto straight_context_config = terminal_portal_config;
+  straight_context_config.enable_spline_realization = false;
+  straight_context_config.enable_straight_realization = true;
+  CollectingTelemetrySink straight_context_telemetry;
+  static_cast<void>(flux::analyze_regional_conflicts(crossing, crossed, straight_context_config,
+                                                     {}, &straight_context_telemetry));
   const auto repeated_regional =
       flux::analyze_regional_conflicts(crossing, crossed, terminal_portal_config);
   flux::RouterTelemetryConfig regional_telemetry_config;
@@ -2049,78 +6001,184 @@ void obstacle_aware_diagonals_and_curves_remain_capacity_and_drc_gated() {
         return event.kind == flux::RouterTelemetryEventKind::search_summary &&
                event.detail.find("regional spline realization completed") != std::string::npos;
       });
-  require(regional == repeated_regional && regional == observed_regional &&
-              decoded_regional_snapshot && decoded_regional_snapshot.events.size() == 1U &&
-              decoded_regional_snapshot.events.front().dynamic_state_included &&
-              decoded_regional_snapshot.events.front().conflicts.size() ==
-                  regional.conflict_edges.size() &&
-              regional_telemetry_state.total_groups == regional.components.size() &&
-              regional_telemetry_state.regional_conflicts == regional.conflict_edges.size() &&
-              !regional_telemetry_state.observed_routes.empty() &&
-              first_candidate_spline != regional_candidate_telemetry.events.end() &&
-              spline_phase_completed != regional_candidate_telemetry.events.end() &&
-              first_candidate_spline < spline_phase_completed &&
-              std::any_of(
-                  regional_telemetry_state.observed_routes.begin(),
-                  regional_telemetry_state.observed_routes.end(),
-                  [](const auto& route) {
-                    return route.route_geometry == flux::RouterTelemetryRouteGeometry::quintic_ph &&
-                           route.spline_degree == 5U && route.spline_control_points.size() >= 6U;
-                  }) &&
-              regional.source_clearance_shadow_conflicts ==
-                  crossed.clearance_shadow_conflicts.size() &&
-              regional.spline_interpolation_gpu_batches > 0U &&
-              regional.spline_interpolation_gpu_fallbacks <
-                  regional.spline_interpolation_gpu_batches &&
-              regional.spline_interpolation_gpu_candidates >=
-                  regional.spline_interpolation_exact_candidates &&
-              regional.spline_interpolation_exact_candidates <=
-                  regional.spline_interpolation_gpu_batches * 2U &&
-              regional.spline_geometry_cache_hits > 0U &&
-              regional.spline_offset_broadphase_batches > 0U &&
-              static_cast<std::uint64_t>(regional.spline_realization_us) > 0U &&
-              regional.coalesced_clearance_shadow_samples +
-                      regional.unmapped_clearance_shadow_conflicts ==
-                  regional.source_clearance_shadow_conflicts &&
-              regional.lane_solver_queries > 0U && regional.lane_solver_states > 0U &&
-              regional.lane_solver_cache_hits <= regional.lane_solver_queries &&
-              regional.joint_spline_candidates_generated >=
-                  regional.joint_spline_active_candidates_retained &&
-              regional.joint_spline_fallback_candidates_promoted <=
-                  regional.joint_spline_fallback_candidates_retained &&
-              regional.joint_spline_fallback_candidates_remaining <=
-                  regional.joint_spline_fallback_candidates_retained &&
-              regional.joint_spline_fallback_candidates_promoted +
-                      regional.joint_spline_fallback_candidates_remaining <=
-                  regional.joint_spline_fallback_candidates_retained &&
-              regional.joint_spline_candidates_evaluated <=
-                  regional.joint_spline_active_candidates_retained +
-                      regional.joint_spline_fallback_candidates_promoted &&
-              regional.joint_spline_fallback_windows_recovered <=
+  require(
+      regional == repeated_regional && regional == observed_regional && decoded_regional_snapshot &&
+          decoded_regional_snapshot.events.size() == 1U &&
+          decoded_regional_snapshot.events.front().dynamic_state_included &&
+          decoded_regional_snapshot.events.front().conflicts.size() ==
+              regional.conflict_edges.size() &&
+          regional_telemetry_state.total_groups == regional.components.size() &&
+          regional_telemetry_state.regional_conflicts == regional.conflict_edges.size() &&
+          !regional_telemetry_state.observed_routes.empty() &&
+          has_context_modes(regional_candidate_telemetry.events, true, false) &&
+          has_context_modes(straight_context_telemetry.events, false, true) &&
+          first_candidate_spline != regional_candidate_telemetry.events.end() &&
+          spline_phase_completed != regional_candidate_telemetry.events.end() &&
+          first_candidate_spline < spline_phase_completed &&
+          std::any_of(
+              regional_telemetry_state.observed_routes.begin(),
+              regional_telemetry_state.observed_routes.end(),
+              [](const auto& route) {
+                return route.route_geometry == flux::RouterTelemetryRouteGeometry::quintic_ph &&
+                       route.spline_degree == 5U && route.spline_control_points.size() >= 6U;
+              }) &&
+          regional.source_clearance_shadow_conflicts == crossed.clearance_shadow_conflicts.size() &&
+          regional.spline_topology_seed_gpu_batches > 0U &&
+          regional.spline_topology_seed_gpu_fallbacks < regional.spline_topology_seed_gpu_batches &&
+          regional.spline_topology_seed_gpu_candidates >=
+              regional.spline_topology_seed_exact_candidates &&
+          regional.spline_interpolation_gpu_batches > 0U &&
+          regional.spline_interpolation_gpu_fallbacks < regional.spline_interpolation_gpu_batches &&
+          regional.spline_interpolation_gpu_candidates >=
+              regional.spline_interpolation_exact_candidates &&
+          regional.spline_geometry_cache_hits > 0U &&
+          ((regional.native_arc_windows_checked > 0U && regional.native_arc_pieces_checked > 0U) ||
+           (regional.spline_centerline_certificate_pairs > 0U &&
+            regional.spline_centerline_separation_proofs +
+                    regional.spline_centerline_collision_proofs >
+                0U)) &&
+          (regional.spline_offset_broadphase_batches > 0U ||
+           regional.spline_centerline_ambiguous_pairs == 0U) &&
+          static_cast<std::uint64_t>(regional.spline_realization_us) > 0U &&
+          regional.coalesced_clearance_shadow_samples +
+                  regional.unmapped_clearance_shadow_conflicts ==
+              regional.source_clearance_shadow_conflicts &&
+          regional.lane_solver_queries > 0U && regional.lane_solver_states > 0U &&
+          regional.lane_solver_cache_hits <= regional.lane_solver_queries &&
+          regional.joint_spline_candidates_generated >=
+              regional.joint_spline_active_candidates_retained &&
+          regional.joint_spline_fallback_candidates_promoted <=
+              regional.joint_spline_fallback_candidates_retained &&
+          regional.joint_spline_fallback_candidates_remaining <=
+              regional.joint_spline_fallback_candidates_retained &&
+          regional.joint_spline_fallback_candidates_promoted +
+                  regional.joint_spline_fallback_candidates_remaining <=
+              regional.joint_spline_fallback_candidates_retained &&
+          regional.joint_spline_candidates_evaluated <=
+              regional.joint_spline_active_candidates_retained +
                   regional.joint_spline_fallback_candidates_promoted &&
-              regional.unmapped_clearance_shadow_conflicts == 0U && !regional.fragments.empty() &&
-              !regional.conflict_edges.empty() && regional.components.size() == 1U &&
-              regional.components.front().nets.size() == 2U &&
-              regional.complete() == regional.spline_candidate_available &&
-              (!regional.complete() ||
-               std::all_of(regional.bundle_assignments.begin(), regional.bundle_assignments.end(),
-                           [](const auto& assignment) { return assignment.complete(); })),
-          "regional analysis must deterministically attribute every exact clearance-shadow "
-          "observation to stable route fragments, "
-          "retain a bounded compact active/fallback spline portfolio, and require an all-window "
-          "spline candidate before bounded source conflicts count as regionally complete: " +
-              std::to_string(regional.joint_spline_candidates_generated) + "/" +
-              std::to_string(regional.joint_spline_active_candidates_retained) + "/" +
-              std::to_string(regional.joint_spline_fallback_candidates_retained) + "/" +
-              std::to_string(regional.joint_spline_fallback_candidates_promoted) + "/" +
-              std::to_string(regional.joint_spline_fallback_candidates_remaining) + "/" +
-              std::to_string(regional.joint_spline_candidates_evaluated));
+          regional.joint_spline_fallback_windows_recovered <=
+              regional.joint_spline_fallback_candidates_promoted &&
+          regional.conflict_directed_topology_cores <=
+              terminal_portal_config.max_conflict_directed_topology_windows &&
+          regional.conflict_directed_windows_recovered +
+                  regional.conflict_directed_windows_exhausted <=
+              regional.conflict_directed_topology_cores &&
+          (regional.conflict_directed_topology_cores == 0U ||
+           regional.conflict_directed_master_reruns >= regional.conflict_directed_topology_cores) &&
+          (regional.conflict_directed_topology_cores == 0U ||
+           regional.confined_anisotropic_erosion_checks > 0U) &&
+          regional.confined_anisotropic_erosion_accepted +
+                  regional.confined_anisotropic_erosion_rejected ==
+              regional.confined_anisotropic_erosion_checks &&
+          regional.confined_anisotropic_erosion_accepted <=
+              regional.confined_anisotropic_erosion_gpu_routes +
+                  regional.confined_anisotropic_erosion_cpu_routes &&
+          regional.unmapped_clearance_shadow_conflicts == 0U && !regional.fragments.empty() &&
+          !regional.conflict_edges.empty() && regional.components.size() == 1U &&
+          regional.components.front().nets.size() == 2U &&
+          regional.complete() == regional.spline_candidate_available &&
+          (!regional.complete() ||
+           std::all_of(regional.bundle_assignments.begin(), regional.bundle_assignments.end(),
+                       [](const auto& assignment) { return assignment.complete(); })),
+      "regional analysis must deterministically attribute every exact clearance-shadow "
+      "observation to stable route fragments, "
+      "retain a bounded compact active/fallback spline portfolio, and require an all-window "
+      "spline candidate before bounded source conflicts count as regionally complete: " +
+          std::to_string(regional.joint_spline_candidates_generated) + "/" +
+          std::to_string(regional.joint_spline_active_candidates_retained) + "/" +
+          std::to_string(regional.joint_spline_fallback_candidates_retained) + "/" +
+          std::to_string(regional.joint_spline_fallback_candidates_promoted) + "/" +
+          std::to_string(regional.joint_spline_fallback_candidates_remaining) + "/" +
+          std::to_string(regional.joint_spline_candidates_evaluated) +
+          "/cert=" + std::to_string(regional.spline_centerline_certificate_pairs) +
+          "/native=" + std::to_string(regional.native_arc_windows_checked) + "/" +
+          std::to_string(regional.native_arc_pieces_checked) + "/" +
+          std::to_string(regional.native_arc_copper_violations));
+
+  // A bounded joint shortlist must have identical authoritative selection whether alternatives
+  // are realized serially or against private immutable snapshots in a parallel batch. Deliberately
+  // exclude timing/cache counters: they describe scheduling rather than selected copper.
+  auto serial_candidate_config = terminal_portal_config;
+  serial_candidate_config.enable_terminal_portal_templates = true;
+  serial_candidate_config.max_terminal_choices_per_terminal = 2U;
+  serial_candidate_config.max_terminal_navmesh_template_checks = 16U;
+  // The base crossing diagnostic intentionally disables detours so it can isolate the rejected
+  // scaffold. Re-enable a bounded topology portfolio here: these distinct detours create the
+  // independent joint candidates that the batch executor must actually evaluate.
+  serial_candidate_config.max_same_layer_detour_checks = 32U;
+  serial_candidate_config.max_same_layer_detour_offsets = 3U;
+  serial_candidate_config.max_joint_spline_candidates = 4U;
+  serial_candidate_config.max_joint_spline_active_pool_candidates = 8U;
+  serial_candidate_config.max_legal_spline_candidates_per_window = 2U;
+  serial_candidate_config.max_joint_spline_fallback_waves = 1U;
+  serial_candidate_config.max_spline_candidate_workers = 1U;
+  serial_candidate_config.max_spline_window_workers = 1U;
+  const auto serial_candidates =
+      flux::analyze_regional_conflicts(crossing, crossed, serial_candidate_config);
+  auto parallel_candidate_config = serial_candidate_config;
+  parallel_candidate_config.max_spline_candidate_workers = 4U;
+  parallel_candidate_config.max_spline_window_workers = 1U;
+  parallel_candidate_config.max_spline_cpu_workers = 4U;
+  parallel_candidate_config.max_spline_window_scratch_bytes = 256U * 1024U * 1024U;
+  parallel_candidate_config.estimated_spline_window_scratch_bytes = 64U * 1024U * 1024U;
+  const auto parallel_candidates =
+      flux::analyze_regional_conflicts(crossing, crossed, parallel_candidate_config);
+  require(parallel_candidates.spline_candidate_parallel_tasks > 0U &&
+              parallel_candidates.spline_candidate_parallel_workers > 1U &&
+              serial_candidates.spline_candidate_parallel_tasks == 0U &&
+              serial_candidates.stop_reason == parallel_candidates.stop_reason &&
+              serial_candidates.spline_candidate_available ==
+                  parallel_candidates.spline_candidate_available &&
+              serial_candidates.native_scene_complete == parallel_candidates.native_scene_complete &&
+              serial_candidates.native_scene_conflicts == parallel_candidates.native_scene_conflicts &&
+              serial_candidates.spline_candidate_paths == parallel_candidates.spline_candidate_paths &&
+              serial_candidates.bundle_assignments.size() ==
+                  parallel_candidates.bundle_assignments.size(),
+          "parallel regional candidate batches must preserve the serial physical outcome: tasks=" +
+              std::to_string(parallel_candidates.spline_candidate_parallel_tasks) +
+              ", workers=" + std::to_string(parallel_candidates.spline_candidate_parallel_workers) +
+              ", stop_equal=" + std::to_string(serial_candidates.stop_reason == parallel_candidates.stop_reason) +
+              ", available=" + std::to_string(serial_candidates.spline_candidate_available) + "/" +
+              std::to_string(parallel_candidates.spline_candidate_available) +
+              ", native=" + std::to_string(serial_candidates.native_scene_complete) + "/" +
+              std::to_string(parallel_candidates.native_scene_complete) +
+              ", conflicts=" + std::to_string(serial_candidates.native_scene_conflicts) + "/" +
+              std::to_string(parallel_candidates.native_scene_conflicts) +
+              ", paths_equal=" + std::to_string(serial_candidates.spline_candidate_paths == parallel_candidates.spline_candidate_paths) +
+              ", assignments=" + std::to_string(serial_candidates.bundle_assignments.size()) + "/" +
+              std::to_string(parallel_candidates.bundle_assignments.size()));
+  for (std::size_t index = 0U; index < serial_candidates.bundle_assignments.size(); ++index) {
+    const auto& serial_assignment = serial_candidates.bundle_assignments[index];
+    const auto& parallel_assignment = parallel_candidates.bundle_assignments[index];
+    require(serial_assignment.selected_templates == parallel_assignment.selected_templates &&
+                serial_assignment.selected_via_choices == parallel_assignment.selected_via_choices &&
+                serial_assignment.spline_candidate_rank == parallel_assignment.spline_candidate_rank &&
+                serial_assignment.stop_reason == parallel_assignment.stop_reason &&
+                serial_assignment.spline_realizations == parallel_assignment.spline_realizations,
+            "parallel candidate reduction must retain the same ranked realized geometry");
+  }
+  std::stop_source candidate_stop;
+  candidate_stop.request_stop();
+  const auto cancelled_candidates = flux::analyze_regional_conflicts(
+      crossing, crossed, parallel_candidate_config, candidate_stop.get_token());
+  require(cancelled_candidates.stop_reason == flux::RegionalRouterStopReason::cancelled &&
+              !cancelled_candidates.spline_candidate_available &&
+              cancelled_candidates.spline_candidate_parallel_tasks == 0U &&
+              std::none_of(cancelled_candidates.bundle_assignments.begin(),
+                           cancelled_candidates.bundle_assignments.end(), [](const auto& assignment) {
+                             return assignment.spline_candidate_realized ||
+                                    !assignment.spline_realizations.empty();
+                           }),
+          "pre-cancelled regional candidate batches must not commit partial realization");
 
   flux::RoutingPlannerConfig deferred_regional_config;
+  deferred_regional_config.curved_tracks = true; // Retained curve/physics scheduling regression.
+  deferred_regional_config.full_strength_first_pass = false; // Explicit legacy scheduling coverage.
   deferred_regional_config.global = crossing_config;
   deferred_regional_config.max_routability_feedback_retries = 0U;
   deferred_regional_config.regional.max_nets_per_window = 1U;
-  const auto deferred_regional_plan = flux::plan_routes(crossing, deferred_regional_config);
+  const auto deferred_regional_plan = flux::plan_routes_legacy(crossing, deferred_regional_config);
   require(
       !deferred_regional_plan.complete() &&
           deferred_regional_plan.regional.diagnostic !=
@@ -2137,7 +6195,248 @@ void obstacle_aware_diagonals_and_curves_remain_capacity_and_drc_gated() {
 
   auto broad_feedback_config = deferred_regional_config;
   broad_feedback_config.max_routability_feedback_retries = 1U;
-  const auto broad_feedback_plan = flux::plan_routes(crossing, broad_feedback_config);
+  const auto broad_feedback_plan = flux::plan_routes_legacy(crossing, broad_feedback_config);
+  auto repeated_physics_config = broad_feedback_config;
+  repeated_physics_config.full_strength_first_pass = true;
+  repeated_physics_config.global.max_iterations = 3U;
+  repeated_physics_config.max_routability_feedback_retries = 2U;
+  CollectingTelemetrySink repeated_physics_telemetry;
+  const auto repeated_physics =
+      flux::plan_routes_legacy(crossing, repeated_physics_config, {}, &repeated_physics_telemetry);
+  require(!repeated_physics.complete() && repeated_physics.feedback_probes.size() == 3U &&
+              repeated_physics.cumulative_global_iterations == 3U &&
+              repeated_physics.feedback_probes.front().next_feedback_affected_nets >= 2U &&
+              repeated_physics.regional.configured.enable_xpbd_relaxation &&
+              repeated_physics.regional.configured.frozen_copper_context &&
+              std::all_of(repeated_physics.feedback_probes.begin(), repeated_physics.feedback_probes.end(),
+                  [](const auto& epoch) {
+                    return !epoch.intermediate_regional_probe &&
+                        std::any_of(epoch.candidates.begin(), epoch.candidates.end(), [](const auto& candidate) {
+                          return candidate.regional_consulted && candidate.regional_spline_realization_enabled;
+                        });
+                  }),
+          "failed physical windows must drive bounded rip-up/replan epochs with physics enabled every time");
+  std::map<std::string, std::vector<flux::RouterTelemetryPathPoint>> replayed_global_paths;
+  std::map<std::string, std::vector<flux::RouterTelemetryPathPoint>> last_global_attempt_paths;
+  const auto is_global_route = [](const flux::RouterTelemetryEvent& event) {
+    return event.stable_id.starts_with("global-route:");
+  };
+  for (const auto& event : repeated_physics_telemetry.events) {
+    if (event.kind == flux::RouterTelemetryEventKind::route_removed && is_global_route(event)) {
+      replayed_global_paths.erase(event.stable_id);
+    } else if (event.kind == flux::RouterTelemetryEventKind::route_candidate_selected &&
+               is_global_route(event)) {
+      replayed_global_paths.insert_or_assign(event.stable_id, event.route_points);
+    }
+    if (event.kind == flux::RouterTelemetryEventKind::global_routing_finished) {
+      last_global_attempt_paths = replayed_global_paths;
+    }
+  }
+  std::map<std::string, std::vector<flux::RouterTelemetryPathPoint>> retained_global_paths;
+  for (const auto& path : repeated_physics.coarse_global.paths) {
+    std::vector<flux::RouterTelemetryPathPoint> points;
+    points.reserve(path.points.size());
+    for (const auto& point : path.points)
+      points.push_back({point.position.x.value(), point.position.y.value(), point.layer});
+    retained_global_paths.emplace(
+        "global-route:" + path.net.value() + ':' + std::to_string(path.connection_index),
+        std::move(points));
+  }
+  require(replayed_global_paths == retained_global_paths,
+          "replayed active global-route telemetry must exactly restore the retained coarse "
+          "checkpoint and exclude paths from a later discarded attempt");
+  for (const auto& [id, ignored] : last_global_attempt_paths) {
+    static_cast<void>(ignored);
+    if (retained_global_paths.contains(id)) {
+      continue;
+    }
+    require(std::any_of(repeated_physics_telemetry.events.begin(), repeated_physics_telemetry.events.end(),
+                        [&](const auto& event) {
+                          return event.kind == flux::RouterTelemetryEventKind::route_removed &&
+                                 event.stable_id == id;
+                        }),
+            "a global-route ID absent from the retained checkpoint must be removed from the "
+            "discarded final attempt");
+  }
+  auto straight_feedback_config = repeated_physics_config;
+  straight_feedback_config.curved_tracks = false;
+  const auto straight_feedback = flux::plan_routes_legacy(crossing, straight_feedback_config);
+  require(!straight_feedback.feedback_probes.empty() &&
+              straight_feedback.feedback_probes.front().intermediate_regional_probe &&
+              straight_feedback.cumulative_global_iterations <= 3U &&
+              std::all_of(straight_feedback.feedback_probes.begin(),
+                          straight_feedback.feedback_probes.end(), [](const auto& epoch) {
+                return std::all_of(epoch.candidates.begin(), epoch.candidates.end(),
+                    [&](const auto& candidate) {
+                      return !candidate.regional_spline_realization_enabled &&
+                          (!epoch.intermediate_regional_probe ||
+                           candidate.global_sampled_overflow == 0U || !candidate.regional_consulted);
+                    });
+              }),
+          "straight conflicts must return to negotiation before expensive regional portfolios");
+  // Distinct lattice rows fit abstract capacity, but wide copper overlaps at their terminal
+  // approaches. Unlike the crossing fixture above, this reaches the negotiated topology gate.
+  auto parallel = crossing;
+  parallel.source_revision = "parallel-terminal-physical-feedback";
+  parallel.rules.default_track_width = Nanometres::from_mm(0.6);
+  parallel.rules.default_clearance = Nanometres::from_mm(0.2);
+  parallel.nets = {{NetId{"a"}, "A", 0}, {NetId{"b"}, "B", 0}};
+  parallel.footprints = {terminal("a1", NetId{"a"}, mm(5.0, 10.0)),
+                         terminal("a2", NetId{"a"}, mm(25.0, 10.0)),
+                         terminal("b1", NetId{"b"}, mm(5.0, 10.6)),
+                         terminal("b2", NetId{"b"}, mm(25.0, 10.6))};
+  for (auto& footprint : parallel.footprints) {
+    footprint.courtyard = local_rectangle(0.2, 0.2);
+    footprint.pads.front().width = Nanometres::from_mm(0.2);
+    footprint.pads.front().height = Nanometres::from_mm(0.2);
+  }
+  flux::RoutingPlannerConfig assembled_feedback_config;
+  require(!assembled_feedback_config.enable_assembled_straight_feedback,
+          "reserved assembled straight feedback must remain opt-in by default");
+  assembled_feedback_config.curved_tracks = false;
+  assembled_feedback_config.full_strength_first_pass = false;
+  assembled_feedback_config.max_routability_feedback_retries = 2U;
+  assembled_feedback_config.global = crossing_config;
+  assembled_feedback_config.global.grid_pitch = Nanometres::from_mm(1.0);
+  assembled_feedback_config.global.max_iterations = 3U;
+  assembled_feedback_config.global.allow_crossing_safe_diagonal_grid_edges = false;
+  assembled_feedback_config.regional.max_nets_per_window = 2U;
+  const auto default_assembled_feedback = flux::plan_routes_legacy(parallel, assembled_feedback_config);
+  require(default_assembled_feedback.feedback_probes.size() == 3U &&
+              default_assembled_feedback.feedback_probes[1].intermediate_regional_probe &&
+              std::none_of(default_assembled_feedback.feedback_probes[1].candidates.begin(),
+                           default_assembled_feedback.feedback_probes[1].candidates.end(),
+                           [](const auto& candidate) {
+                             return candidate.regional_straight_scene_evaluated;
+                           }),
+          "the default scheduler must retain the inexpensive intermediate straight probe");
+  assembled_feedback_config.enable_assembled_straight_feedback = true;
+  const auto assembled_feedback = flux::plan_routes_legacy(parallel, assembled_feedback_config);
+  require(assembled_feedback.feedback_probes.size() == 3U &&
+              assembled_feedback.cumulative_global_iterations == 3U &&
+              !assembled_feedback.complete(),
+          "assembled feedback must preserve the three-iteration budget and reject colliding copper: " +
+              std::to_string(assembled_feedback.feedback_probes.size()) + "/" +
+              std::to_string(assembled_feedback.cumulative_global_iterations) + "/" +
+              assembled_feedback.diagnostic);
+  // The assembled straight scene is the physical authority for the next epoch: its exact
+  // failures must be published after regional realization, then consumed by the following
+  // global retry.  This deliberately keeps curved/spline realization disabled.
+  const auto interleaved_straight_retry = [&] {
+    if (assembled_feedback.feedback_probes.size() >= 2U) {
+      const auto i = assembled_feedback.feedback_probes.size() - 2U;
+      const auto& assembled = assembled_feedback.feedback_probes[i];
+      const auto& retry = assembled_feedback.feedback_probes[i + 1U];
+      const bool exact_failure = std::any_of(
+          assembled.candidates.begin(), assembled.candidates.end(), [](const auto& candidate) {
+            return candidate.global_sampled_overflow == 0U && candidate.global_corridor_overflow == 0U &&
+                candidate.regional_consulted && candidate.regional_straight_scene_evaluated &&
+                candidate.regional_straight_scene_violations > 0U &&
+                !candidate.regional_spline_realization_enabled;
+          });
+      if (!exact_failure ||
+          assembled.history_pressure_after_regional <= assembled.history_pressure_after_global ||
+          retry.history_entries_before != assembled.history_entries_after_regional ||
+          retry.history_pressure_before != assembled.history_pressure_after_regional ||
+          assembled.next_feedback_affected_nets == 0U) {
+        return false;
+      }
+      if (std::any_of(retry.candidates.begin(), retry.candidates.end(),
+                      [](const auto& candidate) {
+                        return candidate.history_informed_global && candidate.feedback_affected_nets > 0U &&
+                            candidate.regional_consulted && candidate.regional_straight_scene_evaluated;
+                      })) {
+        return true;
+      }
+    }
+    return false;
+  }();
+  require(interleaved_straight_retry,
+          "the penultimate assembled straight scene must publish exact regional failures and "
+          "the subsequent global retry must consume that history and affected-net scope: " + [&] {
+            std::string detail;
+            for (const auto& epoch : assembled_feedback.feedback_probes) {
+              detail += " pass=" + std::to_string(epoch.pass) +
+                  " pressure=" + std::to_string(epoch.history_pressure_after_global) + "/" +
+                  std::to_string(epoch.history_pressure_after_regional);
+              for (const auto& candidate : epoch.candidates) {
+                detail += " [overflow=" + std::to_string(candidate.global_sampled_overflow) +
+                    "/" + std::to_string(candidate.global_corridor_overflow) +
+                    " consulted=" + std::to_string(candidate.regional_consulted) +
+                    " scene=" + std::to_string(candidate.regional_straight_scene_evaluated) +
+                    " violations=" + std::to_string(candidate.regional_straight_scene_violations) + "]";
+              }
+            }
+            return detail;
+          }());
+  auto single_portfolio_config = assembled_feedback_config;
+  single_portfolio_config.retained_global_portfolios = 1U;
+  single_portfolio_config.intermediate_regional_portfolios = 1U;
+  const auto single_portfolio = flux::plan_routes_legacy(parallel, single_portfolio_config);
+  require(single_portfolio.feedback_probes.size() == 3U &&
+              std::all_of(single_portfolio.feedback_probes.begin(),
+                          single_portfolio.feedback_probes.end(), [](const auto& epoch) {
+                            return epoch.candidates.size() == 1U;
+                          }) &&
+              single_portfolio.feedback_probes.back().candidates.front().regional_straight_scene_evaluated,
+          "forcing the physically informed replan into final assessment must respect a one-portfolio bound");
+  auto straight_no_retry_config = assembled_feedback_config;
+  straight_no_retry_config.max_routability_feedback_retries = 0U;
+  const auto straight_no_retry = flux::plan_routes_legacy(parallel, straight_no_retry_config);
+  require(straight_no_retry.feedback_probes.size() == 1U &&
+              std::any_of(straight_no_retry.feedback_probes.front().candidates.begin(),
+                          straight_no_retry.feedback_probes.front().candidates.end(),
+                          [](const auto& candidate) {
+                            return candidate.regional_straight_scene_evaluated;
+                          }),
+          "the zero-retry straight boundary must evaluate only the initial assembled scene");
+  repeated_physics_config.global.max_iterations = 6U;
+  const auto distributed_physics = flux::plan_routes_legacy(crossing, repeated_physics_config);
+  require(!distributed_physics.complete() && distributed_physics.feedback_probes.size() == 3U &&
+              distributed_physics.cumulative_global_iterations == 6U &&
+              distributed_physics.feedback_probes[0].global_epoch_iterations == 1U &&
+              distributed_physics.feedback_probes[1].global_epoch_iterations == 3U &&
+              distributed_physics.feedback_probes[2].global_epoch_iterations == 2U,
+          "failed seed certification must distribute, not discard or exceed, the remaining global budget");
+  auto fresh_feedback_config = repeated_physics_config;
+  fresh_feedback_config.regional.prioritize_frozen_scope_expansion = true;
+  const auto fresh_feedback = flux::plan_routes_legacy(crossing, fresh_feedback_config);
+  require(!fresh_feedback.complete() && fresh_feedback.feedback_probes.size() == 3U &&
+              fresh_feedback.cumulative_global_iterations == 6U &&
+              fresh_feedback.feedback_probes[1].candidates.size() == 1U &&
+              fresh_feedback.feedback_probes[1].candidates.front().regional_consulted &&
+              !fresh_feedback.feedback_probes[1].intermediate_regional_probe &&
+              fresh_feedback.feedback_probes.back().retained_global_portfolios > 0U &&
+              !fresh_feedback.feedback_probes.back().candidates.empty(),
+          "fresh intermediate feedback must keep physical authority, global budget and final fallbacks");
+  auto cone_config = broad_feedback_config.global;
+  cone_config.atomic_complete_net_routing = true;
+  cone_config.selective_congestion_reroute = true;
+  cone_config.hard_capacity_start_iteration = 1U;
+  cone_config.max_hard_capacity_blocker_reuse_invalidations_per_failed_net = 4U;
+  const auto repaired_cone = flux::route_global_with_sampled_conflict_repair(crossing, cone_config, 2U);
+  require(repaired_cone.stop_reason != flux::GlobalRouterStopReason::invalid_input &&
+              !repaired_cone.paths.empty() && repaired_cone.post_negotiation_cone_repair_attempts > 0U,
+          "sampled-cone repair must clear selective-only options and never replace routed copper with invalid input");
+  auto oracle_first_config = broad_feedback_config;
+  oracle_first_config.oracle_first_feedback = true;
+  oracle_first_config.clearance_shadows_advisory = true;
+  const auto oracle_first_plan = flux::plan_routes_legacy(crossing, oracle_first_config);
+  require(oracle_first_plan.feedback_probes.size() >= 2U &&
+              oracle_first_plan.feedback_probes.front().quantized_copper_oracle_violations > 0U &&
+              std::all_of(oracle_first_plan.feedback_probes.front().candidates.begin(),
+                          oracle_first_plan.feedback_probes.front().candidates.end(),
+                          [](const auto& candidate) {
+                            return !candidate.regional_consulted && !candidate.exact_promotion_attempted;
+                          }) &&
+              !oracle_first_plan.feedback_probes.back().intermediate_regional_probe &&
+              std::any_of(oracle_first_plan.feedback_probes.back().candidates.begin(),
+                          oracle_first_plan.feedback_probes.back().candidates.end(),
+                          [](const auto& candidate) { return candidate.regional_consulted; }),
+          "exact oracle failures must bypass intermediate regional work but not final realization");
+  require(oracle_first_plan.regional_evaluated &&
+              oracle_first_plan.regional.diagnostic.find("deferred") == std::string::npos,
+          "an unevaluated regional checkpoint must not displace the final physical assessment");
   const auto broad_feedback_candidate = [&]() -> const flux::RoutingPlanFeedbackCandidate* {
     for (const auto& probe : broad_feedback_plan.feedback_probes) {
       const auto found =
@@ -2159,16 +6458,47 @@ void obstacle_aware_diagonals_and_curves_remain_capacity_and_drc_gated() {
               broad_feedback_plan.retained_global_portfolio_peak > 0U &&
               broad_feedback_plan.retained_global_portfolios_evaluated > 0U &&
               broad_feedback_plan.intermediate_regional_probes > 0U &&
-              std::all_of(broad_feedback_plan.feedback_probes.begin(),
-                          broad_feedback_plan.feedback_probes.end(),
-                          [](const auto& probe) {
-                            return probe.global_epoch_iterations > 0U &&
-                                   probe.cumulative_global_iterations > 0U &&
-                                   probe.retained_global_portfolios > 0U;
-                          }),
+              broad_feedback_plan.provisional_exact_promotions_attempted <=
+                  broad_feedback_plan.intermediate_regional_probes &&
+              std::all_of(
+                  broad_feedback_plan.feedback_probes.begin(),
+                  broad_feedback_plan.feedback_probes.end(), [](const auto& probe) {
+                    return !probe.intermediate_regional_probe ||
+                           std::all_of(probe.candidates.begin(), probe.candidates.end(),
+                                       [](const auto& candidate) {
+                                         return (candidate.global_sampled_overflow == 0U &&
+                                                 candidate.global_corridor_overflow == 0U &&
+                                                 candidate.global_unaccepted_lane_transitions ==
+                                                     0U) ||
+                                                (!candidate.regional_consulted &&
+                                                 !candidate.exact_promotion_attempted &&
+                                                 !candidate.regional_spline_realization_enabled &&
+                                                 candidate.regional_spline_candidates_evaluated ==
+                                                     0U);
+                                       });
+                  }) &&
+              std::all_of(
+                  broad_feedback_plan.feedback_probes.begin(),
+                  broad_feedback_plan.feedback_probes.end(),
+                  [](const auto& probe) {
+                    const auto cheap_probe =
+                        !probe.intermediate_regional_probe ||
+                        std::all_of(
+                            probe.candidates.begin(), probe.candidates.end(),
+                            [](const auto& candidate) {
+                              return candidate.exact_promotion_attempted
+                                         ? candidate.regional_spline_realization_enabled
+                                         : !candidate.regional_spline_realization_enabled &&
+                                               candidate.regional_spline_candidates_evaluated == 0U;
+                            });
+                    return probe.global_epoch_iterations > 0U &&
+                           probe.cumulative_global_iterations > 0U &&
+                           probe.retained_global_portfolios > 0U && cheap_probe;
+                  }),
           "a feedback cone which covers essentially every net must re-run global allocation "
           "rather than preserving a token subset of incompatible routes, and short global "
-          "epochs must retain observable topology breadth across physical probes");
+          "epochs must retain observable topology breadth while negotiated overflow returns "
+          "directly to PathFinder/rip-up instead of entering regional PH");
 
   flux::RoutabilityKnowledge typed_history;
   const flux::RoutabilityResourceReference shared_resource{
@@ -2199,6 +6529,64 @@ void obstacle_aware_diagonals_and_curves_remain_capacity_and_drc_gated() {
                   typed_history.history.back().suggested_relaxation,
           "routability history must not collapse lane-order and corridor-change failures into "
           "one actionless scalar pressure entry");
+
+  flux::RegionalRouteResult search_only_regional;
+  search_only_regional.windows.push_back(
+      {0U, {mm(40.0, 40.0), mm(41.0, 41.0)}, {LayerId{"F.Cu"}}, {}, {}, {}, {}, {},
+       {NetId{"net-1"}}});
+  flux::RegionalBundleAssignment search_only_assignment;
+  search_only_assignment.window_id = 0U;
+  search_only_assignment.stop_reason = flux::RegionalBundleStopReason::state_budget_exhausted;
+  search_only_assignment.packing_rejected_states = 73U;
+  search_only_assignment.access_assignment_exhaustions = 9U;
+  search_only_assignment.partial_access_blockers = {
+      {flux::RegionalAccessBlockerKind::via_pair, {}, {}, {}, 17U},
+      {flux::RegionalAccessBlockerKind::terminal_via, {}, {}, {}, 19U}};
+  search_only_regional.bundle_assignments.push_back(search_only_assignment);
+  const auto search_only_diagnoses = flux::diagnose_regional_routability(search_only_regional);
+  flux::RoutabilityKnowledge search_only_history;
+  flux::accumulate_routability_knowledge(search_only_history, search_only_diagnoses);
+  require(search_only_diagnoses.size() == 3U &&
+              std::all_of(search_only_diagnoses.begin(), search_only_diagnoses.end(),
+                          [](const auto& diagnosis) { return !diagnosis.contributes_to_history; }) &&
+              search_only_history.history.empty(),
+          "bounded packing and broad access-search observations must remain diagnostic evidence "
+          "without inventing physical routability history");
+  auto zero_rejected_regional = search_only_regional;
+  zero_rejected_regional.bundle_assignments.front().partial_access_blockers.clear();
+  zero_rejected_regional.bundle_assignments.front().packing_rejected_states = 0U;
+  const auto zero_rejected_diagnoses =
+      flux::diagnose_regional_routability(zero_rejected_regional);
+  auto no_fitting_regional = zero_rejected_regional;
+  no_fitting_regional.bundle_assignments.front().stop_reason =
+      flux::RegionalBundleStopReason::no_fitting_lane_order;
+  no_fitting_regional.bundle_assignments.front().packing_rejected_states = 997U;
+  const auto no_fitting_diagnoses = flux::diagnose_regional_routability(no_fitting_regional);
+  flux::RoutabilityKnowledge counter_history;
+  flux::accumulate_routability_knowledge(counter_history, zero_rejected_diagnoses);
+  flux::accumulate_routability_knowledge(counter_history, no_fitting_diagnoses);
+  require(zero_rejected_diagnoses.size() == 1U &&
+              zero_rejected_diagnoses.front().severity == 1U &&
+              !zero_rejected_diagnoses.front().contributes_to_history &&
+              no_fitting_diagnoses.size() == 1U &&
+              no_fitting_diagnoses.front().severity == 997U &&
+              !no_fitting_diagnoses.front().contributes_to_history &&
+              counter_history.history.empty(),
+          "zero or large rejected-state counters must remain telemetry severity, never physical history");
+  auto physical_regional = search_only_regional;
+  physical_regional.local_routability_diagnoses.push_back(
+      {flux::RoutabilityFailureKind::packing_capacity_exceeded,
+       flux::RoutabilityFailureStage::regional_discrete,
+       {"", LayerId{"F.Cu"}, {mm(40.0, 40.0), mm(41.0, 41.0)}, {NetId{"net-1"}}},
+       3U, Nanometres::from_mm(0.1), {}, {}, flux::RoutabilityRelaxation::change_corridor,
+       "exact regional copper overlap"});
+  const auto physical_diagnoses = flux::diagnose_regional_routability(physical_regional);
+  flux::RoutabilityKnowledge physical_history;
+  flux::accumulate_routability_knowledge(physical_history, physical_diagnoses);
+  require(std::any_of(physical_diagnoses.begin(), physical_diagnoses.end(),
+                      [](const auto& diagnosis) { return diagnosis.contributes_to_history; }) &&
+              physical_history.history.size() == 1U && physical_history.pressure() == 3U,
+          "localized physical regional evidence must continue to feed routability history");
 
   Board conflict_chain;
   conflict_chain.source_revision = "regional-conflict-chain";
@@ -2431,6 +6819,41 @@ void obstacle_aware_diagonals_and_curves_remain_capacity_and_drc_gated() {
                                  ? 0U
                                  : local_corridor_regional.channels.front().occupants.size()));
 
+  // A broad topology cell can overlap a conflicting branch even though its
+  // only capacity sample lies at the other end of the board. Cell membership
+  // must not suppress generation of a local physical cross section.
+  auto remote_sample_global = crossed;
+  for (auto& path : remote_sample_global.paths) {
+    flux::RoutingGeometricCorridorRun corridor;
+    corridor.layer = LayerId{"F.Cu"};
+    corridor.topology_cells = {rectangle(1.0, 1.0, 29.0, 29.0)};
+    corridor.lane_centerline = {mm(2.0, 2.0), mm(8.0, 2.0)};
+    corridor.minimum_physical_cross_section_width = Nanometres::from_mm(1.0);
+    corridor.selected_path_preserves_topology = true;
+    path.geometric_corridors = {corridor};
+  }
+  auto local_sample_config = terminal_portal_config;
+  local_sample_config.local_channel_occupancy = true;
+  const auto local_sample_result = flux::analyze_regional_conflicts(
+      crossing, remote_sample_global, local_sample_config);
+  require(!local_sample_result.windows.empty(), "local-section fixture must retain its conflict");
+  for (const auto& window : local_sample_result.windows) {
+    for (const auto& id : window.fragments) {
+      const auto f = std::find_if(local_sample_result.fragments.begin(), local_sample_result.fragments.end(),
+                                  [&](const auto& fragment) { return fragment.id == id; });
+      require(f != local_sample_result.fragments.end(), "every governed route must be retained");
+      require(std::any_of(local_sample_result.channels.begin(), local_sample_result.channels.end(),
+                           [&](const auto& channel) {
+        return std::find(channel.occupants.begin(), channel.occupants.end(), id) != channel.occupants.end() &&
+               std::any_of(channel.cross_sections.begin(), channel.cross_sections.end(), [&](const auto& section) {
+          return flux::geometry::segment_distance_nm(f->start, f->end, section.first_wall,
+                                                     section.second_wall) <=
+                 static_cast<long double>(f->width.value()) / 2.0L + f->clearance.value();
+        });
+      }), "every governed fragment must recover a local sampled resource, not merely cell membership");
+    }
+  }
+
   auto bounded_crossed = crossed;
   for (auto& path : bounded_crossed.paths) {
     flux::RoutingGeometricCorridorRun corridor;
@@ -2453,6 +6876,14 @@ void obstacle_aware_diagonals_and_curves_remain_capacity_and_drc_gated() {
   flux::DetailedRouterConfig bounded_crossed_config;
   bounded_crossed_config.pull_tight_45_degrees = false;
   bounded_crossed_config.continuous_refinement = false;
+  const auto straight_bounded_detail =
+      flux::materialize_detailed_route(crossing, bounded_crossed, bounded_crossed_config);
+  require(!straight_bounded_detail.complete() && straight_bounded_detail.added_track_arcs == 0U &&
+              straight_bounded_detail.residual_joint_candidate_states == 0U &&
+              straight_bounded_detail.attempted_quintic_ph_runs == 0U &&
+              straight_bounded_detail.copper_drc.violation_count() > 0U,
+          "straight residual repair must report crossing copper without enabling PH implicitly");
+  bounded_crossed_config.circular_arc_refinement = true;
   const auto direct_bounded_detail =
       flux::materialize_detailed_route(crossing, bounded_crossed, bounded_crossed_config);
   require(
@@ -2484,10 +6915,12 @@ void obstacle_aware_diagonals_and_curves_remain_capacity_and_drc_gated() {
   crossed_plan.stop_reason = flux::RoutingPlanStopReason::regional_conflicts;
   const auto crossed_plan_detail =
       flux::materialize_detailed_route(crossing, crossed_plan, bounded_crossed_config);
-  require(
-      !crossed_plan_detail.complete(),
-      "a regional quintic PH curve proposal must remain one atomic transaction and cannot bypass "
-      "exact materialization when its selected topology still forces a crossing");
+  require(!crossed_plan_detail.complete() ||
+              (crossed_plan_detail.candidate && crossed_plan_detail.validation.ok() &&
+               crossed_plan_detail.connectivity.open_connections == 0U &&
+               crossed_plan_detail.copper_drc.ok()),
+          "a regional quintic PH curve proposal must remain one atomic exact transaction; a "
+          "newly solvable crossing may be accepted only as connected DRC-clean copper");
 
   auto stacked_via_board = crossing;
   stacked_via_board.layers = {{LayerId{"F.Cu"}, "F.Cu", LayerKind::copper, 0},
@@ -2573,6 +7006,25 @@ void obstacle_aware_diagonals_and_curves_remain_capacity_and_drc_gated() {
   multilayer_plan.coarse_global = multilayer_global;
   multilayer_plan.regional = flux::analyze_regional_conflicts(
       multilayer_crossing, multilayer_global, multilayer_regional_config);
+  std::size_t isolated_alternative_channels = 0U;
+  for (const auto& assignment : multilayer_plan.regional.bundle_assignments) {
+    for (const auto& route_template : assignment.templates) {
+      for (const auto channel_id : route_template.channel_sequence) {
+        const auto channel = std::find_if(multilayer_plan.regional.channels.begin(), multilayer_plan.regional.channels.end(),
+            [&](const auto& candidate) { return candidate.id == channel_id; });
+        require(channel != multilayer_plan.regional.channels.end(), "every template channel must exist");
+        if (route_template.selected_global_topology) {
+          require(!channel->alternative_template_only,
+                  "generating unselected detours must not add their gates or free space to the "
+                  "retained global template");
+        } else {
+          isolated_alternative_channels += channel->alternative_template_only ? 1U : 0U;
+        }
+      }
+    }
+  }
+  require(isolated_alternative_channels > 0U,
+          "the crossing fixture must exercise separately selectable alternative channels");
   multilayer_plan.paths = multilayer_plan.regional.spline_candidate_available
                               ? multilayer_plan.regional.spline_candidate_paths
                               : multilayer_global.paths;
@@ -2587,8 +7039,12 @@ void obstacle_aware_diagonals_and_curves_remain_capacity_and_drc_gated() {
       std::all_of(shared_access_budget_regional.bundle_assignments.begin(),
                   shared_access_budget_regional.bundle_assignments.end(),
                   [&](const auto& assignment) {
+                    // Each cached pair and complete leaf has an independent bounded query.
+                    // Exhausting one query cannot consume the allowance of another topology.
                     return assignment.partial_access_assignment_states <=
-                           shared_access_budget_config.max_access_assignment_states;
+                           shared_access_budget_config.max_access_assignment_states *
+                               (assignment.partial_pairwise_access_checks +
+                                assignment.bundle_search_states);
                   });
   const auto selected_alternative = std::any_of(
       multilayer_plan.regional.bundle_assignments.begin(),
@@ -2635,6 +7091,14 @@ void obstacle_aware_diagonals_and_curves_remain_capacity_and_drc_gated() {
       });
   const auto multilayer_detail = flux::materialize_detailed_route(
       multilayer_crossing, multilayer_plan, bounded_crossed_config);
+  require(multilayer_plan.regional.candidate_pipeline_stats.layered_navmesh_graph_nodes > 0U &&
+              multilayer_plan.regional.candidate_pipeline_stats.layered_navmesh_search_expansions > 0U &&
+              multilayer_plan.regional.candidate_pipeline_stats.layered_navmesh_selected_proposals > 0U,
+          "regional layer alternatives must consume a certified multilayer cell/via corridor: nodes=" +
+              std::to_string(multilayer_plan.regional.candidate_pipeline_stats.layered_navmesh_graph_nodes) +
+              " transitions=" + std::to_string(multilayer_plan.regional.candidate_pipeline_stats.layered_navmesh_certified_transitions) +
+              " expansions=" + std::to_string(multilayer_plan.regional.candidate_pipeline_stats.layered_navmesh_search_expansions) +
+              " selected=" + std::to_string(multilayer_plan.regional.candidate_pipeline_stats.layered_navmesh_selected_proposals));
   const auto retained_via_choices =
       std::accumulate(multilayer_plan.regional.via_region_evidence.begin(),
                       multilayer_plan.regional.via_region_evidence.end(), std::size_t{0},
@@ -2898,6 +7362,21 @@ void obstacle_aware_diagonals_and_curves_remain_capacity_and_drc_gated() {
   const auto closed_cell = reused_navmesh.corridor[reused_navmesh.corridor.size() / 2U];
   const auto reflooded_navmesh = flux::route_prepared_navmesh_flood_fill(
       prepared_navmesh, mm(20.0, 40.0), {mm(80.0, 60.0)}, direct_navmesh_config, {closed_cell});
+  // A portal endpoint belongs to both adjacent cells. Closing the first cell must not
+  // hide the still-open incident cell or let an interior endpoint escape a dynamic wall.
+  const auto& binding_cell = prepared_navmesh.cells[prepared_navmesh.cells.size() - 1U];
+  std::vector<std::size_t> binding_walls;
+  for (const auto& cell : prepared_navmesh.cells)
+    if (cell.id != binding_cell.id) binding_walls.push_back(cell.id);
+  const auto boundary_bound = flux::route_prepared_navmesh_flood_fill(
+      prepared_navmesh, binding_cell.corners.front(), {binding_cell.center},
+      direct_navmesh_config, binding_walls);
+  require(boundary_bound.ok(),
+          "a shared-face endpoint must bind to the open incident cell of a constrained corridor");
+  const auto closed_endpoint = flux::route_prepared_navmesh_flood_fill(
+      prepared_navmesh, prepared_navmesh.cells[0U].center, {binding_cell.center},
+      direct_navmesh_config, binding_walls);
+  require(!closed_endpoint.ok(), "an endpoint inside a dynamic wall must not escape it");
   const auto rrt_navmesh = flux::route_prepared_navmesh_rrt_connect(
       prepared_navmesh, mm(20.0, 40.0), mm(80.0, 60.0), direct_navmesh_config,
       flux::NavMeshRrtConnectConfig{20'000U, 17U, 0U, 8U});
@@ -3082,6 +7561,31 @@ void obstacle_aware_diagonals_and_curves_remain_capacity_and_drc_gated() {
           "a selected NavMesh corridor must publish a directed gate certificate that accepts its "
           "funnel trace and rejects the reverse obstacle-side traversal");
 
+  flux::NavMeshTopologyGate first_gate;
+  first_gate.ordinal = 0U;
+  first_gate.left_boundary = mm(3.0, -1.0);
+  first_gate.right_boundary = mm(3.0, 1.0);
+  first_gate.from_center = mm(2.0, 0.0);
+  first_gate.to_center = mm(4.0, 0.0);
+  auto second_gate = first_gate;
+  second_gate.ordinal = 1U;
+  second_gate.left_boundary = mm(7.0, -1.0);
+  second_gate.right_boundary = mm(7.0, 1.0);
+  second_gate.from_center = mm(6.0, 0.0);
+  second_gate.to_center = mm(8.0, 0.0);
+  const auto raster_gate_signature =
+      flux::make_navmesh_topology_signature({first_gate, second_gate});
+  const std::vector<Point> contained_gate_subsequence{mm(0.0, 0.0), mm(5.0, 0.0)};
+  const auto strict_gate_sequence = flux::validate_navmesh_topology_signature(
+      raster_gate_signature, contained_gate_subsequence);
+  const auto relaxed_gate_subsequence = flux::validate_navmesh_topology_signature(
+      raster_gate_signature, contained_gate_subsequence, true);
+  require(!strict_gate_sequence.preserved &&
+              strict_gate_sequence.reason == flux::NavMeshTopologyCheckReason::missing_gate &&
+              relaxed_gate_subsequence.preserved && relaxed_gate_subsequence.gates_crossed == 1U,
+          "a guard-contained smooth route may skip raster-only gates while retaining direction "
+          "and order for every gate it actually crosses");
+
   const auto topology_spline = flux::make_topology_preserving_quintic_ph_route(
       direct_navmesh.centerline, Nanometres::from_mm(0.1));
   require(topology_spline.has_value() && topology_spline->tangent_continuous &&
@@ -3236,58 +7740,6 @@ void obstacle_aware_diagonals_and_curves_remain_capacity_and_drc_gated() {
               "/traj=" + std::to_string(early_spline.static_seed_trajectory_accepted) + "/" +
               std::to_string(early_spline.static_seed_trajectory_rejected));
 
-  auto curved_source = two_pad_board();
-  curved_source.nets.push_back(Net{NetId{"arc-blocker-net"}, "ARC_BLOCKER", 0});
-  curved_source.tracks.push_back(
-      flux::TrackSegment{ObjectId{"arc-radius-blocker"}, NetId{"arc-blocker-net"}, LayerId{"F.Cu"},
-                         mm(49.3, 40.39), mm(49.3, 40.7), Nanometres::from_mm(0.1), true});
-  flux::GlobalRouteResult curved_global;
-  curved_global.stop_reason = GlobalRouterStopReason::complete;
-  flux::GlobalRoutePath curved_path;
-  curved_path.net = NetId{"net-1"};
-  curved_path.points = {{mm(20.0, 40.0), LayerId{"F.Cu"}},
-                        {mm(50.0, 40.0), LayerId{"F.Cu"}},
-                        {mm(50.0, 60.0), LayerId{"F.Cu"}},
-                        {mm(80.0, 60.0), LayerId{"F.Cu"}},
-                        {mm(80.0, 40.0), LayerId{"F.Cu"}}};
-  curved_global.paths.push_back(std::move(curved_path));
-  const auto curved_seed = flux::make_quintic_ph_route(std::vector<Point>{
-      mm(20.0, 40.0), mm(50.0, 40.0), mm(50.0, 60.0), mm(80.0, 60.0), mm(80.0, 40.0)});
-  require(curved_seed.has_value(), "curved materialization fixture must form a spline seed");
-  const auto curved_seed_shape = flux::certify_quintic_ph_shape(*curved_seed);
-  flux::DetailedRouterConfig curved_config;
-  curved_config.pull_tight_45_degrees = false;
-  curved_config.continuous_refinement = false;
-  curved_config.circular_arc_refinement = true;
-  curved_config.spline_minimum_bend_radius = Nanometres{0};
-  curved_config.maximum_circular_arc_radius = Nanometres::from_mm(1.0);
-  const auto curved = flux::materialize_detailed_route(curved_source, curved_global, curved_config);
-  require(curved.complete() && curved.candidate && curved.fitted_circular_arcs > 0U &&
-              curved.attempted_quintic_ph_runs > 0U &&
-              curved.adaptive_spline_tessellation_samples > curved.fitted_circular_arcs &&
-              curved.unrounded_non_junction_bends == 0U && curved.copper_drc.ok(),
-          "a bent route must be adaptively fitted from a quintic PH curve to connected DRC-clean "
-          "native line/arc copper: " +
-              std::to_string(curved.adaptive_spline_tessellation_samples) + "/" +
-              std::to_string(curved.fitted_circular_arcs) +
-              "/runs=" + std::to_string(curved.attempted_quintic_ph_runs) + "/" +
-              std::to_string(curved.fitted_quintic_ph_runs) +
-              "/complete=" + std::to_string(curved.complete()) +
-              "/nav=" + std::to_string(curved.spline_navmesh_routes) + "/" +
-              std::to_string(curved.spline_navmesh_failures) +
-              "/traj=" + std::to_string(curved.spline_trajectory_accepted) + "/" +
-              std::to_string(curved.spline_trajectory_initial_violations) + "->" +
-              std::to_string(curved.spline_trajectory_final_violations) + "/" +
-              std::to_string(curved.spline_trajectory_initial_shape_violations) + "->" +
-              std::to_string(curved.spline_trajectory_final_shape_violations) + "/continuous=" +
-              std::to_string(curved.spline_trajectory_initial_continuous_violations) + "->" +
-              std::to_string(curved.spline_trajectory_final_continuous_violations) + "/" +
-              std::to_string(curved_seed_shape.self_intersections) + "/" +
-              std::to_string(curved_seed_shape.cusps) + "/" +
-              std::to_string(curved_seed_shape.station_reversals) + "/" +
-              std::to_string(curved_seed_shape.excess_turn_violations) + "/" +
-              curved.spline_navmesh_last_diagnostic + "/" + curved.diagnostic);
-
   const std::vector<Point> spline_polyline{mm(10.0, 10.0), mm(30.0, 10.0), mm(30.0, 30.0),
                                            mm(50.0, 30.0)};
   auto local_spline = flux::make_quintic_ph_route(spline_polyline);
@@ -3433,6 +7885,56 @@ void obstacle_aware_diagonals_and_curves_remain_capacity_and_drc_gated() {
                           }),
           "a dynamic local DRC probe must report exact violations involving its selected copper "
           "without rechecking unrelated source-only pairs");
+  auto bounded_drc_board = pns_board;
+  bounded_drc_board.nets.push_back({NetId{"static-a-net"}, "STATIC_A", 0});
+  bounded_drc_board.nets.push_back({NetId{"static-b-net"}, "STATIC_B", 0});
+  bounded_drc_board.tracks.push_back(flux::TrackSegment{
+      ObjectId{"unrelated-static-a"}, NetId{"static-a-net"}, LayerId{"F.Cu"}, mm(30.0, 60.0),
+      mm(70.0, 60.0), Nanometres::from_mm(0.25), false});
+  bounded_drc_board.tracks.push_back(flux::TrackSegment{
+      ObjectId{"unrelated-static-b"}, NetId{"static-b-net"}, LayerId{"F.Cu"}, mm(30.0, 60.1),
+      mm(70.0, 60.1), Nanometres::from_mm(0.25), false});
+  const auto whole_bounded_fixture = flux::check_copper_rules(bounded_drc_board);
+  const auto dynamic_bounded_fixture =
+      flux::check_dynamic_copper_rules(bounded_drc_board, {ObjectId{"pns-intruder"}});
+  const auto canonical_violations = [](const auto& report, std::string_view selected) {
+    std::set<std::string> keys;
+    for (const auto& violation : report.violations) {
+      if (!selected.empty() && std::find(violation.object_ids.begin(), violation.object_ids.end(),
+                                         selected) == violation.object_ids.end())
+        continue;
+      auto ids = violation.object_ids;
+      std::sort(ids.begin(), ids.end());
+      auto key = std::to_string(static_cast<int>(violation.kind)) + ":" + violation.code;
+      for (const auto& id : ids)
+        key += ":" + id;
+      keys.insert(std::move(key));
+    }
+    return keys;
+  };
+  require(canonical_violations(whole_bounded_fixture, "pns-intruder") ==
+              canonical_violations(dynamic_bounded_fixture, "") &&
+              whole_bounded_fixture.violation_count() >
+                  dynamic_bounded_fixture.violation_count(),
+          "bounded proposal DRC must exactly match the selected subset of whole-board DRC while "
+          "excluding an unrelated immutable violation");
+  auto selected_via_board = bounded_drc_board;
+  selected_via_board.nets.push_back({NetId{"dynamic-via-net"}, "DYNAMIC_VIA", 0});
+  selected_via_board.vias.push_back(
+      {ObjectId{"dynamic-via"}, NetId{"dynamic-via-net"}, mm(50.0, 50.0),
+       Nanometres::from_mm(0.6), Nanometres::from_mm(0.3), {LayerId{"F.Cu"}}, false});
+  const auto whole_selected_via = flux::check_copper_rules(selected_via_board);
+  const auto dynamic_selected_via =
+      flux::check_dynamic_copper_rules(selected_via_board, {ObjectId{"dynamic-via"}});
+  require(canonical_violations(whole_selected_via, "dynamic-via") ==
+              canonical_violations(dynamic_selected_via, "") &&
+              std::any_of(dynamic_selected_via.violations.begin(),
+                          dynamic_selected_via.violations.end(), [](const auto& violation) {
+                            return violation.kind ==
+                                   flux::CopperViolationKind::track_via_clearance;
+                          }),
+          "bounded DRC for a selected via must retain track/via checks whose track side is "
+          "immutable");
   const flux::PnsShoveRequest pns_request{{"pns-intruder"},
                                           {"pns-obstacle"},
                                           {},
@@ -3506,15 +8008,6 @@ void obstacle_aware_diagonals_and_curves_remain_capacity_and_drc_gated() {
                            [](const auto& track) { return track.id == ObjectId{"pns-obstacle"}; }),
           "an iteration-zero PNS delta must remain actionable through detailed transactional "
           "materialization");
-
-  curved_config.defer_saved_zone_fill_clearance_to_refill = true;
-  const auto refillable_curve =
-      flux::materialize_detailed_route(curved_source, curved_global, curved_config);
-  require(refillable_curve.provisional_zone_refill_candidate() && refillable_curve.candidate &&
-              refillable_curve.fitted_circular_arcs > 0U &&
-              !refillable_curve.fallback_polyline_materialization,
-          "a legal curved refill candidate must remain provisional without being mistaken for a "
-          "failed curved transaction");
 }
 
 void integrated_placement_rejects_proxy_improvement_that_violates_copper_rules() {
@@ -3593,6 +8086,76 @@ void integrated_placement_rejects_proxy_improvement_that_violates_copper_rules()
           "worker completion order");
 }
 
+void kicad_drill_offsets_preserve_copper_and_hole_anchors() {
+  const auto imported = flux::io::import_kicad_pcb_file(
+      std::filesystem::path{FLUX_TEST_SOURCE_DIR} / "fixtures/pad-offset-frames.kicad_pcb");
+  require(imported.strict() && imported.board->footprints.size() == 8U,
+          "offset-pad frame fixture must import strictly");
+  const auto shapes = flux::copper_pad_shapes(*imported.board);
+  for (const auto& footprint : imported.board->footprints) {
+    for (std::size_t index = 0; index < footprint.pads.size(); ++index) {
+      const auto& pad = footprint.pads[index];
+      const auto hole = flux::geometry::transform_point(
+          mm(2.0 + 2.0 * index, 3.0), footprint.position, footprint.rotation, BoardSide::front);
+      require(flux::pad_drill_world_position(footprint, pad) == hole,
+              "serialized offset must not displace the physical hole anchor");
+      const auto shape = std::find_if(shapes.begin(), shapes.end(),
+                                     [&](const auto& item) { return item.id == pad.id; });
+      const auto copper = pad.plated ? flux::geometry::transform_point(
+          mm(0.2, 0.1), hole, Microdegrees{}, BoardSide::front) : hole;
+      require(shape != shapes.end() && shape->position == copper,
+              "copper offsets must move the annulus, while non-plated obstacles stay at the hole");
+    }
+  }
+}
+
+void kicad_pad_frames_match_placed_board_coordinates() {
+  const auto imported = flux::io::import_kicad_pcb_file(
+      std::filesystem::path{FLUX_TEST_SOURCE_DIR} / "fixtures/pad-coordinate-frames.kicad_pcb");
+  require(imported.strict() && imported.board->footprints.size() == 8U,
+          "front/back pad-frame fixture must import strictly");
+  const auto copper = flux::copper_pad_shapes(*imported.board);
+  for (const auto& footprint : imported.board->footprints) {
+    for (std::size_t index = 0; index < footprint.pads.size(); ++index) {
+      const auto& pad = footprint.pads[index];
+      const auto shape = std::find_if(copper.begin(), copper.end(),
+                                     [&](const auto& item) { return item.id == pad.id; });
+      const auto file_local = mm(2.0 + 2.0 * index, 3.0);
+      // KiCad board syntax already contains reflected back-side local positions. Its placed
+      // coordinates therefore apply rotation and translation once, with no second mirror.
+      const auto expected = flux::geometry::transform_point(
+          file_local, footprint.position, footprint.rotation, BoardSide::front);
+      require(shape != copper.end() && shape->position == expected,
+              "back-side file coordinates must not be reflected twice");
+      const auto expected_angle = Microdegrees{index == 0U ? 0 : -45'000'000}.value();
+      require(shape->rotation.value() == expected_angle,
+              "omitted and explicit pad angles must remain absolute in the placed board frame");
+    }
+    const auto world_courtyard = flux::geometry::transform_polygon(
+        footprint.courtyard, footprint.position, footprint.rotation, footprint.side);
+    const auto expected_corner = flux::geometry::transform_point(
+        mm(6.0, 8.0), footprint.position, footprint.rotation, BoardSide::front);
+    require(std::find(world_courtyard.vertices.begin(), world_courtyard.vertices.end(),
+                      expected_corner) != world_courtyard.vertices.end(),
+            "asymmetric back-side courtyards must share the pad coordinate frame");
+  }
+  const auto edge_board = flux::io::import_kicad_pcb(R"((kicad_pcb
+    (version 20241229) (generator "pcbnew")
+    (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+    (net 0 "")
+    (footprint "EdgeFixture" (layer "B.Cu") (at 20 30 90)
+      (fp_rect (start 0 0) (end 6 8) (stroke (width 0.05) (type default))
+        (fill none) (layer "Edge.Cuts")))))");
+  require(edge_board.strict() &&
+              flux::geometry::prepare_polygon(edge_board.board->outline).bounds.minimum == mm(20.0, 24.0) &&
+              flux::geometry::prepare_polygon(edge_board.board->outline).bounds.maximum == mm(28.0, 30.0),
+          "back-side footprint Edge.Cuts must not acquire a second reflection");
+  const auto reference = flux::io::import_kicad_pcb_file(
+      std::filesystem::path{FLUX_TEST_SOURCE_DIR} / "fixtures/routing-corpus/reference/bm_svf.kicad_pcb");
+  require(reference.strict() && flux::analyze_connectivity(*reference.board).open_connections == 0U,
+          "known-connected KRT copper must remain connected after canonical import");
+}
+
 void cancellation_and_kicad_export_boundaries_fail_closed() {
   const auto board = two_pad_board();
   std::stop_source stop;
@@ -3619,24 +8182,29 @@ void cancellation_and_kicad_export_boundaries_fail_closed() {
   const auto serialized_snapshot =
       flux::serialize_router_telemetry_snapshot(observed_state, observed_statistics);
   const auto decoded_snapshot = flux::telemetry::decode_events(serialized_snapshot);
-  require(unobserved_route.stop_reason == observed_route.stop_reason &&
-              unobserved_route.paths == observed_route.paths &&
-              unobserved_route.unrouted_nets == observed_route.unrouted_nets &&
-              unobserved_route.total_overflow == observed_route.total_overflow &&
-              unobserved_route.total_cost == observed_route.total_cost &&
-              observed_statistics.produced == observed_statistics.consumed &&
-              observed_statistics.produced >= 4U && observed_statistics.dropped == 0U &&
-              observed_state.routing_finished &&
-              observed_state.observed_routes.size() == observed_route.paths.size() &&
-              decoded_snapshot && decoded_snapshot.events.size() == 1U &&
-              decoded_snapshot.events.front().type == flux::telemetry::EventType::snapshot &&
-              decoded_snapshot.events.front().message == "Routing finished" &&
-              decoded_snapshot.events.front().metrics.has_value() &&
-              decoded_snapshot.events.front().metrics->route_cost == observed_state.route_cost &&
-              decoded_snapshot.events.front().routes.size() == observed_route.paths.size() &&
-              !decoded_snapshot.events.front().routes.front().points.empty(),
-          "a disabled/enabled telemetry observer must preserve deterministic routing bytes and "
-          "drain a viewer-decodable versioned final snapshot without becoming routing state");
+  const auto retained_coarse_routes = static_cast<std::size_t>(std::count_if(
+      observed_state.observed_routes.begin(), observed_state.observed_routes.end(),
+      [](const auto& route) { return route.route_lifecycle == "retained_fallback"; }));
+  require(
+      unobserved_route.stop_reason == observed_route.stop_reason &&
+          unobserved_route.paths == observed_route.paths &&
+          unobserved_route.unrouted_nets == observed_route.unrouted_nets &&
+          unobserved_route.total_overflow == observed_route.total_overflow &&
+          unobserved_route.total_cost == observed_route.total_cost &&
+          observed_statistics.produced == observed_statistics.consumed &&
+          observed_statistics.produced >= 4U && observed_statistics.dropped == 0U &&
+          !observed_state.routing_finished &&
+          observed_state.observed_routes.size() >= observed_route.paths.size() &&
+          retained_coarse_routes > 0U && decoded_snapshot && decoded_snapshot.events.size() == 1U &&
+          decoded_snapshot.events.front().type == flux::telemetry::EventType::snapshot &&
+          decoded_snapshot.events.front().message == "Routing snapshot" &&
+          decoded_snapshot.events.front().metrics.has_value() &&
+          decoded_snapshot.events.front().metrics->route_cost == observed_state.route_cost &&
+          decoded_snapshot.events.front().routes.size() == observed_state.observed_routes.size() &&
+          !decoded_snapshot.events.front().routes.front().points.empty(),
+      "a disabled/enabled telemetry observer must preserve deterministic routing bytes and "
+      "drain a viewer-decodable versioned final snapshot without fabricating a successful "
+      "routing outcome or becoming routing state");
 
   flux::RouterTelemetryEvent queued_event;
   queued_event.kind = flux::RouterTelemetryEventKind::net_queued;
@@ -3745,23 +8313,22 @@ void cancellation_and_kicad_export_boundaries_fail_closed() {
   const auto contents = load_minimal_kicad_fixture();
   const auto imported = flux::io::import_kicad_pcb(contents);
   require(imported.strict(), "the canonical KiCad fixture must import without loss");
-  const auto stackup_path = std::filesystem::path{FLUX_TEST_SOURCE_DIR} /
-                            "fixtures/routing-corpus/bm_svf.kicad_pcb";
+  const auto stackup_path =
+      std::filesystem::path{FLUX_TEST_SOURCE_DIR} / "fixtures/routing-corpus/bm_svf.kicad_pcb";
   std::ifstream stackup_input(stackup_path, std::ios::binary);
   const std::string stackup_contents{std::istreambuf_iterator<char>{stackup_input},
                                      std::istreambuf_iterator<char>{}};
   const auto stackup_import = flux::io::import_kicad_pcb(stackup_contents);
   const auto dielectric =
       stackup_import.board && stackup_import.board->stackup
-          ? std::find_if(stackup_import.board->stackup->layers.begin(),
-                         stackup_import.board->stackup->layers.end(), [](const auto& layer) {
-                           return layer.kind == flux::StackupLayerKind::dielectric;
-                         })
+          ? std::find_if(
+                stackup_import.board->stackup->layers.begin(),
+                stackup_import.board->stackup->layers.end(),
+                [](const auto& layer) { return layer.kind == flux::StackupLayerKind::dielectric; })
           : std::vector<flux::StackupLayer>::const_iterator{};
   require(!stackup_contents.empty() && stackup_import.strict() && stackup_import.board &&
               stackup_import.board->physical_thickness == Nanometres{1'600'000} &&
-              stackup_import.board->stackup &&
-              stackup_import.board->stackup->layers.size() == 9U &&
+              stackup_import.board->stackup && stackup_import.board->stackup->layers.size() == 9U &&
               dielectric != stackup_import.board->stackup->layers.end() &&
               dielectric->sublayers.size() == 1U &&
               dielectric->sublayers.front().thickness == Nanometres{1'510'000} &&
@@ -3808,7 +8375,8 @@ void cancellation_and_kicad_export_boundaries_fail_closed() {
   const auto unsupported_stackup_import = flux::io::import_kicad_pcb(unsupported_stackup);
   require(!unsupported_stackup_import.strict() &&
               std::any_of(unsupported_stackup_import.diagnostics.begin(),
-                          unsupported_stackup_import.diagnostics.end(), [](const auto& diagnostic) {
+                          unsupported_stackup_import.diagnostics.end(),
+                          [](const auto& diagnostic) {
                             return diagnostic.code == "unsupported_stackup_layer_property";
                           }),
           "unrepresented frequency-dependent stackup semantics must stop strict import with an "
@@ -3823,10 +8391,9 @@ void cancellation_and_kicad_export_boundaries_fail_closed() {
       "(net 1) (uuid \"unsupported-microvia\"))\n");
   const auto microvia_import = flux::io::import_kicad_pcb(microvia_contents);
   require(!microvia_import.strict() &&
-              std::any_of(microvia_import.diagnostics.begin(),
-                          microvia_import.diagnostics.end(), [](const auto& diagnostic) {
-                            return diagnostic.code == "unsupported_microvia";
-                          }),
+              std::any_of(
+                  microvia_import.diagnostics.begin(), microvia_import.diagnostics.end(),
+                  [](const auto& diagnostic) { return diagnostic.code == "unsupported_microvia"; }),
           "laser-drilled microvias must fail strict import until their fabrication semantics are "
           "represented explicitly");
   auto unfilled_zone_contents = contents;
@@ -3834,16 +8401,14 @@ void cancellation_and_kicad_export_boundaries_fail_closed() {
   require(board_close != std::string::npos,
           "unfilled-zone fixture must retain the root closing delimiter");
   unfilled_zone_contents.insert(
-      board_close,
-      "  (zone (layer \"B.Cu\") (uuid \"unfilled-zone-test\") (hatch edge 0.5)\n"
-      "    (polygon (pts (xy 20 20) (xy 30 20) (xy 30 30) (xy 20 30))))\n");
+      board_close, "  (zone (layer \"B.Cu\") (uuid \"unfilled-zone-test\") (hatch edge 0.5)\n"
+                   "    (polygon (pts (xy 20 20) (xy 30 20) (xy 30 30) (xy 20 30))))\n");
   const auto unfilled_zone_import = flux::io::import_kicad_pcb(unfilled_zone_contents);
   const auto imported_unfilled_zone =
       unfilled_zone_import.board
           ? std::find_if(unfilled_zone_import.board->zones.begin(),
-                         unfilled_zone_import.board->zones.end(), [](const auto& zone) {
-                           return zone.id == ObjectId{"unfilled-zone-test"};
-                         })
+                         unfilled_zone_import.board->zones.end(),
+                         [](const auto& zone) { return zone.id == ObjectId{"unfilled-zone-test"}; })
           : std::vector<flux::CopperZone>::const_iterator{};
   require(unfilled_zone_import.strict() && unfilled_zone_import.board &&
               imported_unfilled_zone != unfilled_zone_import.board->zones.end() &&
@@ -3853,14 +8418,14 @@ void cancellation_and_kicad_export_boundaries_fail_closed() {
   const auto unfilled_zone_export = flux::io::export_kicad_candidate(
       unfilled_zone_contents, *unfilled_zone_import.board, *unfilled_zone_import.board);
   const auto unfilled_zone_reimport =
-      unfilled_zone_export.contents
-          ? flux::io::import_kicad_pcb(*unfilled_zone_export.contents)
-          : flux::io::KicadImportResult{};
+      unfilled_zone_export.contents ? flux::io::import_kicad_pcb(*unfilled_zone_export.contents)
+                                    : flux::io::KicadImportResult{};
   require(unfilled_zone_export.ok() && unfilled_zone_export.contents &&
               unfilled_zone_export.contents->find("unfilled-zone-test") != std::string::npos &&
               unfilled_zone_reimport.strict() && unfilled_zone_reimport.board &&
               std::any_of(unfilled_zone_reimport.board->zones.begin(),
-                          unfilled_zone_reimport.board->zones.end(), [](const auto& zone) {
+                          unfilled_zone_reimport.board->zones.end(),
+                          [](const auto& zone) {
                             return zone.id == ObjectId{"unfilled-zone-test"} &&
                                    zone.requires_refill && zone.fills.empty();
                           }),
@@ -3888,8 +8453,7 @@ void cancellation_and_kicad_export_boundaries_fail_closed() {
   require(named_net_import.strict() && named_net_import.board &&
               std::any_of(named_net_import.board->nets.begin(), named_net_import.board->nets.end(),
                           [](const auto& net) {
-                            return net.id == NetId{"kicad-net-name:SIGNAL"} &&
-                                   net.name == "SIGNAL";
+                            return net.id == NetId{"kicad-net-name:SIGNAL"} && net.name == "SIGNAL";
                           }),
           "a KiCad 10 board without an ordinal net table must derive stable named-net identity");
   auto named_net_candidate = *named_net_import.board;
@@ -3947,8 +8511,8 @@ void cancellation_and_kicad_export_boundaries_fail_closed() {
           "oval-drill fixture pad declaration must remain identifiable");
   oval_drill_contents.replace(oval_pad + std::string{"(pad \"1\" "}.size(),
                               std::string{"smd circle"}.size(), "np_thru_hole oval");
-  const auto oval_layers = oval_drill_contents.find(
-      "(layers \"F.Cu\" \"F.Paste\" \"F.Mask\")", oval_pad);
+  const auto oval_layers =
+      oval_drill_contents.find("(layers \"F.Cu\" \"F.Paste\" \"F.Mask\")", oval_pad);
   require(oval_layers != std::string::npos,
           "oval-drill fixture pad layers must remain identifiable");
   oval_drill_contents.replace(
@@ -3958,21 +8522,20 @@ void cancellation_and_kicad_export_boundaries_fail_closed() {
   const auto oval_drill_shapes = oval_drill_import.board
                                      ? flux::copper_pad_shapes(*oval_drill_import.board)
                                      : std::vector<flux::CopperPadShape>{};
-  require(oval_drill_import.strict() && oval_drill_import.board &&
-              !oval_drill_import.board->footprints.back().pads.front().plated &&
-              oval_drill_import.board->footprints.back().pads.front().drill_width ==
-                  Nanometres::from_mm(0.6) &&
-              oval_drill_import.board->footprints.back().pads.front().drill_height ==
-                  Nanometres::from_mm(1.4) &&
-              oval_drill_import.board->footprints.back().pads.front().drill_offset ==
-                  mm(0.2, 0.0) &&
-              !oval_drill_shapes.empty() &&
-              oval_drill_shapes.back().shape == flux::PadShape::oval &&
-              oval_drill_shapes.back().width == Nanometres::from_mm(0.6) &&
-              oval_drill_shapes.back().height == Nanometres::from_mm(1.4) &&
-              oval_drill_shapes.back().position == mm(79.8, 40.0),
-          "oval and offset non-plated drill geometry must retain its exact local dimensions and "
-          "world-space routing obstacle");
+  require(
+      oval_drill_import.strict() && oval_drill_import.board &&
+          !oval_drill_import.board->footprints.back().pads.front().plated &&
+          oval_drill_import.board->footprints.back().pads.front().drill_width ==
+              Nanometres::from_mm(0.6) &&
+          oval_drill_import.board->footprints.back().pads.front().drill_height ==
+              Nanometres::from_mm(1.4) &&
+          oval_drill_import.board->footprints.back().pads.front().drill_offset == mm(-0.2, 0.0) &&
+          !oval_drill_shapes.empty() && oval_drill_shapes.back().shape == flux::PadShape::oval &&
+          oval_drill_shapes.back().width == Nanometres::from_mm(0.6) &&
+          oval_drill_shapes.back().height == Nanometres::from_mm(1.4) &&
+          oval_drill_shapes.back().position == mm(80.0, 40.0),
+      "oval and offset non-plated drill geometry must retain its exact local dimensions and "
+      "world-space routing obstacle");
   const auto priority_template = flux::io::make_placement_move_priorities_template(*imported.board);
   const auto priorities =
       flux::io::load_placement_move_priorities(*imported.board, priority_template);
@@ -4027,11 +8590,12 @@ void cancellation_and_kicad_export_boundaries_fail_closed() {
               ", diagnostics=" + std::to_string(lossy_import.diagnostics.size()));
   const auto qualified_lossy_export =
       flux::io::export_kicad_candidate(lossy_contents, *lossy_import.board, *lossy_import.board);
-  require(!qualified_lossy_export.ok() &&
-              std::any_of(qualified_lossy_export.diagnostics.begin(),
-                          qualified_lossy_export.diagnostics.end(), [](const auto& diagnostic) {
-                            return diagnostic.code == "source_not_strict";
-                          }),
+  require(!qualified_lossy_export.ok() && std::any_of(qualified_lossy_export.diagnostics.begin(),
+                                                      qualified_lossy_export.diagnostics.end(),
+                                                      [](const auto& diagnostic) {
+                                                        return diagnostic.code ==
+                                                               "source_not_strict";
+                                                      }),
           "ordinary export must continue to reject a lossy source projection");
   flux::io::KicadExportOptions preview_options;
   preview_options.verify_round_trip = false;
@@ -4040,7 +8604,8 @@ void cancellation_and_kicad_export_boundaries_fail_closed() {
       lossy_contents, *lossy_import.board, *lossy_import.board, preview_options);
   require(diagnostic_lossy_export.ok() &&
               std::any_of(diagnostic_lossy_export.diagnostics.begin(),
-                          diagnostic_lossy_export.diagnostics.end(), [](const auto& diagnostic) {
+                          diagnostic_lossy_export.diagnostics.end(),
+                          [](const auto& diagnostic) {
                             return diagnostic.code == "lossy_diagnostic_preview" &&
                                    diagnostic.severity == flux::io::ExportSeverity::warning;
                           }),
@@ -4059,7 +8624,8 @@ void cancellation_and_kicad_export_boundaries_fail_closed() {
       invalid_contents, *invalid_import.board, *invalid_import.board);
   require(!qualified_invalid_export.ok() &&
               std::any_of(qualified_invalid_export.diagnostics.begin(),
-                          qualified_invalid_export.diagnostics.end(), [](const auto& diagnostic) {
+                          qualified_invalid_export.diagnostics.end(),
+                          [](const auto& diagnostic) {
                             return diagnostic.code == "invalid_source_snapshot";
                           }),
           "ordinary export must continue to reject a structurally invalid projection");
@@ -4067,7 +8633,8 @@ void cancellation_and_kicad_export_boundaries_fail_closed() {
       invalid_contents, *invalid_import.board, *invalid_import.board, preview_options);
   require(diagnostic_invalid_export.ok() &&
               std::any_of(diagnostic_invalid_export.diagnostics.begin(),
-                          diagnostic_invalid_export.diagnostics.end(), [](const auto& diagnostic) {
+                          diagnostic_invalid_export.diagnostics.end(),
+                          [](const auto& diagnostic) {
                             return diagnostic.code == "invalid_diagnostic_preview" &&
                                    diagnostic.severity == flux::io::ExportSeverity::warning;
                           }),
@@ -4164,6 +8731,13 @@ void cancellation_and_kicad_export_boundaries_fail_closed() {
 }
 
 void routing_xpbd_joint_relaxation_preserves_endpoints_and_reports_stress() {
+  const flux::RegionalRouterConfig production_regional_defaults;
+  require(production_regional_defaults.enable_xpbd_relaxation &&
+              production_regional_defaults.enable_xpbd_feedback,
+          "normal regional routing must run XPBD repair and publish its upstream feedback by "
+          "default");
+  require(production_regional_defaults.max_spline_exact_candidate_workers == 4U,
+          "normal regional routing must evaluate exact local-repair moves in parallel");
   const std::vector<flux::RoutingXpbdParticle> particles{
       {-2'000'000, -1'000'000, 200'000, 0.0L, 0U, 0U, flux::routing_xpbd_endpoint, -2'000'000,
        -1'000'000, 100'000},
@@ -4486,6 +9060,14 @@ void routing_xpbd_joint_relaxation_preserves_endpoints_and_reports_stress() {
       flux::RoutabilityRelaxation::change_corridor, "diffused XPBD constraint-pressure cell", false,
       true});
   const auto feedback_diagnoses = flux::diagnose_regional_routability(feedback);
+  require(std::any_of(feedback_diagnoses.begin(), feedback_diagnoses.end(),
+                      [](const auto& diagnosis) {
+                        return diagnosis.stage == flux::RoutabilityFailureStage::local_pns &&
+                               diagnosis.suggested_relaxation ==
+                                   flux::RoutabilityRelaxation::change_corridor;
+                      }),
+          "an exhausted XPBD solve must request a discrete corridor/topology change instead of "
+          "another equivalent local shove");
   flux::RoutabilityKnowledge knowledge;
   flux::accumulate_routability_knowledge(knowledge, feedback_diagnoses);
   require(std::any_of(knowledge.history.begin(), knowledge.history.end(),
@@ -4528,6 +9110,54 @@ void routing_xpbd_joint_relaxation_preserves_endpoints_and_reports_stress() {
           "moving it away from the stressed region and remaining a non-authoritative cost: " +
               std::to_string(baseline_pressure_crossings) + "->" +
               std::to_string(pressured_pressure_crossings));
+}
+
+void anisotropic_hydraulic_erosion_is_directional_and_gpu_equivalent() {
+  constexpr std::size_t width = 21U;
+  constexpr std::size_t height = 11U;
+  flux::HydraulicPathInput input;
+  input.width = width;
+  input.height = height;
+  input.walkable.assign(width * height, 1U);
+  input.obstacle_clearance.assign(width * height, 8U);
+  input.source = 5U * width + 2U;
+  input.target = 5U * width + 18U;
+
+  flux::HydraulicPathConfig isotropic_config;
+  isotropic_config.prefer_gpu = false;
+  isotropic_config.relaxation_iterations = 64U;
+  isotropic_config.droplet_batches = 2U;
+  isotropic_config.droplets_per_batch = 128U;
+  isotropic_config.maximum_steps_per_droplet = 64U;
+  const auto isotropic = flux::solve_hydraulic_erosion_path(input, isotropic_config);
+
+  auto anisotropic_config = isotropic_config;
+  anisotropic_config.anisotropy_axis_x = 1'024;
+  anisotropic_config.transverse_anisotropy_per_mille = 4'000U;
+  const auto anisotropic = flux::solve_hydraulic_erosion_path(input, anisotropic_config);
+  const auto transverse_bank = input.source - width;
+  require(isotropic.ok() && anisotropic.ok() &&
+              anisotropic.static_potential[transverse_bank] >
+                  isotropic.static_potential[transverse_bank] &&
+              anisotropic.erosion[transverse_bank] < isotropic.erosion[transverse_bank] &&
+              anisotropic.walkable == input.walkable,
+          "anisotropic hydraulic routing must raise transverse travel cost and confine bank "
+          "erosion without modifying authoritative free space");
+
+  auto invalid_config = anisotropic_config;
+  invalid_config.anisotropy_axis_x = 0;
+  const auto invalid = flux::solve_hydraulic_erosion_path(input, invalid_config);
+  require(!invalid.ok() && invalid.diagnostic == "invalid hydraulic erosion path request",
+          "an enabled anisotropic metric must reject a missing direction axis");
+
+  anisotropic_config.prefer_gpu = true;
+  const auto gpu = flux::solve_hydraulic_erosion_path(input, anisotropic_config);
+  require(gpu.ok() && gpu.used_gpu && gpu.riverbed == anisotropic.riverbed &&
+              gpu.static_potential == anisotropic.static_potential &&
+              gpu.erosion == anisotropic.erosion &&
+              gpu.accumulated_flow == anisotropic.accumulated_flow,
+          "the Vulkan anisotropic hydraulic field must remain an integer-exact CPU equivalent: " +
+              gpu.diagnostic);
 }
 
 void hydraulic_polygon_discovery_projects_into_coarse_navmesh() {
@@ -4599,6 +9229,8 @@ void hydraulic_gpu_fuses_clearance_and_batches_independent_requests() {
   cpu_config.droplet_batches = 2U;
   cpu_config.droplets_per_batch = 64U;
   cpu_config.maximum_steps_per_droplet = 96U;
+  cpu_config.anisotropy_axis_x = 1'024;
+  cpu_config.transverse_anisotropy_per_mille = 2'500U;
   std::vector<flux::HydraulicPathResult> expected;
   for (const auto& input : inputs)
     expected.push_back(flux::solve_hydraulic_erosion_path(input, cpu_config));
@@ -4629,8 +9261,9 @@ void hydraulic_gpu_fuses_clearance_and_batches_independent_requests() {
   }
   const auto reused = flux::solve_hydraulic_erosion_path(inputs.front(), gpu_config);
   require(reused.ok() && reused.gpu_clearance_cache_hit &&
-              reused.gpu_persistent_buffer_reuses == 15U && reused.gpu_buffer_growths == 0U,
-          "a repeated hydraulic domain must reuse every capacity-grown GPU buffer");
+              reused.gpu_persistent_buffer_reuses == 14U && reused.gpu_buffer_growths == 0U &&
+              reused.gpu_mask_upload_reuses == 1U && reused.gpu_mask_uploads == 0U,
+          "a repeated hydraulic domain must reuse its private buffers and resident shared mask");
 
   flux::RoutingComputeViaCandidateInput via_filter;
   via_filter.clearance_nm = 100'000;
@@ -4670,10 +9303,125 @@ void hydraulic_gpu_fuses_clearance_and_batches_independent_requests() {
           "obstacle/run-up conflicts before exact regional checks");
 }
 
+void regional_ownership_and_immutable_cache_are_dependency_bound() {
+  flux::OffsetFreeSpaceRegion region;
+  region.area = rectangle(0, 0, 10, 10);
+  flux::NavMeshConfig config;
+  flux::NavMeshPreparationCache cache(10'000, 2);
+  const auto first = cache.prepare(region, config);
+  const auto repeated = cache.prepare(region, config);
+  require(first->ok() && first == repeated && cache.stats().hits == 1 && cache.stats().misses == 1,
+          "unchanged geometry/config must reuse the same immutable prepared domain");
+  auto changed_region = region;
+  changed_region.holes.push_back(rectangle(4, 4, 6, 6));
+  const auto changed = cache.prepare(changed_region, config);
+  require(changed != first && !flux::query_prepared_navmesh_point(*changed, mm(5, 5)).inside &&
+              flux::query_prepared_navmesh_point(*first, mm(5, 5)).inside,
+          "geometry changes must invalidate the key without mutating an outstanding snapshot");
+  auto changed_config = config;
+  changed_config.minimum_boundary_clearance = Nanometres::from_mm(0.1);
+  const auto tighter = cache.prepare(region, changed_config);
+  require(tighter != first && cache.stats().evictions == 1 && first->ok(),
+          "clearance changes miss the cache and bounded eviction preserves live readers");
+  const auto disabled = flux::NavMeshPreparationCache(0, 0).prepare(region, config);
+  require(disabled->ok(), "zero cache capacity disables reuse, not preparation");
+  flux::RegionalRouteResult transaction;
+  transaction.native_realization_manifest_available = true;
+  flux::RegionalSplineRealization route;
+  route.fragment.net = NetId{"owner"};
+  route.owner_window_id = 7;
+  flux::RegionalRoutingWindow window;
+  window.id = 7;
+  window.owned_fragments = {route.fragment};
+  transaction.windows = {window};
+  transaction.native_realization_manifest = {route};
+  require(flux::validate_regional_native_ownership(transaction), "single explicit writer is valid");
+  transaction.native_realization_manifest.push_back(route);
+  require(!flux::validate_regional_native_ownership(transaction),
+          "even identical duplicate copper writers must be rejected");
+  transaction.native_realization_manifest.resize(1);
+  transaction.native_realization_manifest.front().owner_window_id.reset();
+  require(!flux::validate_regional_native_ownership(transaction), "missing ownership fails closed");
+  transaction.native_realization_manifest.front().owner_window_id = 7;
+  window.id = 8;
+  transaction.windows.push_back(window);
+  require(!flux::validate_regional_native_ownership(transaction), "two owning windows fail closed");
+}
+
+void usped_mountains_inform_navmesh_without_changing_free_space() {
+  const std::vector<std::uint8_t> mask{1, 1, 0, 1, 1};
+  const std::vector<double> clearance{0.1, 3.0, 0.0, 3.0, 0.1};
+  const auto field = flux::build_usped_field(5, 1, mask, clearance);
+  require(field.ok() && field.height[2] == 1.0 && field.accumulation[2] == 0 &&
+              field.accumulation[1] == 2 && field.accumulation[3] == 2 &&
+              field.divergence[0] > 0 && field.divergence[1] < 0 && field.sinks == 2,
+          "USPED must map obstacles to masked mountains and accumulate independently in valleys");
+  double sum = 0;
+  for (auto d : field.divergence) sum += d;
+  require(std::abs(sum) < 1e-12 &&
+              flux::build_usped_field(5, 1, mask, clearance).divergence == field.divergence,
+          "USPED masked edge flux must be conservative and deterministic");
+  require(!flux::build_usped_field(5, 1, mask, clearance, 4).ok() &&
+              !flux::build_usped_field(0, 1, {}, {}).ok() &&
+              !flux::build_usped_field(1, 1, {1}, {-1}).ok(),
+          "USPED rejects malformed or over-budget fields");
+  const auto diagonal = flux::build_usped_field(2, 2, {1, 0, 0, 1}, {0.1, 0, 0, 3});
+  require(diagonal.ok() && diagonal.accumulation[3] == 1 && diagonal.sinks == 2,
+          "USPED must not cut diagonal obstacle corners");
+  const auto flat = flux::build_usped_field(2, 2, {1, 1, 1, 1}, {2, 2, 2, 2});
+  require(flat.ok() && flat.sinks == 4 && flat.transport == std::vector<double>(4, 0) &&
+              flat.refinement_priority == std::vector<double>(4, 0),
+          "flat terrain must remain finite and must not invent drainage through mountains");
+
+  flux::OffsetFreeSpaceRegion region;
+  region.area = rectangle(0, 0, 12, 10);
+  region.holes.push_back(rectangle(5, 3, 7, 7));
+  flux::NavMeshConfig config;
+  const auto baseline = flux::prepare_navmesh_domain(region, config);
+  config.usped.enabled = true;
+  const auto informed = flux::prepare_navmesh_domain(region, config);
+  std::cout << "USPED_MICRO baseline_cells=" << baseline.cells.size()
+            << " informed_cells=" << informed.cells.size()
+            << " refined_parents=" << informed.usped_refined_parents
+            << " raster_cells=" << informed.usped_field.height.size() << '\n';
+  require(baseline.ok() && informed.ok() && informed.usped_field.ok() &&
+              informed.usped_refined_parents > 0 &&
+              informed.usped_refined_parents <= config.usped.maximum_refined_parents &&
+              informed.cells.size() == baseline.cells.size() + 3 * informed.usped_refined_parents,
+          "USPED prepass must subdivide bounded certified coarse cells without discarding baseline cells");
+  require(!flux::query_prepared_navmesh_point(informed, mm(6, 5)).inside &&
+              flux::route_prepared_navmesh(informed, mm(2, 5), mm(10, 5), config).ok(),
+          "USPED mesh must retain obstacle exclusion and a certified route around the mountain");
+  config.usped.enabled = false;
+  require(!flux::route_prepared_navmesh(informed, mm(2, 5), mm(10, 5), config).ok(),
+          "prepared mesh must reject mismatched USPED configuration");
+  config.usped.enabled = true;
+  config.maximum_cells = baseline.cells.size();
+  const auto limited = flux::prepare_navmesh_domain(region, config);
+  require(limited.ok() && limited.cells.size() == baseline.cells.size() &&
+              limited.usped_refined_parents == 0 && !limited.usped_diagnostic.empty(),
+          "optional USPED subdivision must fall back to baseline when its mesh budget is exhausted");
+  config.usped.maximum_cells = 1;
+  const auto skipped = flux::prepare_navmesh_domain(region, config);
+  require(skipped.ok() && !skipped.usped_field.ok() && !skipped.usped_diagnostic.empty(),
+          "over-budget prepass must preserve ordinary boundary refinement");
+}
+
 void adaptive_navmesh_recovers_clearance_clipped_passage() {
+  require(flux::NavMeshConfig{}.adaptive_clearance_refinement &&
+              flux::NavMeshConfig{}.maximum_refinement_depth == 2U,
+          "adaptive NavMesh must default to two bounded refinement levels");
   flux::FreeSpaceDomain heterogeneous_domain;
   heterogeneous_domain.outline = rectangle(0.0, 0.0, 20.0, 10.0);
   heterogeneous_domain.obstacles = {rectangle(4.0, 4.0, 5.0, 5.0), rectangle(12.0, 4.0, 13.0, 5.0)};
+  const std::vector<std::pair<Point, Point>> validation_chords{
+      {mm(1.0, 1.0), mm(3.0, 1.0)}, {mm(1.0, 4.5), mm(6.0, 4.5)}};
+  require(flux::validate_free_space_chord_domain(heterogeneous_domain) &&
+              flux::assess_validated_free_space_chords(heterogeneous_domain,
+                                                       validation_chords) ==
+                  flux::assess_free_space_chords(heterogeneous_domain, validation_chords),
+          "prevalidated batched chord certificates must retain the fail-closed exact geometry "
+          "result while omitting only repeated invariant domain validation");
   flux::FreeSpaceOffsetConfig heterogeneous_config{Nanometres::from_mm(0.1)};
   heterogeneous_config.obstacle_clearances = {Nanometres::from_mm(0.2), Nanometres::from_mm(2.0)};
   const auto heterogeneous =
@@ -4848,8 +9596,8 @@ void advanced_routing_compute_shortlists_preserve_cpu_authority() {
     for (std::size_t index = 0U; index < 32U; ++index) {
       const auto x = static_cast<std::int64_t>(index) * 100'000;
       const auto shift = owner == 0U ? 0 : 25'000;
-      offset_hulls.push_back({x + shift, 0, x + shift + 50'000, 50'000, 0U,
-                              static_cast<std::uint32_t>(owner)});
+      offset_hulls.push_back(
+          {x + shift, 0, x + shift + 50'000, 50'000, 0U, static_cast<std::uint32_t>(owner)});
     }
   }
   const auto hulls_cpu =
@@ -4875,6 +9623,46 @@ void advanced_routing_compute_shortlists_preserve_cpu_authority() {
           hulls_cpu.candidate_pairs == hulls_gpu.candidate_pairs &&
           resources_cpu.overflow == resources_gpu.overflow && resources_gpu.used_gpu,
       "advanced GPU shortlists/reductions must agree with their deterministic CPU authority");
+}
+
+void routing_compute_chord_batches_are_bounded_and_conservative() {
+  constexpr auto origin = std::int64_t{8'000'000'000'000'000LL};
+  std::vector<flux::RoutingComputeSegment> chords;
+  std::vector<flux::RoutingComputeSegment> boundaries;
+  chords.reserve(300U);
+  boundaries.reserve(1'100U);
+  for (std::size_t index = 0U; index < 300U; ++index) {
+    const auto x = origin + static_cast<std::int64_t>(index) * 10'000;
+    chords.push_back({x, origin, x + 5'000, origin, 0, 0U, 0U});
+  }
+  for (std::size_t index = 0U; index < 1'100U; ++index) {
+    const auto x = origin + static_cast<std::int64_t>(index) * 5'000;
+    boundaries.push_back({x, origin + 10'000'000, x + 2'500, origin + 10'000'000, 0, 0U, 1U});
+  }
+  // This chord is deliberately a survivor. It crosses a boundary that lies in the second
+  // resident boundary chunk, which proves clear classification is aggregated across chunks.
+  chords[299U] = {origin + 5'350'000, origin + 10'000'000, origin + 5'355'000,
+                  origin + 10'000'000, 0, 0U, 0U};
+  const auto cpu = flux::classify_routing_chords(chords, boundaries, 1'000, 2'048, false);
+  const auto gpu = flux::classify_routing_chords(chords, boundaries, 1'000, 2'048, true);
+  const auto invalid = flux::classify_routing_chords(
+      chords, boundaries, std::numeric_limits<std::int64_t>::max(), 1, true);
+  const auto same_classification =
+      cpu.ok() && gpu.ok() && cpu.chords.size() == gpu.chords.size() &&
+      std::equal(cpu.chords.begin(), cpu.chords.end(), gpu.chords.begin(),
+                 [](const auto& exact, const auto& screened) {
+                   // GPU intersection is intentionally ambiguous rather than a final rejection.
+                   return (exact.classification == flux::RoutingComputeChordClass::definitely_clear) ==
+                          (screened.classification == flux::RoutingComputeChordClass::definitely_clear);
+                 });
+  require(same_classification &&
+              gpu.chords.back().classification != flux::RoutingComputeChordClass::definitely_clear &&
+              !invalid.ok() &&
+              (!gpu.used_gpu ||
+               (gpu.gpu_batch_count == 3U && gpu.gpu_work_items == chords.size() * boundaries.size())) &&
+              (!gpu.used_gpu || gpu.chords.front().closest_boundary == 0U),
+          "bounded translated chord screening must retain exact survivors and aggregate every "
+          "resident boundary chunk");
 }
 
 void physical_copper_t_junction_is_preserved_during_ph_realization() {
@@ -4926,6 +9714,30 @@ void physical_copper_t_junction_is_preserved_during_ph_realization() {
           "two same-net tracks meeting at a pad centre must be classified as an anchored terminal "
           "junction rather than an unrealized free-space PH bend: " +
               terminal.diagnostic);
+
+  // A connection may pass through an already connected through-hole terminal instead of ending
+  // there.  That interior pad contact is part of the routed tree topology and must remain fixed
+  // while the bends on either side are converted to PH geometry.
+  auto pass_through_source = source;
+  auto fourth_footprint = source.footprints.front();
+  fourth_footprint.id = ObjectId{"U4"};
+  fourth_footprint.reference = "U4";
+  fourth_footprint.position = mm(60.0, 70.0);
+  fourth_footprint.pads.front().id = ObjectId{"U4-pad"};
+  pass_through_source.footprints.push_back(std::move(fourth_footprint));
+  auto pass_through_global = global;
+  pass_through_global.paths[1].points = {{mm(80.0, 40.0), LayerId{"F.Cu"}},
+                                         {mm(50.0, 40.0), LayerId{"F.Cu"}},
+                                         {mm(50.0, 60.0), LayerId{"F.Cu"}},
+                                         {mm(60.0, 70.0), LayerId{"F.Cu"}}};
+  const auto pass_through =
+      flux::materialize_detailed_route(pass_through_source, pass_through_global, config);
+  require(pass_through.complete() && pass_through.candidate &&
+              pass_through.connectivity.open_connections == 0U &&
+              pass_through.unrounded_non_junction_bends == 0U,
+          "an interior same-net pad contact must split the PH chain and remain electrically "
+          "anchored through curved realization: " +
+              pass_through.diagnostic);
 }
 
 void same_net_vertical_features_are_reused_as_transition_portals() {
@@ -5004,8 +9816,8 @@ void same_net_vertical_features_are_reused_as_transition_portals() {
         }
         return false;
       });
-  require(global_pad_route.complete() &&
-              global_pad_route.reused_component_pad_transitions > 0U && exact_pad_transition,
+  require(global_pad_route.complete() && global_pad_route.reused_component_pad_transitions > 0U &&
+              exact_pad_transition,
           "a plated pad must expose its offset physical hole, rather than its copper anchor, as "
           "the reusable global layer-transition portal: " +
               global_pad_route.diagnostic);
@@ -5030,10 +9842,10 @@ void same_net_vertical_features_are_reused_as_transition_portals() {
 
 void kicad_zone_refill_adapter_is_bounded_and_fail_closed() {
 #ifdef FLUX_TEST_PYTHON_EXECUTABLE
-  const auto nonce = static_cast<std::uint64_t>(
-      std::chrono::steady_clock::now().time_since_epoch().count());
-  const auto root = std::filesystem::temp_directory_path() /
-                    ("flux-kicad-refill-test-" + std::to_string(nonce));
+  const auto nonce =
+      static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+  const auto root =
+      std::filesystem::temp_directory_path() / ("flux-kicad-refill-test-" + std::to_string(nonce));
   std::error_code error;
   require(std::filesystem::create_directory(root, error) && !error,
           "zone-refill test must create an isolated temporary directory");
@@ -5068,12 +9880,12 @@ print("non-JSON diagnostic before the dedicated report")
   const auto passing_output = passing_directory / "refilled.kicad_pcb";
   const auto passing = flux::io::run_kicad_zone_refill(
       {std::filesystem::path{FLUX_TEST_PYTHON_EXECUTABLE}, passing_helper, provisional,
-       passing_output, passing_directory, std::chrono::seconds{5}, 4U * 1024U,
-       1U * 1024U * 1024U});
+       passing_output, passing_directory, std::chrono::seconds{5}, 4U * 1024U, 1U * 1024U * 1024U});
   require(passing.run && passing.passed && passing.exit_code == 0 &&
               std::filesystem::is_regular_file(passing_output),
           "a shell-free bounded refill adapter must accept an explicit successful JSON/artifact "
-          "transaction: " + passing.diagnostic);
+          "transaction: " +
+              passing.diagnostic);
 
   const auto failing_helper = root / "failing refill helper.py";
   {
@@ -5087,8 +9899,8 @@ print("non-JSON diagnostic before the dedicated report")
           "zone-refill test must create a failing diagnostic directory");
   const auto failing = flux::io::run_kicad_zone_refill(
       {std::filesystem::path{FLUX_TEST_PYTHON_EXECUTABLE}, failing_helper, provisional,
-       failing_directory / "must-not-exist.kicad_pcb", failing_directory,
-       std::chrono::seconds{5}, 4U * 1024U, 1U * 1024U * 1024U});
+       failing_directory / "must-not-exist.kicad_pcb", failing_directory, std::chrono::seconds{5},
+       4U * 1024U, 1U * 1024U * 1024U});
   require(failing.run && !failing.passed && failing.exit_code == 5,
           "a nonzero refill helper result must remain a failed transaction");
 
@@ -5097,13 +9909,86 @@ print("non-JSON diagnostic before the dedicated report")
   require(std::filesystem::create_directory(unavailable_directory, error) && !error,
           "zone-refill test must create an unavailable diagnostic directory");
   const auto unavailable = flux::io::run_kicad_zone_refill(
-      {std::filesystem::path{FLUX_TEST_PYTHON_EXECUTABLE}, root / "missing-helper.py",
-       provisional, unavailable_directory / "must-not-exist.kicad_pcb",
-       unavailable_directory, std::chrono::seconds{5}, 4U * 1024U,
-       1U * 1024U * 1024U});
+      {std::filesystem::path{FLUX_TEST_PYTHON_EXECUTABLE}, root / "missing-helper.py", provisional,
+       unavailable_directory / "must-not-exist.kicad_pcb", unavailable_directory,
+       std::chrono::seconds{5}, 4U * 1024U, 1U * 1024U * 1024U});
   require(!unavailable.run && !unavailable.passed && unavailable.exit_code == -1,
           "an unavailable refill helper must fail before a child process is launched");
 #endif
+}
+
+void generated_copper_telemetry_replaces_latest_scene_and_retains_beziers() {
+  flux::RouterTelemetryConfig config;
+  config.listen_address.reset();
+  config.listen_port.reset();
+  flux::RouterTelemetryService telemetry(config);
+  Board source;
+  source.source_revision = "telemetry-source";
+  source.outline = rectangle(0.0, 0.0, 20.0, 20.0);
+  source.layers = {{LayerId{"F.Cu"}, "F.Cu", LayerKind::copper, 0U},
+                   {LayerId{"B.Cu"}, "B.Cu", LayerKind::copper, 1U}};
+  source.nets = {{NetId{"signal"}, "SIGNAL", 0U}};
+  const auto curve = [](std::string id, LayerId layer, double y) {
+    return flux::TrackBezier{ObjectId{std::move(id)}, NetId{"signal"}, std::move(layer),
+                              mm(2.0, y), mm(6.0, y + 2.0), mm(14.0, y - 2.0), mm(18.0, y),
+                              Nanometres::from_mm(0.2), false};
+  };
+  source.track_beziers.push_back(curve("source-front", LayerId{"F.Cu"}, 5.0));
+  telemetry.publish_source_board(source, "telemetry-source.kicad_pcb");
+
+  auto generated = source;
+  generated.source_revision = "generated-front";
+  generated.track_beziers = {curve("generated-front", LayerId{"F.Cu"}, 10.0)};
+  telemetry.publish_generated_copper(generated, "front curve");
+  const auto latest_scene = [](const flux::RouterTelemetryState& state) {
+    std::vector<std::shared_ptr<const flux::telemetry::SourceBoard>> scenes;
+    for (const auto& scene : state.source_boards)
+      if (scene && scene->id == "generated-copper:latest") scenes.push_back(scene);
+    return scenes;
+  };
+  auto state = telemetry.state();
+  auto generated_scenes = latest_scene(state);
+  require(generated_scenes.size() == 1U &&
+              std::count_if(generated_scenes.front()->primitives.begin(), generated_scenes.front()->primitives.end(),
+                            [](const auto& primitive) {
+                              return primitive.kind == "track_bezier" &&
+                                     primitive.layers == std::vector<std::string>{"F.Cu"};
+                            }) == 1U,
+          "generated copper telemetry must retain front-layer Bezier tracks");
+
+  generated.source_revision = "generated-back";
+  generated.track_beziers = {curve("generated-back", LayerId{"B.Cu"}, 10.0)};
+  telemetry.publish_generated_copper(generated, "back curve");
+  state = telemetry.state();
+  generated_scenes = latest_scene(state);
+  require(generated_scenes.size() == 1U &&
+              std::count_if(generated_scenes.front()->primitives.begin(), generated_scenes.front()->primitives.end(),
+                            [](const auto& primitive) {
+                              return primitive.kind == "track_bezier" &&
+                                     primitive.layers == std::vector<std::string>{"B.Cu"};
+                            }) == 1U &&
+              std::none_of(generated_scenes.front()->primitives.begin(), generated_scenes.front()->primitives.end(),
+                           [](const auto& primitive) {
+                             return primitive.kind == "track_bezier" &&
+                                    primitive.layers == std::vector<std::string>{"F.Cu"};
+                           }),
+          "a later generated snapshot must replace the front scene with the back scene");
+
+  generated.source_revision = "generated-empty";
+  generated.track_beziers.clear();
+  telemetry.publish_generated_copper(generated, "removed curve");
+  state = telemetry.state();
+  generated_scenes = latest_scene(state);
+  const auto source_scene = std::find_if(state.source_boards.begin(), state.source_boards.end(),
+      [](const auto& scene) { return scene && scene->id.starts_with("source-board:"); });
+  require(generated_scenes.size() == 1U &&
+              std::none_of(generated_scenes.front()->primitives.begin(), generated_scenes.front()->primitives.end(),
+                           [](const auto& primitive) { return primitive.kind == "track_bezier"; }) &&
+              source_scene != state.source_boards.end() &&
+              std::any_of((*source_scene)->primitives.begin(), (*source_scene)->primitives.end(),
+                          [](const auto& primitive) { return primitive.kind == "track_bezier"; }),
+          "generated snapshot removal must preserve the immutable source scene");
+  telemetry.stop();
 }
 
 void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
@@ -5170,12 +10055,10 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
   net_class.id = power_class;
   net_class.name = "Power";
   scoped_board.net_classes = {net_class};
-  scoped_board.footprints[0].pads = {
-      {ObjectId{"u1-a"}, signal_a, Point{}, {LayerId{"F.Cu"}}},
-      {ObjectId{"u1-b"}, signal_b, Point{}, {LayerId{"F.Cu"}}}};
-  scoped_board.footprints[1].pads = {
-      {ObjectId{"u2-a"}, signal_a, Point{}, {LayerId{"F.Cu"}}},
-      {ObjectId{"u2-p"}, power, Point{}, {LayerId{"F.Cu"}}}};
+  scoped_board.footprints[0].pads = {{ObjectId{"u1-a"}, signal_a, Point{}, {LayerId{"F.Cu"}}},
+                                     {ObjectId{"u1-b"}, signal_b, Point{}, {LayerId{"F.Cu"}}}};
+  scoped_board.footprints[1].pads = {{ObjectId{"u2-a"}, signal_a, Point{}, {LayerId{"F.Cu"}}},
+                                     {ObjectId{"u2-p"}, power, Point{}, {LayerId{"F.Cu"}}}};
   Footprint third;
   third.id = ObjectId{"U3"};
   third.reference = "U3";
@@ -5187,20 +10070,28 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
   scoped_board.footprints.push_back(third);
   scoped_board.placement_groups = {
       {flux::PlacementGroupId{"core-id"}, "core", {ObjectId{"U1"}, ObjectId{"U2"}}}};
-  scoped_board.tracks = {
-      {ObjectId{"track-a"}, signal_a, LayerId{"F.Cu"}, mm(1.0, 1.0), mm(2.0, 1.0),
-       Nanometres::from_mm(0.25), false},
-      {ObjectId{"track-p-locked"}, power, LayerId{"F.Cu"}, mm(3.0, 1.0), mm(4.0, 1.0),
-       Nanometres::from_mm(0.25), true},
-      {ObjectId{"track-x"}, auxiliary, LayerId{"F.Cu"}, mm(5.0, 1.0), mm(6.0, 1.0),
-       Nanometres::from_mm(0.25), false}};
-  scoped_board.track_arcs = {{ObjectId{"arc-p"}, power, LayerId{"F.Cu"}, mm(7.0, 1.0),
-                              mm(7.5, 1.5), mm(8.0, 1.0), Nanometres::from_mm(0.25), false}};
-  scoped_board.vias = {{ObjectId{"via-p"}, power, mm(9.0, 1.0), Nanometres::from_mm(0.6),
-                        Nanometres::from_mm(0.3), {LayerId{"F.Cu"}, LayerId{"B.Cu"}}, false},
-                       {ObjectId{"via-x-locked"}, auxiliary, mm(10.0, 1.0),
-                        Nanometres::from_mm(0.6), Nanometres::from_mm(0.3),
-                        {LayerId{"F.Cu"}, LayerId{"B.Cu"}}, true}};
+  scoped_board.tracks = {{ObjectId{"track-a"}, signal_a, LayerId{"F.Cu"}, mm(1.0, 1.0),
+                          mm(2.0, 1.0), Nanometres::from_mm(0.25), false},
+                         {ObjectId{"track-p-locked"}, power, LayerId{"F.Cu"}, mm(3.0, 1.0),
+                          mm(4.0, 1.0), Nanometres::from_mm(0.25), true},
+                         {ObjectId{"track-x"}, auxiliary, LayerId{"F.Cu"}, mm(5.0, 1.0),
+                          mm(6.0, 1.0), Nanometres::from_mm(0.25), false}};
+  scoped_board.track_arcs = {{ObjectId{"arc-p"}, power, LayerId{"F.Cu"}, mm(7.0, 1.0), mm(7.5, 1.5),
+                              mm(8.0, 1.0), Nanometres::from_mm(0.25), false}};
+  scoped_board.vias = {{ObjectId{"via-p"},
+                        power,
+                        mm(9.0, 1.0),
+                        Nanometres::from_mm(0.6),
+                        Nanometres::from_mm(0.3),
+                        {LayerId{"F.Cu"}, LayerId{"B.Cu"}},
+                        false},
+                       {ObjectId{"via-x-locked"},
+                        auxiliary,
+                        mm(10.0, 1.0),
+                        Nanometres::from_mm(0.6),
+                        Nanometres::from_mm(0.3),
+                        {LayerId{"F.Cu"}, LayerId{"B.Cu"}},
+                        true}};
   flux::CopperZone immutable_zone;
   immutable_zone.id = ObjectId{"zone-p"};
   immutable_zone.net = power;
@@ -5216,231 +10107,207 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
   scoped_route.selectors.net_classes = {"Power"};
   scoped_route.selectors.placement_groups = {"core"};
   scoped_route.selectors.group_scope = flux::io::WorkPlanSelectorScope::internal;
-  scoped_route.options = {{"atomic_complete_net_routing", true},
-                          {"capacity_reserve_cost", std::uint64_t{777U}},
-                          {"capacity_reserve_per_mille", std::uint64_t{300U}},
-                          {"circular_arc_refinement", true},
-                          {"clearance_shadow_cost_quantum_nm", std::uint64_t{10'000U}},
-                          {"corridor_neck_down_width_nm", std::uint64_t{130'000U}},
-                          {"crossing_safe_diagonal_grid_edges", false},
-                          {"defer_hard_capacity_ripup_victims_to_pass_tail", true},
-                          {"diagonal_grid_edges", true},
-                          {"differential_pair_skew_tuning_batch_assignment", true},
-                          {"expansion_retry_heuristic_weight_per_mille",
-                           std::uint64_t{2'500U}},
-                          {"former_route_memory_cost", std::uint64_t{1'777U}},
-                          {"grid_pitch_nm", std::uint64_t{250'000U}},
-                          {"hard_capacity_start_iteration", std::uint64_t{3U}},
-                          {"local_pin_escape_pitch_nm", std::uint64_t{50'000U}},
-                          {"max_corridor_neck_down_length_nm", std::uint64_t{700'000U}},
-                          {"max_corridor_neck_down_states", std::uint64_t{12'345U}},
-                          {"max_hard_capacity_blocker_reuse_invalidations_per_failed_net",
-                           std::uint64_t{2U}},
-                          {"max_hard_capacity_conflict_set_states_per_attempt",
-                           std::uint64_t{64U}},
-                          {"max_hard_capacity_ripup_attempts_per_pass", std::uint64_t{2U}},
-                          {"max_hard_capacity_ripup_nets_per_attempt", std::uint64_t{3U}},
-                          {"max_final_routability_feedback_passes", std::uint64_t{7U}},
-                          {"max_local_pin_escape_expansions_per_terminal",
-                           std::uint64_t{23'456U}},
-                          {"max_medial_neck_down_length_nm", std::uint64_t{600'000U}},
-                          {"max_pin_access_nodes_per_terminal", std::uint64_t{24U}},
-                          {"max_post_negotiation_sampled_conflict_repair_cones",
-                           std::uint64_t{6U}},
-                          {"max_present_congestion_scale_per_mille",
-                           std::uint64_t{4'800U}},
-                          {"max_router_iterations", std::uint64_t{42U}},
-                          {"max_terminal_escape_reservation_resources",
-                           std::uint64_t{1'234U}},
-                          {"max_terminal_neck_down_length_nm", std::uint64_t{500'000U}},
-                          {"max_voronoi_resource_segment_length_nm",
-                           std::uint64_t{2'000'000U}},
-                          {"medial_neck_down_width_nm", std::uint64_t{140'000U}},
-                          {"physical_envelope_ordering", true},
-                          {"physical_overflow_history", true},
-                          {"pin_escape_grid_radius", std::uint64_t{5U}},
-                          {"post_negotiation_sampled_conflict_repair", true},
-                          {"present_congestion_escalation_start_iteration",
-                           std::uint64_t{3U}},
-                          {"present_congestion_multiplier_per_mille",
-                           std::uint64_t{1'200U}},
-                          {"priority_nets", std::vector<std::string>{"PWR", "SIG_A"}},
-                          {"protect_recovered_hard_capacity_ripup_nets", true},
-                          {"reuse_weighted_search_frontier", true},
-                          {"river_following_cost", std::uint64_t{333U}},
-                          {"rollback_failed_hard_capacity_ripup", true},
-                          {"sampled_route_clearance_reservations", true},
-                          {"search_diversification", true},
-                          {"selective_congestion_reroute", true},
-                          {"selective_full_reroute_interval", std::uint64_t{5U}},
-                          {"terminal_escape_proximity_cost", std::uint64_t{66U}},
-                          {"terminal_escape_reservation_cost", std::uint64_t{555U}},
-                          {"terminal_neck_down_width_nm", std::uint64_t{150'000U}},
-                          {"via_site_phase_x", std::uint64_t{1U}},
-                          {"via_site_phase_y", std::uint64_t{3U}},
-                          {"via_site_pitch_nm", std::uint64_t{1'000'000U}},
-                          {"width_reduction_cost_per_grid_step", std::uint64_t{444U}},
-                          {"xpbd_feedback", true},
-                          {"xpbd_iterations", std::uint64_t{17U}},
-                          {"xpbd_maximum_step_nm", std::uint64_t{80'000U}},
-                          {"xpbd_prefer_gpu", true}};
+  scoped_route.options = {
+      {"atomic_complete_net_routing", true},
+      {"capacity_reserve_cost", std::uint64_t{777U}},
+      {"capacity_reserve_per_mille", std::uint64_t{300U}},
+      {"circular_arc_refinement", true},
+      {"clearance_shadow_cost_quantum_nm", std::uint64_t{10'000U}},
+      {"corridor_neck_down_width_nm", std::uint64_t{130'000U}},
+      {"crossing_safe_diagonal_grid_edges", false},
+      {"defer_hard_capacity_ripup_victims_to_pass_tail", true},
+      {"diagonal_grid_edges", true},
+      {"differential_pair_skew_tuning_batch_assignment", true},
+      {"expansion_retry_heuristic_weight_per_mille", std::uint64_t{2'500U}},
+      {"former_route_memory_cost", std::uint64_t{1'777U}},
+      {"grid_pitch_nm", std::uint64_t{250'000U}},
+      {"hard_capacity_start_iteration", std::uint64_t{3U}},
+      {"local_pin_escape_pitch_nm", std::uint64_t{50'000U}},
+      {"max_corridor_neck_down_length_nm", std::uint64_t{700'000U}},
+      {"max_corridor_neck_down_states", std::uint64_t{12'345U}},
+      {"max_hard_capacity_blocker_reuse_invalidations_per_failed_net", std::uint64_t{2U}},
+      {"max_hard_capacity_conflict_set_states_per_attempt", std::uint64_t{64U}},
+      {"max_hard_capacity_ripup_attempts_per_pass", std::uint64_t{2U}},
+      {"max_hard_capacity_ripup_nets_per_attempt", std::uint64_t{3U}},
+      {"max_final_routability_feedback_passes", std::uint64_t{7U}},
+      {"max_local_pin_escape_expansions_per_terminal", std::uint64_t{23'456U}},
+      {"max_medial_neck_down_length_nm", std::uint64_t{600'000U}},
+      {"max_pin_access_nodes_per_terminal", std::uint64_t{24U}},
+      {"max_post_negotiation_sampled_conflict_repair_cones", std::uint64_t{6U}},
+      {"max_present_congestion_scale_per_mille", std::uint64_t{4'800U}},
+      {"max_router_iterations", std::uint64_t{42U}},
+      {"max_terminal_escape_reservation_resources", std::uint64_t{1'234U}},
+      {"max_terminal_neck_down_length_nm", std::uint64_t{500'000U}},
+      {"max_voronoi_resource_segment_length_nm", std::uint64_t{2'000'000U}},
+      {"medial_neck_down_width_nm", std::uint64_t{140'000U}},
+      {"physical_envelope_ordering", true},
+      {"physical_overflow_history", true},
+      {"pin_escape_grid_radius", std::uint64_t{5U}},
+      {"post_negotiation_sampled_conflict_repair", true},
+      {"present_congestion_escalation_start_iteration", std::uint64_t{3U}},
+      {"present_congestion_multiplier_per_mille", std::uint64_t{1'200U}},
+      {"priority_nets", std::vector<std::string>{"PWR", "SIG_A"}},
+      {"protect_recovered_hard_capacity_ripup_nets", true},
+      {"reuse_weighted_search_frontier", true},
+      {"river_following_cost", std::uint64_t{333U}},
+      {"rollback_failed_hard_capacity_ripup", true},
+      {"sampled_route_clearance_reservations", true},
+      {"search_diversification", true},
+      {"selective_congestion_reroute", true},
+      {"selective_full_reroute_interval", std::uint64_t{5U}},
+      {"terminal_escape_proximity_cost", std::uint64_t{66U}},
+      {"terminal_escape_reservation_cost", std::uint64_t{555U}},
+      {"terminal_neck_down_width_nm", std::uint64_t{150'000U}},
+      {"via_site_phase_x", std::uint64_t{1U}},
+      {"via_site_phase_y", std::uint64_t{3U}},
+      {"via_site_pitch_nm", std::uint64_t{1'000'000U}},
+      {"width_reduction_cost_per_grid_step", std::uint64_t{444U}},
+      {"xpbd_feedback", true},
+      {"xpbd_iterations", std::uint64_t{17U}},
+      {"xpbd_maximum_step_nm", std::uint64_t{80'000U}},
+      {"xpbd_prefer_gpu", true}};
   scoped_plan.steps = {scoped_route};
   const auto expansion = flux::io::expand_flux_work_plan(scoped_board, scoped_plan);
-  require(expansion.ok() && expansion.steps.size() == 1U &&
-              expansion.steps.front().nets == std::vector<NetId>{signal_a, power, auxiliary} &&
-              expansion.steps.front().footprints ==
-                  std::vector<ObjectId>{ObjectId{"U1"}, ObjectId{"U2"}} &&
-              expansion.steps.front().wildcard_only_nets == std::vector<NetId>{auxiliary} &&
-              expansion.copper_authority.reroutable_nets ==
-                  std::vector<NetId>{signal_a, power} &&
-              expansion.copper_authority.removable_tracks ==
-                  std::vector<ObjectId>{ObjectId{"track-a"}} &&
-              expansion.copper_authority.removable_track_arcs ==
-                  std::vector<ObjectId>{ObjectId{"arc-p"}} &&
-              expansion.copper_authority.removable_vias ==
-                  std::vector<ObjectId>{ObjectId{"via-p"}} &&
-              expansion.copper_authority.immutable_tracks ==
-                  std::vector<ObjectId>{ObjectId{"track-p-locked"}, ObjectId{"track-x"}} &&
-              expansion.copper_authority.immutable_vias ==
-                  std::vector<ObjectId>{ObjectId{"via-x-locked"}} &&
-              expansion.copper_authority.immutable_zones ==
-                  std::vector<ObjectId>{ObjectId{"zone-p"}} &&
-              expansion.selected_net_mask == std::vector<std::uint8_t>({1U, 0U, 1U, 1U}) &&
-              expansion.reroutable_net_mask == std::vector<std::uint8_t>({1U, 0U, 1U, 0U}),
-          "selector expansion must union exact physical scopes, apply exclusions last, expose "
-          "device-ready masks, and keep wildcard-only or locked source copper immutable");
+  require(
+      expansion.ok() && expansion.steps.size() == 1U &&
+          expansion.steps.front().nets == std::vector<NetId>{signal_a, power, auxiliary} &&
+          expansion.steps.front().footprints ==
+              std::vector<ObjectId>{ObjectId{"U1"}, ObjectId{"U2"}} &&
+          expansion.steps.front().wildcard_only_nets == std::vector<NetId>{auxiliary} &&
+          expansion.copper_authority.reroutable_nets == std::vector<NetId>{signal_a, power} &&
+          expansion.copper_authority.removable_tracks ==
+              std::vector<ObjectId>{ObjectId{"track-a"}} &&
+          expansion.copper_authority.removable_track_arcs ==
+              std::vector<ObjectId>{ObjectId{"arc-p"}} &&
+          expansion.copper_authority.removable_vias == std::vector<ObjectId>{ObjectId{"via-p"}} &&
+          expansion.copper_authority.immutable_tracks ==
+              std::vector<ObjectId>{ObjectId{"track-p-locked"}, ObjectId{"track-x"}} &&
+          expansion.copper_authority.immutable_vias ==
+              std::vector<ObjectId>{ObjectId{"via-x-locked"}} &&
+          expansion.copper_authority.immutable_zones == std::vector<ObjectId>{ObjectId{"zone-p"}} &&
+          expansion.selected_net_mask == std::vector<std::uint8_t>({1U, 0U, 1U, 1U}) &&
+          expansion.reroutable_net_mask == std::vector<std::uint8_t>({1U, 0U, 1U, 0U}),
+      "selector expansion must union exact physical scopes, apply exclusions last, expose "
+      "device-ready masks, and keep wildcard-only or locked source copper immutable");
   const auto compiled = flux::io::compile_flux_work_plan_routes(scoped_board, scoped_plan);
-  require(compiled.ok() && compiled.route_steps.size() == 1U &&
-              compiled.route_steps.front().selected_nets ==
-                  std::vector<NetId>{signal_a, power, auxiliary} &&
-              compiled.route_steps.front().priority_nets == std::vector<NetId>{power, signal_a} &&
-              compiled.route_steps.front().configuration.planner.global.grid_pitch ==
-                  Nanometres{250'000} &&
-              compiled.route_steps.front().configuration.planner.global.via_site_pitch ==
-                  Nanometres{1'000'000} &&
-              compiled.route_steps.front().configuration.planner.global.via_site_phase_x == 1U &&
-              compiled.route_steps.front().configuration.planner.global.via_site_phase_y == 3U &&
-              compiled.route_steps.front()
-                      .configuration.planner.global.max_pin_escape_grid_radius == 5U &&
-              compiled.route_steps.front()
-                      .configuration.planner.global.max_pin_access_nodes_per_terminal == 24U &&
-              compiled.route_steps.front().configuration.planner.global.local_pin_escape_pitch ==
-                  Nanometres{50'000} &&
-              compiled.route_steps.front()
-                      .configuration.planner.global
-                      .max_local_pin_escape_expansions_per_terminal == 23'456U &&
-              compiled.route_steps.front().configuration.planner.global.terminal_neck_down_width ==
-                  Nanometres{150'000} &&
-              compiled.route_steps.front()
-                      .configuration.planner.global.max_terminal_neck_down_length ==
-                  Nanometres{500'000} &&
-              compiled.route_steps.front().configuration.planner.global.medial_neck_down_width ==
-                  Nanometres{140'000} &&
-              compiled.route_steps.front()
-                      .configuration.planner.global.max_medial_neck_down_length ==
-                  Nanometres{600'000} &&
-              compiled.route_steps.front().configuration.planner.global.corridor_neck_down_width ==
-                  Nanometres{130'000} &&
-              compiled.route_steps.front()
-                      .configuration.planner.global.max_corridor_neck_down_length ==
-                  Nanometres{700'000} &&
-              compiled.route_steps.front()
-                      .configuration.planner.global.max_corridor_neck_down_states == 12'345U &&
-              compiled.route_steps.front()
-                      .configuration.planner.global.max_voronoi_resource_segment_length ==
-                  Nanometres{2'000'000} &&
-              compiled.route_steps.front().configuration.planner.global.max_iterations == 42U &&
-              compiled.route_steps.front().max_final_routability_feedback_passes == 7U &&
-              compiled.route_steps.front().post_negotiation_sampled_conflict_repair &&
-              compiled.route_steps.front()
-                      .max_post_negotiation_sampled_conflict_repair_cones == 6U &&
-              compiled.route_steps.front().configuration.planner.global.allow_diagonal_grid_edges &&
-              !compiled.route_steps.front()
-                   .configuration.planner.global.allow_crossing_safe_diagonal_grid_edges &&
-              compiled.route_steps.front()
-                  .configuration.planner.global.reserve_sampled_route_clearance &&
-              compiled.route_steps.front()
-                      .configuration.planner.global.expansion_retry_heuristic_weight_per_mille ==
-                  2'500U &&
-              compiled.route_steps.front()
-                  .configuration.planner.global.reuse_weighted_search_frontier &&
-              compiled.route_steps.front()
-                      .configuration.planner.global.present_congestion_multiplier_per_mille ==
-                  1'200U &&
-              compiled.route_steps.front()
-                      .configuration.planner.global.max_present_congestion_scale_per_mille ==
-                  4'800U &&
-              compiled.route_steps.front()
-                      .configuration.planner.global
-                      .present_congestion_escalation_start_iteration == 3U &&
-              compiled.route_steps.front()
-                  .configuration.planner.global.scale_voronoi_history_by_overflow &&
-              compiled.route_steps.front()
-                  .configuration.planner.global.order_routing_groups_by_physical_envelope &&
-              compiled.route_steps.front()
-                      .configuration.planner.global.clearance_shadow_cost_quantum ==
-                  Nanometres{10'000} &&
-              compiled.route_steps.front().configuration.planner.global.capacity_reserve_per_mille ==
-                  300U &&
-              compiled.route_steps.front().configuration.planner.global.capacity_reserve_cost ==
-                  777U &&
-              compiled.route_steps.front().configuration.planner.global.river_following_cost ==
-                  333U &&
-              compiled.route_steps.front()
-                      .configuration.planner.global.terminal_escape_reservation_cost == 555U &&
-              compiled.route_steps.front()
-                      .configuration.planner.global.terminal_escape_proximity_cost == 66U &&
-              compiled.route_steps.front()
-                      .configuration.planner.global
-                      .max_terminal_escape_reservation_resources == 1'234U &&
-              compiled.route_steps.front()
-                      .configuration.planner.global.width_reduction_cost_per_grid_step == 444U &&
-              compiled.route_steps.front()
-                      .configuration.planner.global.hard_capacity_start_iteration == 3U &&
-              compiled.route_steps.front()
-                      .configuration.planner.global.max_hard_capacity_ripup_attempts_per_pass ==
-                  2U &&
-              compiled.route_steps.front()
-                      .configuration.planner.global.max_hard_capacity_ripup_nets_per_attempt ==
-                  3U &&
-              compiled.route_steps.front()
-                      .configuration.planner.global
-                      .max_hard_capacity_conflict_set_states_per_attempt == 64U &&
-              compiled.route_steps.front()
-                      .configuration.planner.global
-                      .max_hard_capacity_blocker_reuse_invalidations_per_failed_net == 2U &&
-              compiled.route_steps.front()
-                      .configuration.planner.global.rollback_failed_hard_capacity_ripup &&
-              compiled.route_steps.front()
-                      .configuration.planner.global
-                      .defer_hard_capacity_ripup_victims_to_pass_tail &&
-              compiled.route_steps.front()
-                      .configuration.planner.global.protect_recovered_hard_capacity_ripup_nets &&
-              compiled.route_steps.front().configuration.planner.global
-                      .selective_full_reroute_interval == 5U &&
-              compiled.route_steps.front().configuration.planner.global.former_route_memory_cost ==
-                  1'777U &&
-              compiled.route_steps.front().configuration.planner.global
-                  .enable_search_diversification &&
-              compiled.route_steps.front().configuration.planner.global.atomic_complete_net_routing &&
-              compiled.route_steps.front().configuration.planner.global
-                  .selective_congestion_reroute &&
-              compiled.route_steps.front().configuration.planner.regional.enable_xpbd_relaxation &&
-              compiled.route_steps.front().configuration.planner.regional.enable_xpbd_feedback &&
-              compiled.route_steps.front().configuration.planner.regional.xpbd.iterations == 17U &&
-              compiled.route_steps.front().configuration.planner.regional.xpbd.maximum_step_nm ==
-                  80'000 &&
-              compiled.route_steps.front().configuration.planner.regional.xpbd.prefer_gpu &&
-              compiled.route_steps.front().configuration.detailed.circular_arc_refinement &&
-              compiled.route_steps.front().configuration.detailed.differential_pair_skew_tuning &&
-              compiled.route_steps.front()
-                  .configuration.detailed.differential_pair_skew_tuning_batch_assignment &&
-              compiled.route_steps.front().configuration.detailed.existing_routing ==
-                  flux::ExistingRoutingPolicy::replace_unlocked_for_routed_nets &&
-              compiled.route_steps.front().configuration.detailed.existing_routing_replacement_scope ==
-                  std::optional<std::vector<NetId>>{std::vector<NetId>{signal_a, power}},
-          "route options must compile into the shared autoroute_v1 configuration without giving "
-          "wildcard-only nets source-copper replacement authority");
+  require(
+      compiled.ok() && compiled.route_steps.size() == 1U &&
+          compiled.route_steps.front().selected_nets ==
+              std::vector<NetId>{signal_a, power, auxiliary} &&
+          compiled.route_steps.front().priority_nets == std::vector<NetId>{power, signal_a} &&
+          compiled.route_steps.front().configuration.planner.global.grid_pitch ==
+              Nanometres{250'000} &&
+          compiled.route_steps.front().configuration.planner.global.via_site_pitch ==
+              Nanometres{1'000'000} &&
+          compiled.route_steps.front().configuration.planner.global.via_site_phase_x == 1U &&
+          compiled.route_steps.front().configuration.planner.global.via_site_phase_y == 3U &&
+          compiled.route_steps.front().configuration.planner.global.max_pin_escape_grid_radius ==
+              5U &&
+          compiled.route_steps.front()
+                  .configuration.planner.global.max_pin_access_nodes_per_terminal == 24U &&
+          compiled.route_steps.front().configuration.planner.global.local_pin_escape_pitch ==
+              Nanometres{50'000} &&
+          compiled.route_steps.front()
+                  .configuration.planner.global.max_local_pin_escape_expansions_per_terminal ==
+              23'456U &&
+          compiled.route_steps.front().configuration.planner.global.terminal_neck_down_width ==
+              Nanometres{150'000} &&
+          compiled.route_steps.front().configuration.planner.global.max_terminal_neck_down_length ==
+              Nanometres{500'000} &&
+          compiled.route_steps.front().configuration.planner.global.medial_neck_down_width ==
+              Nanometres{140'000} &&
+          compiled.route_steps.front().configuration.planner.global.max_medial_neck_down_length ==
+              Nanometres{600'000} &&
+          compiled.route_steps.front().configuration.planner.global.corridor_neck_down_width ==
+              Nanometres{130'000} &&
+          compiled.route_steps.front().configuration.planner.global.max_corridor_neck_down_length ==
+              Nanometres{700'000} &&
+          compiled.route_steps.front().configuration.planner.global.max_corridor_neck_down_states ==
+              12'345U &&
+          compiled.route_steps.front()
+                  .configuration.planner.global.max_voronoi_resource_segment_length ==
+              Nanometres{2'000'000} &&
+          compiled.route_steps.front().configuration.planner.global.max_iterations == 42U &&
+          compiled.route_steps.front().max_final_routability_feedback_passes == 7U &&
+          compiled.route_steps.front().post_negotiation_sampled_conflict_repair &&
+          compiled.route_steps.front().max_post_negotiation_sampled_conflict_repair_cones == 6U &&
+          compiled.route_steps.front().configuration.planner.global.allow_diagonal_grid_edges &&
+          !compiled.route_steps.front()
+               .configuration.planner.global.allow_crossing_safe_diagonal_grid_edges &&
+          compiled.route_steps.front()
+              .configuration.planner.global.reserve_sampled_route_clearance &&
+          compiled.route_steps.front()
+                  .configuration.planner.global.expansion_retry_heuristic_weight_per_mille ==
+              2'500U &&
+          compiled.route_steps.front()
+              .configuration.planner.global.reuse_weighted_search_frontier &&
+          compiled.route_steps.front()
+                  .configuration.planner.global.present_congestion_multiplier_per_mille == 1'200U &&
+          compiled.route_steps.front()
+                  .configuration.planner.global.max_present_congestion_scale_per_mille == 4'800U &&
+          compiled.route_steps.front()
+                  .configuration.planner.global.present_congestion_escalation_start_iteration ==
+              3U &&
+          compiled.route_steps.front()
+              .configuration.planner.global.scale_voronoi_history_by_overflow &&
+          compiled.route_steps.front()
+              .configuration.planner.global.order_routing_groups_by_physical_envelope &&
+          compiled.route_steps.front().configuration.planner.global.clearance_shadow_cost_quantum ==
+              Nanometres{10'000} &&
+          compiled.route_steps.front().configuration.planner.global.capacity_reserve_per_mille ==
+              300U &&
+          compiled.route_steps.front().configuration.planner.global.capacity_reserve_cost == 777U &&
+          compiled.route_steps.front().configuration.planner.global.river_following_cost == 333U &&
+          compiled.route_steps.front()
+                  .configuration.planner.global.terminal_escape_reservation_cost == 555U &&
+          compiled.route_steps.front()
+                  .configuration.planner.global.terminal_escape_proximity_cost == 66U &&
+          compiled.route_steps.front()
+                  .configuration.planner.global.max_terminal_escape_reservation_resources ==
+              1'234U &&
+          compiled.route_steps.front()
+                  .configuration.planner.global.width_reduction_cost_per_grid_step == 444U &&
+          compiled.route_steps.front().configuration.planner.global.hard_capacity_start_iteration ==
+              3U &&
+          compiled.route_steps.front()
+                  .configuration.planner.global.max_hard_capacity_ripup_attempts_per_pass == 2U &&
+          compiled.route_steps.front()
+                  .configuration.planner.global.max_hard_capacity_ripup_nets_per_attempt == 3U &&
+          compiled.route_steps.front()
+                  .configuration.planner.global.max_hard_capacity_conflict_set_states_per_attempt ==
+              64U &&
+          compiled.route_steps.front()
+                  .configuration.planner.global
+                  .max_hard_capacity_blocker_reuse_invalidations_per_failed_net == 2U &&
+          compiled.route_steps.front()
+              .configuration.planner.global.rollback_failed_hard_capacity_ripup &&
+          compiled.route_steps.front()
+              .configuration.planner.global.defer_hard_capacity_ripup_victims_to_pass_tail &&
+          compiled.route_steps.front()
+              .configuration.planner.global.protect_recovered_hard_capacity_ripup_nets &&
+          compiled.route_steps.front()
+                  .configuration.planner.global.selective_full_reroute_interval == 5U &&
+          compiled.route_steps.front().configuration.planner.global.former_route_memory_cost ==
+              1'777U &&
+          compiled.route_steps.front().configuration.planner.global.enable_search_diversification &&
+          compiled.route_steps.front().configuration.planner.global.atomic_complete_net_routing &&
+          compiled.route_steps.front().configuration.planner.global.selective_congestion_reroute &&
+          compiled.route_steps.front().configuration.planner.regional.enable_xpbd_relaxation &&
+          compiled.route_steps.front().configuration.planner.regional.enable_xpbd_feedback &&
+          compiled.route_steps.front().configuration.planner.regional.xpbd.iterations == 17U &&
+          compiled.route_steps.front().configuration.planner.regional.xpbd.maximum_step_nm ==
+              80'000 &&
+          compiled.route_steps.front().configuration.planner.regional.xpbd.prefer_gpu &&
+          compiled.route_steps.front().configuration.detailed.circular_arc_refinement &&
+          compiled.route_steps.front().configuration.detailed.differential_pair_skew_tuning &&
+          compiled.route_steps.front()
+              .configuration.detailed.differential_pair_skew_tuning_batch_assignment &&
+          compiled.route_steps.front().configuration.detailed.existing_routing ==
+              flux::ExistingRoutingPolicy::replace_unlocked_for_routed_nets &&
+          compiled.route_steps.front().configuration.detailed.existing_routing_replacement_scope ==
+              std::optional<std::vector<NetId>>{std::vector<NetId>{signal_a, power}},
+      "route options must compile into the shared autoroute_v1 configuration without giving "
+      "wildcard-only nets source-copper replacement authority");
 
   auto invalid_recovery_topology_plan = scoped_plan;
   invalid_recovery_topology_plan.steps.front().options["strict_medial_topology"] = false;
@@ -5449,9 +10316,9 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
       flux::io::compile_flux_work_plan_routes(scoped_board, invalid_recovery_topology_plan);
   require(!invalid_recovery_topology.ok() &&
               std::any_of(invalid_recovery_topology.diagnostics.begin(),
-                          invalid_recovery_topology.diagnostics.end(), [](const auto& diagnostic) {
-                            return diagnostic.code ==
-                                   "invalid_work_plan_route_option_dependency";
+                          invalid_recovery_topology.diagnostics.end(),
+                          [](const auto& diagnostic) {
+                            return diagnostic.code == "invalid_work_plan_route_option_dependency";
                           }),
           "hard-capacity WorkPlan recovery must fail closed without a represented medial "
           "topology");
@@ -5463,22 +10330,22 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
       flux::io::compile_flux_work_plan_routes(scoped_board, incomplete_recovery_bounds_plan);
   require(!incomplete_recovery_bounds.ok() &&
               std::any_of(incomplete_recovery_bounds.diagnostics.begin(),
-                          incomplete_recovery_bounds.diagnostics.end(), [](const auto& diagnostic) {
-                            return diagnostic.code ==
-                                   "invalid_work_plan_route_option_dependency";
+                          incomplete_recovery_bounds.diagnostics.end(),
+                          [](const auto& diagnostic) {
+                            return diagnostic.code == "invalid_work_plan_route_option_dependency";
                           }),
           "hard-capacity WorkPlan recovery must require both bounded attempt and victim counts");
 
   auto invalid_search_pressure_plan = scoped_plan;
-  invalid_search_pressure_plan.steps.front()
-      .options["expansion_retry_heuristic_weight_per_mille"] = std::uint64_t{0U};
+  invalid_search_pressure_plan.steps.front().options["expansion_retry_heuristic_weight_per_mille"] =
+      std::uint64_t{0U};
   const auto invalid_search_pressure =
       flux::io::compile_flux_work_plan_routes(scoped_board, invalid_search_pressure_plan);
   require(!invalid_search_pressure.ok() &&
               std::any_of(invalid_search_pressure.diagnostics.begin(),
-                          invalid_search_pressure.diagnostics.end(), [](const auto& diagnostic) {
-                            return diagnostic.code ==
-                                   "invalid_work_plan_route_option_dependency";
+                          invalid_search_pressure.diagnostics.end(),
+                          [](const auto& diagnostic) {
+                            return diagnostic.code == "invalid_work_plan_route_option_dependency";
                           }),
           "weighted-frontier WorkPlan search must fail closed without a retry weight");
 
@@ -5488,9 +10355,9 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
       flux::io::compile_flux_work_plan_routes(scoped_board, incomplete_neck_down_plan);
   require(!incomplete_neck_down.ok() &&
               std::any_of(incomplete_neck_down.diagnostics.begin(),
-                          incomplete_neck_down.diagnostics.end(), [](const auto& diagnostic) {
-                            return diagnostic.code ==
-                                   "invalid_work_plan_route_option_dependency";
+                          incomplete_neck_down.diagnostics.end(),
+                          [](const auto& diagnostic) {
+                            return diagnostic.code == "invalid_work_plan_route_option_dependency";
                           }),
           "terminal neck-down WorkPlan geometry must require a paired physical length bound");
 
@@ -5503,8 +10370,7 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
               std::any_of(orphan_sampled_repair_budget.diagnostics.begin(),
                           orphan_sampled_repair_budget.diagnostics.end(),
                           [](const auto& diagnostic) {
-                            return diagnostic.code ==
-                                   "invalid_work_plan_route_option_dependency";
+                            return diagnostic.code == "invalid_work_plan_route_option_dependency";
                           }),
           "a WorkPlan sampled-conflict repair budget must not be accepted when the repair "
           "transaction is disabled");
@@ -5513,8 +10379,7 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
   refill_plan.steps.front().options["refillable_zone_fills"] = true;
   refill_plan.steps.front().options["differential_pair_skew_tuning"] = false;
   refill_plan.steps.front().options["differential_pair_skew_tuning_batch_assignment"] = false;
-  const auto refill_compile =
-      flux::io::compile_flux_work_plan_routes(scoped_board, refill_plan);
+  const auto refill_compile = flux::io::compile_flux_work_plan_routes(scoped_board, refill_plan);
   require(refill_compile.ok() && refill_compile.route_steps.size() == 1U &&
               refill_compile.route_steps.front().refillable_zone_fills &&
               refill_compile.route_steps.front()
@@ -5523,10 +10388,8 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
                   .configuration.planner.regional.treat_saved_zone_fills_as_refillable &&
               refill_compile.route_steps.front()
                   .configuration.detailed.defer_saved_zone_fill_clearance_to_refill &&
-              !refill_compile.route_steps.front()
-                   .configuration.detailed.pull_tight_45_degrees &&
-              !refill_compile.route_steps.front()
-                   .configuration.detailed.continuous_refinement &&
+              !refill_compile.route_steps.front().configuration.detailed.pull_tight_45_degrees &&
+              !refill_compile.route_steps.front().configuration.detailed.continuous_refinement &&
               !refill_compile.route_steps.front()
                    .configuration.detailed.topology_locked_medial_materialization,
           "refill-required WorkPlan routing must compile the same conservative provisional "
@@ -5543,8 +10406,7 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
               std::any_of(nonterminal_refill_compile.diagnostics.begin(),
                           nonterminal_refill_compile.diagnostics.end(),
                           [](const auto& diagnostic) {
-                            return diagnostic.code ==
-                                   "invalid_work_plan_route_option_dependency";
+                            return diagnostic.code == "invalid_work_plan_route_option_dependency";
                           }),
           "a refill-required route must terminate the private plan because later steps would "
           "observe stale saved-fill geometry");
@@ -5554,10 +10416,8 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
   diagnostic_preview_plan.steps.front().options["retain_incomplete_diagnostic_preview"] = true;
   const auto diagnostic_preview_compile =
       flux::io::compile_flux_work_plan_routes(scoped_board, diagnostic_preview_plan);
-  require(diagnostic_preview_compile.ok() &&
-              diagnostic_preview_compile.route_steps.size() == 1U &&
-              diagnostic_preview_compile.route_steps.front()
-                  .retain_incomplete_diagnostic_preview,
+  require(diagnostic_preview_compile.ok() && diagnostic_preview_compile.route_steps.size() == 1U &&
+              diagnostic_preview_compile.route_steps.front().retain_incomplete_diagnostic_preview,
           "the diagnostic incomplete-copper transaction must compile only as explicit preview "
           "policy");
   auto mutating_diagnostic_preview_plan = diagnostic_preview_plan;
@@ -5568,8 +10428,7 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
               std::any_of(mutating_diagnostic_preview_compile.diagnostics.begin(),
                           mutating_diagnostic_preview_compile.diagnostics.end(),
                           [](const auto& diagnostic) {
-                            return diagnostic.code ==
-                                   "invalid_work_plan_route_option_dependency";
+                            return diagnostic.code == "invalid_work_plan_route_option_dependency";
                           }),
           "an incomplete diagnostic candidate must never compile in a mutating WorkPlan mode");
   auto refill_diagnostic_preview_plan = diagnostic_preview_plan;
@@ -5586,11 +10445,12 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
   wildcard_plan.steps.front().selectors.net_classes.clear();
   wildcard_plan.steps.front().selectors.placement_groups.clear();
   const auto wildcard_expansion = flux::io::expand_flux_work_plan(scoped_board, wildcard_plan);
-  require(!wildcard_expansion.ok() &&
-              std::any_of(wildcard_expansion.diagnostics.begin(),
-                          wildcard_expansion.diagnostics.end(), [](const auto& diagnostic) {
-                            return diagnostic.code == "wildcard_only_force_reroute_scope";
-                          }),
+  require(!wildcard_expansion.ok() && std::any_of(wildcard_expansion.diagnostics.begin(),
+                                                  wildcard_expansion.diagnostics.end(),
+                                                  [](const auto& diagnostic) {
+                                                    return diagnostic.code ==
+                                                           "wildcard_only_force_reroute_scope";
+                                                  }),
           "glob selection must never infer authority to remove pre-existing copper");
 
   auto allowlisted_plan = scoped_plan;
@@ -5649,14 +10509,12 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
   negative_end.pads.front().net = pair_negative;
   coupled_board.footprints.push_back(std::move(negative_start));
   coupled_board.footprints.push_back(std::move(negative_end));
-  coupled_board.tracks = {
-      {ObjectId{"pair-p-track"}, pair_positive, LayerId{"F.Cu"}, mm(20.0, 38.0),
-       mm(80.0, 38.0), Nanometres::from_mm(0.25), false},
-      {ObjectId{"pair-n-track"}, pair_negative, LayerId{"F.Cu"}, mm(20.0, 42.0),
-       mm(80.0, 42.0), Nanometres::from_mm(0.25), false}};
-  coupled_board.differential_pairs = {
-      {flux::DifferentialPairId{"pair-1"}, "PAIR", pair_positive, pair_negative,
-       Nanometres::from_mm(0.2), std::nullopt}};
+  coupled_board.tracks = {{ObjectId{"pair-p-track"}, pair_positive, LayerId{"F.Cu"}, mm(20.0, 38.0),
+                           mm(80.0, 38.0), Nanometres::from_mm(0.25), false},
+                          {ObjectId{"pair-n-track"}, pair_negative, LayerId{"F.Cu"}, mm(20.0, 42.0),
+                           mm(80.0, 42.0), Nanometres::from_mm(0.25), false}};
+  coupled_board.differential_pairs = {{flux::DifferentialPairId{"pair-1"}, "PAIR", pair_positive,
+                                       pair_negative, Nanometres::from_mm(0.2), std::nullopt}};
 
   auto pair_plan = flux::io::make_flux_work_plan_template(coupled_board, "pair.kicad_pcb");
   pair_plan.mode = flux::io::WorkPlanMode::force_reroute_selected;
@@ -5732,18 +10590,19 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
       flux::io::compile_flux_work_plan_routes(invalid_pair_board, invalid_pair_plan);
   require(!invalid_pair_compile.ok() &&
               std::any_of(invalid_pair_compile.diagnostics.begin(),
-                          invalid_pair_compile.diagnostics.end(), [](const auto& diagnostic) {
-                            return diagnostic.code ==
-                                   "invalid_work_plan_differential_pair_scope";
+                          invalid_pair_compile.diagnostics.end(),
+                          [](const auto& diagnostic) {
+                            return diagnostic.code == "invalid_work_plan_differential_pair_scope";
                           }),
           "a differential-pair step must reject ordinary nets instead of degrading to a generic "
           "route");
 
   auto bus_board = coupled_board;
   bus_board.differential_pairs.clear();
-  bus_board.routing_buses = {
-      {flux::RoutingBusId{"bus-1"}, "PAIR_BUS", {pair_positive, pair_negative},
-       Nanometres::from_mm(0.5)}};
+  bus_board.routing_buses = {{flux::RoutingBusId{"bus-1"},
+                              "PAIR_BUS",
+                              {pair_positive, pair_negative},
+                              Nanometres::from_mm(0.5)}};
   auto bus_plan = flux::io::make_flux_work_plan_template(bus_board, "bus.kicad_pcb");
   bus_plan.mode = flux::io::WorkPlanMode::force_reroute_selected;
   flux::io::WorkPlanStep bus_step;
@@ -5785,8 +10644,8 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
               flux::io::serialize_flux_work_plan_execution_summary(open_bus_execution));
 
   auto connected = two_pad_board();
-  connected.tracks = {{ObjectId{"source-track"}, NetId{"net-1"}, LayerId{"F.Cu"},
-                       mm(20.0, 40.0), mm(80.0, 40.0), Nanometres::from_mm(0.25), false}};
+  connected.tracks = {{ObjectId{"source-track"}, NetId{"net-1"}, LayerId{"F.Cu"}, mm(20.0, 40.0),
+                       mm(80.0, 40.0), Nanometres::from_mm(0.25), false}};
   auto executable_plan = flux::io::make_flux_work_plan_template(connected, "board.kicad_pcb");
   executable_plan.mode = flux::io::WorkPlanMode::force_reroute_selected;
   flux::io::WorkPlanStep executable_route;
@@ -5804,26 +10663,25 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
   CollectingTelemetrySink work_plan_telemetry;
   const auto execution =
       flux::io::execute_flux_work_plan(connected, executable_plan, {}, &work_plan_telemetry);
-  require(execution.ok() && execution.whole_board_accepted && execution.candidate_ready_for_export &&
-              execution.candidate && execution.steps.size() == 2U &&
-              execution.steps.front().status ==
-                  flux::io::WorkPlanStepExecutionStatus::completed &&
-              execution.steps.front().replacement_nets == std::vector<NetId>{NetId{"net-1"}} &&
-              std::none_of(execution.candidate->tracks.begin(), execution.candidate->tracks.end(),
-                           [](const auto& track) {
-                             return track.id == ObjectId{"source-track"};
-                           }) &&
-              connected.tracks.size() == 1U && connected.tracks.front().id == ObjectId{"source-track"} &&
-              flux::io::serialize_flux_work_plan_execution_summary(execution) ==
-                  flux::io::serialize_flux_work_plan_execution_summary(execution) &&
-              std::any_of(work_plan_telemetry.events.begin(), work_plan_telemetry.events.end(),
-                          [](const auto& event) {
-                            return event.kind == flux::RouterTelemetryEventKind::search_summary &&
-                                   event.stable_id == "work-plan-step:reroute" &&
-                                   event.detail == "Work plan step completed: reroute";
-                          }),
-          "work-plan execution must reroute on a copy, replace only exact unlocked source copper, "
-          "and commit a deterministic exact-clean checkpoint through validation");
+  require(
+      execution.ok() && execution.whole_board_accepted && execution.candidate_ready_for_export &&
+          execution.candidate && execution.steps.size() == 2U &&
+          execution.steps.front().status == flux::io::WorkPlanStepExecutionStatus::completed &&
+          execution.steps.front().replacement_nets == std::vector<NetId>{NetId{"net-1"}} &&
+          std::none_of(execution.candidate->tracks.begin(), execution.candidate->tracks.end(),
+                       [](const auto& track) { return track.id == ObjectId{"source-track"}; }) &&
+          connected.tracks.size() == 1U &&
+          connected.tracks.front().id == ObjectId{"source-track"} &&
+          flux::io::serialize_flux_work_plan_execution_summary(execution) ==
+              flux::io::serialize_flux_work_plan_execution_summary(execution) &&
+          std::any_of(work_plan_telemetry.events.begin(), work_plan_telemetry.events.end(),
+                      [](const auto& event) {
+                        return event.kind == flux::RouterTelemetryEventKind::search_summary &&
+                               event.stable_id == "work-plan-step:reroute" &&
+                               event.detail == "Work plan step completed: reroute";
+                      }),
+      "work-plan execution must reroute on a copy, replace only exact unlocked source copper, "
+      "and commit a deterministic exact-clean checkpoint through validation");
 
   auto unrelated_open = connected;
   const NetId unrelated_net{"unrelated-open"};
@@ -5849,7 +10707,8 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
               !unrelated_open_execution.candidate_ready_for_export &&
               unrelated_open_execution.final_acceptance.open_connections > 0U,
           "selected-net step success must not authorize publication while an unrelated whole-board "
-          "connection remains open");
+          "connection remains open: " +
+              flux::io::serialize_flux_work_plan_execution_summary(unrelated_open_execution));
 
   auto preview_plan = executable_plan;
   preview_plan.mode = flux::io::WorkPlanMode::preview;
@@ -5876,24 +10735,23 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
   placement_step.kind = flux::io::WorkPlanStepKind::placement;
   placement_step.selectors.footprints = {"U1", "U2"};
   placement_step.selectors.group_scope = flux::io::WorkPlanSelectorScope::touching;
-  placement_step.options = {
-      {"checkpoint_objective", std::string{"aggregate-overflow"}},
-      {"crossing_safe_diagonal_grid_edges", false},
-      {"direct_medial_edges", false},
-      {"enable_incremental_routing", false},
-      {"enable_routing_guided_moves", false},
-      {"grid_pitch_nm", std::uint64_t{5'000'000U}},
-      {"max_candidate_evaluations", std::uint64_t{2U}},
-      {"max_candidate_evaluation_workers", std::uint64_t{1U}},
-      {"max_expansions_per_connection", std::uint64_t{100'000U}},
-      {"max_full_routing_candidates_per_wave", std::uint64_t{1U}},
-      {"max_placement_passes", std::uint64_t{1U}},
-      {"max_router_iterations", std::uint64_t{2U}},
-      {"negotiate_voronoi_lane_conflicts", false},
-      {"physical_envelope_ordering", false},
-      {"physical_overflow_history", false},
-      {"strict_medial_topology", false},
-      {"topology_locked_medial_materialization", false}};
+  placement_step.options = {{"checkpoint_objective", std::string{"aggregate-overflow"}},
+                            {"crossing_safe_diagonal_grid_edges", false},
+                            {"direct_medial_edges", false},
+                            {"enable_incremental_routing", false},
+                            {"enable_routing_guided_moves", false},
+                            {"grid_pitch_nm", std::uint64_t{5'000'000U}},
+                            {"max_candidate_evaluations", std::uint64_t{2U}},
+                            {"max_candidate_evaluation_workers", std::uint64_t{1U}},
+                            {"max_expansions_per_connection", std::uint64_t{100'000U}},
+                            {"max_full_routing_candidates_per_wave", std::uint64_t{1U}},
+                            {"max_placement_passes", std::uint64_t{1U}},
+                            {"max_router_iterations", std::uint64_t{2U}},
+                            {"negotiate_voronoi_lane_conflicts", false},
+                            {"physical_envelope_ordering", false},
+                            {"physical_overflow_history", false},
+                            {"strict_medial_topology", false},
+                            {"topology_locked_medial_materialization", false}};
   placement_plan.steps = {placement_step};
   const auto placement_compile =
       flux::io::compile_flux_work_plan_routes(placement_source, placement_plan);
@@ -5904,23 +10762,22 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
               placement_compile.route_steps.front().selected_nets ==
                   std::vector<NetId>{NetId{"net-1"}} &&
               placement_compile.route_steps.front().placement->max_passes == 1U &&
-              placement_compile.route_steps.front()
-                      .placement->max_candidate_evaluations == 2U &&
+              placement_compile.route_steps.front().placement->max_candidate_evaluations == 2U &&
               placement_compile.route_steps.front()
                       .configuration.detailed.existing_routing_replacement_scope ==
                   std::optional<std::vector<NetId>>{std::vector<NetId>{}},
           "a placement step must compile selected footprints and all touching nets through the "
           "shared router plus bounded integrated-optimizer configuration");
   CollectingTelemetrySink placement_telemetry;
-  const auto placement_execution = flux::io::execute_flux_work_plan(
-      placement_source, placement_plan, {}, &placement_telemetry);
-  const bool bystander_preserved = placement_execution.candidate &&
+  const auto placement_execution =
+      flux::io::execute_flux_work_plan(placement_source, placement_plan, {}, &placement_telemetry);
+  const bool bystander_preserved =
+      placement_execution.candidate &&
       std::any_of(placement_execution.candidate->footprints.begin(),
                   placement_execution.candidate->footprints.end(),
                   [&placement_bystander](const auto& footprint) {
                     return footprint.id == ObjectId{"BYSTANDER"} &&
-                           footprint.position == placement_bystander.position &&
-                           !footprint.locked;
+                           footprint.position == placement_bystander.position && !footprint.locked;
                   });
   require(placement_execution.ok() && placement_execution.whole_board_accepted &&
               placement_execution.candidate_ready_for_export && placement_execution.candidate &&
@@ -5930,8 +10787,8 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
               placement_execution.steps.front().placement_attempted &&
               placement_execution.steps.front().placement_candidate_evaluations > 0U &&
               placement_execution.steps.front().placement_full_route_evaluations > 0U &&
-              bystander_preserved &&
-              placement_source.tracks.empty() && !placement_execution.candidate->tracks.empty() &&
+              bystander_preserved && placement_source.tracks.empty() &&
+              !placement_execution.candidate->tracks.empty() &&
               std::any_of(placement_telemetry.events.begin(), placement_telemetry.events.end(),
                           [](const auto& event) {
                             return event.stable_id == "work-plan-step:place-and-route" &&
@@ -5942,10 +10799,8 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
               flux::io::serialize_flux_work_plan_execution_summary(placement_execution));
 
   auto reviewed_placement_plan = placement_plan;
-  reviewed_placement_plan.policies = {{"placement-move-priorities",
-                                       "reviewed-priorities.policy",
-                                       std::string(64U, '0'),
-                                       placement_source.source_revision}};
+  reviewed_placement_plan.policies = {{"placement-move-priorities", "reviewed-priorities.policy",
+                                       std::string(64U, '0'), placement_source.source_revision}};
   flux::PlacementMovePriorityPolicy reviewed_priorities;
   reviewed_priorities.source_revision = placement_source.source_revision;
   reviewed_priorities.order = flux::default_placement_move_priority_order();
@@ -5961,8 +10816,7 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
   const auto reviewed_placement_execution =
       flux::io::execute_loaded_flux_work_plan(loaded_placement);
   require(reviewed_placement_execution.ok() && reviewed_placement_execution.steps.size() == 1U &&
-              reviewed_placement_execution.steps.front()
-                  .placement_move_priorities_configured,
+              reviewed_placement_execution.steps.front().placement_move_priorities_configured,
           "the one-read reviewed move-priority policy must reach the integrated placement "
           "optimizer rather than being discarded after identity validation");
 
@@ -5972,21 +10826,18 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
           "tentative placement envelopes must remain preview-only in a saved WorkPlan");
   auto ignored_placement_option_plan = placement_plan;
   ignored_placement_option_plan.steps.front().options["refillable_zone_fills"] = true;
-  require(!flux::io::compile_flux_work_plan_routes(placement_source,
-                                                    ignored_placement_option_plan)
+  require(!flux::io::compile_flux_work_plan_routes(placement_source, ignored_placement_option_plan)
                .ok(),
           "a placement step must reject route-transaction wrappers that its optimizer would not "
           "execute");
   auto unprojected_placement_plan = placement_plan;
   unprojected_placement_plan.steps.front().selectors.group_scope =
       flux::io::WorkPlanSelectorScope::selected;
-  require(!flux::io::compile_flux_work_plan_routes(placement_source,
-                                                    unprojected_placement_plan)
-               .ok(),
-          "placement must project every selected footprint to touching nets before execution");
+  require(
+      !flux::io::compile_flux_work_plan_routes(placement_source, unprojected_placement_plan).ok(),
+      "placement must project every selected footprint to touching nets before execution");
   auto route_with_placement_option = executable_plan;
-  route_with_placement_option.steps.front().options["max_placement_passes"] =
-      std::uint64_t{2U};
+  route_with_placement_option.steps.front().options["max_placement_passes"] = std::uint64_t{2U};
   require(!flux::io::compile_flux_work_plan_routes(connected, route_with_placement_option).ok(),
           "placement-only configuration must not be silently accepted by an ordinary route step");
 
@@ -5996,8 +10847,7 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
   flux::CopperZone refill_zone;
   refill_zone.id = ObjectId{"work-plan-saved-fill"};
   refill_zone.net = NetId{"work-plan-plane"};
-  refill_zone.fills = {
-      flux::CopperZoneFill{LayerId{"F.Cu"}, rectangle(45.0, 0.0, 55.0, 80.0), {}}};
+  refill_zone.fills = {flux::CopperZoneFill{LayerId{"F.Cu"}, rectangle(45.0, 0.0, 55.0, 80.0), {}}};
   refill_source.zones.push_back(std::move(refill_zone));
   auto refill_execution_plan =
       flux::io::make_flux_work_plan_template(refill_source, "refill.kicad_pcb");
@@ -6024,8 +10874,8 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
   require(provisional_refill.ok() && !provisional_refill.whole_board_accepted &&
               provisional_refill.zone_refill_required &&
               provisional_refill.candidate_ready_for_zone_refill &&
-              !provisional_refill.candidate_ready_for_export &&
-              provisional_refill.candidate && provisional_refill.steps.size() == 1U &&
+              !provisional_refill.candidate_ready_for_export && provisional_refill.candidate &&
+              provisional_refill.steps.size() == 1U &&
               provisional_refill.steps.front().status ==
                   flux::io::WorkPlanStepExecutionStatus::completed &&
               provisional_refill.steps.front().provisional_zone_refill_required,
@@ -6036,8 +10886,7 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
   Board partial_preview_source;
   partial_preview_source.source_revision = "partial-preview-fixture";
   partial_preview_source.outline = rectangle(0.0, 0.0, 100.0, 80.0);
-  partial_preview_source.layers = {
-      {LayerId{"F.Cu"}, "F.Cu", LayerKind::copper, 0U}};
+  partial_preview_source.layers = {{LayerId{"F.Cu"}, "F.Cu", LayerKind::copper, 0U}};
   const NetId preview_easy{"preview-easy"};
   const NetId preview_blocked{"preview-blocked"};
   partial_preview_source.nets = {{preview_easy, "PREVIEW_EASY", 0},
@@ -6048,41 +10897,39 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
     footprint.reference = id;
     footprint.position = position;
     footprint.courtyard = local_rectangle(2.0, 2.0);
-    footprint.pads = {
-        {ObjectId{id + "-pad"}, net, Point{}, {LayerId{"F.Cu"}}}};
+    footprint.pads = {{ObjectId{id + "-pad"}, net, Point{}, {LayerId{"F.Cu"}}}};
     return footprint;
   };
-  partial_preview_source.footprints = {
-      preview_terminal("E1", preview_easy, mm(10.0, 20.0)),
-      preview_terminal("E2", preview_easy, mm(30.0, 20.0)),
-      preview_terminal("B1", preview_blocked, mm(10.0, 60.0)),
-      preview_terminal("B2", preview_blocked, mm(90.0, 60.0))};
-  partial_preview_source.keepouts = {
-      {ObjectId{"preview-wall"}, rectangle(45.0, 0.0, 55.0, 80.0),
-       {LayerId{"F.Cu"}}, flux::KeepoutRules{true, true, false, false, false},
-       "preview wall"}};
-  auto incomplete_preview_plan = flux::io::make_flux_work_plan_template(
-      partial_preview_source, "partial-preview.kicad_pcb");
+  partial_preview_source.footprints = {preview_terminal("E1", preview_easy, mm(10.0, 20.0)),
+                                       preview_terminal("E2", preview_easy, mm(30.0, 20.0)),
+                                       preview_terminal("B1", preview_blocked, mm(10.0, 60.0)),
+                                       preview_terminal("B2", preview_blocked, mm(90.0, 60.0))};
+  partial_preview_source.keepouts = {{ObjectId{"preview-wall"},
+                                      rectangle(45.0, 0.0, 55.0, 80.0),
+                                      {LayerId{"F.Cu"}},
+                                      flux::KeepoutRules{true, true, false, false, false},
+                                      "preview wall"}};
+  auto incomplete_preview_plan =
+      flux::io::make_flux_work_plan_template(partial_preview_source, "partial-preview.kicad_pcb");
   incomplete_preview_plan.mode = flux::io::WorkPlanMode::preview;
   flux::io::WorkPlanStep incomplete_preview_route;
   incomplete_preview_route.id = "incomplete-preview";
   incomplete_preview_route.kind = flux::io::WorkPlanStepKind::route;
   incomplete_preview_route.selectors.exact_nets = {"PREVIEW_EASY", "PREVIEW_BLOCKED"};
-  incomplete_preview_route.options = {
-      {"checkpoint_objective", std::string{"aggregate-overflow"}},
-      {"crossing_safe_diagonal_grid_edges", false},
-      {"direct_medial_edges", false},
-      {"grid_pitch_nm", std::uint64_t{5'000'000U}},
-      {"interleave_routability_feedback", false},
-      {"max_expansions_per_connection", std::uint64_t{100'000U}},
-      {"max_router_iterations", std::uint64_t{2U}},
-      {"negotiate_voronoi_lane_conflicts", false},
-      {"physical_envelope_ordering", false},
-      {"physical_overflow_history", false},
-      {"retain_incomplete_diagnostic_preview", true},
-      {"routability_feedback_retries", std::uint64_t{0U}},
-      {"strict_medial_topology", false},
-      {"topology_locked_medial_materialization", false}};
+  incomplete_preview_route.options = {{"checkpoint_objective", std::string{"aggregate-overflow"}},
+                                      {"crossing_safe_diagonal_grid_edges", false},
+                                      {"direct_medial_edges", false},
+                                      {"grid_pitch_nm", std::uint64_t{5'000'000U}},
+                                      {"interleave_routability_feedback", false},
+                                      {"max_expansions_per_connection", std::uint64_t{100'000U}},
+                                      {"max_router_iterations", std::uint64_t{2U}},
+                                      {"negotiate_voronoi_lane_conflicts", false},
+                                      {"physical_envelope_ordering", false},
+                                      {"physical_overflow_history", false},
+                                      {"retain_incomplete_diagnostic_preview", true},
+                                      {"routability_feedback_retries", std::uint64_t{0U}},
+                                      {"strict_medial_topology", false},
+                                      {"topology_locked_medial_materialization", false}};
   incomplete_preview_plan.steps = {incomplete_preview_route};
   CollectingTelemetrySink incomplete_preview_telemetry;
   const auto incomplete_preview_execution = flux::io::execute_flux_work_plan(
@@ -6097,113 +10944,147 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
               incomplete_preview_execution.steps.size() == 1U &&
               incomplete_preview_execution.steps.front().status ==
                   flux::io::WorkPlanStepExecutionStatus::failed &&
-              incomplete_preview_execution.steps.front()
-                  .incomplete_diagnostic_preview_attempted &&
-              incomplete_preview_execution.steps.front()
-                  .incomplete_diagnostic_preview_available &&
-              incomplete_preview_execution.steps.front().incomplete_diagnostic_preview_paths >
-                  0U &&
+              incomplete_preview_execution.steps.front().incomplete_diagnostic_preview_attempted &&
+              incomplete_preview_execution.steps.front().incomplete_diagnostic_preview_available &&
+              incomplete_preview_execution.steps.front().incomplete_diagnostic_preview_paths > 0U &&
               std::any_of(incomplete_preview_telemetry.events.begin(),
-                          incomplete_preview_telemetry.events.end(), [](const auto& event) {
+                          incomplete_preview_telemetry.events.end(),
+                          [](const auto& event) {
                             return event.stable_id ==
                                    "work-plan-diagnostic-preview:incomplete-preview";
                           }),
           "an incomplete preview must retain partial copper and telemetry without changing failure "
           "or publication authority: " +
-              flux::io::serialize_flux_work_plan_execution_summary(
-                  incomplete_preview_execution));
+              flux::io::serialize_flux_work_plan_execution_summary(incomplete_preview_execution));
 
   std::stop_source cancelled_source;
   cancelled_source.request_stop();
-  const auto cancelled = flux::io::execute_flux_work_plan(
-      connected, executable_plan, cancelled_source.get_token());
-  require(!cancelled.ok() && !cancelled.steps.empty() &&
-              cancelled.steps.front().status ==
-                  flux::io::WorkPlanStepExecutionStatus::cancelled &&
-              cancelled.candidate && cancelled.candidate->tracks == connected.tracks &&
-              cancelled.candidate->footprints == connected.footprints,
-          "a pre-requested stop token must cancel before routing and preserve the source checkpoint");
-}
-
-void corner_blends_preserve_straight_run_tangents() {
-  for (const auto sign : {-1.0L, 1.0L}) {
-    const std::vector<Point> points{mm(10.0 * sign, 10.0), mm(20.0 * sign, 10.0),
-                                    mm(20.0 * sign, 30.0), mm(10.0 * sign, 30.0)};
-    const auto ordinary = flux::make_corner_rounded_quintic_ph_route(
-        points, Nanometres::from_mm(1.0));
-    auto aligned = flux::make_run_aligned_quintic_ph_route(points, Nanometres::from_mm(1.0));
-    require(ordinary && aligned, "both corner seed families must interpolate the micro-route");
-    const auto maximum_outward = [sign](const auto& route) {
-      long double result = -std::numeric_limits<long double>::infinity();
-      for (std::size_t i = 0U; i <= 512U; ++i)
-        result = std::max(result, sign * flux::evaluate_quintic_ph(route, i / 512.0L).x);
-      return result;
-    };
-    require(maximum_outward(*ordinary) > 20050000.0L,
-            "bisector shoulder tangents must reproduce an outward bow beyond a 50um margin");
-    const auto check = [&] {
-      require(aligned->tangent_continuous && maximum_outward(*aligned) <= 20000000.01L &&
-                  flux::certify_quintic_ph_shape(*aligned).legal,
-              "run-aligned shoulders must keep the connecting PH run straight and regular");
-      require(aligned->node_tangent_directions.size() == aligned->control_points.size(),
-              "Hermite direction constraints must stay aligned with interpolation nodes");
-    };
-    check();
-    require(flux::rebuild_quintic_ph_route(*aligned), "aligned seed must rebuild");
-    check();
-    require(flux::insert_quintic_ph_interpolation_node(*aligned, 0.5L),
-            "the straight PH span must support exact adaptive insertion");
-    check();
-    require(flux::rebuild_quintic_ph_route(*aligned), "inserted direction constraints must rebuild");
-    check();
-    auto malformed = *aligned;
-    malformed.node_tangent_directions.pop_back();
-    require(!flux::rebuild_quintic_ph_route(malformed),
-            "misaligned Hermite direction metadata must fail closed");
-  }
+  const auto cancelled =
+      flux::io::execute_flux_work_plan(connected, executable_plan, cancelled_source.get_token());
+  require(
+      !cancelled.ok() && !cancelled.steps.empty() &&
+          cancelled.steps.front().status == flux::io::WorkPlanStepExecutionStatus::cancelled &&
+          cancelled.candidate && cancelled.candidate->tracks == connected.tracks &&
+          cancelled.candidate->footprints == connected.footprints,
+      "a pre-requested stop token must cancel before routing and preserve the source checkpoint");
 }
 
 } // namespace
 
 int main(int argc, char** argv) {
   const std::vector<TestCase> tests{
+      {"routing_engine_explores_supported_physical_families", routing_engine_explores_supported_physical_families},
+      {"routing_engine_scaffold_progress_preserves_external_validation_gate",
+       routing_engine_scaffold_progress_preserves_external_validation_gate},
+      {"routing_engine_cancels_a_live_continuation", routing_engine_cancels_a_live_continuation},
+      {"routing_engine_resumes_and_requires_current_external_validation", routing_engine_resumes_and_requires_current_external_validation},
+      {"routing_engine_distinguishes_deadline_cancellation_and_budget", routing_engine_distinguishes_deadline_cancellation_and_budget},
+      {"kicad_drill_offsets_preserve_copper_and_hole_anchors", kicad_drill_offsets_preserve_copper_and_hole_anchors},
+      {"kicad_pad_frames_match_placed_board_coordinates", kicad_pad_frames_match_placed_board_coordinates},
       {"units_remain_exact_and_saturating", units_remain_exact_and_saturating},
-      {"corner_blends_preserve_straight_run_tangents", corner_blends_preserve_straight_run_tangents},
       {"multisource_terminal_membership_preserves_access_preference_order",
        multisource_terminal_membership_preserves_access_preference_order},
-      {"file_import_preserves_project_minimum_rules", file_import_preserves_project_minimum_rules},
+      {"failed_spline_chains_retry_against_committed_copper",
+       failed_spline_chains_retry_against_committed_copper},
+      {"dense_candidate_grid_requires_enforced_physical_clearance",
+       dense_candidate_grid_requires_enforced_physical_clearance},
+      {"default_planar_pitch_uses_scoped_source_rules", default_planar_pitch_uses_scoped_source_rules},
+      {"regional_candidate_ranker_is_schema_bound_and_deterministic",
+       regional_candidate_ranker_is_schema_bound_and_deterministic},
       {"source_bound_board_rules_control_geometry_and_hole_clearance",
        source_bound_board_rules_control_geometry_and_hole_clearance},
+      {"file_import_preserves_project_minimum_rules", file_import_preserves_project_minimum_rules},
       {"dimensioned_pathfinder_pressure_preserves_units_and_group_fairness",
        dimensioned_pathfinder_pressure_preserves_units_and_group_fairness},
+      {"quantized_copper_oracle_exposes_physical_conflicts_and_via_chains",
+       quantized_copper_oracle_exposes_physical_conflicts_and_via_chains},
+      {"physical_probe_preserves_native_coordinate_clearance",
+       physical_probe_preserves_native_coordinate_clearance},
+      {"regional_fragment_compression_preserves_tree_junctions", regional_fragment_compression_preserves_tree_junctions},
+      {"straight_regional_layer_adapters_preserve_connectivity", straight_regional_layer_adapters_preserve_connectivity},
+      {"straight_regional_lanes_require_exact_copper_proof", straight_regional_lanes_require_exact_copper_proof},
+      {"straight_elbow_alternatives_preserve_exact_copper_contract",
+       straight_elbow_alternatives_preserve_exact_copper_contract},
+      {"regional_repair_scheduler_preserves_exploration",
+       regional_repair_scheduler_preserves_exploration},
+      {"regional_access_cache_is_bounded_without_changing_solutions",
+       regional_access_cache_is_bounded_without_changing_solutions},
+      {"regional_performance_samples_preserve_submicrosecond_work",
+       regional_performance_samples_preserve_submicrosecond_work},
+      {"fixed_template_copper_pruning_is_conservative",
+       fixed_template_copper_pruning_is_conservative},
+      {"straight_joint_three_window_repair_escapes_pairwise_minimum",
+       straight_joint_three_window_repair_escapes_pairwise_minimum},
+      {"straight_scene_portfolio_replays_retained_window_alternative",
+       straight_scene_portfolio_replays_retained_window_alternative},
+      {"regional_capacity_tracks_longitudinal_demand",
+       regional_capacity_tracks_longitudinal_demand},
       {"physical_checkpoint_ordering_is_feasibility_first_and_fail_closed",
        physical_checkpoint_ordering_is_feasibility_first_and_fail_closed},
+      {"regional_scope_checkpoint_ordering_retains_checked_physical_evidence",
+       regional_scope_checkpoint_ordering_retains_checked_physical_evidence},
       {"routing_xpbd_joint_relaxation_preserves_endpoints_and_reports_stress",
        routing_xpbd_joint_relaxation_preserves_endpoints_and_reports_stress},
+      {"straight_track_angles_preserve_off_grid_endpoints_and_clearance",
+       straight_track_angles_preserve_off_grid_endpoints_and_clearance},
+      {"soft_capacity_cuts_exclude_legally_separated_shadows",
+       soft_capacity_cuts_exclude_legally_separated_shadows},
       {"global_to_detailed_route_is_transactional_and_capacity_gated",
        global_to_detailed_route_is_transactional_and_capacity_gated},
       {"constrained_ph_rebound_avoids_inter_sample_obstacle",
        constrained_ph_rebound_avoids_inter_sample_obstacle},
       {"quintic_ph_geometry_preserves_invariants_and_exact_offsets",
        quintic_ph_geometry_preserves_invariants_and_exact_offsets},
+      {"arc_free_space_preserves_the_unswept_region", arc_free_space_preserves_the_unswept_region},
+      {"curved_ph_materialization_is_exact_and_drc_clean",
+       curved_ph_materialization_is_exact_and_drc_clean},
+      {"exact_copper_witnesses_create_missing_regional_scope",
+       exact_copper_witnesses_create_missing_regional_scope},
+      {"regional_spline_tiers_are_selected_breadth_first",
+       regional_spline_tiers_are_selected_breadth_first},
+      {"exact_via_witnesses_create_regional_repair_scope",
+       exact_via_witnesses_create_regional_repair_scope},
+      {"regional_bundle_forward_checking_preserves_access_solutions",
+       regional_bundle_forward_checking_preserves_access_solutions},
+      {"frozen_foreign_copper_rejects_selected_vias_before_spline_selection",
+       frozen_foreign_copper_rejects_selected_vias_before_spline_selection},
       {"parallel_spline_workers_shutdown_after_short_optimizations",
        parallel_spline_workers_shutdown_after_short_optimizations},
+      {"exact_copper_witnesses_preserve_branch_identity",
+       exact_copper_witnesses_preserve_branch_identity},
+      {"adaptive_portal_direction_is_independent_of_path_sampling",
+       adaptive_portal_direction_is_independent_of_path_sampling},
+      {"short_terminal_dogleg_has_a_regular_ph_realization",
+       short_terminal_dogleg_has_a_regular_ph_realization},
+      {"fallback_corridor_preserves_curvature_room", fallback_corridor_preserves_curvature_room},
+      {"fallback_corridor_retains_one_sided_bend_room", fallback_corridor_retains_one_sided_bend_room},
+      {"corner_blends_preserve_straight_run_tangents", corner_blends_preserve_straight_run_tangents},
       {"obstacle_aware_diagonals_and_curves_remain_capacity_and_drc_gated",
        obstacle_aware_diagonals_and_curves_remain_capacity_and_drc_gated},
       {"hydraulic_polygon_discovery_projects_into_coarse_navmesh",
        hydraulic_polygon_discovery_projects_into_coarse_navmesh},
+      {"anisotropic_hydraulic_erosion_is_directional_and_gpu_equivalent",
+       anisotropic_hydraulic_erosion_is_directional_and_gpu_equivalent},
       {"hydraulic_gpu_fuses_clearance_and_batches_independent_requests",
        hydraulic_gpu_fuses_clearance_and_batches_independent_requests},
       {"adaptive_navmesh_recovers_clearance_clipped_passage",
        adaptive_navmesh_recovers_clearance_clipped_passage},
+      {"usped_mountains_inform_navmesh_without_changing_free_space",
+       usped_mountains_inform_navmesh_without_changing_free_space},
+      {"regional_ownership_and_immutable_cache_are_dependency_bound",
+       regional_ownership_and_immutable_cache_are_dependency_bound},
       {"advanced_routing_compute_shortlists_preserve_cpu_authority",
        advanced_routing_compute_shortlists_preserve_cpu_authority},
+      {"routing_compute_chord_batches_are_bounded_and_conservative",
+       routing_compute_chord_batches_are_bounded_and_conservative},
       {"physical_copper_t_junction_is_preserved_during_ph_realization",
        physical_copper_t_junction_is_preserved_during_ph_realization},
       {"same_net_vertical_features_are_reused_as_transition_portals",
        same_net_vertical_features_are_reused_as_transition_portals},
       {"kicad_zone_refill_adapter_is_bounded_and_fail_closed",
        kicad_zone_refill_adapter_is_bounded_and_fail_closed},
+      {"generated_copper_telemetry_replaces_latest_scene_and_retains_beziers",
+       generated_copper_telemetry_replaces_latest_scene_and_retains_beziers},
       {"work_plan_round_trip_is_strict_source_bound_and_non_authoritative",
        work_plan_round_trip_is_strict_source_bound_and_non_authoritative},
       {"integrated_placement_rejects_proxy_improvement_that_violates_copper_rules",

@@ -1,0 +1,167 @@
+{
+  "experiment": "clearance-constrained exact-PH tightening",
+  "date": "2026-10-09T13:49:44.640303+00:00",
+  "revision": "94aa691ad89576d1c0ac07a5346020da21fc9d06",
+  "working_tree_dirty": true,
+  "baseline_artifacts": "build/bounded-engine-tiers-20261009T131008Z/tier-0/tier-0-pt2399_delay",
+  "baseline_duration_seconds": 502.5184379220009,
+  "baseline": {
+    "added_track_beziers": 179,
+    "added_tracks": 47,
+    "added_vias": 3,
+    "complete": false,
+    "copper_violation_counts": {},
+    "copper_violations": 0,
+    "diagnostic": "materialized curved route retains 7 non-junction direction changes without quintic PH curve realization",
+    "differential_pair_gap_violations": 0,
+    "differential_pair_skew_violations": 0,
+    "discarded_direct_medial_copper_violations": 0,
+    "discarded_direct_medial_topology_complete_paths": 0,
+    "discarded_topology_locked_rejection_copper_violations": 0,
+    "first_copper_violation": null,
+    "global_complete": false,
+    "global_diagnostic": "global-router iteration limit reached",
+    "global_stop_reason": "iteration_limit",
+    "open_connections": 0,
+    "provisional_complete": false,
+    "regional_candidate_ranker_diagnostic": "",
+    "spline_last_materialization_diagnostic": "quantized PH replacement committed",
+    "spline_navmesh_last_diagnostic": "free-space offset output failed exact conservative validation: output outer contour violates source-boundary clearance; free-space offset output failed exact conservative validation: output region overlaps polygonal obstacle 106",
+    "spline_navmesh_last_topology_diagnostic": "continuous route retained guard containment and obstacle winding class",
+    "spline_trajectory_final_bend_radius_violations": 0,
+    "spline_trajectory_final_continuous_violations": 0,
+    "spline_trajectory_final_excess_turn_violations": 0,
+    "spline_trajectory_final_shape_violations": 0,
+    "spline_trajectory_final_violations": 0,
+    "spline_trajectory_initial_continuous_violations": 0,
+    "spline_trajectory_initial_shape_violations": 0,
+    "spline_trajectory_initial_violations": 0,
+    "stop_reason": "invalid_path",
+    "topology_locked_rejection_copper_violations": 0,
+    "topology_locked_rejection_first_violation": "",
+    "unrounded_non_junction_bends": 7
+  },
+  "validation_status": "implementation and focused regressions verified; benchmark comparison complete; no tier promotion",
+  "hypothesis": "Feasible curve selection preferred extra clearance and control immobility over length; redundant interpolation nodes preserved detours.",
+  "length_only_control": {
+    "artifact": "build/tautening-tier0-20261009",
+    "binary": "build/tautening-20261009/flux-cli-length-only",
+    "duration_seconds": 478.2273368330207,
+    "metrics": {
+      "complete": false,
+      "diagnostic": "materialized curved route retains 7 non-junction direction changes without quintic PH curve realization",
+      "unrounded_non_junction_bends": 7,
+      "copper_violations": 0,
+      "open_connections": 0,
+      "added_tracks": 47,
+      "added_track_beziers": 205,
+      "added_vias": 3,
+      "routing_engine_tightening_actions": 1,
+      "routing_engine_tightening_improvements": 0
+    },
+    "interpretation": "No tier promotion; same seven unsmoothed bends. Curves also arise in detailed materialization after the regional tightening action."
+  },
+  "paired_synthetic": {
+    "artifact": "build/tautening-20261009/paired-support-comparison.png",
+    "cases": {
+      "circle": {
+        "before_length_nm": 263522,
+        "after_length_nm": 230226,
+        "shortening_percent": 12.634998216467697,
+        "before_interpolation_points": 3,
+        "after_interpolation_points": 4
+      },
+      "box": {
+        "before_length_nm": 263522,
+        "after_length_nm": 217674,
+        "shortening_percent": 17.398167894900617,
+        "before_interpolation_points": 3,
+        "after_interpolation_points": 4
+      }
+    }
+  },
+  "paired_initial_board_attempts": {
+    "tier0": "build/paired-tier0-20261009",
+    "tier1": "build/paired-tier1-20261009",
+    "status": "aborted by agent after core regression discovery; not completed benchmarks",
+    "reason": "post-polish station changes regressed zigzag regularity and detailed G2 promotion; repair before final comparison"
+  },
+  "regression_validation": {
+    "initial_core_passed": 62,
+    "initial_core_total": 64,
+    "failures": [
+      "quintic_ph_geometry_preserves_invariants_and_exact_offsets",
+      "curved_ph_materialization_is_exact_and_drc_clean"
+    ],
+    "fixes": [
+      "Run optimizer obstacle post-polish only with a real clearance evaluator; retain general node deletion in explicit regional tightening.",
+      "Require bounded post-polish candidate to satisfy downstream G2 promotion, envelope, shape and topology when requested.",
+      "Retry G2 promotion once from pre-optimization checkpoint after optimized layout fails; do not relax curvature tolerance."
+    ],
+    "rerun_status": "Both previously failing tests pass; PH/regional tightening, committed-copper retry and inter-sample rebound pass; independent review found no actionable issues.",
+    "g2_diagnosis": "Disabling paired supports reproduced identical G2 failure; bounded pre-optimization seed promotion retry restores requested continuity using unchanged hard gates.",
+    "interpretation": "Initial full suite62/64 plus focused reruns of both failures; not a second full64/64 run."
+  },
+  "paired_final_board_runs": {
+    "tier0": "build/paired-final-tier0-20261009",
+    "tier1": "build/paired-final-tier1-20261009",
+    "routing_timeout_seconds": 900,
+    "outer_timeout_seconds": 960,
+    "status": "finished; neither tier qualified",
+    "runtime_caveat": "Tier 0 and Tier 1 ran concurrently; wall times are not directly comparable with the isolated control.",
+    "tier0_result": {
+      "duration_seconds": 489.26400074298726,
+      "metrics": {
+        "complete": false,
+        "open_connections": 0,
+        "copper_violations": 0,
+        "unrounded_non_junction_bends": 7,
+        "added_tracks": 47,
+        "added_track_beziers": 199,
+        "added_vias": 3,
+        "spline_paired_obstacle_support_attempts": 30,
+        "spline_paired_obstacle_supports_inserted": 0,
+        "spline_paired_obstacle_support_recoveries": 0,
+        "routing_engine_tightening_actions": 1,
+        "routing_engine_tightening_improvements": 0
+      },
+      "kicad_drc": {
+        "version": "10.0.6",
+        "violations_by_type": {},
+        "unconnected_items": 0
+      },
+      "interpretation": "No tier promotion: same seven unsmoothed joints. Thirty pair attempts, no accepted supports; synthetic improvement not reproduced on this board."
+    },
+    "tier1_result": {
+      "global_duration_seconds": 907.2157418169954,
+      "metrics": {
+        "complete": true,
+        "paths": 78,
+        "unrouted_nets": 0,
+        "total_overflow": 0,
+        "clearance_shadow_conflicts": 398,
+        "clearance_shadow_overflow": 398,
+        "stop_reason": "complete"
+      },
+      "qualified": false,
+      "detailed_validation": "not run: routing_plan_complete=false after engine timed out; shadows were advisory, not a direct benchmark count gate",
+      "interpretation": "Topological completion is not physical copper completion. The398 tile-coalesced advisory shadow witnesses are not398 KiCad violations.",
+      "routing_engine_outcome": "timed-out"
+    }
+  },
+  "sampled_memory": {
+    "tier0": {
+      "maximum_observed_rss_kib": 863312,
+      "samples": 44
+    },
+    "tier1": {
+      "maximum_observed_rss_kib": 799740,
+      "samples": 78
+    }
+  },
+  "builds": [
+    "build/dev",
+    "build/tautening-release/flux-cli",
+    "build/release/flux-cli"
+  ]
+}

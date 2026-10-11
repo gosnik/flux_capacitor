@@ -24,6 +24,18 @@ class RuleContextTests(unittest.TestCase):
         self.project = b'{"board":{"design_settings":{"rules":{"min_track_width":0.7}}}}\n'
         self.source.with_suffix(".kicad_pro").write_bytes(self.project)
 
+    def test_straight_angle_audit_checks_exported_decimal_copper(self):
+        self.candidate.write_text("""(kicad_pcb
+          (segment (start 1.1 2) (end 3.1 2) (width 0.25) (layer "F.Cu"))
+          (segment (end 3.1 4) (start 3.1 2) (width 0.25) (layer "F.Cu"))
+          (segment (start 3.1 4) (end 3.100001 4.000001) (width 0.25) (layer "F.Cu")))""")
+        self.assertTrue(corpus.audit_straight_copper_angles(self.candidate)["passed"])
+        with self.candidate.open("a") as out:
+            out.write('(segment (start 0 0) (end 1 1.000001) (width 0.25) (layer "F.Cu"))')
+        audit = corpus.audit_straight_copper_angles(self.candidate)
+        self.assertFalse(audit["passed"])
+        self.assertEqual(audit["angles"]["other"], 1)
+
     def test_drc_sees_original_project_and_custom_rules_before_launch(self):
         rules = b'(version 1)\n(rule "hole spacing" (constraint hole_to_hole (min 0.25mm)))\n'
         self.source.with_suffix(".kicad_dru").write_bytes(rules)
@@ -49,6 +61,33 @@ class RuleContextTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "missing source KiCad project"):
                 corpus.require_kicad_drc(self.candidate, self.report, Path("kicad-cli"), self.source)
         launch.assert_not_called()
+
+    def test_written_preview_cannot_bypass_detailed_curve_completion(self):
+        expected = {"min_track_arcs": 1, "max_unrounded_non_junction_bends": 0}
+        legal = {"complete": True, "validation_errors": 0, "open_connections": 0,
+                 "copper_violations": 0, "added_track_arcs": 2,
+                 "unrounded_non_junction_bends": 0, "artifact_written": True}
+        self.assertTrue(corpus.detailed_copper_ready_for_final_drc(legal, expected, self.candidate))
+        for changes in ({"complete": False}, {"unrounded_non_junction_bends": 11},
+                        {"added_track_arcs": 0}, {"open_connections": 1},
+                        {"copper_violations": 1}, {"artifact_written": False}):
+            with self.subTest(changes=changes):
+                preview = dict(legal, **changes, diagnostic_kicad_drc_passed=True)
+                self.assertFalse(corpus.detailed_copper_ready_for_final_drc(
+                    preview, expected, self.candidate))
+        self.assertFalse(corpus.detailed_copper_ready_for_final_drc(
+            legal, expected, self.candidate.parent / "missing.kicad_pcb"))
+
+    def test_straight_copper_requires_no_arcs_and_all_legality_gates(self):
+        expected = {"max_track_arcs": 0}
+        legal = {"complete": True, "validation_errors": 0, "open_connections": 0,
+                 "copper_violations": 0, "added_track_arcs": 0,
+                 "unrounded_non_junction_bends": 17, "artifact_written": True}
+        self.assertTrue(corpus.detailed_copper_ready_for_final_drc(legal, expected, self.candidate))
+        for change in ({"added_track_arcs": 1}, {"open_connections": 1},
+                       {"copper_violations": 1}, {"complete": False}, {"validation_errors": 1}):
+            self.assertFalse(corpus.detailed_copper_ready_for_final_drc(
+                dict(legal, **change), expected, self.candidate))
 
     def test_mismatched_candidate_project_is_not_overwritten(self):
         staged = self.candidate.with_suffix(".kicad_pro")

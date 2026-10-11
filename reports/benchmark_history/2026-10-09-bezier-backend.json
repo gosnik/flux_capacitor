@@ -1,0 +1,108 @@
+{
+  "date": "2026-10-09",
+  "git_revision": "94aa691ad89576d1c0ac07a5346020da21fc9d06",
+  "working_tree": "dirty; includes pre-existing routing engine work",
+  "experiment": "KiCad 10 net-assigned cubic copper backend",
+  "benchmark_scope": "bounded Tier0 mechanism check, not tier promotion",
+  "configuration": {
+    "max_router_iterations": 1,
+    "max_expansions": 50000,
+    "max_static_seed_workers": 2,
+    "routing_timeout_ms": 180000,
+    "curved_tracks": true
+  },
+  "board": "pt2399_delay",
+  "tier": 0,
+  "outcome": {
+    "complete": false,
+    "added_tracks": 56,
+    "added_track_arcs": 0,
+    "added_track_beziers": 174,
+    "fitted_cubic_beziers": 340,
+    "added_vias": 3,
+    "open_connections": 0,
+    "copper_violations": 0,
+    "validation_errors": 0,
+    "unrounded_non_junction_bends": 16,
+    "artifact_written": true
+  },
+  "runtime_seconds": 180.31,
+  "peak_rss_kib": 598864,
+  "qualification": "incomplete: 16 unresolved bends; no tier promotion",
+  "artifact": "build/bezier-integration-validation/tier0.kicad_pcb",
+  "visual": "build/bezier-integration-validation/tier0-cubic-copper.png",
+  "visual_observation": "Viewed actual cubic controls rendered from pcbnew. Smooth spans present; remaining angular connectors and a loop-like detour confirm that full-route smoothness/logical topology is not established.",
+  "validation_fixture": {
+    "validated_at": "2026-10-09",
+    "flux_binary": "build/release/flux-cli",
+    "kicad_cli_version": "10.0.6",
+    "source": "build/bezier-kicad10-probe/gap_safe.kicad_pcb",
+    "export": "build/bezier-integration-validation/gap-safe-flux-export.kicad_pcb",
+    "commands": {
+      "export": "flux-cli detail-kicad SOURCE --max-router-iterations 1 --routing-timeout-ms 10000 --no-telemetry --write-incomplete-preview EXPORT",
+      "strict_reimport": "flux-cli inspect-kicad EXPORT",
+      "change_set": "flux-cli changeset-kicad SOURCE EXPORT",
+      "drc": "kicad-cli pcb drc --format json --severity-error --exit-code-violations EXPORT"
+    },
+    "source_import": {
+      "ok": true,
+      "strict": true,
+      "track_beziers": 2
+    },
+    "flux_export": {
+      "detail_exit_code": 0,
+      "complete": true,
+      "added_track_beziers": 0,
+      "reused_track_beziers": 0
+    },
+    "strict_reimport": {
+      "ok": true,
+      "strict": true,
+      "track_beziers": 2,
+      "open_connections": 0
+    },
+    "change_set": {
+      "ok": true,
+      "source_track_beziers": 2,
+      "track_bezier_operations": 0
+    },
+    "kicad_drc": {
+      "exit_code": 0,
+      "error_violations": 0
+    },
+    "pcbnew_render": {
+      "copper_beziers": 2,
+      "pads": 4,
+      "image": "build/bezier-integration-validation/gap-safe-flux-export.png"
+    },
+    "tier0_generated_cubics": {
+      "candidate": "build/bezier-integration-validation/tier0.kicad_pcb",
+      "added_track_beziers": 174,
+      "fitted_cubic_beziers": 340,
+      "internal_open_connections": 0,
+      "unrounded_non_junction_bends": 16,
+      "complete": false,
+      "kicad_drc_report": "build/bezier-integration-validation/tier0-drc.json",
+      "render": "build/bezier-integration-validation/tier0-cubic-copper.png"
+    }
+  },
+  "tests": {
+    "core": "64/64 passed after final relink",
+    "focused_cubic": "3/3 passed",
+    "python_bridge": "7/7 passed",
+    "viewer_build": "passed",
+    "final_manifest": "build/bezier-integration-validation/final-tests.json"
+  },
+  "limitations": [
+    "conservative inner-envelope connectivity can reject marginal interior contacts",
+    "minimum graphic copper width must be enforced by Flux",
+    "tier run preceded final checkpoint/PNS source-curve bookkeeping corrections; final unit tests cover updated source"
+  ],
+  "kicad_drc": {
+    "version": "10.0.6",
+    "original_project_rules_copied": true,
+    "errors": 0,
+    "unconnected": 0,
+    "categories": {}
+  }
+}

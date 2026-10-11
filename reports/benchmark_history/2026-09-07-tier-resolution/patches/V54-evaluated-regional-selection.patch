@@ -1,0 +1,81 @@
+--- a/src/regional_router.cpp
++++ b/src/regional_router.cpp
+@@ -16750,6 +16750,8 @@
+     // provisional shadow count can nevertheless leave fewer unsolved lane/via/spline windows.
+     // Preserve connectivity and topology as hard lexicographic gates, then retain that partial
+     // physical improvement for the next feedback pass before comparing coarse overflow.
++    // A deferred region has no assignments because it was never examined. Its empty failure
++    // count cannot outrank an evaluated physical checkpoint, even when that checkpoint fails.
+     const auto oracle_opens = [](const RoutingPlanResult& plan) {
+       return plan.quantized_copper_oracle.evaluated
+                  ? plan.quantized_copper_oracle.open_connections
+@@ -16763,6 +16765,7 @@
+     return std::tuple{lhs.complete() ? 0U : 1U,
+                       lhs.coarse_global.unrouted_nets.size(),
+                       coarse_topology_complete(lhs.coarse_global) ? 0U : 1U,
++                      lhs.regional_evaluated ? 0U : 1U,
+                       incomplete_assignments(lhs),
+                       oracle_opens(lhs),
+                       oracle_violations(lhs),
+@@ -16771,6 +16774,7 @@
+            std::tuple{rhs.complete() ? 0U : 1U,
+                       rhs.coarse_global.unrouted_nets.size(),
+                       coarse_topology_complete(rhs.coarse_global) ? 0U : 1U,
++                      rhs.regional_evaluated ? 0U : 1U,
+                       incomplete_assignments(rhs),
+                       oracle_opens(rhs),
+                       oracle_violations(rhs),
+@@ -17246,6 +17250,7 @@
+                                           regional_attempt_config) &&
+           intermediate_regional_ready) {
+         feedback_candidate.regional_consulted = true;
++        regional_candidate.regional_evaluated = true;
+         regional_candidate.regional =
+             analyze_regional_conflicts(board, regional_candidate.coarse_global,
+                                        regional_attempt_config, stop_token, telemetry);
+@@ -17316,6 +17321,7 @@
+             regional_candidate.quantized_copper_oracle.diagnoses;
+         regional_candidate.regional = analyze_regional_conflicts(
+             board, regional_candidate.coarse_global, promotion_config, stop_token, telemetry);
++        regional_candidate.regional_evaluated = true;
+         regional_candidate.paths = regional_candidate.regional.spline_candidate_available
+                                        ? regional_candidate.regional.spline_candidate_paths
+                                        : regional_candidate.coarse_global.paths;
+--- a/include/flux/core/regional_router.hpp
++++ b/include/flux/core/regional_router.hpp
+@@ -1310,6 +1310,8 @@
+   std::size_t provisional_exact_promotions_succeeded{0U};
+   std::size_t discarded_portfolio_diagnoses{0U};
+   bool routability_feedback_budget_exhausted{false};
++  // An empty deferred assessment is unknown, not evidence of zero regional failures.
++  bool regional_evaluated{false};
+   RoutingPlanStopReason stop_reason{RoutingPlanStopReason::invalid_input};
+   std::string diagnostic;
+ 
+--- a/apps/flux-cli/main.cpp
++++ b/apps/flux-cli/main.cpp
+@@ -3492,6 +3492,12 @@
+     std::cout << "null";
+   } else {
+     std::cout << (routing_plan->complete() ? "true" : "false");
++  }
++  std::cout << ",\n  \"regional_evaluated\": ";
++  if (routing_plan == nullptr) {
++    std::cout << "null";
++  } else {
++    std::cout << (routing_plan->regional_evaluated ? "true" : "false");
+   }
+   std::cout << ",\n  \"regional_feedback_passes\": ";
+   if (routing_plan == nullptr) {
+--- a/tests/unit/core_tests.cpp
++++ b/tests/unit/core_tests.cpp
+@@ -4679,6 +4679,9 @@
+                           oracle_first_plan.feedback_probes.back().candidates.end(),
+                           [](const auto& candidate) { return candidate.regional_consulted; }),
+           "exact oracle failures must bypass intermediate regional work but not final realization");
++  require(oracle_first_plan.regional_evaluated &&
++              oracle_first_plan.regional.diagnostic.find("deferred") == std::string::npos,
++          "an unevaluated regional checkpoint must not displace the final physical assessment");
+   const auto broad_feedback_candidate = [&]() -> const flux::RoutingPlanFeedbackCandidate* {
+     for (const auto& probe : broad_feedback_plan.feedback_probes) {
+       const auto found =

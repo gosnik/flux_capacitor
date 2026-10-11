@@ -7,9 +7,12 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <iomanip>
 #include <limits>
 #include <set>
+#include <sstream>
 #include <string_view>
+#include <tuple>
 
 namespace flux::viewer {
 namespace {
@@ -26,30 +29,186 @@ constexpr ImU32 color(float red, float green, float blue, float alpha = 1.0F) {
                   static_cast<int>(blue * 255.0F), static_cast<int>(alpha * 255.0F));
 }
 
-ImU32 layer_color(std::string_view layer, float alpha = 1.0F) {
+std::string format_age_us(std::uint64_t age_us) {
+  std::ostringstream out;
+  if (age_us < 1'000U) out << age_us << " us";
+  else if (age_us < 1'000'000U) out << age_us / 1'000U << " ms";
+  else out << std::fixed << std::setprecision(1) << static_cast<double>(age_us) / 1'000'000.0 << " s";
+  return out.str();
+}
+
+enum class LayerColorRole {
+  base,
+  copper,
+  provisional,
+  quintic_ph,
+  retained,
+  river,
+  rrt,
+  hydraulic,
+  ripped,
+  control,
+  conflict,
+  clearance,
+  occupancy,
+  occupancy_warning,
+  occupancy_overflow,
+  zone,
+  keepout,
+  via_candidate,
+  via_selected,
+  via_contested,
+  via_rejected,
+};
+
+ImVec4 base_layer_color(std::string_view layer) {
+  // Keep the two outer copper layers immediately recognizable using the conventional KiCad
+  // red/blue association. Inner layers use a stable, high-contrast sequence; unknown/non-copper
+  // layers retain deterministic hashing so trace replay does not depend on source-board order.
+  if (layer == "F.Cu")
+    return {0.96F, 0.30F, 0.25F, 1.0F};
+  if (layer == "B.Cu")
+    return {0.30F, 0.58F, 1.00F, 1.0F};
   static constexpr std::array<ImVec4, 8> palette{{
-      {0.30F, 0.78F, 1.00F, 1.0F},
-      {1.00F, 0.48F, 0.27F, 1.0F},
-      {0.45F, 0.88F, 0.48F, 1.0F},
-      {0.95F, 0.76F, 0.27F, 1.0F},
-      {0.74F, 0.55F, 1.00F, 1.0F},
-      {0.26F, 0.86F, 0.78F, 1.0F},
-      {1.00F, 0.43F, 0.66F, 1.0F},
-      {0.72F, 0.78F, 0.86F, 1.0F},
+      {0.96F, 0.72F, 0.24F, 1.0F}, {0.68F, 0.48F, 1.00F, 1.0F},
+      {0.28F, 0.86F, 0.54F, 1.0F}, {0.98F, 0.44F, 0.72F, 1.0F},
+      {0.24F, 0.82F, 0.90F, 1.0F}, {0.78F, 0.88F, 0.30F, 1.0F},
+      {1.00F, 0.54F, 0.24F, 1.0F}, {0.72F, 0.78F, 0.86F, 1.0F},
   }};
+  if (layer.starts_with("In") && layer.ends_with(".Cu")) {
+    std::size_t number = 0U;
+    bool valid = layer.size() > 5U;
+    for (std::size_t index = 2U; valid && index + 3U < layer.size(); ++index) {
+      valid = std::isdigit(static_cast<unsigned char>(layer[index])) != 0;
+      if (valid)
+        number = number * 10U + static_cast<std::size_t>(layer[index] - '0');
+    }
+    if (valid && number > 0U)
+      return palette[(number - 1U) % palette.size()];
+  }
   std::uint64_t hash = 1469598103934665603ULL;
   for (const char character : layer) {
     hash ^= static_cast<unsigned char>(character);
     hash *= 1099511628211ULL;
   }
-  const ImVec4 selected = palette[static_cast<std::size_t>(hash % palette.size())];
-  return ImGui::ColorConvertFloat4ToU32(ImVec4(selected.x, selected.y, selected.z, alpha));
+  return palette[static_cast<std::size_t>(hash % palette.size())];
+}
+
+ImVec4 mix_color(ImVec4 base, ImVec4 accent, float amount, float alpha) {
+  const auto blend = [amount](float lhs, float rhs) { return lhs * (1.0F - amount) + rhs * amount; };
+  return {blend(base.x, accent.x), blend(base.y, accent.y), blend(base.z, accent.z), alpha};
+}
+
+ImVec4 layer_role_color_value(std::string_view layer, LayerColorRole role, float alpha = 1.0F) {
+  const ImVec4 base = base_layer_color(layer);
+  switch (role) {
+  case LayerColorRole::base:
+  case LayerColorRole::copper:
+    return {base.x, base.y, base.z, alpha};
+  case LayerColorRole::provisional:
+    return mix_color(base, {0.30F, 1.00F, 0.92F, 1.0F}, 0.28F, alpha);
+  case LayerColorRole::quintic_ph:
+    return mix_color(base, {0.94F, 0.52F, 1.00F, 1.0F}, 0.27F, alpha);
+  case LayerColorRole::retained:
+    return mix_color(base, {0.58F, 0.64F, 0.74F, 1.0F}, 0.42F, alpha);
+  case LayerColorRole::river:
+    return mix_color(base, {0.18F, 0.76F, 1.00F, 1.0F}, 0.38F, alpha);
+  case LayerColorRole::rrt:
+    return mix_color(base, {1.00F, 0.65F, 0.18F, 1.0F}, 0.38F, alpha);
+  case LayerColorRole::hydraulic:
+    return mix_color(base, {0.18F, 0.96F, 0.46F, 1.0F}, 0.38F, alpha);
+  case LayerColorRole::ripped:
+    return mix_color(base, {1.00F, 0.14F, 0.16F, 1.0F}, 0.56F, alpha);
+  case LayerColorRole::control:
+    return mix_color(base, {1.00F, 0.92F, 1.00F, 1.0F}, 0.48F, alpha);
+  case LayerColorRole::conflict:
+    return mix_color(base, {1.00F, 0.08F, 0.10F, 1.0F}, 0.62F, alpha);
+  case LayerColorRole::clearance:
+    return mix_color(base, {1.00F, 0.52F, 0.16F, 1.0F}, 0.52F, alpha);
+  case LayerColorRole::occupancy:
+    return mix_color(base, {0.28F, 0.68F, 0.82F, 1.0F}, 0.25F, alpha);
+  case LayerColorRole::occupancy_warning:
+    return mix_color(base, {1.00F, 0.74F, 0.16F, 1.0F}, 0.52F, alpha);
+  case LayerColorRole::occupancy_overflow:
+    return mix_color(base, {1.00F, 0.16F, 0.10F, 1.0F}, 0.62F, alpha);
+  case LayerColorRole::zone:
+    return mix_color(base, {0.44F, 0.72F, 0.92F, 1.0F}, 0.20F, alpha);
+  case LayerColorRole::keepout:
+    return mix_color(base, {0.98F, 0.22F, 0.76F, 1.0F}, 0.56F, alpha);
+  case LayerColorRole::via_candidate:
+    return mix_color(base, {0.80F, 0.90F, 1.00F, 1.0F}, 0.35F, alpha);
+  case LayerColorRole::via_selected:
+    return {base.x, base.y, base.z, alpha};
+  case LayerColorRole::via_contested:
+    return mix_color(base, {1.00F, 0.26F, 0.82F, 1.0F}, 0.58F, alpha);
+  case LayerColorRole::via_rejected:
+    return mix_color(base, {1.00F, 0.14F, 0.12F, 1.0F}, 0.68F, alpha);
+  }
+  return {base.x, base.y, base.z, alpha};
+}
+
+ImU32 layer_color(std::string_view layer, float alpha = 1.0F) {
+  return ImGui::ColorConvertFloat4ToU32(
+      layer_role_color_value(layer, LayerColorRole::base, alpha));
+}
+
+ImU32 layer_color(std::string_view layer, LayerColorRole role, float alpha = 1.0F) {
+  return ImGui::ColorConvertFloat4ToU32(layer_role_color_value(layer, role, alpha));
+}
+
+std::vector<std::string> collect_board_layers(const telemetry::LiveState& displayed) {
+  std::vector<std::pair<std::int64_t, std::string>> ordered;
+  std::set<std::string> seen;
+  for (const auto& [id, board] : displayed.source_boards()) {
+    (void)id;
+    if (!board)
+      continue;
+    for (const auto& layer : board->layers) {
+      if (seen.insert(layer.id).second)
+        ordered.emplace_back(layer.stack_order, layer.id);
+    }
+  }
+  std::stable_sort(ordered.begin(), ordered.end(), [](const auto& lhs, const auto& rhs) {
+    return std::tie(lhs.first, lhs.second) < std::tie(rhs.first, rhs.second);
+  });
+  std::set<std::string> dynamic;
+  const auto add_dynamic = [&](const std::string& layer) {
+    if (!layer.empty() && !seen.contains(layer))
+      dynamic.insert(layer);
+  };
+  for (const auto& [id, route] : displayed.routes()) {
+    (void)id;
+    for (const auto& point : route.points)
+      add_dynamic(point.layer);
+    for (const auto& point : route.control_points)
+      add_dynamic(point.layer);
+  }
+  for (const auto& [id, via] : displayed.vias()) {
+    (void)id;
+    add_dynamic(via.position.layer);
+    add_dynamic(via.to_layer);
+  }
+  for (const auto& [id, resource] : displayed.resources()) {
+    (void)id;
+    add_dynamic(resource.layer);
+  }
+  std::vector<std::string> result;
+  result.reserve(ordered.size() + dynamic.size());
+  for (const auto& [order, layer] : ordered) {
+    (void)order;
+    result.push_back(layer);
+  }
+  result.insert(result.end(), dynamic.begin(), dynamic.end());
+  return result;
 }
 
 bool is_milestone(EventType type) {
   switch (type) {
+  case EventType::session_started:
   case EventType::routing_started:
   case EventType::routing_finished:
+  case EventType::routing_completed:
+  case EventType::copper_generated:
   case EventType::net_completed:
   case EventType::net_failed:
   case EventType::route_committed:
@@ -194,10 +353,11 @@ std::vector<Point> tessellate_route_quintic_ph(const telemetry::Route& route) {
   result.reserve(ph_segments * samples_per_segment + 1U);
   for (std::size_t segment = 0U; segment < ph_segments; ++segment) {
     for (std::size_t index = segment == 0U ? 0U : 1U; index <= samples_per_segment; ++index) {
-      const auto parameter = static_cast<long double>(index) /
-                             static_cast<long double>(samples_per_segment);
+      const auto parameter =
+          static_cast<long double>(index) / static_cast<long double>(samples_per_segment);
       const auto point = evaluate_segment(segment, parameter);
-      if (result.empty() || result.back() != point) result.push_back(point);
+      if (result.empty() || result.back() != point)
+        result.push_back(point);
     }
   }
   return result.size() >= 2U ? result : route.points;
@@ -262,10 +422,11 @@ Bounds state_bounds(const telemetry::LiveState& state) {
   }
   for (const auto& [id, field] : state.hydraulic_fields()) {
     (void)id;
-    const auto extent_x = static_cast<std::int64_t>(
-        field.cell_pitch_nm * field.stride * field.width);
-    const auto extent_y = static_cast<std::int64_t>(
-        field.cell_pitch_nm * field.stride * field.height);
+    std::string hydraulic_error;
+    if (!telemetry::validate_hydraulic_field(field, hydraulic_error)) continue;
+    const auto cell_nm = static_cast<std::int64_t>(field.cell_pitch_nm * field.stride);
+    const auto extent_x = static_cast<std::int64_t>(field.width) * cell_nm;
+    const auto extent_y = static_cast<std::int64_t>(field.height) * cell_nm;
     bounds.include(Point{field.origin_x_nm, field.origin_y_nm, field.layer});
     bounds.include(Point{field.origin_x_nm + extent_x, field.origin_y_nm + extent_y, field.layer});
   }
@@ -362,7 +523,8 @@ ViewerApp::~ViewerApp() {
 }
 
 void ViewerApp::update_preferences() {
-  if (!options_.preferences) return;
+  if (!options_.preferences)
+    return;
   options_.preferences->overlays = overlays_;
   options_.preferences->activity_panel_height = activity_panel_height_;
   options_.preferences->replay_speed = replay_speed_;
@@ -393,14 +555,36 @@ void ViewerApp::sync_overlay_history_to_source() {
   }
   const auto source_position =
       mode_ == SourceMode::replay ? replay_.position() : overlay_history_.size();
+  if (mode_ == SourceMode::replay) {
+    // A replay may seek before the rolling live-history window. Rebuild to that position
+    // instead of silently displaying the earliest retained (but later) geometry.
+    if (source_position < overlay_history_.retained_begin()) overlay_history_.clear();
+    while (overlay_history_.size() < source_position) {
+      overlay_history_.append(trace_.events()[overlay_history_.size()]);
+    }
+  }
   overlay_history_.seek(source_position);
+}
+
+std::optional<std::uint64_t> ViewerApp::freshness_age_us(
+    const std::optional<std::uint64_t>& event_time_us, bool metrics) const {
+  if (!event_time_us) return std::nullopt;
+  if (mode_ == SourceMode::replay) {
+    return replay_clock_us_ >= *event_time_us ? replay_clock_us_ - *event_time_us : 0U;
+  }
+  const auto& received_at = metrics ? live_metrics_received_at_ : live_geometry_received_at_;
+  if (!received_at) return std::nullopt;
+  return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+      std::chrono::steady_clock::now() - *received_at).count());
 }
 
 void ViewerApp::connect_live() {
   mode_ = SourceMode::live;
   replay_playing_ = false;
   live_state_.clear();
+  live_timeline_.clear();
   overlay_history_.clear();
+  live_board_identity_.clear();
   overlay_follow_source_ = true;
   (void)client_.connect(endpoint_, options_.level, options_.rate_hz);
   ui_status_ = "Connecting to live telemetry";
@@ -420,10 +604,6 @@ void ViewerApp::load_trace(const std::filesystem::path& path) {
   trace_ = std::move(loaded);
   replay_.set_trace(&trace_);
   overlay_history_.clear();
-  for (const auto& event : trace_.events()) {
-    overlay_history_.append(event);
-  }
-  overlay_history_.seek(0U);
   overlay_follow_source_ = true;
   mode_ = SourceMode::replay;
   replay_playing_ = false;
@@ -442,7 +622,8 @@ void ViewerApp::start_recording(const std::filesystem::path& path) {
   std::string error;
   if (recorder_.open(path, error)) {
     record_path_ = path.string();
-    if (options_.preferences) options_.preferences->record_directory = path.parent_path();
+    if (options_.preferences)
+      options_.preferences->record_directory = path.parent_path();
     ui_status_ = "Recording live events to " + record_path_;
   } else {
     ui_status_ = std::move(error);
@@ -465,16 +646,52 @@ void ViewerApp::tick() {
   if (connection.connection_generation != live_connection_generation_) {
     live_connection_generation_ = connection.connection_generation;
     live_state_.clear();
-    if (mode_ == SourceMode::live) {
-      overlay_history_.clear();
-      overlay_follow_source_ = true;
+    if (const auto boundary = live_timeline_.begin_session(live_connection_generation_)) {
+      live_state_.apply(*boundary);
+      if (mode_ == SourceMode::live) {
+        overlay_history_.append(*boundary);
+      }
+      if (recorder_.is_open() && !recorder_.append(*boundary)) {
+        ui_status_ = recorder_.error();
+      }
     }
     view_.fit_requested = true;
     ui_status_ = live_connection_generation_ == 1U ? "Connected to Flux telemetry"
                                                    : "Connected to a new Flux telemetry instance";
   }
   for (telemetry::Event& event : client_.drain()) {
+    event = live_timeline_.rebase(std::move(event));
+
+    // A router process may remain reachable while it starts another board, while an automatic
+    // reconnect may merely continue the current board. Use the producer's immutable source
+    // identity—not the socket generation—as the reset boundary. Preferences remain intact, but
+    // every board-specific overlay, activity row, metric, and timeline checkpoint is discarded.
+    if (!event.source_identity.empty()) {
+      const bool new_board = !live_board_identity_.empty() &&
+                             event.source_identity != live_board_identity_;
+      if (new_board) {
+        live_state_.clear();
+        overlay_history_.clear();
+        overlay_follow_source_ = true;
+        replay_playing_ = false;
+        replay_accumulator_us_ = 0.0;
+        view_.fit_requested = true;
+        ui_status_ = "Started new board " + event.source_identity;
+      }
+      live_board_identity_ = event.source_identity;
+    }
+
     live_state_.apply(event);
+    // A repeated recovery snapshot may carry the same timestamp and payload. LiveState updates
+    // these timestamps only for semantic changes, so it cannot make a stale board look fresh.
+    if (live_state_.last_metrics_time_us() != live_metrics_event_time_us_) {
+      live_metrics_event_time_us_ = live_state_.last_metrics_time_us();
+      live_metrics_received_at_ = live_metrics_event_time_us_ ? std::optional{now} : std::nullopt;
+    }
+    if (live_state_.last_geometry_time_us() != live_geometry_event_time_us_) {
+      live_geometry_event_time_us_ = live_state_.last_geometry_time_us();
+      live_geometry_received_at_ = live_geometry_event_time_us_ ? std::optional{now} : std::nullopt;
+    }
     if (mode_ == SourceMode::live) {
       overlay_history_.append(event);
     }
@@ -544,7 +761,7 @@ void ViewerApp::draw_menu_bar() {
     if (ImGui::MenuItem("Fit routing state", "F")) {
       view_.fit_requested = true;
     }
-    ImGui::MenuItem("Grid", nullptr, &overlays_.grid);
+    ImGui::MenuItem("NavMesh grid", nullptr, &overlays_.grid);
     ImGui::EndMenu();
   }
   ImGui::TextDisabled("  Flux Router Telemetry Viewer");
@@ -621,10 +838,9 @@ void ViewerApp::draw_source_panel() {
       ImGui::TextDisabled("schema %u  %zu layers  %zu nets  %zu objects", board->board_schema,
                           board->layers.size(), board->nets.size(), board->primitives.size());
       if (board->stackup) {
-        const auto dielectric_count =
-            static_cast<std::size_t>(std::count_if(
-                board->stackup->layers.begin(), board->stackup->layers.end(),
-                [](const auto& layer) { return layer.kind == "dielectric"; }));
+        const auto dielectric_count = static_cast<std::size_t>(
+            std::count_if(board->stackup->layers.begin(), board->stackup->layers.end(),
+                          [](const auto& layer) { return layer.kind == "dielectric"; }));
         if (board->physical_thickness_nm) {
           ImGui::TextDisabled("stackup %zu physical layers / %zu dielectric  %.3f mm",
                               board->stackup->layers.size(), dielectric_count,
@@ -705,8 +921,8 @@ void ViewerApp::draw_source_panel() {
   ImGui::Spacing();
   ImGui::TextUnformatted("Capture");
   ImGui::Separator();
-  ImGui::TextWrapped("%s", record_path_.empty() ? "No recording file selected"
-                                                : record_path_.c_str());
+  ImGui::TextWrapped("%s",
+                     record_path_.empty() ? "No recording file selected" : record_path_.c_str());
   if (!recorder_.is_open()) {
     if (ImGui::Button("Select recording file...", ImVec2(-1.0F, 0.0F))) {
       open_file_browser(true);
@@ -726,7 +942,7 @@ void ViewerApp::draw_overlay_panel() {
       overlay_follow_source_ = follow;
       sync_overlay_history_to_source();
     }
-    const std::uint64_t minimum = 0U;
+    const std::uint64_t minimum = overlay_history_.retained_begin();
     const std::uint64_t maximum = overlay_history_.size();
     std::uint64_t position = overlay_history_.position();
     ImGui::SetNextItemWidth(-1.0F);
@@ -737,6 +953,11 @@ void ViewerApp::draw_overlay_panel() {
           mode_ == SourceMode::replay ? replay_.position() : overlay_history_.size();
       overlay_follow_source_ = position == source_position;
       view_.fit_requested = true;
+    }
+    if (overlay_history_.dropped_events() != 0U) {
+      ImGui::TextDisabled("History trimmed: %llu events dropped; %zu KiB retained",
+                          static_cast<unsigned long long>(overlay_history_.dropped_events()),
+                          overlay_history_.retained_bytes() / 1024U);
     }
     if (position == 0U) {
       ImGui::TextDisabled("Initial state (oldest -> newest)");
@@ -751,6 +972,7 @@ void ViewerApp::draw_overlay_panel() {
   ImGui::Checkbox("Source board outline", &overlays_.source_board);
   ImGui::Checkbox("Source footprints / pads", &overlays_.source_footprints);
   ImGui::Checkbox("Existing source copper", &overlays_.source_copper);
+  ImGui::Checkbox("Retained / resulting copper", &overlays_.resulting_copper);
   ImGui::Checkbox("Source zones / keepouts", &overlays_.source_zones_keepouts);
   ImGui::Separator();
   ImGui::Checkbox("Committed routes", &overlays_.committed_routes);
@@ -764,49 +986,20 @@ void ViewerApp::draw_overlay_panel() {
   ImGui::Checkbox("PH Bézier control polygons", &overlays_.ph_controls);
   ImGui::Checkbox("Rip-up / reroute", &overlays_.rip_up_activity);
   ImGui::Checkbox("Congestion conflicts", &overlays_.congestion);
-  ImGui::Checkbox("Clearance shadows", &overlays_.clearance_shadows);
+  ImGui::Checkbox("Shadow witnesses", &overlays_.clearance_shadows);
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Planning clearance witness locations. Markers are not physical clearance envelopes or KiCad DRC results.");
+  }
   ImGui::Checkbox("Corridor / resource occupancy", &overlays_.occupancy);
   ImGui::Checkbox("Priority scores", &overlays_.priorities);
   ImGui::Checkbox("Via candidates", &overlays_.via_candidates);
   ImGui::Checkbox("Selected vias", &overlays_.selected_vias);
   ImGui::Checkbox("Contested sites", &overlays_.contested_vias);
   ImGui::Checkbox("Rejected via sites", &overlays_.rejected_vias);
-  ImGui::Checkbox("Grid", &overlays_.grid);
+  ImGui::Checkbox("Active regional solve area", &overlays_.active_region);
+  ImGui::Checkbox("NavMesh grid", &overlays_.grid);
 
-  const auto& displayed = overlay_state();
-  std::set<std::string> layers;
-  for (const auto& [id, board] : displayed.source_boards()) {
-    (void)id;
-    if (!board) {
-      continue;
-    }
-    for (const auto& layer : board->layers) {
-      layers.insert(layer.id);
-    }
-  }
-  for (const auto& [id, route] : displayed.routes()) {
-    (void)id;
-    for (const Point& point : route.points) {
-      if (!point.layer.empty())
-        layers.insert(point.layer);
-    }
-    for (const Point& point : route.control_points) {
-      if (!point.layer.empty())
-        layers.insert(point.layer);
-    }
-  }
-  for (const auto& [id, via] : displayed.vias()) {
-    (void)id;
-    if (!via.position.layer.empty())
-      layers.insert(via.position.layer);
-    if (!via.to_layer.empty())
-      layers.insert(via.to_layer);
-  }
-  for (const auto& [id, resource] : displayed.resources()) {
-    (void)id;
-    if (!resource.layer.empty())
-      layers.insert(resource.layer);
-  }
+  const auto layers = collect_board_layers(overlay_state());
   ImGui::SetNextItemWidth(-1.0F);
   if (ImGui::BeginCombo("Layer",
                         overlays_.layer.empty() ? "All layers" : overlays_.layer.c_str())) {
@@ -823,6 +1016,54 @@ void ViewerApp::draw_overlay_panel() {
   if (ImGui::Button("Fit state", ImVec2(-1.0F, 0.0F))) {
     view_.fit_requested = true;
   }
+}
+
+void ViewerApp::draw_legend_panel() {
+  if (!ImGui::CollapsingHeader("Layer / overlay legend", ImGuiTreeNodeFlags_DefaultOpen))
+    return;
+  ImGui::TextWrapped("Hue identifies the board layer. Shade identifies the overlay state; dashed "
+                     "lines are provisional or removed, and via rings show start/end layers.");
+  const auto layers = collect_board_layers(overlay_state());
+  if (layers.empty()) {
+    ImGui::TextDisabled("Waiting for board-layer metadata.");
+    return;
+  }
+  if (ImGui::BeginTable("layer-overlay-legend", 6,
+                        ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH |
+                            ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_ScrollY,
+                        ImVec2(0.0F,
+                               std::min(210.0F, 31.0F + static_cast<float>(layers.size()) * 23.0F)))) {
+    ImGui::TableSetupColumn("Layer", ImGuiTableColumnFlags_WidthStretch);
+    ImGui::TableSetupColumn("Cu", ImGuiTableColumnFlags_WidthFixed, 30.0F);
+    ImGui::TableSetupColumn("PH", ImGuiTableColumnFlags_WidthFixed, 30.0F);
+    ImGui::TableSetupColumn("Alt", ImGuiTableColumnFlags_WidthFixed, 30.0F);
+    ImGui::TableSetupColumn("Clr", ImGuiTableColumnFlags_WidthFixed, 30.0F);
+    ImGui::TableSetupColumn("Ovf", ImGuiTableColumnFlags_WidthFixed, 30.0F);
+    ImGui::TableHeadersRow();
+    for (const auto& layer : layers) {
+      ImGui::PushID(layer.c_str());
+      ImGui::TableNextRow();
+      ImGui::TableSetColumnIndex(0);
+      ImGui::TextUnformatted(layer.c_str());
+      const auto swatch = [&](int column, const char* id, LayerColorRole role, const char* tooltip) {
+        ImGui::TableSetColumnIndex(column);
+        ImGui::ColorButton(id, layer_role_color_value(layer, role),
+                           ImGuiColorEditFlags_NoPicker | ImGuiColorEditFlags_NoDragDrop |
+                               ImGuiColorEditFlags_NoTooltip,
+                           ImVec2(18.0F, 14.0F));
+        if (ImGui::IsItemHovered())
+          ImGui::SetTooltip("%s / %s", layer.c_str(), tooltip);
+      };
+      swatch(1, "##copper", LayerColorRole::copper, "copper / committed route");
+      swatch(2, "##ph", LayerColorRole::quintic_ph, "quintic PH realization");
+      swatch(3, "##alternative", LayerColorRole::retained, "retained alternative");
+      swatch(4, "##clearance", LayerColorRole::clearance, "clearance shadow");
+      swatch(5, "##overflow", LayerColorRole::occupancy_overflow, "resource overflow");
+      ImGui::PopID();
+    }
+    ImGui::EndTable();
+  }
+  ImGui::TextDisabled("Alt families: river=blue tint, RRT=amber tint, hydraulic=green tint");
 }
 
 void ViewerApp::draw_board_canvas() {
@@ -886,6 +1127,26 @@ void ViewerApp::draw_board_canvas() {
     return overlays_.layer.empty() || primitive.layers.empty() ||
            std::find(primitive.layers.begin(), primitive.layers.end(), overlays_.layer) !=
                primitive.layers.end();
+  };
+  const auto draw_active_region = [&] {
+    if (!overlays_.active_region || !displayed.active_region() || !displayed.active_region()->active)
+      return;
+    const telemetry::ActiveRegion& region = *displayed.active_region();
+    const bool layer_matches = overlays_.layer.empty() || region.layers.empty() ||
+        std::find(region.layers.begin(), region.layers.end(), overlays_.layer) != region.layers.end();
+    if (layer_matches && region.minimum_x_nm < region.maximum_x_nm &&
+        region.minimum_y_nm < region.maximum_y_nm) {
+      const ImVec2 minimum = screen(Point{region.minimum_x_nm, region.minimum_y_nm, {}});
+      const ImVec2 maximum = screen(Point{region.maximum_x_nm, region.maximum_y_nm, {}});
+      const ImVec2 first{std::min(minimum.x, maximum.x), std::min(minimum.y, maximum.y)};
+      const ImVec2 last{std::max(minimum.x, maximum.x), std::max(minimum.y, maximum.y)};
+      draw->AddRectFilled(first, last, color(0.26F, 0.88F, 0.72F, 0.12F));
+      draw->AddRect(first, last, color(0.34F, 1.0F, 0.78F, 0.90F), 0.0F, 0, 2.0F);
+      std::string label = region.label.empty() ? "Active regional solve" : region.label;
+      if (label.size() > 160U) label = label.substr(0U, 157U) + "...";
+      if (!region.nets.empty()) label += "  nets " + std::to_string(region.nets.size());
+      draw->AddText(ImVec2(first.x + 4.0F, first.y + 4.0F), color(0.72F, 1.0F, 0.86F), label.c_str());
+    }
   };
   const auto draw_closed_points = [&](const std::vector<Point>& points, ImU32 line_color,
                                       float width) {
@@ -968,17 +1229,18 @@ void ViewerApp::draw_board_canvas() {
           center, static_cast<long double>(primitive.drill_offset_x_nm),
           static_cast<long double>(primitive.drill_offset_y_nm), primitive.rotation_microdegrees);
       const auto horizontal = drill_width >= drill_height;
-      const auto radius_nm = static_cast<long double>(horizontal ? drill_height : drill_width) / 2.0L;
+      const auto radius_nm =
+          static_cast<long double>(horizontal ? drill_height : drill_width) / 2.0L;
       const auto run_nm =
           static_cast<long double>(horizontal ? drill_width : drill_height) / 2.0L - radius_nm;
-      const auto first = rotated_pad_point(
-          drill_center, horizontal ? -run_nm : 0.0L, horizontal ? 0.0L : -run_nm,
-          primitive.rotation_microdegrees);
-      const auto second = rotated_pad_point(
-          drill_center, horizontal ? run_nm : 0.0L, horizontal ? 0.0L : run_nm,
-          primitive.rotation_microdegrees);
-      const auto thickness = static_cast<float>(std::max(
-          2.0, static_cast<double>(radius_nm * 2.0L) / 1'000'000.0 * view_.pixels_per_mm));
+      const auto first =
+          rotated_pad_point(drill_center, horizontal ? -run_nm : 0.0L, horizontal ? 0.0L : -run_nm,
+                            primitive.rotation_microdegrees);
+      const auto second =
+          rotated_pad_point(drill_center, horizontal ? run_nm : 0.0L, horizontal ? 0.0L : run_nm,
+                            primitive.rotation_microdegrees);
+      const auto thickness = static_cast<float>(
+          std::max(2.0, static_cast<double>(radius_nm * 2.0L) / 1'000'000.0 * view_.pixels_per_mm));
       const auto hole_color = color(0.035F, 0.052F, 0.070F);
       const auto drill_outline = color(0.68F, 0.72F, 0.76F);
       draw->AddLine(screen(first), screen(second), hole_color, thickness);
@@ -990,74 +1252,102 @@ void ViewerApp::draw_board_canvas() {
   };
 
   if (overlays_.grid) {
-    double grid_mm = 0.01;
-    while (grid_mm * view_.pixels_per_mm < 34.0) {
-      grid_mm *= 10.0;
-    }
-    const float spacing = static_cast<float>(grid_mm * view_.pixels_per_mm);
-    const float center_x = canvas_origin.x + canvas_size.x * 0.5F + view_.pan.x;
-    const float center_y = canvas_origin.y + canvas_size.y * 0.5F + view_.pan.y;
-    const float first_x = canvas_origin.x + std::fmod(center_x - canvas_origin.x, spacing);
-    const float first_y = canvas_origin.y + std::fmod(center_y - canvas_origin.y, spacing);
-    for (float x = first_x; x < canvas_end.x; x += spacing) {
-      draw->AddLine(ImVec2(x, canvas_origin.y), ImVec2(x, canvas_end.y),
-                    color(0.17F, 0.22F, 0.27F, 0.55F));
-    }
-    for (float y = first_y; y < canvas_end.y; y += spacing) {
-      draw->AddLine(ImVec2(canvas_origin.x, y), ImVec2(canvas_end.x, y),
-                    color(0.17F, 0.22F, 0.27F, 0.55F));
+    using CellKey =
+        std::tuple<std::int64_t, std::int64_t, std::int64_t, std::int64_t, std::string,
+                   std::uint32_t>;
+    std::set<CellKey> drawn_cells;
+    for (const auto& [route_id, route] : displayed.routes()) {
+      (void)route_id;
+      for (const auto& cell : route.navmesh_cells) {
+        const auto& layer = cell.minimum.layer;
+        if (!layer_visible(layer) || cell.minimum.x_nm >= cell.maximum.x_nm ||
+            cell.minimum.y_nm >= cell.maximum.y_nm) {
+          continue;
+        }
+        const CellKey key{cell.minimum.x_nm, cell.minimum.y_nm, cell.maximum.x_nm,
+                          cell.maximum.y_nm, layer, cell.refinement_level};
+        if (!drawn_cells.insert(key).second) {
+          continue;
+        }
+        const Point upper_left{cell.minimum.x_nm, cell.maximum.y_nm, layer};
+        const Point lower_right{cell.maximum.x_nm, cell.minimum.y_nm, layer};
+        const auto outline_alpha =
+            std::min(0.82F, 0.34F + 0.14F * static_cast<float>(cell.refinement_level));
+        const auto tint = layer_color(
+            layer, 0.025F + 0.018F * static_cast<float>(cell.refinement_level));
+        draw->AddRectFilled(screen(upper_left), screen(lower_right), tint);
+        draw->AddRect(screen(upper_left), screen(lower_right),
+                      layer_color(layer, outline_alpha), 0.0F, ImDrawFlags_None,
+                      cell.refinement_level == 0U ? 1.0F : 1.35F);
+      }
     }
   }
 
   for (const auto& [board_id, board] : displayed.source_boards()) {
-    (void)board_id;
     if (!board) {
       continue;
     }
+    const bool generated_copper = board_id.starts_with("generated-copper:");
+    if (generated_copper && !overlays_.resulting_copper) {
+      continue;
+    }
+    const bool source_scene = !generated_copper;
+    const bool copper_visible =
+        generated_copper ? overlays_.resulting_copper : overlays_.source_copper;
     for (const auto& primitive : board->primitives) {
       if (!primitive_layer_visible(primitive)) {
         continue;
       }
-      if (overlays_.source_board && primitive.kind == "board_outline") {
+      if (source_scene && overlays_.source_board && primitive.kind == "board_outline") {
         draw_closed_points(primitive.points, color(0.72F, 0.78F, 0.82F, 0.95F), 2.2F);
-      } else if (overlays_.source_board && primitive.kind == "board_cutout") {
+      } else if (source_scene && overlays_.source_board && primitive.kind == "board_cutout") {
         draw_closed_points(primitive.points, color(0.95F, 0.52F, 0.34F, 0.90F), 1.8F);
-      } else if (overlays_.source_zones_keepouts && primitive.kind == "zone") {
-        draw_closed_points(
-            primitive.points,
-            layer_color(primitive.layers.empty() ? "zone" : primitive.layers.front(), 0.32F), 1.2F);
+      } else if (source_scene && overlays_.source_zones_keepouts && primitive.kind == "zone") {
+        const auto layer = primitive.layers.empty() ? std::string_view{"zone"}
+                                                    : std::string_view{primitive.layers.front()};
+        draw_closed_points(primitive.points, layer_color(layer, LayerColorRole::zone, 0.52F),
+                           1.2F);
         for (const auto& hole : primitive.holes) {
-          draw_closed_points(hole, color(0.95F, 0.65F, 0.20F, 0.55F), 1.0F);
+          draw_closed_points(hole, layer_color(layer, LayerColorRole::zone, 0.34F), 1.0F);
         }
-      } else if (overlays_.source_zones_keepouts && primitive.kind == "keepout") {
-        draw_closed_points(primitive.points, color(0.96F, 0.26F, 0.72F, 0.68F), 1.6F);
-      } else if (overlays_.source_footprints && primitive.kind == "footprint") {
+      } else if (source_scene && overlays_.source_zones_keepouts && primitive.kind == "keepout") {
+        const auto layer = primitive.layers.empty() ? std::string_view{"keepout"}
+                                                    : std::string_view{primitive.layers.front()};
+        draw_closed_points(primitive.points, layer_color(layer, LayerColorRole::keepout, 0.78F),
+                           1.6F);
+      } else if (source_scene && overlays_.source_footprints && primitive.kind == "footprint") {
         draw_closed_points(primitive.points, color(0.86F, 0.84F, 0.58F, 0.82F), 1.5F);
         if (!primitive.reference.empty() && !primitive.points.empty() &&
             view_.pixels_per_mm >= 7.0) {
           draw->AddText(screen(primitive.points.front()), color(0.92F, 0.90F, 0.68F, 0.86F),
                         primitive.reference.c_str());
         }
-      } else if (overlays_.source_footprints && primitive.kind == "footprint_courtyard_circle" &&
-                 primitive.points.size() == 2U) {
+      } else if (source_scene && overlays_.source_footprints &&
+                 primitive.kind == "footprint_courtyard_circle" && primitive.points.size() == 2U) {
         const auto dx = static_cast<double>(primitive.points[1].x_nm - primitive.points[0].x_nm);
         const auto dy = static_cast<double>(primitive.points[1].y_nm - primitive.points[0].y_nm);
         const auto radius =
             static_cast<float>(std::hypot(dx, dy) / 1'000'000.0 * view_.pixels_per_mm);
         draw->AddCircle(screen(primitive.points[0]), radius, color(0.86F, 0.84F, 0.58F, 0.82F), 32,
                         1.5F);
-      } else if (overlays_.source_footprints && primitive.kind == "pad") {
+      } else if (source_scene && overlays_.source_footprints && primitive.kind == "pad") {
         draw_source_pad(primitive);
-      } else if (overlays_.source_copper && primitive.kind == "track" &&
-                 primitive.points.size() >= 2U) {
+      } else if (copper_visible && primitive.kind == "track" && primitive.points.size() >= 2U) {
         const auto width = static_cast<float>(std::max(
             1.0, static_cast<double>(primitive.width_nm) / 1'000'000.0 * view_.pixels_per_mm));
         draw->AddLine(
             screen(primitive.points[0]), screen(primitive.points[1]),
-            layer_color(primitive.layers.empty() ? "track" : primitive.layers.front(), 0.64F),
+            layer_color(primitive.layers.empty() ? "track" : primitive.layers.front(),
+                        LayerColorRole::copper, 0.72F),
             width);
-      } else if (overlays_.source_copper && primitive.kind == "track_arc" &&
-                 primitive.points.size() == 3U) {
+      } else if (copper_visible && primitive.kind == "track_bezier" && primitive.points.size() == 4U) {
+        const auto width = static_cast<float>(std::max(
+            1.0, static_cast<double>(primitive.width_nm) / 1'000'000.0 * view_.pixels_per_mm));
+        draw->AddBezierCubic(screen(primitive.points[0]), screen(primitive.points[1]),
+                             screen(primitive.points[2]), screen(primitive.points[3]),
+                             layer_color(primitive.layers.empty() ? "bezier" : primitive.layers.front(),
+                                         LayerColorRole::copper, 0.72F), width);
+      } else if (copper_visible && primitive.kind == "track_arc" && primitive.points.size() == 3U) {
         const auto width = static_cast<float>(std::max(
             1.0, static_cast<double>(primitive.width_nm) / 1'000'000.0 * view_.pixels_per_mm));
         const auto arc = tessellate_source_arc(primitive);
@@ -1068,13 +1358,20 @@ void ViewerApp::draw_board_canvas() {
         }
         draw->AddPolyline(
             pixels.data(), static_cast<int>(pixels.size()),
-            layer_color(primitive.layers.empty() ? "arc" : primitive.layers.front(), 0.64F),
+            layer_color(primitive.layers.empty() ? "arc" : primitive.layers.front(),
+                        LayerColorRole::copper, 0.72F),
             ImDrawFlags_None, width);
-      } else if (overlays_.source_copper && primitive.kind == "via" && !primitive.points.empty()) {
+      } else if (copper_visible && primitive.kind == "via" && !primitive.points.empty()) {
         const auto radius = static_cast<float>(std::max(
             2.0, static_cast<double>(primitive.diameter_nm) / 2'000'000.0 * view_.pixels_per_mm));
+        const auto first_layer = primitive.layers.empty() ? std::string_view{"via"}
+                                                         : std::string_view{primitive.layers.front()};
+        const auto last_layer = primitive.layers.empty() ? first_layer
+                                                         : std::string_view{primitive.layers.back()};
         draw->AddCircleFilled(screen(primitive.points.front()), radius,
-                              color(0.76F, 0.72F, 0.60F, 0.65F), 20);
+                              layer_color(first_layer, LayerColorRole::via_selected, 0.72F), 20);
+        draw->AddCircle(screen(primitive.points.front()), radius + 1.5F,
+                        layer_color(last_layer, LayerColorRole::via_selected, 0.88F), 20, 1.5F);
         const auto drill = static_cast<float>(std::max(
             1.0, static_cast<double>(primitive.drill_nm) / 2'000'000.0 * view_.pixels_per_mm));
         draw->AddCircleFilled(screen(primitive.points.front()), drill,
@@ -1093,73 +1390,91 @@ void ViewerApp::draw_board_canvas() {
       const float width = static_cast<float>(std::clamp(
           static_cast<double>(resource.channel_width_nm) / 1'000'000.0 * view_.pixels_per_mm, 4.0,
           30.0));
-      const ImU32 resource_color = utilization > 1.0   ? color(1.0F, 0.20F, 0.12F, 0.30F)
-                                   : utilization > 0.8 ? color(1.0F, 0.70F, 0.18F, 0.24F)
-                                                       : color(0.24F, 0.62F, 0.82F, 0.16F);
+      const ImU32 resource_color =
+          utilization > 1.0
+              ? layer_color(resource.layer, LayerColorRole::occupancy_overflow, 0.38F)
+          : utilization > 0.8
+              ? layer_color(resource.layer, LayerColorRole::occupancy_warning, 0.31F)
+              : layer_color(resource.layer, LayerColorRole::occupancy, 0.22F);
       draw->AddLine(screen(resource.start), screen(resource.end), resource_color, width);
     }
   }
 
   if (overlays_.hydraulic_fields) {
+    const auto maximum_draw_cells = std::max<std::size_t>(1U,
+        65'536U / std::max<std::size_t>(1U, displayed.hydraulic_fields().size()));
     for (const auto& [id, field] : displayed.hydraulic_fields()) {
       (void)id;
-      if (!layer_visible(field.layer) || field.width == 0U || field.height == 0U ||
-          field.stride == 0U || field.cell_pitch_nm == 0U ||
-          field.erosion.size() != field.width * field.height ||
-          field.flow.size() != field.erosion.size()) {
+      std::string hydraulic_error;
+      if (!layer_visible(field.layer) ||
+          !telemetry::validate_hydraulic_field(field, hydraulic_error) || field.flow.empty()) {
         continue;
       }
+      const std::size_t cells = field.width * field.height;
+      std::size_t sample = std::max<std::size_t>(1U,
+          static_cast<std::size_t>(std::ceil(std::sqrt(static_cast<double>(cells) /
+                                                        static_cast<double>(maximum_draw_cells)))));
+      const auto sampled_cells = [&] {
+        return (1U + (field.width - 1U) / sample) *
+               (1U + (field.height - 1U) / sample);
+      };
+      // Ceilings matter for thin, highly rectangular fields: sqrt(area) alone is insufficient.
+      sample = std::max({sample, 1U + (field.width - 1U) / maximum_draw_cells,
+                         1U + (field.height - 1U) / maximum_draw_cells});
+      while (sampled_cells() > maximum_draw_cells) ++sample;
       const bool has_heightmap = field.heightmap.size() == field.erosion.size() &&
                                  field.free_space.size() == field.erosion.size();
-      const bool has_feedback =
-          field.downstream_pressure.size() == field.erosion.size() &&
-          field.success_prior.size() == field.erosion.size();
+      const bool has_feedback = field.downstream_pressure.size() == field.erosion.size() &&
+                                field.success_prior.size() == field.erosion.size();
       const auto cell_nm = static_cast<std::int64_t>(field.cell_pitch_nm * field.stride);
-      for (std::size_t y = 0U; y < field.height; ++y) {
-        for (std::size_t x = 0U; x < field.width; ++x) {
+      for (std::size_t y = 0U; y < field.height; y += sample) {
+        for (std::size_t x = 0U; x < field.width; x += sample) {
           const auto index = y * field.width + x;
           const float erosion = static_cast<float>(field.erosion[index]) / 65'535.0F;
           const float flow = static_cast<float>(field.flow[index]) / 65'535.0F;
-          const float terrain = has_heightmap
-                                    ? static_cast<float>(field.heightmap[index]) / 65'535.0F
-                                    : 0.0F;
+          const float terrain =
+              has_heightmap ? static_cast<float>(field.heightmap[index]) / 65'535.0F : 0.0F;
           const float free_space = has_heightmap
                                        ? static_cast<float>(field.free_space[index]) / 65'535.0F
                                        : (std::max(erosion, flow) > 0.0F ? 1.0F : 0.0F);
-          const float pressure = has_feedback
-                                     ? static_cast<float>(field.downstream_pressure[index]) /
-                                           65'535.0F
-                                     : 0.0F;
-          const float success = has_feedback
-                                    ? static_cast<float>(field.success_prior[index]) / 65'535.0F
-                                    : 0.0F;
+          const float pressure =
+              has_feedback ? static_cast<float>(field.downstream_pressure[index]) / 65'535.0F
+                           : 0.0F;
+          const float success =
+              has_feedback ? static_cast<float>(field.success_prior[index]) / 65'535.0F : 0.0F;
           const float intensity = std::max(erosion, flow * 0.42F);
-          if (free_space <= 0.0F) continue;
+          if (free_space <= 0.0F)
+            continue;
           Point first{field.origin_x_nm + static_cast<std::int64_t>(x) * cell_nm,
                       field.origin_y_nm + static_cast<std::int64_t>(y) * cell_nm, field.layer};
-          Point last{first.x_nm + cell_nm, first.y_nm + cell_nm, field.layer};
+          const auto span_x = std::min(sample, field.width - x);
+          const auto span_y = std::min(sample, field.height - y);
+          Point last{first.x_nm + cell_nm * static_cast<std::int64_t>(span_x),
+                     first.y_nm + cell_nm * static_cast<std::int64_t>(span_y), field.layer};
           const auto first_screen = screen(first);
           const auto last_screen = screen(last);
           // Low terrain is the target valley (blue/green); high terrain is uphill (amber).
           // Flow and erosion brighten the carved riverbed without hiding the complete domain.
           // Downstream failures tint the deposited terrain magenta/red. Repeatedly clean copper
           // contributes a bounded green success prior, making learned valleys directly visible.
-          const float red = std::clamp(0.05F + terrain * 0.90F + intensity * 0.20F +
-                                           pressure * 0.70F,
-                                       0.0F, 1.0F);
+          const float red = std::clamp(
+              0.05F + terrain * 0.90F + intensity * 0.20F + pressure * 0.70F, 0.0F, 1.0F);
           const float green = std::clamp(0.42F + terrain * 0.28F + intensity * 0.25F +
                                              success * 0.45F - pressure * 0.22F,
                                          0.0F, 1.0F);
-          const float blue = std::clamp(0.88F - terrain * 0.72F + intensity * 0.08F +
-                                            pressure * 0.32F,
-                                        0.0F, 1.0F);
+          const float blue = std::clamp(
+              0.88F - terrain * 0.72F + intensity * 0.08F + pressure * 0.32F, 0.0F, 1.0F);
           const float alpha =
               free_space * (0.09F + intensity * 0.29F + pressure * 0.24F + success * 0.12F);
+          const auto layer_tint = base_layer_color(field.layer);
+          constexpr float layer_mix = 0.18F;
           draw->AddRectFilled(ImVec2(std::min(first_screen.x, last_screen.x),
-                                    std::min(first_screen.y, last_screen.y)),
+                                     std::min(first_screen.y, last_screen.y)),
                               ImVec2(std::max(first_screen.x, last_screen.x),
-                                    std::max(first_screen.y, last_screen.y)),
-                              color(red, green, blue, alpha));
+                                     std::max(first_screen.y, last_screen.y)),
+                              color(red * (1.0F - layer_mix) + layer_tint.x * layer_mix,
+                                    green * (1.0F - layer_mix) + layer_tint.y * layer_mix,
+                                    blue * (1.0F - layer_mix) + layer_tint.z * layer_mix, alpha));
         }
       }
     }
@@ -1175,15 +1490,25 @@ void ViewerApp::draw_board_canvas() {
       continue;
     }
     const ImVec2 position = screen(conflict.location);
+    if (clearance) {
+      // Telemetry provides a witness location, not a copper envelope. Keep the marker in
+      // screen units so a clearance deficit cannot be mistaken for a physical shadow radius.
+      constexpr float marker_radius = 6.0F;
+      draw->AddQuad(ImVec2(position.x, position.y - marker_radius),
+                    ImVec2(position.x + marker_radius, position.y),
+                    ImVec2(position.x, position.y + marker_radius),
+                    ImVec2(position.x - marker_radius, position.y),
+                    layer_color(conflict.location.layer, LayerColorRole::clearance), 1.5F);
+      continue;
+    }
     const float radius =
         static_cast<float>(std::clamp(std::abs(static_cast<double>(conflict.clearance_deficit_nm)) /
                                           1'000'000.0 * view_.pixels_per_mm,
                                       7.0, 34.0));
-    const ImU32 fill =
-        clearance ? color(1.0F, 0.35F, 0.22F, 0.24F) : color(1.0F, 0.12F, 0.18F, 0.34F);
+    const auto role = LayerColorRole::conflict;
+    const ImU32 fill = layer_color(conflict.location.layer, role, 0.36F);
     draw->AddCircleFilled(position, radius, fill, 20);
-    draw->AddCircle(position, radius,
-                    clearance ? color(1.0F, 0.48F, 0.28F) : color(1.0F, 0.18F, 0.22F), 20, 2.0F);
+    draw->AddCircle(position, radius, layer_color(conflict.location.layer, role), 20, 2.0F);
   }
 
   for (const auto& [id, route] : displayed.routes()) {
@@ -1193,11 +1518,10 @@ void ViewerApp::draw_board_canvas() {
         route.state == RouteState::current || route.state == RouteState::provisional;
     const bool ripped = route.state == RouteState::ripped_up || route.state == RouteState::removed;
     const bool retained = route.lifecycle == "retained_fallback";
-    if (retained &&
-        (!overlays_.retained_coarse_routes ||
-         (route.family == "river" && !overlays_.river_routes) ||
-         (route.family == "rrt_connect" && !overlays_.rrt_routes) ||
-         (route.family == "hydraulic_erosion" && !overlays_.hydraulic_routes))) {
+    if (retained && (!overlays_.retained_coarse_routes ||
+                     (route.family == "river" && !overlays_.river_routes) ||
+                     (route.family == "rrt_connect" && !overlays_.rrt_routes) ||
+                     (route.family == "hydraulic_erosion" && !overlays_.hydraulic_routes))) {
       continue;
     }
     if ((committed && !overlays_.committed_routes) ||
@@ -1207,7 +1531,7 @@ void ViewerApp::draw_board_canvas() {
     }
     const bool highlighted = displayed.active_net() && route.net == *displayed.active_net();
     const bool quintic_ph = route.geometry == RouteGeometry::quintic_ph &&
-                               route.spline_degree == 5U && route.control_points.size() >= 6U;
+                            route.spline_degree == 5U && route.control_points.size() >= 6U;
     const auto spline_points = quintic_ph && overlays_.ph_curves
                                    ? tessellate_route_quintic_ph(route)
                                    : std::vector<Point>{};
@@ -1221,21 +1545,24 @@ void ViewerApp::draw_board_canvas() {
       const float physical_width = static_cast<float>(static_cast<double>(route.width_nm) /
                                                       1'000'000.0 * view_.pixels_per_mm);
       const float width = std::clamp(physical_width, highlighted ? 3.5F : 2.0F, 12.0F);
-      ImU32 route_color = layer_color(first.layer, ripped ? 0.35F : 0.92F);
+      ImU32 route_color = layer_color(first.layer, LayerColorRole::copper,
+                                      ripped ? 0.35F : 0.92F);
       if (retained && route.family == "rrt_connect") {
-        route_color = color(1.00F, 0.62F, 0.20F, 0.62F);
+        route_color = layer_color(first.layer, LayerColorRole::rrt, 0.68F);
       } else if (retained && route.family == "hydraulic_erosion") {
-        route_color = color(0.20F, 0.95F, 0.48F, 0.70F);
+        route_color = layer_color(first.layer, LayerColorRole::hydraulic, 0.72F);
       } else if (retained && route.family == "river") {
-        route_color = color(0.20F, 0.72F, 1.00F, 0.68F);
+        route_color = layer_color(first.layer, LayerColorRole::river, 0.70F);
       } else if (retained) {
-        route_color = color(0.58F, 0.64F, 0.78F, 0.48F);
+        route_color = layer_color(first.layer, LayerColorRole::retained, 0.54F);
       } else if (active) {
-        route_color = quintic_ph && overlays_.ph_curves ? color(0.88F, 0.44F, 1.00F)
-                      : route.state == RouteState::provisional  ? color(0.20F, 0.94F, 0.92F)
-                                                                : color(1.0F, 0.86F, 0.25F);
+        route_color = quintic_ph && overlays_.ph_curves
+                          ? layer_color(first.layer, LayerColorRole::quintic_ph)
+                      : route.state == RouteState::provisional
+                          ? layer_color(first.layer, LayerColorRole::provisional)
+                          : layer_color(first.layer, LayerColorRole::occupancy_warning);
       } else if (ripped) {
-        route_color = color(1.0F, 0.24F, 0.22F, 0.55F);
+        route_color = layer_color(first.layer, LayerColorRole::ripped, 0.58F);
       }
       if ((route.state == RouteState::provisional || ripped) &&
           !(quintic_ph && overlays_.ph_curves)) {
@@ -1245,17 +1572,20 @@ void ViewerApp::draw_board_canvas() {
       }
     }
     if (quintic_ph && overlays_.ph_controls && !route.control_points.empty()) {
-      const auto control_color = color(0.96F, 0.72F, 1.00F, 0.48F);
       for (std::size_t index = 1U; index < route.control_points.size(); ++index) {
-        if (index % 6U == 0U) continue;
+        if (index % 6U == 0U)
+          continue;
         if (layer_visible(route.control_points[index - 1U].layer)) {
+          const auto control_color = layer_color(route.control_points[index - 1U].layer,
+                                                 LayerColorRole::control, 0.52F);
           add_dashed_line(draw, screen(route.control_points[index - 1U]),
                           screen(route.control_points[index]), control_color, 1.0F, 4.0F);
         }
       }
       for (const auto& control : route.control_points) {
         if (layer_visible(control.layer)) {
-          draw->AddCircleFilled(screen(control), 2.8F, color(0.98F, 0.80F, 1.00F), 10);
+          draw->AddCircleFilled(screen(control), 2.8F,
+                                layer_color(control.layer, LayerColorRole::control), 10);
         }
       }
     }
@@ -1266,8 +1596,8 @@ void ViewerApp::draw_board_canvas() {
         char label[96];
         std::snprintf(label, sizeof(label), "%s  %.2f  %s", route.net.c_str(),
                       priority->second.final_priority, priority->second.staged_class.c_str());
-        draw->AddText(ImVec2(position.x + 6.0F, position.y - 18.0F), color(0.95F, 0.95F, 0.82F),
-                      label);
+        draw->AddText(ImVec2(position.x + 6.0F, position.y - 18.0F),
+                      layer_color(route.points.front().layer, LayerColorRole::control), label);
       }
     }
   }
@@ -1288,21 +1618,28 @@ void ViewerApp::draw_board_canvas() {
     const float radius = static_cast<float>(std::clamp(
         static_cast<double>(via.diameter_nm) / 2'000'000.0 * view_.pixels_per_mm, 4.0, 12.0));
     if (via.state == ViaState::selected) {
-      draw->AddCircleFilled(position, radius, layer_color(via.position.layer));
-      draw->AddCircle(position, radius + 2.0F, layer_color(via.to_layer), 18, 2.0F);
+      draw->AddCircleFilled(position, radius,
+                            layer_color(via.position.layer, LayerColorRole::via_selected));
+      draw->AddCircle(position, radius + 2.0F,
+                      layer_color(via.to_layer, LayerColorRole::via_selected), 18, 2.0F);
     } else if (via.state == ViaState::contested) {
-      draw->AddCircle(position, radius + 3.0F, color(1.0F, 0.24F, 0.82F), 18, 3.0F);
-      draw->AddCircle(position, radius, color(0.95F, 0.78F, 0.24F), 18, 1.5F);
+      draw->AddCircleFilled(position, radius * 0.72F,
+                            layer_color(via.position.layer, LayerColorRole::base, 0.55F), 18);
+      draw->AddCircle(position, radius + 3.0F,
+                      layer_color(via.position.layer, LayerColorRole::via_contested), 18, 3.0F);
+      draw->AddCircle(position, radius,
+                      layer_color(via.to_layer, LayerColorRole::via_contested), 18, 1.5F);
     } else if (via.state == ViaState::rejected) {
-      draw->AddCircle(position, radius, color(0.95F, 0.26F, 0.22F), 16, 1.5F);
+      const auto rejected = layer_color(via.position.layer, LayerColorRole::via_rejected);
+      draw->AddCircle(position, radius, rejected, 16, 1.5F);
       draw->AddLine(ImVec2(position.x - radius, position.y - radius),
-                    ImVec2(position.x + radius, position.y + radius), color(0.95F, 0.26F, 0.22F),
-                    1.5F);
+                    ImVec2(position.x + radius, position.y + radius), rejected, 1.5F);
       draw->AddLine(ImVec2(position.x - radius, position.y + radius),
-                    ImVec2(position.x + radius, position.y - radius), color(0.95F, 0.26F, 0.22F),
-                    1.5F);
+                    ImVec2(position.x + radius, position.y - radius), rejected, 1.5F);
     } else {
-      draw->AddCircle(position, radius, color(0.60F, 0.78F, 0.92F, 0.80F), 16, 1.5F);
+      draw->AddCircle(position, radius,
+                      layer_color(via.position.layer, LayerColorRole::via_candidate, 0.84F), 16,
+                      1.5F);
     }
   }
 
@@ -1314,6 +1651,8 @@ void ViewerApp::draw_board_canvas() {
                   color(0.55F, 0.64F, 0.70F), text);
   }
 
+  // Keep the working-region boundary visible above opaque heatmaps and board primitives.
+  draw_active_region();
   draw->PopClipRect();
   draw->AddText(ImVec2(canvas_origin.x + 10.0F, canvas_origin.y + 8.0F), color(0.67F, 0.74F, 0.79F),
                 "Right-drag: pan   Wheel: zoom   Ctrl+wheel: UI scale   F: fit");
@@ -1323,6 +1662,22 @@ void ViewerApp::draw_metrics_panel() {
   ImGui::TextUnformatted("Pathfinder / routing metrics");
   ImGui::Separator();
   const telemetry::LiveState& current = state();
+  if (current.progress()) {
+    const auto& progress = *current.progress();
+    ImGui::Text("Phase: %s", progress.phase.c_str());
+    ImGui::SameLine();
+    ImGui::TextDisabled("work %llu  elapsed %s", static_cast<unsigned long long>(progress.work_units),
+                        format_age_us(progress.elapsed_us).c_str());
+  } else {
+    ImGui::TextDisabled("Phase: awaiting progress checkpoint");
+  }
+  const auto metrics_age = freshness_age_us(current.last_metrics_time_us(), true);
+  const auto geometry_age = freshness_age_us(current.last_geometry_time_us(), false);
+  ImGui::TextDisabled("Metrics age: %s", metrics_age ? format_age_us(*metrics_age).c_str()
+                                                       : "awaiting checkpoint");
+  ImGui::SameLine();
+  ImGui::TextDisabled("Geometry age: %s", geometry_age ? format_age_us(*geometry_age).c_str()
+                                                         : "awaiting geometry update");
   if (current.metrics()) {
     const telemetry::IterationMetrics& metrics = *current.metrics();
     if (ImGui::BeginTable("routing-metrics-grid", 2,
@@ -1334,11 +1689,19 @@ void ViewerApp::draw_metrics_panel() {
       metric_row("Nets routed", metrics.routed_nets);
       metric_row("Nets unrouted", metrics.unrouted_nets);
       metric_row("Nets total", metrics.total_nets);
+      metric_row("Groups routed", metrics.routed_groups);
+      metric_row("Groups unrouted", metrics.unrouted_groups);
+      metric_row("Groups total", metrics.total_groups);
       metric_row("Sampled overflow", metrics.sampled_overflow);
       metric_row("Corridor overflow", metrics.corridor_overflow);
       metric_row("Physical overflow", metrics.physical_overflow_nm, " nm");
-      metric_row("Clearance shadows", metrics.clearance_shadow_conflicts);
+      metric_row("Shadow witnesses", metrics.clearance_shadow_conflicts);
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Planning clearance witnesses; one physical interaction may produce several. Not a KiCad DRC violation count.");
       metric_row("Regional conflicts", metrics.regional_conflicts);
+      metric_row("Unresolved packing obligations", metrics.unresolved_packing_obligations);
+      metric_row("Packing budget exhausted",
+                 metrics.packing_obligation_budget_exhausted ? 1U : 0U);
       metric_row("Route cost", metrics.route_cost);
       metric_row("Search expansions", metrics.search_expansions);
       metric_row("Vias", metrics.vias);
@@ -1358,6 +1721,30 @@ void ViewerApp::draw_metrics_panel() {
   }
 
   draw_history_plot(current.iteration_history());
+
+  if (ImGui::CollapsingHeader("Logged diagnostics")) {
+    if (current.logged_diagnostics().empty()) {
+      ImGui::TextDisabled("No numeric key=value search summaries received.");
+    } else if (ImGui::BeginTable("logged-diagnostics", 4,
+                                 ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
+                                     ImGuiTableFlags_ScrollY,
+                                 ImVec2(0.0F, 130.0F))) {
+      ImGui::TableSetupColumn("Key");
+      ImGui::TableSetupColumn("Value");
+      ImGui::TableSetupColumn("Scope");
+      ImGui::TableSetupColumn("Updated (s)");
+      ImGui::TableHeadersRow();
+      for (const auto& [key, diagnostic] : current.logged_diagnostics()) {
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted(key.c_str());
+        ImGui::TableSetColumnIndex(1); ImGui::Text("%.6g", diagnostic.value);
+        ImGui::TableSetColumnIndex(2); ImGui::TextUnformatted(diagnostic.scope.c_str());
+        ImGui::TableSetColumnIndex(3);
+        ImGui::Text("%.3f", static_cast<double>(diagnostic.updated_time_us) / 1'000'000.0);
+      }
+      ImGui::EndTable();
+    }
+  }
 
   if (ImGui::CollapsingHeader("Routing priority", ImGuiTreeNodeFlags_DefaultOpen)) {
     if (ImGui::BeginTable("priority-table", 4,
@@ -1433,12 +1820,14 @@ void ViewerApp::draw_metrics_panel() {
       ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch, 1.0F);
       metric_row("Produced", counters.produced);
       metric_row("Dropped", counters.dropped);
+      metric_row("Transport drops", counters.transport_dropped);
       metric_row("Coalesced", counters.coalesced);
       metric_row("Serialized", counters.serialized);
       metric_row("Snapshots", counters.snapshots);
       metric_row("Observed gaps", current.observed_sequence_gaps());
       const ConnectionStatus connection = client_.status();
       metric_row("Viewer drops", connection.viewer_dropped_events);
+      metric_row("State budget rejections", current.dropped_oversized_geometry_updates());
       ImGui::EndTable();
     }
   }
@@ -1449,25 +1838,32 @@ void ViewerApp::draw_activity_panel() {
   ImGui::SameLine();
   ImGui::TextDisabled("semantic milestones and bounded debug summaries");
   ImGui::Separator();
-  if (ImGui::BeginTable("activity-table", 4,
+  if (ImGui::BeginTable("activity-table", 5,
                         ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
                             ImGuiTableFlags_ScrollY)) {
+    ImGui::TableSetupColumn("Session", ImGuiTableColumnFlags_WidthFixed, 58.0F);
     ImGui::TableSetupColumn("Seq", ImGuiTableColumnFlags_WidthFixed, 72.0F);
     ImGui::TableSetupColumn("Time", ImGuiTableColumnFlags_WidthFixed, 88.0F);
     ImGui::TableSetupColumn("Event", ImGuiTableColumnFlags_WidthFixed, 190.0F);
     ImGui::TableSetupColumn("Detail", ImGuiTableColumnFlags_WidthStretch);
     ImGui::TableHeadersRow();
-    for (auto activity_it = state().activity().crbegin(); activity_it != state().activity().crend();
-         ++activity_it) {
+    for (auto activity_it = overlay_state().activity().crbegin();
+         activity_it != overlay_state().activity().crend(); ++activity_it) {
       const telemetry::Activity& activity = *activity_it;
       ImGui::TableNextRow();
       ImGui::TableSetColumnIndex(0);
-      ImGui::Text("%llu", static_cast<unsigned long long>(activity.sequence));
+      if (activity.session_generation == 0U) {
+        ImGui::TextUnformatted("-");
+      } else {
+        ImGui::Text("%llu", static_cast<unsigned long long>(activity.session_generation));
+      }
       ImGui::TableSetColumnIndex(1);
-      ImGui::Text("%.3f", static_cast<double>(activity.monotonic_time_us) / 1'000'000.0);
+      ImGui::Text("%llu", static_cast<unsigned long long>(activity.sequence));
       ImGui::TableSetColumnIndex(2);
-      ImGui::TextUnformatted(telemetry::to_string(activity.type).data());
+      ImGui::Text("%.3f", static_cast<double>(activity.monotonic_time_us) / 1'000'000.0);
       ImGui::TableSetColumnIndex(3);
+      ImGui::TextUnformatted(telemetry::to_string(activity.type).data());
+      ImGui::TableSetColumnIndex(4);
       ImGui::TextUnformatted(activity.message.c_str());
     }
     ImGui::EndTable();
@@ -1480,8 +1876,8 @@ void ViewerApp::open_file_browser(bool save_mode) {
   file_browser_.title = save_mode ? "Record telemetry trace" : "Open telemetry trace";
   std::filesystem::path initial;
   if (options_.preferences) {
-    initial = save_mode ? options_.preferences->record_directory
-                        : options_.preferences->trace_directory;
+    initial =
+        save_mode ? options_.preferences->record_directory : options_.preferences->trace_directory;
   }
   const auto& current = save_mode ? record_path_ : trace_path_;
   std::error_code error;
@@ -1491,13 +1887,16 @@ void ViewerApp::open_file_browser(bool save_mode) {
                                                                  : current_path.parent_path();
     error.clear();
   }
-  if (initial.empty()) initial = std::filesystem::current_path(error);
-  if (initial.empty() || error) initial = std::filesystem::temp_directory_path(error);
+  if (initial.empty())
+    initial = std::filesystem::current_path(error);
+  if (initial.empty() || error)
+    initial = std::filesystem::temp_directory_path(error);
   file_browser_.directory = initial;
   file_browser_.directory_input = initial.string();
   if (save_mode) {
     file_browser_.save_name = std::filesystem::path{record_path_}.filename().string();
-    if (file_browser_.save_name.empty()) file_browser_.save_name = "flux-telemetry.jsonl";
+    if (file_browser_.save_name.empty())
+      file_browser_.save_name = "flux-telemetry.jsonl";
   }
   file_browser_.open = true;
   file_browser_.open_requested = true;
@@ -1524,7 +1923,8 @@ void ViewerApp::refresh_file_browser() {
       continue;
     }
     const auto name = entry.path().filename().string();
-    if (!directory_entry && lowercase(entry.path().extension().string()) != ".jsonl") continue;
+    if (!directory_entry && lowercase(entry.path().extension().string()) != ".jsonl")
+      continue;
     file_browser_.entries.push_back(FileBrowserEntry{entry.path(), name, directory_entry});
   }
   if (error) {
@@ -1533,11 +1933,12 @@ void ViewerApp::refresh_file_browser() {
   }
   std::sort(file_browser_.entries.begin(), file_browser_.entries.end(),
             [](const auto& lhs, const auto& rhs) {
-              if (lhs.directory != rhs.directory) return lhs.directory > rhs.directory;
+              if (lhs.directory != rhs.directory)
+                return lhs.directory > rhs.directory;
               return lowercase(lhs.name) < lowercase(rhs.name);
             });
-  file_browser_.status = std::to_string(file_browser_.entries.size()) +
-                         " directories and JSONL traces";
+  file_browser_.status =
+      std::to_string(file_browser_.entries.size()) + " directories and JSONL traces";
 }
 
 void ViewerApp::draw_file_browser() {
@@ -1545,7 +1946,8 @@ void ViewerApp::draw_file_browser() {
     ImGui::OpenPopup(file_browser_.title.c_str());
     file_browser_.open_requested = false;
   }
-  if (!file_browser_.open) return;
+  if (!file_browser_.open)
+    return;
 
   ImGui::SetNextWindowSize(ImVec2(780.0F, 540.0F), ImGuiCond_FirstUseEver);
   bool keep_open = true;
@@ -1572,14 +1974,16 @@ void ViewerApp::draw_file_browser() {
     }
   }
   ImGui::SameLine();
-  if (ImGui::Button("Refresh")) refresh_file_browser();
+  if (ImGui::Button("Refresh"))
+    refresh_file_browser();
   ImGui::TextDisabled("%s", file_browser_.status.c_str());
   ImGui::Separator();
 
   const float footer_rows = file_browser_.save_mode ? 2.0F : 1.0F;
   const float footer_height = ImGui::GetFrameHeightWithSpacing() * footer_rows + 18.0F;
-  ImGui::BeginChild("file-browser-list", ImVec2(0.0F, std::max(220.0F,
-                     ImGui::GetContentRegionAvail().y - footer_height)), true);
+  ImGui::BeginChild(
+      "file-browser-list",
+      ImVec2(0.0F, std::max(220.0F, ImGui::GetContentRegionAvail().y - footer_height)), true);
   std::optional<std::filesystem::path> navigate_to;
   for (const auto& entry : file_browser_.entries) {
     const bool selected = file_browser_.selected == entry.path;
@@ -1587,7 +1991,8 @@ void ViewerApp::draw_file_browser() {
                               "##" + entry.path.string();
     if (ImGui::Selectable(label.c_str(), selected, ImGuiSelectableFlags_AllowDoubleClick)) {
       file_browser_.selected = entry.path;
-      if (file_browser_.save_mode && !entry.directory) file_browser_.save_name = entry.name;
+      if (file_browser_.save_mode && !entry.directory)
+        file_browser_.save_name = entry.name;
       if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
         if (entry.directory) {
           navigate_to = entry.path;
@@ -1620,7 +2025,8 @@ void ViewerApp::draw_file_browser() {
         !file_browser_.selected.empty() &&
         !std::filesystem::is_directory(file_browser_.selected, selected_error) && !selected_error;
     ImGui::BeginDisabled(!selected_file);
-    if (ImGui::Button("Open trace", ImVec2(140.0F, 0.0F))) chosen = file_browser_.selected;
+    if (ImGui::Button("Open trace", ImVec2(140.0F, 0.0F)))
+      chosen = file_browser_.selected;
     ImGui::EndDisabled();
     ImGui::SameLine();
     if (ImGui::Button("Open this directory", ImVec2(170.0F, 0.0F))) {
@@ -1628,11 +2034,14 @@ void ViewerApp::draw_file_browser() {
     }
   }
   ImGui::SameLine();
-  if (ImGui::Button("Cancel", ImVec2(100.0F, 0.0F))) keep_open = false;
+  if (ImGui::Button("Cancel", ImVec2(100.0F, 0.0F)))
+    keep_open = false;
 
   if (chosen) {
-    if (file_browser_.save_mode) start_recording(*chosen);
-    else load_trace(*chosen);
+    if (file_browser_.save_mode)
+      start_recording(*chosen);
+    else
+      load_trace(*chosen);
     keep_open = false;
   }
   if (!keep_open) {
@@ -1718,6 +2127,8 @@ void ViewerApp::draw() {
 
     ImGui::TableSetColumnIndex(2);
     ImGui::BeginChild("metrics", ImVec2(0.0F, 0.0F));
+    draw_legend_panel();
+    ImGui::Spacing();
     draw_metrics_panel();
     ImGui::EndChild();
     ImGui::EndTable();

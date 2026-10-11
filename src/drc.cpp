@@ -1,5 +1,6 @@
 #include "flux/core/drc.hpp"
 
+#include "flux/core/bezier_copper.hpp"
 #include "flux/core/copper_geometry.hpp"
 #include "flux/core/geometry.hpp"
 #include "flux/core/keepout_geometry.hpp"
@@ -81,7 +82,35 @@ void add_violation(CopperDrcReport& report, CopperViolationKind kind, std::strin
 
 [[nodiscard]] bool selected_for_dynamic_check(const std::set<std::string>* selected,
                                               const ObjectId& first,
-                                              const ObjectId* second = nullptr) {
+                                              const ObjectId* second = nullptr);
+
+void remap_bezier_proxy_ids(CopperDrcReport& report,
+                            const std::map<std::string, ObjectId>& proxy_sources) {
+  for (auto& violation : report.violations) {
+    for (auto& id : violation.object_ids) {
+      if (const auto found = proxy_sources.find(id); found != proxy_sources.end()) id = found->second.value();
+    }
+    std::sort(violation.object_ids.begin(), violation.object_ids.end());
+    violation.object_ids.erase(std::unique(violation.object_ids.begin(), violation.object_ids.end()),
+                               violation.object_ids.end());
+  }
+}
+
+void check_bezier_fabrication_minimums(const Board& board, CopperDrcReport& report,
+                                       const std::set<std::string>* selected = nullptr) {
+  const auto minimum = static_cast<long double>(board.rules.minimum_track_width.value());
+  if (minimum <= 0.0L) return;
+  for (const auto& curve : board.track_beziers) {
+    if (selected_for_dynamic_check(selected, curve.id) && curve.width.value() < minimum) {
+      add_violation(report, CopperViolationKind::track_width, "track_bezier_width", {curve.id.value()},
+                    minimum, static_cast<long double>(curve.width.value()));
+    }
+  }
+}
+
+[[nodiscard]] bool selected_for_dynamic_check(const std::set<std::string>* selected,
+                                              const ObjectId& first,
+                                              const ObjectId* second) {
   return selected == nullptr || selected->contains(first.value()) ||
          (second != nullptr && selected->contains(second->value()));
 }
@@ -249,7 +278,54 @@ void check_hole_clearance(const Board& board, const std::vector<CopperPadShape>&
     const auto remaining = std::numeric_limits<std::uint64_t>::max() - result;
     result += length > remaining ? remaining : length;
   }
+  for (const auto& curve : board.track_beziers) {
+    if (curve.net != net) continue;
+    const auto flattened = tessellate_track_bezier(curve);
+    if (!flattened.certified) return std::numeric_limits<std::uint64_t>::max();
+    for (const auto& segment : flattened.segments) {
+      const auto length = geometry::segment_length_nm(segment.start, segment.end);
+      const auto remaining = std::numeric_limits<std::uint64_t>::max() - result;
+      result += length > remaining ? remaining : length;
+    }
+  }
   return result;
+}
+
+// Chord lengths are useful estimates, but must not certify differential skew for curved copper.
+void check_bezier_skew(const Board& board, CopperDrcReport& report,
+                       const std::set<std::string>* selected = nullptr) {
+  std::set<NetId> touched;
+  const auto collect = [&](const auto& objects) {
+    for (const auto& object : objects)
+      if (selected == nullptr || selected->contains(object.id.value())) touched.insert(object.net);
+  };
+  collect(board.tracks); collect(board.track_arcs); collect(board.track_beziers); collect(board.vias);
+  Board straight = board;
+  straight.track_beziers.clear();
+  const auto interval = [&](const NetId& net) {
+    long double lower = routed_length_impl(straight, net), upper = lower;
+    for (const auto& curve : board.track_beziers) {
+      if (curve.net != net) continue;
+      const auto flattened = tessellate_track_bezier(curve);
+      if (!flattened.certified) return std::pair{0.0L, std::numeric_limits<long double>::infinity()};
+      lower += std::max(0.0L, flattened.length_lower_nm - 1.0L);
+      upper += flattened.length_upper_nm + 1.0L;
+    }
+    return std::pair{lower, upper};
+  };
+  for (const auto& pair : board.differential_pairs) {
+    if (!pair.maximum_skew || (!touched.contains(pair.positive_net) && !touched.contains(pair.negative_net))) continue;
+    std::erase_if(report.violations, [&](const auto& violation) {
+      return violation.kind == CopperViolationKind::differential_pair_skew &&
+             std::find(violation.object_ids.begin(), violation.object_ids.end(), pair.id.value()) != violation.object_ids.end();
+    });
+    const auto positive = interval(pair.positive_net), negative = interval(pair.negative_net);
+    const auto worst = std::max(std::abs(positive.second - negative.first),
+                                std::abs(negative.second - positive.first));
+    if (worst > pair.maximum_skew->value())
+      add_violation(report, CopperViolationKind::differential_pair_skew, "differential_pair_skew",
+                    {pair.id.value()}, pair.maximum_skew->value(), worst);
+  }
 }
 
 void check_board_edge(const Board& board, const std::vector<CopperPadShape>& pads,
@@ -329,6 +405,24 @@ void check_board_edge(const Board& board, const std::vector<CopperPadShape>& pad
 } // namespace
 
 CopperDrcReport check_copper_rules(const Board& board) {
+  if (!board.track_beziers.empty()) {
+    const auto flattened = flatten_board_beziers_conservatively(board);
+    CopperDrcReport report = check_copper_rules(flattened.board);
+    remap_bezier_proxy_ids(report, flattened.proxy_sources);
+    check_bezier_fabrication_minimums(board, report);
+    check_bezier_skew(board, report);
+    if (!flattened.certified) {
+      for (const auto& curve : board.track_beziers) {
+        const auto represented = std::any_of(flattened.proxy_sources.begin(), flattened.proxy_sources.end(),
+                                             [&curve](const auto& entry) { return entry.second == curve.id; });
+        if (!tessellate_track_bezier(curve).certified || !represented) {
+          add_violation(report, CopperViolationKind::copper_outside_board,
+                        "unsupported_track_bezier_geometry", {curve.id.value()}, 0.0L, 0.0L);
+        }
+      }
+    }
+    return report;
+  }
   CopperDrcReport report;
   const auto clearance = [&board](const NetId& lhs, const NetId& rhs) {
     return static_cast<long double>(resolve_pairwise_clearance(board, lhs, rhs).value());
@@ -711,6 +805,31 @@ CopperDrcReport check_copper_rules(const Board& board) {
 
 CopperDrcReport check_dynamic_copper_rules(const Board& board,
                                            const std::vector<ObjectId>& dynamic_objects) {
+  if (!board.track_beziers.empty()) {
+    const auto flattened = flatten_board_beziers_conservatively(board);
+    std::vector<ObjectId> selected = dynamic_objects;
+    std::set<std::string> requested;
+    for (const auto& id : dynamic_objects) requested.insert(id.value());
+    for (const auto& [proxy, source] : flattened.proxy_sources) {
+      if (requested.contains(source.value())) selected.emplace_back(proxy);
+    }
+    CopperDrcReport report = check_dynamic_copper_rules(flattened.board, selected);
+    remap_bezier_proxy_ids(report, flattened.proxy_sources);
+    check_bezier_fabrication_minimums(board, report, &requested);
+    check_bezier_skew(board, report, &requested);
+    if (!flattened.certified) {
+      for (const auto& curve : board.track_beziers) {
+        const auto represented = std::any_of(flattened.proxy_sources.begin(), flattened.proxy_sources.end(),
+                                             [&curve](const auto& entry) { return entry.second == curve.id; });
+        if (requested.contains(curve.id.value()) &&
+            (!tessellate_track_bezier(curve).certified || !represented)) {
+          add_violation(report, CopperViolationKind::copper_outside_board,
+                        "unsupported_track_bezier_geometry", {curve.id.value()}, 0.0L, 0.0L);
+        }
+      }
+    }
+    return report;
+  }
   CopperDrcReport report;
   std::set<std::string> selected;
   for (const auto& id : dynamic_objects) {
@@ -1076,6 +1195,43 @@ CopperDrcReport check_dynamic_copper_rules(const Board& board,
       continue;
     }
     check_via_edge(lhs);
+    // Track/via and arc/via rules are normally evaluated from the track/arc side. In a bounded
+    // proposal check that side may be immutable and therefore unselected, so visit the symmetric
+    // relationship here. Skip selected tracks/arcs because their loops above already reported the
+    // same physical pair.
+    for (const auto& track : board.tracks) {
+      if (is_selected(track.id) || lhs.net == track.net ||
+          !contains_layer(lhs.layers, track.layer) ||
+          !possible_interaction(lhs.id, track.id)) {
+        continue;
+      }
+      const auto actual = geometry::point_segment_distance_nm(lhs.position, track.start, track.end);
+      const auto required = (static_cast<long double>(lhs.diameter.value()) +
+                             static_cast<long double>(track.width.value())) /
+                                2.0L +
+                            clearance(lhs.net, track.net);
+      if (actual < required) {
+        add_violation(report, CopperViolationKind::track_via_clearance, "track_via_clearance",
+                      {track.id.value(), lhs.id.value()}, required, actual);
+      }
+    }
+    for (const auto& arc : board.track_arcs) {
+      if (is_selected(arc.id) || lhs.net == arc.net || !contains_layer(lhs.layers, arc.layer) ||
+          !possible_interaction(lhs.id, arc.id)) {
+        continue;
+      }
+      const auto actual = geometry::point_circular_arc_distance_nm(
+          lhs.position, arc.start, arc.middle, arc.end);
+      const auto required = (static_cast<long double>(lhs.diameter.value()) +
+                             static_cast<long double>(arc.width.value())) /
+                                2.0L +
+                            clearance(lhs.net, arc.net);
+      if (actual < required) {
+        add_violation(report, CopperViolationKind::track_via_clearance,
+                      "track_arc_via_clearance", {arc.id.value(), lhs.id.value()}, required,
+                      actual);
+      }
+    }
     for (const auto& rhs : board.vias) {
       if (lhs.id == rhs.id || lhs.net == rhs.net || !share_layer(lhs.layers, rhs.layers) ||
           !possible_interaction(lhs.id, rhs.id)) {

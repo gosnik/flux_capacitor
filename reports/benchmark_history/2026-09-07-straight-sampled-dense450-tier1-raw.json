@@ -1,0 +1,34 @@
+{
+  "artifacts": [
+    {
+      "bytes": 4705,
+      "path": "run-metadata.json",
+      "sha256": "d2a3cb5277ea050ebb72c5a092a41e2b65870079ee2172be36b041ac20ab1bc0"
+    },
+    {
+      "bytes": 912,
+      "path": "tier-1-bm_svf/analysis/global/failed-route-previews.json",
+      "sha256": "aa9601d88bdcbbc4434d226affad45030afa3c311ef575f66007607959b28606"
+    },
+    {
+      "bytes": 212484,
+      "path": "tier-1-bm_svf/analysis/global/near-00-window--1/copper-00-B_Cu.png",
+      "sha256": "645992e37f3ac8ac126421e587641048c9768ef8a47576f34e43febe3a580177"
+    },
+    {
+      "bytes": 254173,
+      "path": "tier-1-bm_svf/analysis/global/near-00-window--1/copper-01-F_Cu.png",
+      "sha256": "d93947d5ca0a1bb36ae22eb95a626a99d506b5c90caf14e8e90ff9934b0befd1"
+    },
+    {
+      "bytes": 16211977,
+      "path": "tier-1-bm_svf/telemetry/bm_svf-global.jsonl",
+      "sha256": "5d8388a0d4340ab250b67e81dce22d4ffb4acb8ac41a41e1648487a9749c6d39"
+    }
+  ],
+  "boards": [],
+  "diagnostic": "Command '['/home/adam/qtbits/flux_capacitor/build/dev/flux-cli', 'route-kicad', '/home/adam/qtbits/flux_capacitor/tests/fixtures/routing-corpus/bm_svf.kicad_pcb', '--max-router-iterations', '30', '--max-expansions', '50000', '--max-static-seed-workers', '2', '--search-diversification', '--crossing-safe-diagonal-grid', '--grid-pitch-nm', '450000', '--xpbd-relaxation', '--xpbd-feedback', '--atomic-net-trees', '--terminal-escape-proximity-cost', '500', '--dense-candidate-grid', '--physical-feedback-retries', '0', '--feedback-shadow-policy', 'enforced', '--no-full-strength-first-pass', '--telemetry-level', 'diagnostic', '--telemetry-record', '/home/adam/qtbits/flux_capacitor/build/straight-sampled-dense450-tier1/tier-1-bm_svf/telemetry/bm_svf-global.jsonl']' timed out after 600 seconds",
+  "schema": "flux_routing_baseline_result",
+  "schema_version": 1,
+  "status": "failed"
+}

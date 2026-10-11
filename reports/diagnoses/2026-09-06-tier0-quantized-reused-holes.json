@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "board": "pt2399_delay",
+  "tier": 0,
+  "artifact": "build/tier0-terminal-membership-v23-20260906",
+  "failing_stage": "quantized diagnostic copper: source vertical feature identity lost during rounding",
+  "nets": ["kicad-net-16", "kicad-net-3"],
+  "layers": ["F.Cu", "B.Cu"],
+  "source_transition_sites_nm": [[20040000, 51500000], [35540000, 57000000]],
+  "quantized_violation_sites_nm": [[20000000, 51500000], [35500000, 57000000]],
+  "raw_drc_counts": {"hole_to_hole_clearance": 2},
+  "opens": 0,
+  "mechanism": "Quantization protects only path endpoints. An interior transition at an existing plated through-pad moves by 40 micrometres; exact reusable_transition lookup then misses the source hole and emits a new via next to it.",
+  "classification": "Diagnostic physical realisation defect, not evidence that a new via location is required. Separately, detailed routing is blocked by 11 unrounded non-junction bends.",
+  "ranked_candidates": [
+    "Preserve exact source-owned reusable transition sites as immutable quantization anchors after checking net, plating/drill and participating layers.",
+    "Snap near existing holes back after quantization; rejected because proximity alone does not prove intended transition ownership.",
+    "Relocate the duplicate via; rejected because the original path intentionally reused a legal existing vertical feature."
+  ],
+  "experiment": "Add source-via and plated-pad interior-anchor micro-tests, including negative checks for wrong-net, unplated and insufficient-layer features. Preserve every coincident point of an anchored chain together.",
+  "success": "The oracle reuses source holes without adding duplicate vias, with exact DRC and connectivity intact. No clearance rule changes.",
+  "tier_promoted": false
+}

@@ -1,0 +1,19 @@
+{
+  "artifacts": [
+    {
+      "bytes": 4722,
+      "path": "run-metadata.json",
+      "sha256": "819734e1fafd0b6ee1f0e26db67ce5fe1dadcf04437935d650f7e21f9600b4e1"
+    },
+    {
+      "bytes": 16262933,
+      "path": "tier-1-bm_svf/telemetry/bm_svf-global.jsonl",
+      "sha256": "8a74b77ed95baf49ba39dfbb76c96b94501ec241a4041ea4b8262f92599c35a2"
+    }
+  ],
+  "boards": [],
+  "diagnostic": "command failed (-15): /home/adam/qtbits/flux_capacitor/build/dev/flux-cli route-kicad /home/adam/qtbits/flux_capacitor/tests/fixtures/routing-corpus/bm_svf.kicad_pcb --max-router-iterations 30 --max-expansions 50000 --max-static-seed-workers 2 --search-diversification --crossing-safe-diagonal-grid --direct-medial --grid-pitch-nm 650000 --xpbd-relaxation --xpbd-feedback --atomic-net-trees --hard-capacity-start-iteration 4 --max-hard-capacity-ripup-attempts-per-pass 8 --max-hard-capacity-ripup-nets-per-attempt 8 --max-hard-capacity-conflict-set-states-per-attempt 256 --terminal-escape-proximity-cost 500 --rollback-failed-hard-capacity-ripup --defer-hard-capacity-ripup-victims-to-pass-tail --protect-recovered-hard-capacity-ripup-nets --telemetry-level diagnostic --telemetry-record /home/adam/qtbits/flux_capacitor/build/straight-deferred-tier1/tier-1-bm_svf/telemetry/bm_svf-global.jsonl\nstdout:\n\nstderr:\n",
+  "schema": "flux_routing_baseline_result",
+  "schema_version": 1,
+  "status": "failed"
+}

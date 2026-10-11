@@ -1,0 +1,191 @@
+{
+  "board": "bm_svf",
+  "tier": 1,
+  "outcome": "diagnostic_timeout",
+  "attempt": {
+    "command": [
+      "build/dev/flux-cli",
+      "route-kicad",
+      "tests/fixtures/routing-corpus/bm_svf.kicad_pcb",
+      "--max-router-iterations",
+      "30",
+      "--max-expansions",
+      "50000",
+      "--max-static-seed-workers",
+      "2",
+      "--search-diversification",
+      "--crossing-safe-diagonal-grid",
+      "--direct-medial",
+      "--grid-pitch-nm",
+      "650000",
+      "--xpbd-relaxation",
+      "--xpbd-feedback",
+      "--atomic-net-trees",
+      "--hard-capacity-start-iteration",
+      "4",
+      "--max-hard-capacity-ripup-attempts-per-pass",
+      "8",
+      "--max-hard-capacity-ripup-nets-per-attempt",
+      "8",
+      "--max-hard-capacity-conflict-set-states-per-attempt",
+      "256",
+      "--terminal-escape-proximity-cost",
+      "500",
+      "--rollback-failed-hard-capacity-ripup",
+      "--defer-hard-capacity-ripup-victims-to-pass-tail",
+      "--protect-recovered-hard-capacity-ripup-nets",
+      "--telemetry-level",
+      "diagnostic",
+      "--telemetry-record",
+      "build/frontier-20260905/corrected-tier1/routing.jsonl"
+    ],
+    "source_sha256_before": "308ce5513cb6b2b33820648a0062a54f548f6b3c13d856cdcd9b7c3ac8a20d2a",
+    "cli_sha256": "8b75b54243b4c0df243348d2189d5b38ec9e6f30e0912a82b02d3ff951dfd327",
+    "timeout_seconds": 900,
+    "started_at": "2026-09-05T19:42:09+0800",
+    "qualification": "detailed_complete",
+    "diagnostic_budget_override": true,
+    "returncode": null,
+    "timed_out": true,
+    "duration_seconds": 900.0892894639983,
+    "peak_rss_kib": 622248,
+    "source_sha256_after": "308ce5513cb6b2b33820648a0062a54f548f6b3c13d856cdcd9b7c3ac8a20d2a"
+  },
+  "stage": "global allocation / physical realization mismatch",
+  "observed_topologically_routed_nets": 25,
+  "final_copper_accepted": false,
+  "external_kicad_drc": null,
+  "epochs": [
+    {
+      "seconds": 127.052818,
+      "provisional_quantized_violations": 804,
+      "provisional_opens": 6,
+      "diagnosis_counts_by_category": {
+        "track_pad_clearance": 5,
+        "track_clearance": 54
+      },
+      "sample_pair_witness": {
+        "code": "track_clearance",
+        "conflicts": [
+          {
+            "id": "quantized-copper:quantization_clearance:change_lane_order:B.Cu:48:46:track_clearance:kicad-net-11/0/run:kicad-net-7/0/run:kicad-net-11:kicad-net-7",
+            "kind": "physical",
+            "resource": "quantized-copper:quantization_clearance:change_lane_order:B.Cu:48:46:track_clearance:kicad-net-11/0/run:kicad-net-7/0/run:kicad-net-11:kicad-net-7",
+            "group": "quantized-copper-oracle:quantization_clearance",
+            "location": {
+              "x_nm": 48300000,
+              "y_nm": 46800000,
+              "layer": "B.Cu"
+            },
+            "nets": [
+              "kicad-net-11",
+              "kicad-net-7"
+            ],
+            "clearance_deficit_nm": 450000,
+            "pressure": 10,
+            "history": 0
+          }
+        ]
+      }
+    },
+    {
+      "seconds": 318.495613,
+      "provisional_quantized_violations": 724,
+      "provisional_opens": 8,
+      "diagnosis_counts_by_category": {
+        "track_pad_clearance": 4,
+        "track_clearance": 52
+      },
+      "sample_pair_witness": {
+        "code": "track_clearance",
+        "conflicts": [
+          {
+            "id": "quantized-copper:quantization_clearance:change_lane_order:B.Cu:49:79:track_clearance:kicad-net-16/3/run:kicad-net-8/0/run:kicad-net-16:kicad-net-8",
+            "kind": "physical",
+            "resource": "quantized-copper:quantization_clearance:change_lane_order:B.Cu:49:79:track_clearance:kicad-net-16/3/run:kicad-net-8/0/run:kicad-net-16:kicad-net-8",
+            "group": "quantized-copper-oracle:quantization_clearance",
+            "location": {
+              "x_nm": 49600000,
+              "y_nm": 79950000,
+              "layer": "B.Cu"
+            },
+            "nets": [
+              "kicad-net-16",
+              "kicad-net-8"
+            ],
+            "clearance_deficit_nm": 450000,
+            "pressure": 10,
+            "history": 0
+          }
+        ]
+      }
+    },
+    {
+      "seconds": 506.33533,
+      "provisional_quantized_violations": 804,
+      "provisional_opens": 8,
+      "diagnosis_counts_by_category": {
+        "track_pad_clearance": 6,
+        "track_clearance": 52
+      },
+      "sample_pair_witness": {
+        "code": "track_clearance",
+        "conflicts": [
+          {
+            "id": "quantized-copper:quantization_clearance:change_lane_order:B.Cu:48:70:track_clearance:kicad-net-24/0/run:kicad-net-8/0/run:kicad-net-24:kicad-net-8",
+            "kind": "physical",
+            "resource": "quantized-copper:quantization_clearance:change_lane_order:B.Cu:48:70:track_clearance:kicad-net-24/0/run:kicad-net-8/0/run:kicad-net-24:kicad-net-8",
+            "group": "quantized-copper-oracle:quantization_clearance",
+            "location": {
+              "x_nm": 48300000,
+              "y_nm": 70550000,
+              "layer": "B.Cu"
+            },
+            "nets": [
+              "kicad-net-24",
+              "kicad-net-8"
+            ],
+            "clearance_deficit_nm": 450000,
+            "pressure": 10,
+            "history": 0
+          }
+        ]
+      }
+    },
+    {
+      "seconds": 746.441347,
+      "provisional_quantized_violations": 885,
+      "provisional_opens": 4,
+      "diagnosis_counts_by_category": {
+        "track_pad_clearance": 8,
+        "track_clearance": 52
+      },
+      "sample_pair_witness": {
+        "code": "track_clearance",
+        "conflicts": [
+          {
+            "id": "quantized-copper:quantization_clearance:change_lane_order:B.Cu:48:82:track_clearance:kicad-net-11/0/run:kicad-net-5/0/run:kicad-net-11:kicad-net-5",
+            "kind": "physical",
+            "resource": "quantized-copper:quantization_clearance:change_lane_order:B.Cu:48:82:track_clearance:kicad-net-11/0/run:kicad-net-5/0/run:kicad-net-11:kicad-net-5",
+            "group": "quantized-copper-oracle:quantization_clearance",
+            "location": {
+              "x_nm": 48300000,
+              "y_nm": 82550000,
+              "layer": "B.Cu"
+            },
+            "nets": [
+              "kicad-net-11",
+              "kicad-net-5"
+            ],
+            "clearance_deficit_nm": 450000,
+            "pressure": 10,
+            "history": 0
+          }
+        ]
+      }
+    }
+  ],
+  "interpretation": "Zero sampled/corridor overflow and all-net path allocation coexist with hundreds of exact provisional copper violations and open connections; physical feasibility has not converged. Counts by category describe coalesced diagnoses, not raw DRC totals.",
+  "reference_oracle": "reports/krt_bm_svf_comparison_2026-09-05.md",
+  "next_work": "Restore full Tier-0 physical legality first; then inspect unaccepted packed-lane transitions and exact conflict attribution on this frontier."
+}

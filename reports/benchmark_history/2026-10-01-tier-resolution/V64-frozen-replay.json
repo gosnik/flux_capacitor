@@ -1,0 +1,407 @@
+{
+  "schema": 1,
+  "qualification": false,
+  "context": "build/tier-resolution-20261001-v64/frozen-context/window-0-frozen.json",
+  "context_sha256": "50dbf7b8e9d3fdc51cf9b66c30fda5cf995e29c778106f8961597922e1482397",
+  "before_elapsed_s": 0.13,
+  "after_elapsed_s": 1.97,
+  "variants": [
+    {
+      "configuration": {
+        "forward_checking": false,
+        "resource_forward_checking": false,
+        "local_channel_occupancy": false,
+        "shared_channel_copper": false,
+        "centerline_channel_cuts": false
+      },
+      "before": {
+        "states": 256,
+        "choices": 197,
+        "elapsed_us": 2638,
+        "access_pruned": 0
+      },
+      "after": {
+        "states": 256,
+        "choices": 197,
+        "elapsed_us": 2001,
+        "access_pruned": 0,
+        "frozen_copper_via_pruned": 0
+      }
+    },
+    {
+      "configuration": {
+        "forward_checking": true,
+        "resource_forward_checking": false,
+        "local_channel_occupancy": false,
+        "shared_channel_copper": false,
+        "centerline_channel_cuts": false
+      },
+      "before": {
+        "states": 256,
+        "choices": 24,
+        "elapsed_us": 9439,
+        "access_pruned": 9
+      },
+      "after": {
+        "states": 256,
+        "choices": 20,
+        "elapsed_us": 243760,
+        "access_pruned": 26,
+        "frozen_copper_via_pruned": 17
+      }
+    },
+    {
+      "configuration": {
+        "forward_checking": true,
+        "resource_forward_checking": true,
+        "local_channel_occupancy": false,
+        "shared_channel_copper": false,
+        "centerline_channel_cuts": false
+      },
+      "before": {
+        "states": 256,
+        "choices": 24,
+        "elapsed_us": 9369,
+        "access_pruned": 9
+      },
+      "after": {
+        "states": 256,
+        "choices": 29,
+        "elapsed_us": 301779,
+        "access_pruned": 21,
+        "frozen_copper_via_pruned": 9
+      }
+    },
+    {
+      "configuration": {
+        "forward_checking": false,
+        "resource_forward_checking": false,
+        "local_channel_occupancy": true,
+        "shared_channel_copper": false,
+        "centerline_channel_cuts": false
+      },
+      "before": {
+        "states": 256,
+        "choices": 197,
+        "elapsed_us": 2148,
+        "access_pruned": 0
+      },
+      "after": {
+        "states": 256,
+        "choices": 197,
+        "elapsed_us": 1561,
+        "access_pruned": 0,
+        "frozen_copper_via_pruned": 0
+      }
+    },
+    {
+      "configuration": {
+        "forward_checking": true,
+        "resource_forward_checking": false,
+        "local_channel_occupancy": true,
+        "shared_channel_copper": false,
+        "centerline_channel_cuts": false
+      },
+      "before": {
+        "states": 256,
+        "choices": 24,
+        "elapsed_us": 10529,
+        "access_pruned": 9
+      },
+      "after": {
+        "states": 256,
+        "choices": 0,
+        "elapsed_us": 57862,
+        "access_pruned": 8,
+        "frozen_copper_via_pruned": 8
+      }
+    },
+    {
+      "configuration": {
+        "forward_checking": true,
+        "resource_forward_checking": true,
+        "local_channel_occupancy": true,
+        "shared_channel_copper": false,
+        "centerline_channel_cuts": false
+      },
+      "before": {
+        "states": 256,
+        "choices": 24,
+        "elapsed_us": 10902,
+        "access_pruned": 9
+      },
+      "after": {
+        "states": 8,
+        "choices": 0,
+        "elapsed_us": 8116,
+        "access_pruned": 5,
+        "frozen_copper_via_pruned": 5
+      }
+    },
+    {
+      "configuration": {
+        "forward_checking": false,
+        "resource_forward_checking": false,
+        "local_channel_occupancy": false,
+        "shared_channel_copper": true,
+        "centerline_channel_cuts": false
+      },
+      "before": {
+        "states": 256,
+        "choices": 197,
+        "elapsed_us": 2058,
+        "access_pruned": 0
+      },
+      "after": {
+        "states": 256,
+        "choices": 197,
+        "elapsed_us": 1476,
+        "access_pruned": 0,
+        "frozen_copper_via_pruned": 0
+      }
+    },
+    {
+      "configuration": {
+        "forward_checking": true,
+        "resource_forward_checking": false,
+        "local_channel_occupancy": false,
+        "shared_channel_copper": true,
+        "centerline_channel_cuts": false
+      },
+      "before": {
+        "states": 256,
+        "choices": 24,
+        "elapsed_us": 8240,
+        "access_pruned": 9
+      },
+      "after": {
+        "states": 256,
+        "choices": 20,
+        "elapsed_us": 242222,
+        "access_pruned": 26,
+        "frozen_copper_via_pruned": 17
+      }
+    },
+    {
+      "configuration": {
+        "forward_checking": true,
+        "resource_forward_checking": true,
+        "local_channel_occupancy": false,
+        "shared_channel_copper": true,
+        "centerline_channel_cuts": false
+      },
+      "before": {
+        "states": 256,
+        "choices": 24,
+        "elapsed_us": 8273,
+        "access_pruned": 9
+      },
+      "after": {
+        "states": 256,
+        "choices": 29,
+        "elapsed_us": 301789,
+        "access_pruned": 21,
+        "frozen_copper_via_pruned": 9
+      }
+    },
+    {
+      "configuration": {
+        "forward_checking": false,
+        "resource_forward_checking": false,
+        "local_channel_occupancy": true,
+        "shared_channel_copper": true,
+        "centerline_channel_cuts": false
+      },
+      "before": {
+        "states": 256,
+        "choices": 197,
+        "elapsed_us": 1719,
+        "access_pruned": 0
+      },
+      "after": {
+        "states": 256,
+        "choices": 197,
+        "elapsed_us": 1672,
+        "access_pruned": 0,
+        "frozen_copper_via_pruned": 0
+      }
+    },
+    {
+      "configuration": {
+        "forward_checking": true,
+        "resource_forward_checking": false,
+        "local_channel_occupancy": true,
+        "shared_channel_copper": true,
+        "centerline_channel_cuts": false
+      },
+      "before": {
+        "states": 256,
+        "choices": 24,
+        "elapsed_us": 9471,
+        "access_pruned": 9
+      },
+      "after": {
+        "states": 256,
+        "choices": 0,
+        "elapsed_us": 57741,
+        "access_pruned": 8,
+        "frozen_copper_via_pruned": 8
+      }
+    },
+    {
+      "configuration": {
+        "forward_checking": true,
+        "resource_forward_checking": true,
+        "local_channel_occupancy": true,
+        "shared_channel_copper": true,
+        "centerline_channel_cuts": false
+      },
+      "before": {
+        "states": 256,
+        "choices": 24,
+        "elapsed_us": 9584,
+        "access_pruned": 9
+      },
+      "after": {
+        "states": 8,
+        "choices": 0,
+        "elapsed_us": 8287,
+        "access_pruned": 5,
+        "frozen_copper_via_pruned": 5
+      }
+    },
+    {
+      "configuration": {
+        "forward_checking": false,
+        "resource_forward_checking": false,
+        "local_channel_occupancy": true,
+        "shared_channel_copper": false,
+        "centerline_channel_cuts": true
+      },
+      "before": {
+        "states": 256,
+        "choices": 199,
+        "elapsed_us": 1569,
+        "access_pruned": 0
+      },
+      "after": {
+        "states": 256,
+        "choices": 199,
+        "elapsed_us": 1532,
+        "access_pruned": 0,
+        "frozen_copper_via_pruned": 0
+      }
+    },
+    {
+      "configuration": {
+        "forward_checking": true,
+        "resource_forward_checking": false,
+        "local_channel_occupancy": true,
+        "shared_channel_copper": false,
+        "centerline_channel_cuts": true
+      },
+      "before": {
+        "states": 256,
+        "choices": 24,
+        "elapsed_us": 7287,
+        "access_pruned": 9
+      },
+      "after": {
+        "states": 256,
+        "choices": 24,
+        "elapsed_us": 182911,
+        "access_pruned": 11,
+        "frozen_copper_via_pruned": 3
+      }
+    },
+    {
+      "configuration": {
+        "forward_checking": true,
+        "resource_forward_checking": true,
+        "local_channel_occupancy": true,
+        "shared_channel_copper": false,
+        "centerline_channel_cuts": true
+      },
+      "before": {
+        "states": 256,
+        "choices": 24,
+        "elapsed_us": 7243,
+        "access_pruned": 9
+      },
+      "after": {
+        "states": 256,
+        "choices": 24,
+        "elapsed_us": 181967,
+        "access_pruned": 11,
+        "frozen_copper_via_pruned": 3
+      }
+    },
+    {
+      "configuration": {
+        "forward_checking": false,
+        "resource_forward_checking": false,
+        "local_channel_occupancy": true,
+        "shared_channel_copper": true,
+        "centerline_channel_cuts": true
+      },
+      "before": {
+        "states": 256,
+        "choices": 199,
+        "elapsed_us": 1653,
+        "access_pruned": 0
+      },
+      "after": {
+        "states": 256,
+        "choices": 199,
+        "elapsed_us": 1624,
+        "access_pruned": 0,
+        "frozen_copper_via_pruned": 0
+      }
+    },
+    {
+      "configuration": {
+        "forward_checking": true,
+        "resource_forward_checking": false,
+        "local_channel_occupancy": true,
+        "shared_channel_copper": true,
+        "centerline_channel_cuts": true
+      },
+      "before": {
+        "states": 256,
+        "choices": 24,
+        "elapsed_us": 7411,
+        "access_pruned": 9
+      },
+      "after": {
+        "states": 256,
+        "choices": 24,
+        "elapsed_us": 181577,
+        "access_pruned": 11,
+        "frozen_copper_via_pruned": 3
+      }
+    },
+    {
+      "configuration": {
+        "forward_checking": true,
+        "resource_forward_checking": true,
+        "local_channel_occupancy": true,
+        "shared_channel_copper": true,
+        "centerline_channel_cuts": true
+      },
+      "before": {
+        "states": 256,
+        "choices": 24,
+        "elapsed_us": 7452,
+        "access_pruned": 9
+      },
+      "after": {
+        "states": 256,
+        "choices": 24,
+        "elapsed_us": 183544,
+        "access_pruned": 11,
+        "frozen_copper_via_pruned": 3
+      }
+    }
+  ],
+  "interpretation": "Early gate acts in forwardchecking variants; extra search/geometry cost. Zero choices indicates rejected bounded domain, not proof of whole-board unroutability."
+}

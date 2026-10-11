@@ -1,0 +1,23 @@
+{
+  "date": "2026-09-06",
+  "source_revision": "25e3b884be9b359d9c5bf0cc4fbb6cc836fd4f82",
+  "dirty_worktree": true,
+  "router_sha256": "7e973466d637c2c3fd6d1f32bff6a97b5e3127bfafbec2b38ea9a2a53a97d51e",
+  "experiment": "candidate-via local copper context",
+  "regressions": {
+    "command": "ctest --test-dir build/dev -R '^flux_unit_tests$|arc_detour|arc_export|multilayer' --output-on-failure",
+    "passed": 10,
+    "failed": 0,
+    "runtime_seconds": 181.52,
+    "core_runtime_seconds": 150.31,
+    "kicad_drc_fixture_checks_passed": 2
+  },
+  "expanded_micro_test": {
+    "command": "build/dev/tests/flux_unit_tests global_to_detailed_route_is_transactional_and_capacity_gated",
+    "passed": true,
+    "note": "Run after adding plated/unplated reuse and generated-ID collision assertions; routing binary unchanged."
+  },
+  "diff_check": "passed",
+  "performance_note": "Regression checks overlapped the beginning of the frontier benchmark; do not infer a precise routing speedup from this run.",
+  "frontier_status": "900-second timeout; verification is not tier qualification"
+}

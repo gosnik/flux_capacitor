@@ -1,0 +1,114 @@
+{
+  "board": "bm_svf",
+  "tier": 1,
+  "stage": "canonical KiCad import",
+  "mismatched_pad_positions": [
+    {
+      "reference": "U1",
+      "id": "caaeb4b6-eea8-4e68-9678-6f2fed3dcf37",
+      "net": "VACTROL_NEG",
+      "flux": [
+        73152000,
+        67056000
+      ],
+      "kicad": [
+        70612000,
+        67056000
+      ]
+    },
+    {
+      "reference": "U1",
+      "id": "28af5706-5674-4d09-8b25-f27bf989c419",
+      "net": "VACTROL_POS",
+      "flux": [
+        70612000,
+        67056000
+      ],
+      "kicad": [
+        73152000,
+        67056000
+      ]
+    },
+    {
+      "reference": "U1",
+      "id": "e5fe336e-4f87-42b3-89eb-4a1409e3baa9",
+      "net": "Net-(U3A--)",
+      "flux": [
+        73152000,
+        79756000
+      ],
+      "kicad": [
+        70612000,
+        79756000
+      ]
+    },
+    {
+      "reference": "U1",
+      "id": "92d9583c-d8b0-4b1c-8345-241b579e16fc",
+      "net": "Net-(C2-Pad2)",
+      "flux": [
+        70612000,
+        79756000
+      ],
+      "kicad": [
+        73152000,
+        79756000
+      ]
+    },
+    {
+      "reference": "U2",
+      "id": "3c701d15-b295-46f1-b8f6-076b61e8b491",
+      "net": "VACTROL_NEG",
+      "flux": [
+        53721000,
+        67056000
+      ],
+      "kicad": [
+        51181000,
+        67056000
+      ]
+    },
+    {
+      "reference": "U2",
+      "id": "8009b633-5ef5-4551-9c2f-222bc584bba6",
+      "net": "VACTROL_POS",
+      "flux": [
+        51181000,
+        67056000
+      ],
+      "kicad": [
+        53721000,
+        67056000
+      ]
+    },
+    {
+      "reference": "U2",
+      "id": "e3c77767-6b3c-4791-b057-fbf48490f228",
+      "net": "Net-(U4B--)",
+      "flux": [
+        53721000,
+        79756000
+      ],
+      "kicad": [
+        51181000,
+        79756000
+      ]
+    },
+    {
+      "reference": "U2",
+      "id": "01be28b5-b922-440e-bf57-25361f5a9f3c",
+      "net": "Net-(R4-Pad1)",
+      "flux": [
+        51181000,
+        79756000
+      ],
+      "kicad": [
+        53721000,
+        79756000
+      ]
+    }
+  ],
+  "count": 8,
+  "pads_compared": 114,
+  "kicad_version": "9.0.8+dfsg-1"
+}

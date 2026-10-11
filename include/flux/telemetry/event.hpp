@@ -15,9 +15,12 @@ inline constexpr std::uint32_t telemetry_schema_version = 1;
 enum class Level { normal, diagnostic, trace };
 
 enum class EventType {
+  session_started,
   snapshot,
   routing_started,
   routing_finished,
+  routing_completed,
+  copper_generated,
   net_queued,
   net_started,
   net_completed,
@@ -76,6 +79,17 @@ struct Route {
   bool topology_gate_sequence_legal{false};
   std::string family;
   std::string lifecycle;
+
+  struct NavMeshCell {
+    Point minimum;
+    Point maximum;
+    std::uint32_t refinement_level{0};
+
+    bool operator==(const NavMeshCell&) const = default;
+  };
+  // Exact adaptive leaves retained around this route's selected NavMesh corridor. These are
+  // diagnostic topology evidence, not another routing representation.
+  std::vector<NavMeshCell> navmesh_cells;
 
   bool operator==(const Route&) const = default;
 };
@@ -154,6 +168,8 @@ struct HydraulicField {
 
   bool operator==(const HydraulicField&) const = default;
 };
+
+[[nodiscard]] bool validate_hydraulic_field(const HydraulicField& field, std::string& error);
 
 struct Priority {
   std::string net;
@@ -282,6 +298,8 @@ struct IterationMetrics {
   std::size_t vias{0};
   std::size_t rip_ups{0};
   std::size_t search_expansions{0};
+  std::size_t unresolved_packing_obligations{0};
+  bool packing_obligation_budget_exhausted{false};
   std::uint64_t selected_checkpoint{0};
   std::uint64_t best_checkpoint{0};
   bool selected_is_best{false};
@@ -295,14 +313,38 @@ struct Counters {
   std::uint64_t coalesced{0};
   std::uint64_t serialized{0};
   std::uint64_t snapshots{0};
+  std::uint64_t transport_dropped{0};
 
   bool operator==(const Counters&) const = default;
+};
+
+// A producer-reported unit of work. This deliberately carries no inferred completion fraction:
+// different routing phases have incompatible work estimates.
+struct PhaseProgress {
+  std::string phase;
+  std::uint64_t work_units{0};
+  std::uint64_t elapsed_us{0};
+
+  bool operator==(const PhaseProgress&) const = default;
+};
+
+struct ActiveRegion {
+  std::string id;
+  std::string label;
+  std::int64_t minimum_x_nm{0}, minimum_y_nm{0}, maximum_x_nm{0}, maximum_y_nm{0};
+  std::vector<std::string> layers;
+  std::vector<std::string> nets;
+  bool active{false};
+  bool operator==(const ActiveRegion&) const = default;
 };
 
 // One representation is used inside a live WebSocket batch and as one JSONL trace record.
 // Snapshot events carry complete bounded collections; incremental events normally carry one item.
 struct Event {
   std::uint32_t schema{telemetry_schema_version};
+  // Viewer-assigned live connection generation. Zero denotes legacy/unscoped telemetry.
+  // It is diagnostic provenance only and never participates in routing decisions.
+  std::uint64_t session_generation{0};
   std::uint64_t sequence{0};
   std::uint64_t monotonic_time_us{0};
   Level level{Level::normal};
@@ -322,7 +364,11 @@ struct Event {
   std::vector<HydraulicField> hydraulic_fields;
   std::vector<Priority> priorities;
   std::optional<IterationMetrics> metrics;
+  bool packing_metrics_only{false};
   std::optional<Counters> counters;
+  std::optional<PhaseProgress> progress;
+  // Present for an explicit regional update, including active=false to clear it.
+  std::optional<ActiveRegion> active_region;
   std::string message;
 
   bool operator==(const Event&) const = default;
@@ -353,5 +399,8 @@ struct DecodeResult {
 
 [[nodiscard]] DecodeResult decode_events(std::string_view json_or_jsonl);
 [[nodiscard]] std::string encode_event(const Event& event);
+// Conservative retained-memory estimate for bounded observer queues/history. It includes dynamic
+// payload capacity; immutable source boards are charged once per event reference.
+[[nodiscard]] std::size_t estimated_event_bytes(const Event& event);
 
 } // namespace flux::telemetry

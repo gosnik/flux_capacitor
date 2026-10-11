@@ -1,0 +1,5 @@
+# Tier 1 baseline diagnosis — 2026-10-01
+
+`bm_svf` has 78 materialized coarse paths and zero opens in the frozen exact replay, but 491 copper violations: 420 track, 47 track/via, 24 hole clearance. The largest pair is Net-(U4A--) / Net-(R4-Pad1) on F.Cu (15 coalesced diagnoses; 675 µm worst deficit). This pair is a witness, not proof that its frozen scope is unsatisfiable.
+
+The normal fresh benchmark is running. Its first four global feedback epochs measure 674, 613, 499 and 540 coarse copper errors with zero opens. Final regional assembly remains pending. Existing source confirms that scope retries overwrite earlier assessed scenes unconditionally, and plan retention compares incomplete assignments before regional scene legality. The smallest isolated experiment is to retain measured physical checkpoints while continuing expanded scope exploration separately. The full ranking and primary research references are in `../benchmark_history/2026-10-01-tier-resolution/V61-experiment.json`. No tier promotion or legal-clearance change is proposed.

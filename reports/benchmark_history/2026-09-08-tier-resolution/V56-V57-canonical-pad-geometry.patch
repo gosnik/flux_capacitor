@@ -1,0 +1,432 @@
+--- a/src/kicad_import.cpp
++++ b/src/kicad_import.cpp
+@@ -1037,12 +1037,12 @@
+         continue;
+       }
+     }
+-    const auto layer = named_atom(*footprint, "layer");
+-    const auto side = layer && *layer == "B.Cu" ? BoardSide::back : BoardSide::front;
++    // Board-file footprint graphics are already mirrored on the back side. They need only
++    // the placed rotation/translation when converted directly to world-space board edges.
+     for (const auto& segment : local_segments) {
+       segments.push_back(RawSegment{
+-          geometry::transform_point(segment.start, *position, rotation, side),
+-          geometry::transform_point(segment.end, *position, rotation, side), segment.location});
++          geometry::transform_point(segment.start, *position, rotation, BoardSide::front),
++          geometry::transform_point(segment.end, *position, rotation, BoardSide::front), segment.location});
+     }
+   }
+   if (segments.empty()) {
+@@ -1725,6 +1725,10 @@
+                                                 std::string(pad_name),
+                                             importer)};
+       pad.net = pad_net(*pad_expression, importer);
++      // A missing board-file pad angle is zero in the placed board frame, not zero relative
++      // to the footprint. Explicit angles below use this same absolute-to-local conversion.
++      pad.rotation = footprint.side == BoardSide::front
++                         ? Microdegrees{-footprint.rotation.value()} : footprint.rotation;
+       if (const auto* pad_at = find_child(*pad_expression, "at")) {
+         if (const auto local = parse_point(*pad_at, importer, "pad at")) {
+           pad.local_position = *local;
+@@ -1787,9 +1791,33 @@
+       const auto drill = parse_pad_drill(*pad_expression, importer);
+       pad.drill_width = drill.width;
+       pad.drill_height = drill.height;
+-      pad.drill_offset = drill.offset;
++      // KiCad's serialized drill offset moves copper relative to the hole anchor. Canonical
++      // pads instead anchor copper and store the hole relative to it. Rebase both together so
++      // neither copper nor drill is moved in world coordinates by the representation change.
++      const auto file_local_angle = footprint.side == BoardSide::front
++                                        ? pad.rotation : Microdegrees{-pad.rotation.value()};
++      pad.local_position = geometry::transform_point(
++          drill.offset, pad.local_position, file_local_angle, BoardSide::front);
++      pad.drill_offset = {Nanometres{-drill.offset.x.value()}, Nanometres{-drill.offset.y.value()}};
+       pad.plated = atom_at(*pad_expression, 2) != std::optional<std::string_view>{"np_thru_hole"};
+       footprint.pads.push_back(std::move(pad));
++    }
++    if (footprint.side == BoardSide::back) {
++      // KiCad serializes already-reflected local coordinates. Canonical footprints retain
++      // front-side local geometry and mirror it on placement, so undo the file reflection
++      // exactly once at this boundary. Do not change the canonical placement transform.
++      const auto unmirror = [](Point& point) { point.x = Nanometres{-point.x.value()}; };
++      for (auto& point : footprint.courtyard.vertices) unmirror(point);
++      for (auto& circle : footprint.courtyard_circles) {
++        unmirror(circle.center);
++        unmirror(circle.edge);
++      }
++      for (auto& keepout : footprint.keepouts)
++        for (auto& point : keepout.area.vertices) unmirror(point);
++      for (auto& pad : footprint.pads) {
++        unmirror(pad.local_position);
++        unmirror(pad.drill_offset);
++      }
+     }
+     board.footprints.push_back(std::move(footprint));
+   }
+--- a/tests/unit/core_tests.cpp
++++ b/tests/unit/core_tests.cpp
+@@ -6250,6 +6250,76 @@
+           "worker completion order");
+ }
+ 
++void kicad_drill_offsets_preserve_copper_and_hole_anchors() {
++  const auto imported = flux::io::import_kicad_pcb_file(
++      std::filesystem::path{FLUX_TEST_SOURCE_DIR} / "fixtures/pad-offset-frames.kicad_pcb");
++  require(imported.strict() && imported.board->footprints.size() == 8U,
++          "offset-pad frame fixture must import strictly");
++  const auto shapes = flux::copper_pad_shapes(*imported.board);
++  for (const auto& footprint : imported.board->footprints) {
++    for (std::size_t index = 0; index < footprint.pads.size(); ++index) {
++      const auto& pad = footprint.pads[index];
++      const auto hole = flux::geometry::transform_point(
++          mm(2.0 + 2.0 * index, 3.0), footprint.position, footprint.rotation, BoardSide::front);
++      require(flux::pad_drill_world_position(footprint, pad) == hole,
++              "serialized offset must not displace the physical hole anchor");
++      const auto shape = std::find_if(shapes.begin(), shapes.end(),
++                                     [&](const auto& item) { return item.id == pad.id; });
++      const auto copper = pad.plated ? flux::geometry::transform_point(
++          mm(0.2, 0.1), hole, Microdegrees{}, BoardSide::front) : hole;
++      require(shape != shapes.end() && shape->position == copper,
++              "copper offsets must move the annulus, while non-plated obstacles stay at the hole");
++    }
++  }
++}
++
++void kicad_pad_frames_match_placed_board_coordinates() {
++  const auto imported = flux::io::import_kicad_pcb_file(
++      std::filesystem::path{FLUX_TEST_SOURCE_DIR} / "fixtures/pad-coordinate-frames.kicad_pcb");
++  require(imported.strict() && imported.board->footprints.size() == 8U,
++          "front/back pad-frame fixture must import strictly");
++  const auto copper = flux::copper_pad_shapes(*imported.board);
++  for (const auto& footprint : imported.board->footprints) {
++    for (std::size_t index = 0; index < footprint.pads.size(); ++index) {
++      const auto& pad = footprint.pads[index];
++      const auto shape = std::find_if(copper.begin(), copper.end(),
++                                     [&](const auto& item) { return item.id == pad.id; });
++      const auto file_local = mm(2.0 + 2.0 * index, 3.0);
++      // KiCad board syntax already contains reflected back-side local positions. Its placed
++      // coordinates therefore apply rotation and translation once, with no second mirror.
++      const auto expected = flux::geometry::transform_point(
++          file_local, footprint.position, footprint.rotation, BoardSide::front);
++      require(shape != copper.end() && shape->position == expected,
++              "back-side file coordinates must not be reflected twice");
++      const auto expected_angle = Microdegrees{index == 0U ? 0 : -45'000'000}.value();
++      require(shape->rotation.value() == expected_angle,
++              "omitted and explicit pad angles must remain absolute in the placed board frame");
++    }
++    const auto world_courtyard = flux::geometry::transform_polygon(
++        footprint.courtyard, footprint.position, footprint.rotation, footprint.side);
++    const auto expected_corner = flux::geometry::transform_point(
++        mm(6.0, 8.0), footprint.position, footprint.rotation, BoardSide::front);
++    require(std::find(world_courtyard.vertices.begin(), world_courtyard.vertices.end(),
++                      expected_corner) != world_courtyard.vertices.end(),
++            "asymmetric back-side courtyards must share the pad coordinate frame");
++  }
++  const auto edge_board = flux::io::import_kicad_pcb(R"((kicad_pcb
++    (version 20241229) (generator "pcbnew")
++    (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
++    (net 0 "")
++    (footprint "EdgeFixture" (layer "B.Cu") (at 20 30 90)
++      (fp_rect (start 0 0) (end 6 8) (stroke (width 0.05) (type default))
++        (fill none) (layer "Edge.Cuts")))))");
++  require(edge_board.strict() &&
++              flux::geometry::prepare_polygon(edge_board.board->outline).bounds.minimum == mm(20.0, 24.0) &&
++              flux::geometry::prepare_polygon(edge_board.board->outline).bounds.maximum == mm(28.0, 30.0),
++          "back-side footprint Edge.Cuts must not acquire a second reflection");
++  const auto reference = flux::io::import_kicad_pcb_file(
++      std::filesystem::path{FLUX_TEST_SOURCE_DIR} / "fixtures/routing-corpus/reference/bm_svf.kicad_pcb");
++  require(reference.strict() && flux::analyze_connectivity(*reference.board).open_connections == 0U,
++          "known-connected KRT copper must remain connected after canonical import");
++}
++
+ void cancellation_and_kicad_export_boundaries_fail_closed() {
+   const auto board = two_pad_board();
+   std::stop_source stop;
+@@ -6623,11 +6693,11 @@
+               Nanometres::from_mm(0.6) &&
+           oval_drill_import.board->footprints.back().pads.front().drill_height ==
+               Nanometres::from_mm(1.4) &&
+-          oval_drill_import.board->footprints.back().pads.front().drill_offset == mm(0.2, 0.0) &&
++          oval_drill_import.board->footprints.back().pads.front().drill_offset == mm(-0.2, 0.0) &&
+           !oval_drill_shapes.empty() && oval_drill_shapes.back().shape == flux::PadShape::oval &&
+           oval_drill_shapes.back().width == Nanometres::from_mm(0.6) &&
+           oval_drill_shapes.back().height == Nanometres::from_mm(1.4) &&
+-          oval_drill_shapes.back().position == mm(79.8, 40.0),
++          oval_drill_shapes.back().position == mm(80.0, 40.0),
+       "oval and offset non-plated drill geometry must retain its exact local dimensions and "
+       "world-space routing obstacle");
+   const auto priority_template = flux::io::make_placement_move_priorities_template(*imported.board);
+@@ -8951,6 +9021,8 @@
+ 
+ int main(int argc, char** argv) {
+   const std::vector<TestCase> tests{
++      {"kicad_drill_offsets_preserve_copper_and_hole_anchors", kicad_drill_offsets_preserve_copper_and_hole_anchors},
++      {"kicad_pad_frames_match_placed_board_coordinates", kicad_pad_frames_match_placed_board_coordinates},
+       {"units_remain_exact_and_saturating", units_remain_exact_and_saturating},
+       {"multisource_terminal_membership_preserves_access_preference_order",
+        multisource_terminal_membership_preserves_access_preference_order},
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -106,6 +106,24 @@
+ 
+ find_package(Python3 COMPONENTS Interpreter)
+ if(Python3_Interpreter_FOUND)
++  execute_process(COMMAND "${Python3_EXECUTABLE}" -c "import pcbnew"
++    RESULT_VARIABLE FLUX_KICAD_PYTHON_STATUS OUTPUT_QUIET ERROR_QUIET)
++  if(FLUX_KICAD_PYTHON_STATUS EQUAL 0)
++    # Independent loader parity protects the canonical boundary before routing is attempted.
++    add_dependencies(flux_unit_tests flux-inspect-pad-geometry)
++    add_test(NAME flux_kicad_pad_geometry_parity
++      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/python/verify_kicad_pad_geometry.py"
++        --inspector $<TARGET_FILE:flux-inspect-pad-geometry>
++        --report "${CMAKE_CURRENT_BINARY_DIR}/pad-geometry-parity.json"
++        "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pad-coordinate-frames.kicad_pcb"
++        "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pad-offset-frames.kicad_pcb"
++        "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/routing-corpus/pt2399_delay.kicad_pcb"
++        "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/routing-corpus/bm_svf.kicad_pcb"
++        "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/routing-corpus/ft2232h_jtag.kicad_pcb"
++        "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/routing-corpus/gb_nintendo_power.kicad_pcb"
++        "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/routing-corpus/nascom_eprom_80bus.kicad_pcb")
++    set_tests_properties(flux_kicad_pad_geometry_parity PROPERTIES TIMEOUT 60 LABELS "risk;import;kicad")
++  endif()
+   target_compile_definitions(
+     flux_unit_tests PRIVATE FLUX_TEST_PYTHON_EXECUTABLE="${Python3_EXECUTABLE}")
+   add_test(
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -214,6 +214,8 @@
+ target_link_libraries(flux-replay-regional-bundle PRIVATE flux::core Boost::json)
+ add_executable(flux-replay-quantized-copper EXCLUDE_FROM_ALL tools/replay_quantized_copper.cpp)
+ target_link_libraries(flux-replay-quantized-copper PRIVATE flux::core Boost::json)
++add_executable(flux-inspect-pad-geometry EXCLUDE_FROM_ALL tools/inspect_pad_geometry.cpp)
++target_link_libraries(flux-inspect-pad-geometry PRIVATE flux::core Boost::json)
+ target_compile_features(flux-cli PRIVATE cxx_std_20)
+ target_include_directories(flux-cli PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
+ target_compile_definitions(
+--- /dev/null
++++ b/tools/inspect_pad_geometry.cpp
+@@ -0,0 +1,47 @@
++// Read-only canonical pad geometry for differential comparison with KiCad's own loader.
++#include "flux/core/copper_geometry.hpp"
++#include "flux/io/kicad_import.hpp"
++#include <boost/json.hpp>
++#include <iostream>
++#include <map>
++
++int main(int argc, char** argv) {
++  if (argc != 2) {
++    std::cerr << "usage: flux-inspect-pad-geometry BOARD.kicad_pcb\n";
++    return 1;
++  }
++  const auto imported = flux::io::import_kicad_pcb_file(argv[1]);
++  if (!imported.strict()) {
++    std::cerr << "source must import strictly\n";
++    return 1;
++  }
++  std::map<flux::ObjectId, std::string> references;
++  for (const auto& footprint : imported.board->footprints)
++    for (const auto& pad : footprint.pads) references.emplace(pad.id, footprint.reference);
++  boost::json::array pads;
++  std::map<flux::ObjectId, flux::Point> drill_positions;
++  for (const auto& footprint : imported.board->footprints)
++    for (const auto& pad : footprint.pads)
++      if (flux::pad_has_drill(pad))
++        drill_positions.emplace(pad.id, flux::pad_drill_world_position(footprint, pad));
++  for (const auto& pad : flux::copper_pad_shapes(*imported.board)) {
++    boost::json::object row;
++    row["id"] = pad.id.value();
++    row["reference"] = references.at(pad.id);
++    row["net"] = pad.net.value();
++    row["x_nm"] = pad.position.x.value();
++    row["y_nm"] = pad.position.y.value();
++    row["clockwise_microdegrees"] = -pad.rotation.value();
++    row["width_nm"] = pad.width.value();
++    row["height_nm"] = pad.height.value();
++    if (const auto drill = drill_positions.find(pad.id); drill != drill_positions.end()) {
++      row["drill_x_nm"] = drill->second.x.value();
++      row["drill_y_nm"] = drill->second.y.value();
++    }
++    pads.push_back(std::move(row));
++  }
++  boost::json::object result;
++  result["source_revision"] = imported.board->source_revision;
++  result["pads"] = std::move(pads);
++  std::cout << result << '\n';
++}
+--- /dev/null
++++ b/tools/inspect_pad_geometry.md
+@@ -0,0 +1,22 @@
++# Independent KiCad pad-geometry comparison
++
++Build `flux-inspect-pad-geometry` explicitly. It strictly imports a board with its
++sibling project rules and prints the canonical copper-pad positions, dimensions
++and angles. It writes no PCB files and cannot qualify routing.
++
++Compare it with KiCad's independent loader using the Python environment that
++provides `pcbnew`:
++
++```sh
++cmake --build build/release --target flux-inspect-pad-geometry
++/usr/bin/python3 tests/python/verify_kicad_pad_geometry.py \
++  --inspector build/release/flux-inspect-pad-geometry \
++  --report build/pad-geometry-parity.json \
++  tests/fixtures/pad-coordinate-frames.kicad_pcb \
++  tests/fixtures/routing-corpus/bm_svf.kicad_pcb
++```
++
++The comparison requires identical pad identities and exact integer positions,
++dimensions and angles (modulo a full turn). Pads without copper layers are omitted
++by both loaders. Offset-pad copper centers are compared with KiCad ShapePos;
++physical hole centers are independently compared with KiCad GetPosition.
+--- /dev/null
++++ b/tests/python/verify_kicad_pad_geometry.py
+@@ -0,0 +1,73 @@
++#!/usr/bin/env python3
++"""Compare strict Flux pad geometry with KiCad's independent board loader.
++
++Requires pcbnew (run with KiCad's system Python). This is a geometry check, not
++routing qualification. Original board/project files are only read.
++"""
++import argparse
++import json
++from pathlib import Path
++import subprocess
++
++import pcbnew
++
++
++def compare(inspector, path):
++    result = subprocess.run([str(inspector), str(path)], check=True,
++                            text=True, capture_output=True)
++    imported = json.loads(result.stdout)
++    board = pcbnew.LoadBoard(str(path))
++    if board is None:
++        raise RuntimeError(f"KiCad could not read {path}")
++    expected = {pad.m_Uuid.AsString(): pad for footprint in board.GetFootprints()
++                for pad in footprint.Pads() if pad.GetLayerSet().CuStack()}
++    actual = {row["id"]: row for row in imported["pads"]}
++    mismatches = []
++    if len(actual) != len(imported["pads"]) or set(actual) != set(expected):
++        mismatches.append({"field": "pad_identity", "missing": sorted(set(expected) - set(actual)),
++                           "extra": sorted(set(actual) - set(expected))})
++    for identity in sorted(set(actual) & set(expected)):
++        row, pad = actual[identity], expected[identity]
++        position, size = pad.ShapePos(pad.GetLayer()), pad.GetSize()
++        dimensions = (size.x, size.y)
++        if pad.GetAttribute() == pcbnew.PAD_ATTRIB_NPTH:
++            position = pad.GetPosition()
++            dimensions = (pad.GetDrillSize().x, pad.GetDrillSize().y)
++        values = {"x_nm": position.x, "y_nm": position.y,
++                  "width_nm": dimensions[0], "height_nm": dimensions[1],
++                  "clockwise_microdegrees": round(pad.GetOrientationDegrees() * 1_000_000)}
++        if pad.GetDrillSize().x and pad.GetDrillSize().y:
++            values["drill_x_nm"] = pad.GetPosition().x
++            values["drill_y_nm"] = pad.GetPosition().y
++        for field, value in values.items():
++            lhs, rhs = row.get(field), value
++            if field == "clockwise_microdegrees":
++                lhs, rhs = lhs % 360_000_000, rhs % 360_000_000
++            # This corpus uses exact integer geometry; no coordinate tolerance is applied.
++            if lhs != rhs:
++                mismatches.append({"id": identity, "reference": row["reference"],
++                                   "field": field, "flux": lhs, "kicad": rhs})
++    return {"board": str(path), "source_revision": imported["source_revision"],
++            "pads_compared": len(expected), "passed": not mismatches,
++            "mismatches": mismatches}
++
++
++def main():
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--inspector", type=Path, required=True)
++    parser.add_argument("--report", type=Path, required=True)
++    parser.add_argument("boards", type=Path, nargs="+")
++    args = parser.parse_args()
++    reports = [compare(args.inspector.resolve(), board) for board in args.boards]
++    result = {"schema": 1, "kicad_version": pcbnew.GetBuildVersion(),
++              "passed": all(row["passed"] for row in reports), "boards": reports}
++    args.report.parent.mkdir(parents=True, exist_ok=True)
++    args.report.write_text(json.dumps(result, indent=2) + "\n")
++    for row in reports:
++        print(f"{'PASS' if row['passed'] else 'FAIL'} {row['board']}: "
++              f"{row['pads_compared']} pads, {len(row['mismatches'])} mismatches")
++    return 0 if result["passed"] else 1
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+--- /dev/null
++++ b/tests/fixtures/pad-coordinate-frames.kicad_pcb
+@@ -0,0 +1,35 @@
++(kicad_pcb (version 20241229) (generator "pcbnew") (general (thickness 1.6)) (paper "A4") (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user) (46 "B.CrtYd" user) (47 "F.CrtYd" user)) (setup (pad_to_mask_clearance 0)) (net 0 "") (net 1 "N")
++(gr_rect (start 0 0) (end 150 100) (stroke (width 0.05) (type default)) (fill none) (layer "Edge.Cuts") (uuid "c459a4ae-aeb3-5048-b577-9a698a17fe9f"))
++(footprint "Test:PadFrame" (layer "F.Cu") (at 20 20 0) (uuid "f59066c2-6bc9-5b8c-8ace-58a65de97db4") (property "Reference" "F0" (at 0 0) (layer "F.Cu")) (property "Value" "PadFrame" (at 0 0) (layer "F.Cu")) (fp_rect (start 0 0) (end 6 8) (stroke (width 0.05) (type default)) (fill none) (layer "F.CrtYd") (uuid "1f7bf23a-0936-5ac7-b3e7-ac1f503d2961"))
++(pad "1" smd rect (at 2 3) (size 1 2) (layers "F.Cu") (net 1 "N") (uuid "efb074bf-4104-5b98-ab96-2b0cc1912f3c"))
++(pad "2" smd rect (at 4 3 45) (size 1 2) (layers "F.Cu") (net 1 "N") (uuid "bbc78da6-cf3a-518f-a552-dc801aa1c2a4"))
++)
++(footprint "Test:PadFrame" (layer "F.Cu") (at 50 20 90) (uuid "30268be7-0777-5a0d-8652-68b149d976a2") (property "Reference" "F90" (at 0 0) (layer "F.Cu")) (property "Value" "PadFrame" (at 0 0) (layer "F.Cu")) (fp_rect (start 0 0) (end 6 8) (stroke (width 0.05) (type default)) (fill none) (layer "F.CrtYd") (uuid "1f10bcb6-86df-5480-988a-0480125d34d7"))
++(pad "1" smd rect (at 2 3) (size 1 2) (layers "F.Cu") (net 1 "N") (uuid "2e6fefcf-a2c6-5b76-aaef-92a546aca4ef"))
++(pad "2" smd rect (at 4 3 45) (size 1 2) (layers "F.Cu") (net 1 "N") (uuid "f5b3a2b6-19f4-583a-8798-a60d93911b18"))
++)
++(footprint "Test:PadFrame" (layer "F.Cu") (at 80 20 180) (uuid "b8cfa020-de93-53cf-bfcd-49734f7daa3d") (property "Reference" "F180" (at 0 0) (layer "F.Cu")) (property "Value" "PadFrame" (at 0 0) (layer "F.Cu")) (fp_rect (start 0 0) (end 6 8) (stroke (width 0.05) (type default)) (fill none) (layer "F.CrtYd") (uuid "ece896ef-3e8a-5259-aeb2-c17aff7e6d9e"))
++(pad "1" smd rect (at 2 3) (size 1 2) (layers "F.Cu") (net 1 "N") (uuid "b5f3fbf0-9eb3-55f2-b395-832bd34139c6"))
++(pad "2" smd rect (at 4 3 45) (size 1 2) (layers "F.Cu") (net 1 "N") (uuid "d82976f3-c767-5c2b-9b2b-f7cbf746b90d"))
++)
++(footprint "Test:PadFrame" (layer "F.Cu") (at 110 20 270) (uuid "d952be54-67fc-5228-9dfb-a051522af7c4") (property "Reference" "F270" (at 0 0) (layer "F.Cu")) (property "Value" "PadFrame" (at 0 0) (layer "F.Cu")) (fp_rect (start 0 0) (end 6 8) (stroke (width 0.05) (type default)) (fill none) (layer "F.CrtYd") (uuid "810ad1c8-602e-544d-99dd-ec15912d0896"))
++(pad "1" smd rect (at 2 3) (size 1 2) (layers "F.Cu") (net 1 "N") (uuid "b0d83c16-c9e9-51bc-a8a2-114a6f9d64d0"))
++(pad "2" smd rect (at 4 3 45) (size 1 2) (layers "F.Cu") (net 1 "N") (uuid "43dd541a-c6f2-5fe9-bdfa-b4de9e88312c"))
++)
++(footprint "Test:PadFrame" (layer "B.Cu") (at 20 60 0) (uuid "ed698884-80c6-5c25-8fd9-296c7e220b7f") (property "Reference" "B0" (at 0 0) (layer "B.Cu")) (property "Value" "PadFrame" (at 0 0) (layer "B.Cu")) (fp_rect (start 0 0) (end 6 8) (stroke (width 0.05) (type default)) (fill none) (layer "B.CrtYd") (uuid "4b457b28-974d-58c3-93c7-3eea92f2edc1"))
++(pad "1" smd rect (at 2 3) (size 1 2) (layers "B.Cu") (net 1 "N") (uuid "dfba9ac9-1f80-5832-ba54-a7e29db88331"))
++(pad "2" smd rect (at 4 3 45) (size 1 2) (layers "B.Cu") (net 1 "N") (uuid "be0b52e7-0021-508f-86f6-fdc7efd0f9ab"))
++)
++(footprint "Test:PadFrame" (layer "B.Cu") (at 50 60 90) (uuid "7556b2bb-0dff-583e-a48f-195a59369403") (property "Reference" "B90" (at 0 0) (layer "B.Cu")) (property "Value" "PadFrame" (at 0 0) (layer "B.Cu")) (fp_rect (start 0 0) (end 6 8) (stroke (width 0.05) (type default)) (fill none) (layer "B.CrtYd") (uuid "5fff736b-753f-5dfb-9b3b-8d2fea89447d"))
++(pad "1" smd rect (at 2 3) (size 1 2) (layers "B.Cu") (net 1 "N") (uuid "7fd7ace7-39a5-5dfd-9eff-c891a404e423"))
++(pad "2" smd rect (at 4 3 45) (size 1 2) (layers "B.Cu") (net 1 "N") (uuid "49af6304-e546-5a8a-b5e2-a9621f475c0c"))
++)
++(footprint "Test:PadFrame" (layer "B.Cu") (at 80 60 180) (uuid "c024ebb7-4902-5526-a8b3-efcca4533e5d") (property "Reference" "B180" (at 0 0) (layer "B.Cu")) (property "Value" "PadFrame" (at 0 0) (layer "B.Cu")) (fp_rect (start 0 0) (end 6 8) (stroke (width 0.05) (type default)) (fill none) (layer "B.CrtYd") (uuid "0fe5d85e-bf5b-5a89-9d16-61373701421f"))
++(pad "1" smd rect (at 2 3) (size 1 2) (layers "B.Cu") (net 1 "N") (uuid "92446e8b-f829-5dab-baca-7b97407162c4"))
++(pad "2" smd rect (at 4 3 45) (size 1 2) (layers "B.Cu") (net 1 "N") (uuid "36b0747e-8fdb-5616-bdd3-7c0bda39b5a6"))
++)
++(footprint "Test:PadFrame" (layer "B.Cu") (at 110 60 270) (uuid "45c21ea1-1ab1-5efc-8290-8c12dd7f9c9f") (property "Reference" "B270" (at 0 0) (layer "B.Cu")) (property "Value" "PadFrame" (at 0 0) (layer "B.Cu")) (fp_rect (start 0 0) (end 6 8) (stroke (width 0.05) (type default)) (fill none) (layer "B.CrtYd") (uuid "5709a194-dd76-5983-8244-91d7f9506ff5"))
++(pad "1" smd rect (at 2 3) (size 1 2) (layers "B.Cu") (net 1 "N") (uuid "9a43ea05-4a03-51b6-a886-bf3ddad86d29"))
++(pad "2" smd rect (at 4 3 45) (size 1 2) (layers "B.Cu") (net 1 "N") (uuid "bd1b593a-2349-536f-b209-1d3dac00fa72"))
++)
++)
+--- /dev/null
++++ b/tests/fixtures/pad-offset-frames.kicad_pcb
+@@ -0,0 +1,35 @@
++(kicad_pcb (version 20241229) (generator "pcbnew") (general (thickness 1.6)) (paper "A4") (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user) (46 "B.CrtYd" user) (47 "F.CrtYd" user)) (setup (pad_to_mask_clearance 0)) (net 0 "") (net 1 "N")
++(gr_rect (start 0 0) (end 150 100) (stroke (width 0.05) (type default)) (fill none) (layer "Edge.Cuts") (uuid "c459a4ae-aeb3-5048-b577-9a698a17fe9f"))
++(footprint "Test:PadFrame" (layer "F.Cu") (at 20 20 0) (uuid "f59066c2-6bc9-5b8c-8ace-58a65de97db4") (property "Reference" "F0" (at 0 0) (layer "F.Cu")) (property "Value" "PadFrame" (at 0 0) (layer "F.Cu")) (fp_rect (start 0 0) (end 6 8) (stroke (width 0.05) (type default)) (fill none) (layer "F.CrtYd") (uuid "1f7bf23a-0936-5ac7-b3e7-ac1f503d2961"))
++(pad "1" thru_hole rect (at 2 3) (size 1 2) (drill oval 0.4 0.6 (offset 0.2 0.1)) (layers "*.Cu" "*.Mask") (net 1 "N") (uuid "efb074bf-4104-5b98-ab96-2b0cc1912f3c"))
++(pad "2" np_thru_hole rect (at 4 3 45) (size 1 2) (drill oval 0.4 0.6 (offset 0.2 0.1)) (layers "*.Cu" "*.Mask") (net 1 "N") (uuid "bbc78da6-cf3a-518f-a552-dc801aa1c2a4"))
++)
++(footprint "Test:PadFrame" (layer "F.Cu") (at 50 20 90) (uuid "30268be7-0777-5a0d-8652-68b149d976a2") (property "Reference" "F90" (at 0 0) (layer "F.Cu")) (property "Value" "PadFrame" (at 0 0) (layer "F.Cu")) (fp_rect (start 0 0) (end 6 8) (stroke (width 0.05) (type default)) (fill none) (layer "F.CrtYd") (uuid "1f10bcb6-86df-5480-988a-0480125d34d7"))
++(pad "1" thru_hole rect (at 2 3) (size 1 2) (drill oval 0.4 0.6 (offset 0.2 0.1)) (layers "*.Cu" "*.Mask") (net 1 "N") (uuid "2e6fefcf-a2c6-5b76-aaef-92a546aca4ef"))
++(pad "2" np_thru_hole rect (at 4 3 45) (size 1 2) (drill oval 0.4 0.6 (offset 0.2 0.1)) (layers "*.Cu" "*.Mask") (net 1 "N") (uuid "f5b3a2b6-19f4-583a-8798-a60d93911b18"))
++)
++(footprint "Test:PadFrame" (layer "F.Cu") (at 80 20 180) (uuid "b8cfa020-de93-53cf-bfcd-49734f7daa3d") (property "Reference" "F180" (at 0 0) (layer "F.Cu")) (property "Value" "PadFrame" (at 0 0) (layer "F.Cu")) (fp_rect (start 0 0) (end 6 8) (stroke (width 0.05) (type default)) (fill none) (layer "F.CrtYd") (uuid "ece896ef-3e8a-5259-aeb2-c17aff7e6d9e"))
++(pad "1" thru_hole rect (at 2 3) (size 1 2) (drill oval 0.4 0.6 (offset 0.2 0.1)) (layers "*.Cu" "*.Mask") (net 1 "N") (uuid "b5f3fbf0-9eb3-55f2-b395-832bd34139c6"))
++(pad "2" np_thru_hole rect (at 4 3 45) (size 1 2) (drill oval 0.4 0.6 (offset 0.2 0.1)) (layers "*.Cu" "*.Mask") (net 1 "N") (uuid "d82976f3-c767-5c2b-9b2b-f7cbf746b90d"))
++)
++(footprint "Test:PadFrame" (layer "F.Cu") (at 110 20 270) (uuid "d952be54-67fc-5228-9dfb-a051522af7c4") (property "Reference" "F270" (at 0 0) (layer "F.Cu")) (property "Value" "PadFrame" (at 0 0) (layer "F.Cu")) (fp_rect (start 0 0) (end 6 8) (stroke (width 0.05) (type default)) (fill none) (layer "F.CrtYd") (uuid "810ad1c8-602e-544d-99dd-ec15912d0896"))
++(pad "1" thru_hole rect (at 2 3) (size 1 2) (drill oval 0.4 0.6 (offset 0.2 0.1)) (layers "*.Cu" "*.Mask") (net 1 "N") (uuid "b0d83c16-c9e9-51bc-a8a2-114a6f9d64d0"))
++(pad "2" np_thru_hole rect (at 4 3 45) (size 1 2) (drill oval 0.4 0.6 (offset 0.2 0.1)) (layers "*.Cu" "*.Mask") (net 1 "N") (uuid "43dd541a-c6f2-5fe9-bdfa-b4de9e88312c"))
++)
++(footprint "Test:PadFrame" (layer "B.Cu") (at 20 60 0) (uuid "ed698884-80c6-5c25-8fd9-296c7e220b7f") (property "Reference" "B0" (at 0 0) (layer "B.Cu")) (property "Value" "PadFrame" (at 0 0) (layer "B.Cu")) (fp_rect (start 0 0) (end 6 8) (stroke (width 0.05) (type default)) (fill none) (layer "B.CrtYd") (uuid "4b457b28-974d-58c3-93c7-3eea92f2edc1"))
++(pad "1" thru_hole rect (at 2 3) (size 1 2) (drill oval 0.4 0.6 (offset 0.2 0.1)) (layers "*.Cu" "*.Mask") (net 1 "N") (uuid "dfba9ac9-1f80-5832-ba54-a7e29db88331"))
++(pad "2" np_thru_hole rect (at 4 3 45) (size 1 2) (drill oval 0.4 0.6 (offset 0.2 0.1)) (layers "*.Cu" "*.Mask") (net 1 "N") (uuid "be0b52e7-0021-508f-86f6-fdc7efd0f9ab"))
++)
++(footprint "Test:PadFrame" (layer "B.Cu") (at 50 60 90) (uuid "7556b2bb-0dff-583e-a48f-195a59369403") (property "Reference" "B90" (at 0 0) (layer "B.Cu")) (property "Value" "PadFrame" (at 0 0) (layer "B.Cu")) (fp_rect (start 0 0) (end 6 8) (stroke (width 0.05) (type default)) (fill none) (layer "B.CrtYd") (uuid "5fff736b-753f-5dfb-9b3b-8d2fea89447d"))
++(pad "1" thru_hole rect (at 2 3) (size 1 2) (drill oval 0.4 0.6 (offset 0.2 0.1)) (layers "*.Cu" "*.Mask") (net 1 "N") (uuid "7fd7ace7-39a5-5dfd-9eff-c891a404e423"))
++(pad "2" np_thru_hole rect (at 4 3 45) (size 1 2) (drill oval 0.4 0.6 (offset 0.2 0.1)) (layers "*.Cu" "*.Mask") (net 1 "N") (uuid "49af6304-e546-5a8a-b5e2-a9621f475c0c"))
++)
++(footprint "Test:PadFrame" (layer "B.Cu") (at 80 60 180) (uuid "c024ebb7-4902-5526-a8b3-efcca4533e5d") (property "Reference" "B180" (at 0 0) (layer "B.Cu")) (property "Value" "PadFrame" (at 0 0) (layer "B.Cu")) (fp_rect (start 0 0) (end 6 8) (stroke (width 0.05) (type default)) (fill none) (layer "B.CrtYd") (uuid "0fe5d85e-bf5b-5a89-9d16-61373701421f"))
++(pad "1" thru_hole rect (at 2 3) (size 1 2) (drill oval 0.4 0.6 (offset 0.2 0.1)) (layers "*.Cu" "*.Mask") (net 1 "N") (uuid "92446e8b-f829-5dab-baca-7b97407162c4"))
++(pad "2" np_thru_hole rect (at 4 3 45) (size 1 2) (drill oval 0.4 0.6 (offset 0.2 0.1)) (layers "*.Cu" "*.Mask") (net 1 "N") (uuid "36b0747e-8fdb-5616-bdd3-7c0bda39b5a6"))
++)
++(footprint "Test:PadFrame" (layer "B.Cu") (at 110 60 270) (uuid "45c21ea1-1ab1-5efc-8290-8c12dd7f9c9f") (property "Reference" "B270" (at 0 0) (layer "B.Cu")) (property "Value" "PadFrame" (at 0 0) (layer "B.Cu")) (fp_rect (start 0 0) (end 6 8) (stroke (width 0.05) (type default)) (fill none) (layer "B.CrtYd") (uuid "5709a194-dd76-5983-8244-91d7f9506ff5"))
++(pad "1" thru_hole rect (at 2 3) (size 1 2) (drill oval 0.4 0.6 (offset 0.2 0.1)) (layers "*.Cu" "*.Mask") (net 1 "N") (uuid "9a43ea05-4a03-51b6-a886-bf3ddad86d29"))
++(pad "2" np_thru_hole rect (at 4 3 45) (size 1 2) (drill oval 0.4 0.6 (offset 0.2 0.1)) (layers "*.Cu" "*.Mask") (net 1 "N") (uuid "bd1b593a-2349-536f-b209-1d3dac00fa72"))
++)
++)

@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "experiment": "V65 selected coarse checkpoint telemetry restoration",
+  "type": "diagnostic correctness",
+  "failure": "Final retained metrics and active global telemetry geometry can belong to different global attempts. publish_feedback_selection previously emitted only checkpoint counters.",
+  "evidence": {
+    "reported_coarse_oracle": 540,
+    "final_snapshot_replay": 647,
+    "reported_tracks": 1291,
+    "replayed_tracks": 1242,
+    "reported_vias": 46,
+    "replayed_vias": 47,
+    "neckdowns": 0,
+    "artifact": "build/tier-resolution-20261001-v63/final-oracle-replay.jsonl",
+    "limitation": "Replay lossiness alone does not identify every discrepancy. Source evidence establishes that retained geometry was not republished."
+  },
+  "change": "Republish selected coarseglobal paths with canonical IDs; remove known missing global paths without touching other route families.",
+  "hypothesis": "Final route event view equals returned coarsecheckpoint, making diagnosis reproducible. No routing quality/count improvement expected.",
+  "validation": {
+    "core": "53/53 passed",
+    "old_object_abi": "header unchanged; isolated prechange object linked before currentcore library",
+    "before_fixture": "1/1 passed",
+    "after_fixture": "1/1 passed",
+    "red_proof": false,
+    "limitation": "Existing crossing fixture does not force discarded-vs-retained path divergence; code inspection and fullnormal diagnostic discrepancy motivate correction. Do not claim red fixture."
+  },
+  "source_hashes": {
+    "src/regional_router.cpp": "a2af9320d7de984ae8da776c9a37cf4eaa8cbcd0b7d24e1071c7517130781fda",
+    "tests/unit/core_tests.cpp": "d1208088757910b3e29c9c47b7c4dd7995f6496f2b9660bcf4d2d5049a4b34a1"
+  },
+  "subsequent_matched_confirmation": {
+    "experiment": "V67 matched N2/R1/32",
+    "selected_snapshot": 5956,
+    "replay": "78paths1292tracks46vias796errors0opens exactly matches returned coarse oracle",
+    "causal_limit": "supports representation correction on this real matched run; no entire prior540vs647 discrepancy attribution"
+  }
+}

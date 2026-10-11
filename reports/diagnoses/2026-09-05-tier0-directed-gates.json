@@ -1,0 +1,53 @@
+{
+  "board": "pt2399_delay",
+  "tier": 0,
+  "stage": "regional PH topology certificate",
+  "nets": [
+    "kicad-net-11",
+    "kicad-net-8"
+  ],
+  "layer": "B.Cu",
+  "conflict_bounds_nm": [
+    42500000,
+    28500000,
+    43500000,
+    29500000
+  ],
+  "context_seed_nm": [
+    [
+      51000000,
+      29000000
+    ],
+    [
+      46500000,
+      29000000
+    ],
+    [
+      42000000,
+      29000000
+    ],
+    [
+      37500000,
+      29000000
+    ]
+  ],
+  "candidate_rejections_per_template": {
+    "constructor": 0,
+    "containment": 0,
+    "directed_gate": 160,
+    "shape": 0
+  },
+  "failure_class": "certificate disagreement before native copper",
+  "suspected_mechanism": "straight polyline and PH gate traversal disagree; not curvature infeasibility",
+  "alternative_exists": "two net-8 statically checked templates; all blocked by shared net-11 context gate certificate",
+  "artifacts": "build/frontier-20260905/seed-diagnostic",
+  "ranked_hypotheses": [
+    "Gate sequence comparator disagrees between exact line and PH at coincident portal boundaries",
+    "Overlapping channel certificates retain duplicated or reordered portal gates",
+    "Immutable context inherits certificate for a different owner geometry"
+  ],
+  "final_kicad_drc": null,
+  "proven_mechanism": "Retained global template includes alternative-only channels; a 12-gate sequence is duplicated and fails strict order at gate 12 even on the raw straight seed.",
+  "independent_local_bug": "Adaptive portal signed-side classification depends on path subdivision because the cell-center vector is not perpendicular to the portal.",
+  "experiment": "Explicit alternative-only channel provenance; exclude unselected channels from retained template and packing assessment."
+}

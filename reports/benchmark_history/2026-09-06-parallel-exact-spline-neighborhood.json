@@ -1,0 +1,111 @@
+{
+  "schema": 1,
+  "experiment": "parallel-exact-regional-spline-neighborhood",
+  "hypothesis": "The unchanged exact move neighborhood used by joint shove, trajectory polish and adaptive pair repair can be evaluated by four workers and reduced in original candidate-slot order, shortening the single dense window without changing routing decisions.",
+  "binary": {
+    "path": "build/parallel-exact-v15-bin/flux-cli",
+    "sha256": "afb45b9615ee59aec96e6a275eb9e67613c1fc2a601fe30d41dcf64a72d27090"
+  },
+  "runs": [
+    {
+      "board": "pt2399_delay",
+      "tier": 0,
+      "artifact": "build/tier0-parallel-exact-v15-20260906",
+      "status": "passed",
+      "paths": 50,
+      "tracks": 75,
+      "arcs": 299,
+      "vias": 5,
+      "opens": 0,
+      "malformed_non_ph_bends": 0,
+      "internal_copper_violations": 0,
+      "external_kicad_drc_violations": 0,
+      "output_sha256": "459bffc8258348a89eafcc275a35decdfc59e8afb1278b0731a58e0fd9df35ac",
+      "output_matches_v5_v8_v10_v11_v13": true,
+      "native_windows_checked": 5,
+      "native_pieces_checked": 299,
+      "native_copper_violations": 29,
+      "native_legal_windows": 3,
+      "global_duration_seconds": 254.09676061599748,
+      "detailed_duration_seconds": 366.2198882179946,
+      "regional_spline_realization_seconds_global": 6.439541
+    },
+    {
+      "board": "bm_svf",
+      "tier": 1,
+      "policy": "prioritized_frozen_scope_expansion",
+      "artifact": "build/tier1-parallel-exact-v15-20260906",
+      "status": "diagnostic_timeout",
+      "timeout_seconds": 1200,
+      "pre_native_checkpoints": [
+        {"epoch": 1, "violations": 764, "opens": 0},
+        {"epoch": 2, "violations": 1297, "opens": 0},
+        {"epoch": 3, "violations": 2216, "opens": 0},
+        {"epoch": 4, "windows": 25, "owned_fragments": 226, "corridors": 89, "alternatives": 649, "portfolio_ready_seconds": 706.336780}
+      ],
+      "active_tier_barrier_seconds": 912.194381,
+      "active_tier_duration_seconds": 205.857601,
+      "fallback_windows_queued": 15,
+      "fallback_windows_promoted": 15,
+      "ordinary_spline_realization_complete_seconds": 1104.136772,
+      "conflict_directed_master": {
+        "window": 0,
+        "round": 1,
+        "core_fragments": 8,
+        "no_goods": 0,
+        "complete_states": 0,
+        "stop": 2,
+        "finished_seconds": 1132.780216
+      },
+      "residual_cones": 3,
+      "residual_windows": 3,
+      "residual_alternative_checks_at_timeout": 170,
+      "residual_alternatives_accepted_at_timeout": 168,
+      "final_kicad_drc": "not_evaluated"
+    }
+  ],
+  "critical_window_phase_comparison_seconds": {
+    "v14_rank_0": {
+      "joint_shove": 13.284428,
+      "trajectory_polish": 12.313502,
+      "adaptive_pair": 4.182190,
+      "total": 40.777217
+    },
+    "v15_rank_0": {
+      "joint_shove": 5.999352,
+      "trajectory_polish": 5.060563,
+      "adaptive_pair": 2.544968,
+      "total": 26.994505
+    }
+  },
+  "comparison": {
+    "tier0_global_speedup_percent_vs_v13": 14.97,
+    "tier0_detailed_speedup_percent_vs_v13": 8.46,
+    "tier0_regional_spline_speedup_percent_vs_v13": 39.37,
+    "tier1_active_tier_speedup_percent_vs_v13": 37.06,
+    "tier1_v13_fallback_windows_promoted": 11,
+    "tier1_v15_fallback_windows_promoted": 15
+  },
+  "verification": {
+    "core_units": {"passed": 32, "failed": 0},
+    "candidate_set_pruned": false,
+    "candidate_reduction_order_changed": false,
+    "final_legality_gates_changed": false
+  },
+  "research_basis": [
+    {
+      "source": "https://vlsicad.ucsd.edu/Publications/Journals/j133.pdf",
+      "application": "TritonRoute decomposes detailed routing into private workers that perform routing and DRC before deterministic database update. Flux applies only the independent-work principle within one immutable move neighborhood."
+    },
+    {
+      "source": "https://github.com/The-OpenROAD-Project/OpenROAD/blob/master/src/drt/README.md",
+      "application": "The maintained detailed router exposes parallel/distributed search-and-repair operation while retaining DRC as an authority."
+    }
+  ],
+  "interpretation": {
+    "hypothesis_result": "strongly_supported",
+    "decision": "keep",
+    "reason": "Tier 0 is byte-identical and fully DRC-clean, while the Tier-1 active barrier fell by 37 percent and all fallback windows completed soon enough to enter conflict-directed and residual-cone search within the former timeout.",
+    "next_hypothesis": "Run beyond the 1200-second diagnostic cap to characterize the now-reachable residual-cone realization and identify its earliest physical failure."
+  }
+}

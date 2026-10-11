@@ -1,0 +1,23 @@
+{
+  "schema": "flux_v64_normal_benchmark_summary",
+  "date": "2026-10-01",
+  "board": "bm_svf",
+  "tier": 1,
+  "qualified": false,
+  "completed": false,
+  "status": "stopped",
+  "stop_reason": "stopped: disproven straight-mode frozen-boundary contract",
+  "evidence": {
+    "process_group": "1010879",
+    "route_process": "1012604",
+    "observed_elapsed_seconds": 2792,
+    "observed_elapsed": "46:32",
+    "cpu_percent_at_stop": 98.8,
+    "telemetry_sequence": 6170,
+    "telemetry_monotonic_time_us": 464726011,
+    "active_group": "regional-bundle-context:ordinary:2",
+    "last_telemetry_event": "SearchSummary"
+  },
+  "qualification_note": "No completed benchmark metrics or qualification classification; process stopped after V67 two-window transaction test disproved the frozen-boundary contract used by this V64 run.",
+  "artifacts": "build/tier-resolution-20261001-v64/tier1-normal"
+}

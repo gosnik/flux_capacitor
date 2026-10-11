@@ -1,5 +1,65 @@
 # flux_capacitor
 
+Routing defaults to curved spline/PH realization, enabling compatible erosion and XPBD repair.
+Straight routing remains an explicit option (`--straight-tracks`, or
+`run_tiers.sh --track-geometry straight`).
+Tier promotion still requires complete connectivity and original-project KiCad DRC.
+
+Regional geometry repair enables bounded CPU AVBD refinement after eligible XPBD proposals,
+including converged proposals and single-route obstacle scenes. It jointly updates trace controls and eligible generated vias using local blocks,
+contact multipliers, adaptive penalties, and deterministic owner coloring under the shared CPU
+worker budget. Via motion requires every attachment to be owned by the window; protected or
+external attachments pin the via. PH reconstruction and exact copper checks still decide whether
+a proposal survives. Use `--no-avbd-relaxation` for comparison or `--avbd-iterations N` (1–128)
+to bound its iterations. `regional_avbd_*` metrics distinguish solver proposals from retained
+regional improvements; neither implies a final DRC pass.
+
+Regional search evaluates at most two selected windows before broad portfolio enumeration,
+with prefix limits of eight alternatives, 1,024 bundle/lane states and 128 access states. Completed
+navigation requests and prepared geometry are reused across continuations with exact input keys;
+completed-route storage is capped at 512 entries and 64 MiB. The state engine schedules bounded
+repair experiments under a shared deadline. Each eligible strategy receives initial exploration;
+subsequent priority combines measured physical gain per active time with aging. Stagnation
+suppresses only the same strategy and input state. Physical progress affects priority rather
+than granting permission to continue. Legacy credit settings no longer gate execution.
+Up to two paused experiments retain separate preparation caches. A full pool resumes live work
+before admitting another strategy, exchanging slots without evicting the selected continuation.
+Changed physical inputs invalidate a
+paused regional solve before it can resume. History-only updates preserve its immutable search
+snapshot; publication retains newer routing knowledge. Global retries still depend on history. Scheduling history is capped at roughly 4,096 dispatch records;
+exact context keys have a 4,096-entry/64 MiB ceiling. Reaching these safety bounds retains the best
+checkpoint and reports exhaustion. Linux also checks a cooperative 2 GiB process RSS threshold
+when retaining paused experiments; this is not a hard allocator limit.
+The engine retains its best physical scene; full-scene connectivity and DRC remain authoritative.
+
+Terrain evolution and hydraulic GPU routing share immutable device-local walkability masks
+through the common Vulkan runtime. Cache identity includes dimensions and exact normalized
+contents; leases keep buffers alive through fenced submissions. The cache bounds both entries
+and allocated device bytes (16 entries / 64 MiB) and evicts only idle entries. Exact host
+identity mirrors consume up to another 64 MiB, plus bounded staging during upload. Mutable polygon rasterization uses a
+private mask. Height feedback still uploads on every request.
+`static_seed_height_evolution_gpu_mask_uploads`, `*_upload_reuses`, and
+`*_cross_pipeline_reuses` distinguish transfers, cache hits, and reuse across the two pipelines;
+the corresponding `static_seed_hydraulic_gpu_mask_*` counters cover hydraulic discovery.
+XPBD retains its existing immutable-input cache. Mutable fields and incompatible geometry
+layouts are not aliased across pipelines.
+
+v0.140/schema 21 separates global physical feedback from continuous realization: intermediate
+epochs perform bounded discrete corridor, packing, terminal, lane, layer, and via analysis, while
+PH/XPBD/PNS, residual repair, quantization, and exact detailed routing run only on the retained
+final checkpoint. PH optimization shares an immutable prepared NavMesh corridor, can certify
+conservative sub-cell free-space slivers against the exact offset domain, scores seeds against
+that same domain, and rejects GPU/CPU candidates that leave the selected homotopy. Exact
+connectivity, represented copper DRC, and external KiCad DRC remain authoritative.
+
+Residual regional failures now enter a bounded conflict-directed exact-master loop before the
+broader cone/global retry. The existing finite template/access/via/lane CSP is the discrete master;
+failed PH/copper realizations contribute stable physical no-good clauses, and only complete route
+runs implicated by the failure receive new corridor, homotopy, layer, and via columns. PH geometry
+stays outside the master and remains its separation oracle. A replacement is retained only as an
+atomic feasibility-first improvement, with exact detailed connectivity and DRC still authoritative.
+See [`ADR 0168`](docs/adr/0168-conflict-directed-exact-regional-master.md).
+
 v0.138/schema 21 applies the source-bound KiCad hole-clearance floor as an exact
 different-net drill-boundary-to-copper rule for straight tracks, arcs, vias, supported pads, and
 saved zone fills. Whole-board and dynamic DRC share that predicate with global and regional route
@@ -70,10 +130,10 @@ remains. Exact connectivity and copper DRC still reject the complete transaction
 current Freerouting control are recorded in
 [`ADR 0155`](docs/adr/0155-dense-board-observability-and-external-control.md).
 
-The active continuous route representation is now a tangent-continuous chain of quintic
+The optional continuous route representation is a tangent-continuous chain of quintic
 Pythagorean-hodograph Bezier segments. PH Hermite interpolation, centripetal/chord parameter
-selection, optional bounded C2 joining, polynomial speed and arc length, analytical curvature and
-inflection isolation, exact rational offsets, and bounded rational-offset intersections replace
+selection, fairness-aware branch ranking, optional bounded geometric-G2 joining, polynomial speed
+and arc length, analytical curvature and inflection isolation, and exact rational offsets replace
 the former cubic B-spline implementation. XPBD and PNS move interpolation nodes and rebuild the PH
 segments; telemetry publishes flattened six-control degree-five spans. Detailed routing uses a
 resident Vulkan XPBD whole-chain precondition and candidate-major GPU polishing: every bounded
@@ -83,9 +143,15 @@ their recursive long tails measured worse when synchronized per node. Complete s
 chains instead run as bounded parallel tasks against one immutable board snapshot; compact copper
 deltas are reduced in stable route order and exact-rechecked before commit. CPU exact geometry,
 connectivity, DRC, and commit remain authoritative, and unavailable compute restores the complete
-CPU wave. KiCad has no electrical Bézier-track primitive, so the PH Bézier remains Flux geometry
-and accepted routes are adaptively emitted as native connected track arcs/segments. See
-[`ADR 0156`](docs/adr/0156-quintic-ph-continuous-routing.md).
+CPU wave. KiCad has no electrical Bézier-track primitive, so each final regional PH candidate is
+immediately fitted to native connected track arcs/segments and checked as that exact copper scene.
+Native fitting checks quantized join angles and uses tangent-matched biarcs when independent
+circle fitting would leave kinks. An ownership-resolved manifest carries those exact pieces into
+detailed routing; assembled-scene feedback includes outside-window routes and proposed vias.
+Arc navigation obstacles cover the actual sweep rather than filling the supporting circle.
+Rational PH offsets remain targeted diagnostics for a rejected native scene rather than the normal
+acceptance bottleneck. See [`ADR 0156`](docs/adr/0156-quintic-ph-continuous-routing.md) and
+[`ADR 0171`](docs/adr/0171-fair-g2-native-copper-realization.md).
 Residual retry now solves only transitive fragment-owner cones, reuses unaffected assignments,
 and deterministically remaps derived channel/terminal/via identities before atomic checkpoint
 replacement. Telemetry and CLI JSON distinguish reused, recomputed, and withheld assignments.
@@ -277,6 +343,9 @@ The current executable baseline provides:
   maximum routed skew constraints, applied as hard detailed-routing and optimization acceptance
   gates without pretending preferred KiCad net-class geometry is itself a DRC limit;
 - a feasibility-first structured objective vector;
+- confined conflict-directed anisotropic hydraulic erosion that produces bounded same-layer
+  topology alternatives after an exact regional copper failure, with deterministic CPU/Vulkan
+  parity and unchanged polygon, clearance, connectivity, and DRC authority;
 - a deterministic CLI demonstration and dependency-free CTest suite.
 
 Safe live footprint transforms, transactional zone refill/editing and ambiguous fill contours,
@@ -421,6 +490,9 @@ footprints. See [`ADR 0112`](docs/adr/0112-bounded-kicad-place-route-workflow.md
 ./build/dev/flux-cli route-kicad board.kicad_pcb --corridor-neck-down-width-nm 150000 --max-corridor-neck-down-length-nm 3000000 --max-corridor-neck-down-states 5000000 --width-reduction-cost-per-grid-step 0
 ./build/dev/flux-cli route-kicad board.kicad_pcb --max-voronoi-resource-segment-length-nm 1000000
 ./build/dev/flux-cli detail-kicad board.kicad_pcb
+# Default: straight track sections with conventional corner pull-tight.
+./build/dev/flux-cli detail-kicad board.kicad_pcb board.straight.kicad_pcb
+# Optional retained PH/spline realization:
 ./build/dev/flux-cli detail-kicad board.kicad_pcb --arcs board.curved.kicad_pcb
 ./build/dev/flux-cli detail-kicad board.kicad_pcb --netclasses board.flux_netclasses
 ./build/dev/flux-cli detail-kicad board.kicad_pcb --netclasses board.flux_netclasses --diffpairs board.flux_diffpairs --buses board.flux_buses
@@ -438,6 +510,26 @@ footprints. See [`ADR 0112`](docs/adr/0112-bounded-kicad-place-route-workflow.md
 ./build/dev/flux-cli constrained-optimize-kicad board.kicad_pcb board.constraints
 ./build/dev/flux-cli constrained-refine-kicad board.kicad_pcb board.constraints board.refined.kicad_pcb
 ```
+
+Regional candidate learning-to-rank is an opt-in experiment. Collect exact post-realization labels
+without changing candidate order, train the external XGBoost model, then enable advisory ranking:
+
+```bash
+./build/dev/flux-cli detail-kicad board.kicad_pcb \
+  --regional-candidate-training-data build/regional-candidates.jsonl
+python3 tools/train_regional_candidate_ranker.py \
+  build/regional-candidates.jsonl --output build/regional-ranker.json
+./build/dev/flux-cli detail-kicad board.kicad_pcb \
+  --regional-candidate-ranker-model build/regional-ranker.json \
+  --regional-candidate-training-data build/regional-ranked-candidates.jsonl
+```
+
+Training requires the Python `xgboost` and `numpy` packages; routing does not. The exported model
+uses a bounded Flux-owned JSON schema and can only reorder the already retained regional
+shortlist. Invalid models restore the deterministic heuristic order, and every candidate that is
+tried still passes the unchanged PH/XPBD, quantization, connectivity, copper-DRC, and transaction
+gates. CLI JSON reports model loading, scored/reordered candidates, observation writes, and any
+fallback diagnostic.
 
 `demo` evaluates a small legal routed board and prints a machine-readable objective.
 `demo-invalid` deliberately overlaps two courtyards and exits with status 2.
@@ -495,6 +587,59 @@ All KiCad routing and optimization commands accept positive `--max-router-iterat
 bounds alternatives per terminal. Results expose total/adaptive access nodes and terminals that
 needed the fallback. They make large-board verification effort reproducible; exhausting a limit
 remains an incomplete result and never authorizes materialization or export.
+
+For controlled `route-kicad` / `detail-kicad` feedback experiments,
+`--physical-feedback-retries R` explicitly partitions `--max-router-iterations N`
+into an initial epoch and retries (`0 <= R < N`, at most 64 retries).
+`--feedback-shadow-policy enforced|advisory` holds shadow treatment fixed instead of
+deriving it from the retry count. `--oracle-first-feedback` defers intermediate
+regional search when the provisional copper oracle already has failures to feed
+upstream; final regional realization and DRC remain mandatory. This scheduling
+experiment is disabled by default and is not a tier-qualified routing improvement.
+The corpus runner accepts these controls with `--iteration-budget N` and preserves
+them in run metadata. See
+[the experiment](reports/diagnoses/2026-09-05-oracle-first-feedback.md).
+
+The full-strength “kitchen sink” policy is now the default for the planner,
+`route-kicad`, and `detail-kicad`; `--full-strength-first-pass` explicitly selects it.
+Use `--no-full-strength-first-pass` to restore the legacy staged policy. It
+certifies the first global seed before distributing remaining iterations across retries, enables
+compatible bounded global repair operators and USPED refinement, and uses full
+regional portfolios/PH/XPBD on every feedback epoch. Failed physical repair feeds
+conflict-directed rip-up/reroute, then physics runs again, bounded by the caller's
+iteration/retry limits. The initial and final epochs retain the full local scope-repair
+budget; intermediate retry epochs return failures upstream before local scope rebuilding.
+The default initial shadow policy matches a one-iteration run, independently of the
+retry budget; explicit shadow-policy overrides still apply on every epoch.
+Short iteration budgets clamp the default retry count without adding iterations.
+Preliminary straight-scaffold rejection is disabled, not final native-copper legality. Up to two additional
+sampled-conflict repair cones retain their own existing local search budgets.
+On `detail-kicad`, native arc refinement and applicable differential-pair tuning
+are enabled too. This option is mutually exclusive with `--oracle-first-feedback`
+and explicit XPBD-disable flags. No topology-backend replacement, unspecified
+neck-down widths, learned model, source-rule relaxation or hardware-parallelism
+change is implied. All stages remain conditional on applicable failures and
+bounded; already legal candidates may finish early.
+
+`--frozen-copper-context` experimentally checks each native regional candidate
+against all unowned global planar fragments, including untouched continuations
+of locally repaired nets. It can reject locally legal but globally crossing
+curves before the first-legal candidate exit. It is conservative about copper
+that another window may later move. It also checks the current candidate's resolved
+entry/exit vias with their full copper/drill/span; other windows' future vias are
+not included. Candidate via copper envelopes also guide the existing spline
+optimiser; this guidance does not replace exact hole/copper checks. The full-strength
+default enables this context; it remains opt-in under legacy scheduling.
+Final full-scene and KiCad checks remain mandatory. The corpus runner
+accepts the same flag; see [the diagnosis](reports/diagnoses/2026-09-06-frozen-copper-context.md).
+
+`--expand-frozen-copper-scope` implies frozen context and additionally feeds exact
+candidate/outside-fragment pairs from retained unresolved candidates into bounded
+regional scope retries. It avoids nearest-net attribution across layer changes.
+Already legal candidates and duplicate pairs do not enlarge scope. The full-strength
+default permits this on its initial and final epochs; intermediate retry failures receive
+upstream rerouting. [Experiment details](reports/diagnoses/2026-09-06-frozen-scope-feedback.md).
+
 `--terminal-neck-down-width-nm N` and `--max-terminal-neck-down-length-nm N` must be supplied
 together. Nominal access remains preferred; the explicit smaller width applies only to a bounded
 ordinary-net terminal polyline whose nominal-width portal is independently legal. Pair/bus members
@@ -1837,3 +1982,86 @@ bounded budget. Unknown fields, stale fingerprints, duplicate normalized angles,
 IDs, reference mismatches, and policies excluding the current orientation fail closed. Only
 footprints named by the sidecar receive orientation proposals, although ordinary legal
 translations remain part of the integrated search.
+
+### Experimental USPED NavMesh prepass
+
+Add `--usped-navmesh` to KiCad routing commands to enable a bounded, geometry-only CPU prepass
+inspired by LittlePlanets terrain. Obstacles remain masked mountains; clearance defines slopes and
+valleys. Flow accumulation and transport divergence rank extra NavMesh subdivisions without
+changing legal free space. It is disabled by default pending full-board qualification.
+See [ADR 0172](docs/adr/0172-usped-informed-navmesh.md) for fields, budgets and limitations.
+
+For a structured global-stage on/off comparison (not copper qualification):
+
+```sh
+python3 tests/python/compare_usped_navmesh.py \
+  --flux-cli build/dev/flux-cli --board tests/fixtures/parity/krt/cap_chain.kicad_pcb \
+  --output build/usped-comparison.json --timeout 120 \
+  --router-args --max-router-iterations 1 --max-expansions 10000
+```
+
+The routing corpus uses curved routing by default (`./run_tiers.sh`); pass
+`--track-geometry straight` for a straight-routing comparison.
+The straight acceptance gate requires zero added arcs and all existing connectivity,
+clearance, hole, edge and original-project KiCad DRC checks. Explicit `--curved-tracks`
+and `--arcs` remain supported. No tier is promoted by changing geometry mode.
+
+### KiCad 10 Bézier copper
+
+Curved routing now retains PH geometry through a bounded conversion to piecewise cubic Bézier
+copper, exported as KiCad 10 net-assigned `gr_curve` objects. Board schema 22 preserves the four
+controls, width, layer, net and lock state through import, candidate export and change sets.
+The viewer draws these controls directly. Clearance checks use conservative envelopes of the
+actual cubic, and connectivity uses inner envelopes. Flux also checks minimum width explicitly,
+because KiCad's graphic copper does not receive every track-specific fabrication rule.
+See [the PH design update](docs/adr/0156-quintic-ph-continuous-routing.md).
+
+### Height-evolution discovery
+
+Global hydraulic proposals use bounded Vulkan terrain evolution by default in the CLI and routing
+engine. It repeatedly erodes and deposits a clearance-derived height field on the GPU, then searches across
+valleys and saddles without altering legal copper space. `--terrain-height-evolution` explicitly
+selects this default; `--no-terrain-height-evolution` selects Vulkan droplets for comparison.
+Completed engine passes replace a net/layer-aware copper pressure snapshot; later global passes
+recompute terrain from it, including changes from rip-up. Confined anisotropic repair retains its
+directional solver. Field buffers stay resident across evolution iterations; CPU path extraction
+and exact validation remain active. An explicit CPU reference is available through the library for
+comparison, and a requested GPU solve never silently falls back to it.
+See [the design](docs/adr/0173-terrain-height-evolution-discovery.md).
+
+### Bounded regional acceleration
+
+Regional channel construction indexes cached prepared polygons and reduces exact overlap results
+in channel order. Board-bound preparation reuses obstacle sources, validation, local spatial
+indices and navigation geometry; laid or ripped-up copper invalidates the relevant board snapshot.
+Independent windows adapt concurrency to available work and an estimated scratch budget. Within a
+single window, up to two alternatives run against private copies of the same copper snapshot;
+selection and publication retain shortlist order and the existing legal-candidate limit.
+
+All routing CPU pools acquire nonblocking leases from one process-wide worker budget. Nested
+regional/PH pools run serially when their parent owns the parallel work. The regional library
+configuration exposes `max_spline_cpu_workers`, `max_spline_window_workers`,
+`max_spline_candidate_workers`, `max_spline_window_scratch_bytes` and
+`estimated_spline_window_scratch_bytes`. The default scratch allowance is 256 MiB with a 64 MiB
+per-worker estimate; this limits concurrency, not actual process RSS. Zero scratch allowance removes
+that estimated-memory cap. GPU chord screening submits at most 1,024 chords, 1,024 boundary segments
+and 262,144 chord/segment pairs per dispatch. Ambiguous screening results retain exact CPU checks.
+Managed routing pauses park child workers before returning control to the state engine.
+
+### Indexed physical clearance map
+
+Polygonal terrain discovery now uses a reusable physical map with a **0.05 mm logical pixel pitch**. Each pixel stores an integer record index. Materialized records contain boundary distance, a conservative whole-pixel distance bound, inside/boundary flags, the nearest exact boundary primitive, and an offset/count into a pooled list of all boundary primitives touching that pixel. Exact primitive geometry and owner IDs are stored once in an immutable pool backed by a BVH. Unmaterialized pixels have an explicit invalid index and are never interpreted as free space.
+
+This index consumes the existing prepared polygonal domain: its obstacle IDs identify domain rings, not original KiCad item UUIDs. The caller's prepared domain remains responsible for net/layer/rule selection. Boundary references are not a claim that every raw PCB object or every occupied polygon interior has been indexed. Exact point queries resolve narrow passages without treating an entire touched pixel as impassable. Final chord, continuous-copper and KiCad DRC checks remain authoritative.
+
+The physical index and cached discovery fields are separate from mutable pressure, success, height and flow arrays. Exact geometry keys exclude routing endpoints and history, so history-only changes reuse the physical snapshot. Changed domain geometry creates a new snapshot; existing users retain valid leases. The physical grid does not force erosion onto a four-million-cell solver: rich records are materialized at queried pixels, while the existing adaptive discovery pitch remains in use.
+
+The terrain wrapper retains at most four entries/128 MiB of indexed-map cache data; callers may retain immutable leases beyond cache eviction. A map is bounded to four million logical cells. Domains exceeding these bounds explicitly report `indexed_clearance_map_fallbacks` and retain the exhaustive exact polygon-raster path. `HydraulicPathConfig::use_indexed_clearance_map=false` selects that reference path for differential checks. The alternate hydraulic GPU polygon-raster backend remains available; the default height-evolution path consumes indexed physical fields and the existing shared GPU mask cache.
+
+CLI telemetry reports `static_seed_indexed_clearance_map_{builds,reuses,cells,records,references,fallbacks}`. Cell/record/reference totals are accumulated observations across routing attempts, not peak resident memory. Raw rich-record storage is CPU-side; walkability is reused on the GPU through immutable mask leases.
+
+Dynamic direct-edge clearance shadows use the same primitive-index API in an open-segment mode. Owner references retain the authoritative route segment, net membership, layer, selected copper radius and originating edge/via resource. BVH nodes retain the maximum descendant copper radius; queries conservatively expand candidate bounds by copper radii and the clearance bound, then run the existing exact segment-distance and pairwise rule checks on retained owners. These queries do not use polygon inside/outside parity. The immutable index is rebuilt lazily after occupancy changes, is limited to 32 MiB, and falls back to exhaustive owner checks when unavailable. Sampled-edge shadow construction keeps its existing bounded spatial raster.
+
+Same-corridor overlaps that fit the integer capacity estimate now remain explicit **packing obligations**. They are separate from proven clearance violations and do not charge congestion history merely for missing proof. Regional analysis maps their witnesses into bounded packing work. A `no_conflicts` label or a complete discrete assignment cannot discharge them: a complete, conflict-free physical scene is required. Obligation truncation remains explicit. CLI and viewer telemetry expose the unresolved count and budget-exhaustion state.
+
+System diagrams: [routing and feedback flow](docs/diagrams/flux-system-flow.mmd), [engine decision policy](docs/diagrams/flux-engine-decisions.mmd), and [clearance ownership and compute](docs/diagrams/flux-clearance-and-compute.mmd). These show conditional mechanisms as well as the main data flow; enabled actions are selected by the engine rather than executed as a fixed sequence.

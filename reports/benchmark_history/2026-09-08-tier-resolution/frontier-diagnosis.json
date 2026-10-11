@@ -1,0 +1,83 @@
+{
+  "board": "bm_svf",
+  "tier": 1,
+  "status": "unqualified",
+  "configuration": {
+    "iterations": 2,
+    "physical_feedback_retries": 0,
+    "regional_bundle_states": 256,
+    "planning_timeout_seconds": 600
+  },
+  "failing_stage": "assembled regional physical copper",
+  "topological_connectivity": "78 materialized paths, zero exact opens; not evidence of DRC legality",
+  "exact_scene": {
+    "drc_violations": 812,
+    "opens": 0,
+    "categories": {
+      "hole_clearance": 47,
+      "hole_to_hole_clearance": 3,
+      "track_clearance": 674,
+      "track_via_clearance": 88
+    },
+    "artifact": "V60-frontier-external-verification.json"
+  },
+  "smallest_high_priority_conflict": {
+    "nets": [
+      "kicad-net-13",
+      "kicad-net-14"
+    ],
+    "names": [
+      "Net-(U4A--)",
+      "Net-(R4-Pad1)"
+    ],
+    "layer": "F.Cu",
+    "coalesced_diagnoses": 19,
+    "worst_bounds_nm": [
+      55052499,
+      82277499,
+      55827501,
+      83502501
+    ],
+    "worst_deficit_nm": 525000,
+    "source_pair": [
+      {
+        "net": "kicad-net-13",
+        "connection_index": 2,
+        "segment_index": 1,
+        "start_nm": [
+          55440000,
+          81915000
+        ],
+        "end_nm": [
+          55440000,
+          83540000
+        ]
+      },
+      {
+        "net": "kicad-net-14",
+        "connection_index": 2,
+        "segment_index": 4,
+        "start_nm": [
+          55590000,
+          82890000
+        ],
+        "end_nm": [
+          55490002,
+          82790002
+        ]
+      }
+    ],
+    "limitation": "Largest recorded pair group; not a proven minimal unsatisfiable region."
+  },
+  "physical_feasibility": "Known-good KRT reference proves whole-board routability; feasibility of the frozen regional scope remains unproved.",
+  "resolved_this_turn": "Exact via failures now retain branch/layer ownership and reach regional scope instead of being silently filtered or guessed by proximity. Standalone32-state selected unmapped pairs100\u21920.",
+  "rejected_experiment": "V59 normal-angle via approaches recover one local access assignment but worsen assembled scenes; reverted.",
+  "upstream_trace_status": "Exact pair identified in reconstructed assembled copper. Earliest irreversible topology/portfolio choice remains to be established; no claim that local clearance repair alone can solve it.",
+  "next_hypotheses": [
+    "Evaluate the default full feedback configuration with the corrected via ownership before changing another algorithm.",
+    "Trace the Net-(U4A--)/Net-(R4-Pad1) crossing back to selected lane/template and source corridor choices.",
+    "Feed exact assembled-scene conflicts to global/portfolio selection earlier; retain a physically evaluated checkpoint across failed scope retries."
+  ],
+  "qualification_gates": "All opens, copper/hole/via clearance, shorts, crossing and ordinary-angle checks plus KiCad DRC remain mandatory; no tier promoted.",
+  "latest_run_outcome": "256-state follow-up timed out at600seconds; 812-error scene is a completed intermediate scene, not a final selected checkpoint."
+}

@@ -1,0 +1,89 @@
+{
+  "schema": 1,
+  "experiment": "breadth-first-regional-spline-tiers",
+  "hypothesis": "Independent regional windows are starved because each worker evaluates an active shortlist and its fallback wave depth-first. A deterministic barrier between active and fallback tiers should characterize every window before reserve candidates consume workers.",
+  "binary": {
+    "path": "build/breadth-first-v10-bin/flux-cli",
+    "sha256": "37ab4ca12755e8eec99e750e1e131dafbae400a69e436fa7db79e1127b004ca7"
+  },
+  "research": [
+    {
+      "project": "OpenROAD TritonRoute",
+      "source": "https://openroad.readthedocs.io/en/latest/main/src/drt/README.html",
+      "relevance": "Detailed routing is decomposed into bounded search/repair stages; Flux retains its exact regional repair algorithms while changing only independent-window scheduling."
+    }
+  ],
+  "runs": [
+    {
+      "board": "pt2399_delay",
+      "tier": 0,
+      "policy": "default",
+      "artifact": "build/tier0-breadth-first-spline-tiers-v10-20260906",
+      "status": "passed",
+      "paths": 50,
+      "tracks": 75,
+      "arcs": 299,
+      "vias": 5,
+      "opens": 0,
+      "internal_copper_violations": 0,
+      "external_kicad_drc_violations": 0,
+      "output_sha256": "459bffc8258348a89eafcc275a35decdfc59e8afb1278b0731a58e0fd9df35ac",
+      "output_matches_v5_v8": true,
+      "global_duration_seconds": 308.4983158480027,
+      "detailed_duration_seconds": 395.30113714501204
+    },
+    {
+      "board": "bm_svf",
+      "tier": 1,
+      "policy": "default_without_prioritized_frozen_scope_expansion",
+      "artifact": "build/tier1-breadth-first-spline-tiers-v10-20260906",
+      "status": "diagnostic_timeout",
+      "timeout_seconds": 1200,
+      "control_comparable_to_v9": false,
+      "observations": [
+        "The run completed two ordinary active/fallback barriers and reached a third physical epoch.",
+        "Its late scope fell from eight windows to four before timeout, but this trajectory cannot be attributed to scheduling because V9 enabled prioritized frozen-scope expansion."
+      ]
+    },
+    {
+      "board": "bm_svf",
+      "tier": 1,
+      "policy": "prioritized_frozen_scope_expansion",
+      "artifact": "build/tier1-breadth-first-spline-tiers-v10-scope-20260906",
+      "status": "diagnostic_timeout",
+      "timeout_seconds": 1200,
+      "control_comparable_to_v9": true,
+      "pre_native_checkpoints": [
+        {"epoch": 1, "seconds": 38.210877, "violations": 764, "opens": 0, "windows": 17},
+        {"epoch": 2, "seconds": 207.319641, "violations": 1297, "opens": 0, "windows": 24},
+        {"epoch": 3, "seconds": 261.090696, "violations": 2216, "opens": 0, "windows": 27},
+        {"epoch": 4, "windows_ready_seconds": 328.672, "windows": 25, "owned_fragments": 226, "corridors": 89, "portfolio_ready_seconds": 684.78462, "alternatives": 649}
+      ],
+      "active_tier_barrier_seconds": 1011.127689,
+      "fallback_windows_queued": 15,
+      "fallback_promotions_before_timeout": 11,
+      "eligible_windows_receiving_active_work_before_fallback": 24,
+      "maximum_candidate_starts_before_barrier": 8,
+      "final_kicad_drc": "not_evaluated"
+    }
+  ],
+  "comparison": {
+    "v9_depth_first": {
+      "fallback_first_seconds": 788.886496,
+      "windows_reaching_16_candidate_starts": [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17],
+      "active_barrier": false
+    },
+    "v10_breadth_first": {
+      "fallback_first_seconds": 1011.15573,
+      "windows_reaching_16_candidate_starts_before_timeout": [2, 3, 4, 5, 6, 7, 8],
+      "active_barrier": true,
+      "all_eligible_windows_characterized_before_fallback": true
+    }
+  },
+  "interpretation": {
+    "hypothesis_result": "strongly_supported",
+    "decision": "keep",
+    "remaining_frontier": "The active tier still takes 326 seconds with only four independent window workers on a 24-core host. Portfolio construction takes another 356 seconds. Exact native PH/copper work remains the dominant post-portfolio cost.",
+    "next_experiment": "Increase the independently owned regional-window worker bound from four to eight while preserving stable reduction, candidate ordering, tier barriers, and all exact legality gates."
+  }
+}

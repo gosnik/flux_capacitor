@@ -1,0 +1,72 @@
+{
+  "schema": "flux_v63_normal_benchmark_summary",
+  "date": "2026-10-01",
+  "binary": "build/tier-resolution-20261001-v63/flux-cli",
+  "board": "bm_svf",
+  "tier": 1,
+  "qualification": false,
+  "reason": "global topology complete but routing plan and physical scene are not legal",
+  "global": {
+    "complete": true,
+    "routing_plan_complete": false,
+    "stop_reason": "complete",
+    "paths": 78,
+    "unrouted_nets": 0,
+    "iterations": 2,
+    "total_overflow": 0,
+    "residual_conflict_groups": 1,
+    "regional_windows": 33,
+    "regional_spline_realizations": 213,
+    "regional_bundle_search_states": 794574,
+    "regional_native_scene_complete": 1,
+    "regional_native_scene_conflicts": 439,
+    "regional_native_scene_fixed_conflicts": 387,
+    "regional_selected_alternative_templates": 21,
+    "regional_accepted_alternative_templates": 709,
+    "regional_selected_via_alternative_switches": 26,
+    "retained_global_portfolios_evaluated": 14,
+    "retained_global_portfolio_peak": 4,
+    "discarded_portfolio_diagnoses": 508
+  },
+  "straight_scene": {
+    "evaluated": 1,
+    "violations": 764,
+    "open_connections": 0,
+    "trials": 2,
+    "source_fallback_selected": 1,
+    "categories": {
+      "hole_clearance": 62,
+      "hole_to_hole_clearance": 3,
+      "track_clearance": 542,
+      "track_edge_clearance": 5,
+      "track_pad_clearance": 4,
+      "track_via_clearance": 142,
+      "via_clearance": 4,
+      "via_edge_clearance": 2
+    }
+  },
+  "oracle": {
+    "feasible": false,
+    "open_connections": 0,
+    "unrouted_nets": 0,
+    "paths_examined": 78,
+    "paths_materialized": 78,
+    "tracks": 1291,
+    "vias": 46,
+    "elapsed_us": 128159,
+    "drc_violation_counts": {
+      "hole_clearance": 29,
+      "track_clearance": 386,
+      "track_via_clearance": 123,
+      "via_clearance": 2
+    }
+  },
+  "timing": {
+    "global_duration_seconds": 2502.4366506399965,
+    "process_elapsed_seconds": 2513.75,
+    "user_seconds": 2307.04,
+    "system_seconds": 6.16,
+    "max_rss_kb": 572412
+  },
+  "physical_frontier": "Topological routing reaches 78 paths with zero global overflow, but native scene reports 439 conflicts (387 fixed) and the selected straight realization retains 764 DRC violations across track/clearance/via/hole categories; detailed realization is absent."
+}

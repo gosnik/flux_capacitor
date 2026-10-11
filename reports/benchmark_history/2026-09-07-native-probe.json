@@ -1,0 +1,52 @@
+{
+  "schema": 1,
+  "date": "2026-09-07",
+  "experiment": "V30 native-coordinate physical feedback",
+  "git_revision": "7cd59fc",
+  "worktree": "Native probe precision and V28/V29 integration plus preserved earlier work",
+  "binary_sha256": "da92a08381d392771266e8a08a33eea317b17efc0657317a2e53da94463f2c79",
+  "change": "Default physical probe pitch 100000 -> 1 nm, matching final native copper; explicit coarse experiments and all DRC rules retained",
+  "tier0": {
+    "artifact": "build/tier0-native-probe-v30-20260907",
+    "routing_overrides": [],
+    "global_seconds": 62.57459003300755,
+    "detail_seconds": 136.41453279700363,
+    "paths": 50,
+    "tracks": 82,
+    "arcs": 152,
+    "vias": 4,
+    "unrounded_bends": 0,
+    "internal_copper_violations": 0,
+    "opens": 0,
+    "oracle_violations": 0,
+    "oracle_pitch_nm": 1,
+    "accepted_pcb_sha256": "2e0197607f1b02982a4e66fe58527c86b87f8b8f600ade47041d8bfb09e51cf7",
+    "route_length_mm": 407.95254076405774,
+    "original_project_sha256": "ddbcc3d30ca8a4e88f38be0bb5a12f4f29f67048bd503d3e77b2e615196bab8a",
+    "external_kicad_drc": {"version": "9.0.8", "original_project": true, "errors": 0, "opens": 0},
+    "tier_pass": true
+  },
+  "tier1": {
+    "artifact": "build/tier1-native-probe-v30-20260907",
+    "routing_overrides": {"planning_timeout_seconds": 600},
+    "outcome": "planning_timeout",
+    "selected_paths": 78,
+    "diagnostic_replay_raw_violations_before": 930,
+    "diagnostic_replay_raw_violations_after": 853,
+    "interpretation": "The difference removes manufactured pad/edge failures and exposes some hidden track/via errors; it is not an actual routed-copper improvement.",
+    "accepted_copper": false,
+    "final_kicad_drc": "not_evaluated",
+    "tier_pass": false
+  },
+  "verification": {
+    "core": {"passed": 42, "total": 42},
+    "rule_context": {"passed": 7, "total": 7},
+    "summary": {"passed": 4, "total": 4},
+    "other_regression": {"passed": 119, "total": 126, "seconds": 38.78, "known_failures": 7},
+    "constrained_placement_export": "Prior timeout unresolved; export and dependent DRC excluded explicitly",
+    "diagnostic_tool": "Built and executed: matched allocation at three precisions, missing snapshot rejected, 25 complete whole-net pair alternatives evaluated"
+  },
+  "peak_memory_bytes": null,
+  "decision": "keep feedback correctness fix; no Tier-1 promotion",
+  "next_hypothesis": "Longitudinally separated fragments are incorrectly charged as simultaneous lanes in a merged regional channel, both in DFS capacity and downstream lane packing."
+}

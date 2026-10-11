@@ -1,5 +1,7 @@
 #include "flux/core/validation.hpp"
 
+#include "flux/core/bezier_copper.hpp"
+
 #include "flux/core/geometry.hpp"
 #include "flux/core/keepout_geometry.hpp"
 #include "flux/core/routing_rules.hpp"
@@ -845,6 +847,41 @@ ValidationReport validate_board_impl(const Board& board, bool reuse_static_zone_
     } else if (!geometry::circular_arc_inside_board_area(arc.start, arc.middle, arc.end, board)) {
       add_issue(report, IssueSeverity::error, "track_arc_outside_board",
                 "track arc centerline must remain inside the board", {arc.id.value()});
+    }
+  }
+
+  for (const auto& curve : board.track_beziers) {
+    if (!insert_unique(object_ids, curve.id.value())) {
+      add_issue(report, IssueSeverity::error, "duplicate_or_empty_object_id",
+                "object IDs must be non-empty and globally unique", {curve.id.value()});
+    }
+    if (!has_value(net_ids, curve.net.value())) {
+      add_issue(report, IssueSeverity::error, "unknown_track_bezier_net",
+                "track Bezier references an undeclared net", {curve.id.value(), curve.net.value()});
+    }
+    if (!has_value(layer_ids, curve.layer.value())) {
+      add_issue(report, IssueSeverity::error, "unknown_track_bezier_layer",
+                "track Bezier references an undeclared layer", {curve.id.value(), curve.layer.value()});
+    }
+    if (curve.width.value() <= 0) {
+      add_issue(report, IssueSeverity::error, "track_bezier_nonpositive_width",
+                "track Bezier width must be positive", {curve.id.value()});
+    }
+    const auto all_same = curve.start == curve.control1 && curve.start == curve.control2 &&
+                          curve.start == curve.end;
+    if (all_same) {
+      add_issue(report, IssueSeverity::error, "track_bezier_zero_length",
+                "track Bezier control polygon must not collapse to one point", {curve.id.value()});
+    }
+    const auto in_range = geometry::coordinate_in_range(curve.start) &&
+                          geometry::coordinate_in_range(curve.control1) &&
+                          geometry::coordinate_in_range(curve.control2) &&
+                          geometry::coordinate_in_range(curve.end);
+    const auto flattened = tessellate_track_bezier(curve);
+    if (!in_range || !flattened.certified) {
+      add_issue(report, IssueSeverity::error, "invalid_track_bezier_geometry",
+                "track Bezier controls must be in range and admit a certified tessellation",
+                {curve.id.value()});
     }
   }
 

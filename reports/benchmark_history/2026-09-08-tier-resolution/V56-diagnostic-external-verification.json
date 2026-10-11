@@ -1,0 +1,44 @@
+{
+  "authoritative": false,
+  "qualified": false,
+  "internal": {
+    "authoritative": false,
+    "snapshot_sequence": 1,
+    "paths": 78,
+    "detail_complete": false,
+    "tracks": 1005,
+    "arcs": 0,
+    "vias": 63,
+    "validation_errors": 0,
+    "opens": 0,
+    "drc_violations": 397,
+    "diagnostic": "materialized route violates represented copper rules",
+    "preview_written": true
+  },
+  "kicad_errors": 271,
+  "kicad_error_categories": {
+    "solder_mask_bridge": 3,
+    "hole_to_hole": 2,
+    "shorting_items": 69,
+    "tracks_crossing": 58,
+    "clearance": 139
+  },
+  "kicad_unconnected_items": 0,
+  "straight_angle_audit": {
+    "tracks": 1005,
+    "angles": {
+      "horizontal": 228,
+      "vertical": 264,
+      "diagonal_45": 513,
+      "other": 0
+    },
+    "arcs": 0,
+    "passed": true
+  },
+  "project_context": {
+    "source": "tests/fixtures/routing-corpus/bm_svf.kicad_pro",
+    "destination": "build/tier-resolution-v56-tier1/first-scene/diagnostic-preview/candidate.kicad_pro",
+    "sha256": "04856904fe9070f7decd33b676d3f58e44676b6c930e65fa8a16f0ddd65d54db",
+    "byte_identical": true
+  }
+}

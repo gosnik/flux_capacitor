@@ -1,0 +1,450 @@
+--- a/src/regional_router.cpp
++++ b/src/regional_router.cpp
+@@ -372,6 +372,7 @@
+          config.max_selected_via_site_checks_per_region > 0U &&
+          config.max_access_assignment_states > 0U && config.max_access_blockers_per_window > 0U &&
+          config.max_layer_sequences_per_fragment > 0U && config.max_bundle_search_states > 0U &&
++         config.max_straight_portfolio_checks <= 4'096U &&
+          config.max_lane_order_states > 0U && config.max_spline_window_workers > 0U &&
+          config.max_spline_exact_candidate_workers > 0U &&
+          config.max_spline_sweeps > 0U &&
+@@ -6441,6 +6442,8 @@
+                        {"frozen_copper_context", regional.configured.frozen_copper_context},
+                        {"enable_spline_realization", regional.configured.enable_spline_realization},
+                        {"enable_straight_realization", regional.configured.enable_straight_realization},
++                       {"max_straight_portfolio_checks",
++                        regional.configured.max_straight_portfolio_checks},
+                        {"phase", json::string(phase)}, {"window", window.id},
+                        {"max_states", regional.configured.max_bundle_search_states},
+                        {"max_access_states", regional.configured.max_access_assignment_states},
+@@ -15416,6 +15419,24 @@
+                                          RegionalRouteResult& result, std::stop_token stop_token) {
+   result.configured.enable_straight_realization = true;
+   result.configured.enable_spline_realization = false;
++  result.straight_scene_portfolio_checks = 0U;
++  result.straight_scene_portfolio_improvements = 0U;
++  const std::vector<RegionalBundleStopReason> discrete_stop_reasons = [&] {
++    std::vector<RegionalBundleStopReason> reasons;
++    reasons.reserve(result.bundle_assignments.size());
++    for (const auto& assignment : result.bundle_assignments) reasons.push_back(assignment.stop_reason);
++    return reasons;
++  }();
++  const auto apply_selection = [](RegionalBundleAssignment& assignment,
++                                  const RegionalBundleSelection& selection) {
++    assignment.selected_templates = selection.templates;
++    assignment.selected_via_choices = selection.via_choices;
++    assignment.via_assignment_region_order = selection.via_assignment_region_order;
++    assignment.packed_cross_sections = selection.packed_cross_sections;
++    assignment.selected_via_alternative_switches = selection.via_alternative_switches;
++    assignment.selected_template_conflicts = selection.template_conflicts;
++    assignment.selected_residual_conflicts = selection.residual_conflicts;
++  };
+   // The discrete objective can prefer many layer excursions whose copper is worse than the
+   // original topology. Keep the allocator's already packed source-topology fallback in the
+   // physical comparison; do not invent a new lane order or lower a clearance requirement.
+@@ -15444,19 +15465,11 @@
+     if (!selected || (assignment.selected_templates == selected->templates &&
+                       assignment.selected_via_choices == selected->via_choices &&
+                       assignment.packed_cross_sections == selected->packed_cross_sections)) continue;
+-    assignment.selected_templates = selected->templates;
+-    assignment.selected_via_choices = selected->via_choices;
+-    assignment.via_assignment_region_order = selected->via_assignment_region_order;
+-    assignment.packed_cross_sections = selected->packed_cross_sections;
+-    assignment.selected_via_alternative_switches = selected->via_alternative_switches;
+-    assignment.selected_template_conflicts = selected->template_conflicts;
+-    assignment.selected_residual_conflicts = selected->residual_conflicts;
++    apply_selection(assignment, *selected);
+     changed = true;
+   }
+   realize_regional_straight_candidate_once(board, global, result, stop_token);
+   result.straight_scene_trials = stop_token.stop_requested() ? 0U : 1U;
+-  if (!changed || result.spline_candidate_available || stop_token.stop_requested()) return;
+-  realize_regional_straight_candidate_once(board, global, fallback, stop_token);
+   const auto objective = [](const auto& candidate) {
+     return std::tuple{candidate.spline_candidate_available ? 0U : 1U,
+                       candidate.linear_scaffold_checks > 0U ? 0U : 1U,
+@@ -15464,11 +15477,96 @@
+                       candidate.straight_scene_drc_violations,
+                       candidate.native_scene_conflicts};
+   };
+-  if (!stop_token.stop_requested() && objective(fallback) < objective(result)) {
+-    result = std::move(fallback);
+-    result.straight_source_fallback_selected = true;
++  if (changed && !result.spline_candidate_available && !stop_token.stop_requested()) {
++    realize_regional_straight_candidate_once(board, global, fallback, stop_token);
++    if (!stop_token.stop_requested() && objective(fallback) < objective(result)) {
++      result = std::move(fallback);
++      result.straight_source_fallback_selected = true;
++    }
++    result.straight_scene_trials = 2U;
++  }
++  if (result.spline_candidate_available || stop_token.stop_requested()) return;
++
++  // V68: retain the discrete planner as the source of alternatives, but judge each changed
++  // window only in the complete assembled straight transaction. A failed realization changes an
++  // assignment's stop reason, so restore only its original discrete state for the trial; an
++  // assignment that was incomplete or unsearched remains excluded from publication.
++  const bool complete_discrete_scene = std::all_of(
++      discrete_stop_reasons.begin(), discrete_stop_reasons.end(), [](const auto reason) {
++        return reason == RegionalBundleStopReason::complete;
++      });
++  const auto comparable = [](const RegionalRouteResult& candidate) {
++    return candidate.straight_scene_evaluated && candidate.native_scene_evaluated &&
++           candidate.native_scene_complete;
++  };
++  if (result.configured.max_straight_portfolio_checks == 0U || !complete_discrete_scene ||
++      !comparable(result) || result.spline_candidate_available || stop_token.stop_requested()) {
++    return;
++  }
++  std::vector<std::size_t> window_order;
++  for (std::size_t index = 0U; index < result.bundle_assignments.size(); ++index) {
++    const auto& assignment = result.bundle_assignments[index];
++    if (discrete_stop_reasons[index] != RegionalBundleStopReason::complete ||
++        assignment.spline_candidate_shortlist.empty()) continue;
++    window_order.push_back(index);
++  }
++  std::stable_sort(window_order.begin(), window_order.end(), [&](const auto left, const auto right) {
++    const auto& a = result.bundle_assignments[left];
++    const auto& b = result.bundle_assignments[right];
++    const auto pressure_a = a.selected_template_conflicts + a.selected_residual_conflicts;
++    const auto pressure_b = b.selected_template_conflicts + b.selected_residual_conflicts;
++    return pressure_a != pressure_b ? pressure_a > pressure_b : a.window_id < b.window_id;
++  });
++  const auto same_selection = [](const RegionalBundleAssignment& assignment,
++                                 const RegionalBundleSelection& selection) {
++    return assignment.selected_templates == selection.templates &&
++           assignment.selected_via_choices == selection.via_choices &&
++           assignment.via_assignment_region_order == selection.via_assignment_region_order &&
++           assignment.packed_cross_sections == selection.packed_cross_sections;
++  };
++  for (const auto index : window_order) {
++    const auto& assignment = result.bundle_assignments[index];
++    std::vector<RegionalBundleSelection> alternatives;
++    const auto remaining_checks = result.configured.max_straight_portfolio_checks -
++                                  result.straight_scene_portfolio_checks;
++    alternatives.reserve(std::min(assignment.spline_candidate_shortlist.size(), remaining_checks));
++    for (const auto& selection : assignment.spline_candidate_shortlist) {
++      if (alternatives.size() >= remaining_checks) break;
++      if (same_selection(assignment, selection) ||
++          std::find(alternatives.begin(), alternatives.end(), selection) != alternatives.end()) continue;
++      alternatives.push_back(selection);
++    }
++    for (const auto& selection : alternatives) {
++      if (result.straight_scene_portfolio_checks >=
++              result.configured.max_straight_portfolio_checks ||
++          stop_token.stop_requested()) return;
++      auto trial = result;
++      for (std::size_t restore = 0U; restore < trial.bundle_assignments.size(); ++restore)
++        if (discrete_stop_reasons[restore] == RegionalBundleStopReason::complete)
++          trial.bundle_assignments[restore].stop_reason = discrete_stop_reasons[restore];
++      apply_selection(trial.bundle_assignments[index], selection);
++      const auto prior_scaffold_checks = trial.linear_scaffold_checks;
++      const auto prior_scaffold_rejections = trial.linear_scaffold_rejections;
++      realize_regional_straight_candidate_once(board, global, trial, stop_token);
++      result.linear_scaffold_checks += trial.linear_scaffold_checks - prior_scaffold_checks;
++      result.linear_scaffold_rejections +=
++          trial.linear_scaffold_rejections - prior_scaffold_rejections;
++      ++result.straight_scene_portfolio_checks;
++      ++result.straight_scene_trials;
++      if (stop_token.stop_requested() || !comparable(trial) ||
++          trial.straight_scene_open_connections > result.straight_scene_open_connections) continue;
++      const auto trial_objective = objective(trial);
++      if (trial_objective < objective(result)) {
++        trial.straight_scene_trials = result.straight_scene_trials;
++        trial.linear_scaffold_checks = result.linear_scaffold_checks;
++        trial.linear_scaffold_rejections = result.linear_scaffold_rejections;
++        trial.straight_scene_portfolio_checks = result.straight_scene_portfolio_checks;
++        trial.straight_scene_portfolio_improvements = result.straight_scene_portfolio_improvements + 1U;
++        result = std::move(trial);
++        if (result.spline_candidate_available) return;
++      }
++    }
+   }
+-  result.straight_scene_trials = 2U;
+ }
+ 
+ void assess_regional_native_scene(const Board& source, RegionalRouteResult& regional) {
+--- a/include/flux/core/regional_router.hpp
++++ b/include/flux/core/regional_router.hpp
+@@ -162,6 +162,10 @@
+   bool enable_spline_realization{true};
+   // Realize selected lanes as integer H/V/45 copper without PH interpolation.
+   bool enable_straight_realization{false};
++  // After the selected straight transaction and its retained source-topology fallback both fail
++  // whole-scene copper checks, replay this many existing discrete portfolio alternatives. Zero
++  // preserves the selected-only baseline. This does not generate topology or relax packing.
++  std::size_t max_straight_portfolio_checks{0U};
+   // Materialize each final PH window candidate immediately as KiCad-native arcs/segments and
+   // use represented copper DRC as the mutual/static legality authority. Continuous PH envelopes
+   // remain topology/fairness guidance and a failure diagnostic, not a second copper model.
+@@ -917,6 +921,8 @@
+   std::size_t linear_scaffold_rejections{0U};
+   std::size_t straight_scene_trials{0U};
+   bool straight_source_fallback_selected{false};
++  std::size_t straight_scene_portfolio_checks{0U};
++  std::size_t straight_scene_portfolio_improvements{0U};
+   std::size_t straight_collapsed_via_adapters{0U};
+   std::size_t straight_scene_drc_violations{0U};
+   std::size_t straight_scene_open_connections{0U};
+--- a/apps/flux-cli/main.cpp
++++ b/apps/flux-cli/main.cpp
+@@ -1735,6 +1735,12 @@
+   } else {
+     std::cout << regional->configured.max_bundle_search_states;
+   }
++  std::cout << ",\n  \"configured_regional_max_straight_portfolio_checks\": ";
++  if (regional == nullptr) {
++    std::cout << "null";
++  } else {
++    std::cout << regional->configured.max_straight_portfolio_checks;
++  }
+   std::cout << ",\n  \"regional_selected_global_narrow_corridor_fallbacks\": ";
+   if (regional == nullptr) {
+     std::cout << "null";
+@@ -3175,6 +3181,11 @@
+                                   regional == nullptr ? 0U : regional->straight_scene_trials);
+   print_regional_diagnosis_metric("regional_straight_source_fallback_selected",
+                                   regional && regional->straight_source_fallback_selected ? 1U : 0U);
++  print_regional_diagnosis_metric("regional_straight_scene_portfolio_checks",
++                                  regional == nullptr ? 0U : regional->straight_scene_portfolio_checks);
++  print_regional_diagnosis_metric("regional_straight_scene_portfolio_improvements",
++                                  regional == nullptr ? 0U
++                                                      : regional->straight_scene_portfolio_improvements);
+   print_regional_diagnosis_metric("regional_straight_collapsed_via_adapters",
+                                   regional == nullptr ? 0U : regional->straight_collapsed_via_adapters);
+   print_regional_diagnosis_metric("regional_straight_scene_drc_violations",
+@@ -7018,6 +7029,7 @@
+   bool shared_channel_copper{false};
+   bool centerline_channel_cuts{false};
+   std::optional<std::size_t> max_regional_bundle_states;
++  std::optional<std::size_t> max_straight_portfolio_checks;
+   bool expand_frozen_copper_scope{false};
+   bool prioritize_frozen_scope_expansion{false};
+   std::optional<std::size_t> max_final_routability_feedback_passes;
+@@ -7195,6 +7207,14 @@
+       if (parsed.ec != std::errc{} || parsed.ptr != token.data() + token.size() ||
+           value == 0 || value > 1'000'000U) return std::nullopt;
+       result.max_regional_bundle_states = value;
++    } else if (argument == "--max-straight-portfolio-checks") {
++      if (result.max_straight_portfolio_checks || index + 1 >= argc) return std::nullopt;
++      std::size_t value = 0U;
++      const std::string_view token{argv[++index]};
++      const auto parsed = std::from_chars(token.data(), token.data() + token.size(), value);
++      if (parsed.ec != std::errc{} || parsed.ptr != token.data() + token.size() ||
++          value > 4'096U) return std::nullopt;
++      result.max_straight_portfolio_checks = value;
+     } else if (argument == "--xpbd-iterations") {
+       if (result.xpbd_iterations || index + 1 >= argc)
+         return std::nullopt;
+@@ -8036,6 +8056,8 @@
+   config.centerline_channel_cuts = tail.centerline_channel_cuts;
+   if (tail.max_regional_bundle_states)
+     config.max_bundle_search_states = *tail.max_regional_bundle_states;
++  if (tail.max_straight_portfolio_checks)
++    config.max_straight_portfolio_checks = *tail.max_straight_portfolio_checks;
+   config.frozen_copper_context = tail.frozen_copper_context;
+   config.expand_frozen_copper_scope = tail.expand_frozen_copper_scope;
+   config.prioritize_frozen_scope_expansion = tail.prioritize_frozen_scope_expansion;
+@@ -8645,7 +8667,7 @@
+                "[--feedback-shadow-policy enforced|advisory] [--oracle-first-feedback | --full-strength-first-pass | --no-full-strength-first-pass] "
+                "[--frozen-copper-context] [--expand-frozen-copper-scope] [--prioritize-frozen-scope-expansion] "
+                "[--local-channel-occupancy] [--shared-channel-copper] [--centerline-channel-cuts] "
+-               "[--max-regional-bundle-states N] [--curved-tracks] "
++               "[--max-regional-bundle-states N] [--max-straight-portfolio-checks N] [--curved-tracks] "
+                "[--max-static-seed-workers N] "
+                "[--no-telemetry] [--telemetry-listen ADDRESS:PORT] "
+                "[--telemetry-rate HZ] [--telemetry-level normal|diagnostic|trace] "
+@@ -8747,6 +8769,7 @@
+                "[--max-router-iterations N] [--physical-feedback-retries N] "
+                "[--feedback-shadow-policy enforced|advisory] [--oracle-first-feedback | --full-strength-first-pass | --no-full-strength-first-pass] "
+                "[--frozen-copper-context] [--expand-frozen-copper-scope] [--prioritize-frozen-scope-expansion] "
++               "[--max-straight-portfolio-checks N] "
+                "[--max-static-seed-workers N] "
+                "[--max-expansions N] [--expansion-retry-heuristic-weight-per-mille N] "
+                "[--reuse-weighted-search-frontier] "
+--- a/tests/unit/core_tests.cpp
++++ b/tests/unit/core_tests.cpp
+@@ -540,6 +540,137 @@
+   require(!cancelled.spline_candidate_available, "cancelled straight realization must fail closed");
+ }
+ 
++void straight_scene_portfolio_replays_retained_window_alternative() {
++  Board board;
++  board.source_revision = "straight-portfolio-fixture";
++  board.outline = rectangle(0.0, 0.0, 100.0, 80.0);
++  const LayerId front{"F.Cu"};
++  board.layers = {{front, "F.Cu", LayerKind::copper, 0U}};
++  const NetId a{"portfolio-a"}, b{"portfolio-b"};
++  board.nets = {{a, "A", 0}, {b, "B", 0}};
++  const auto terminal = [&](std::string id, NetId net, Point position) {
++    Footprint footprint;
++    footprint.id = ObjectId{id};
++    footprint.reference = id;
++    footprint.position = position;
++    footprint.courtyard = local_rectangle(1.0, 1.0);
++    footprint.pads = {{ObjectId{id + "-pad"}, std::move(net), Point{}, {front}}};
++    return footprint;
++  };
++  board.footprints = {terminal("a1", a, mm(20, 40)), terminal("a2", a, mm(80, 40)),
++                      terminal("b1", b, mm(50, 20)), terminal("b2", b, mm(50, 60))};
++  const auto fragment = [&](NetId net, Point start, Point end) {
++    flux::RegionalRouteFragment value;
++    value.id = {std::move(net), 0U, 0U, 0U};
++    value.layer = front;
++    value.start = start;
++    value.end = end;
++    value.width = Nanometres::from_mm(0.25);
++    value.clearance = Nanometres::from_mm(0.2);
++    return value;
++  };
++  const auto a_fragment = fragment(a, mm(20, 40), mm(80, 40));
++  const auto b_fragment = fragment(b, mm(50, 20), mm(50, 60));
++  flux::GlobalRouteResult global;
++  global.paths = {{a, 0U, {{a_fragment.start, front}, {a_fragment.end, front}}},
++                  {b, 0U, {{b_fragment.start, front}, {b_fragment.end, front}}}};
++  flux::RegionalRouteResult regional;
++  regional.fragments = {a_fragment, b_fragment};
++  flux::RegionalRoutingWindow a_window;
++  a_window.id = 0U;
++  a_window.fragments = {a_fragment.id};
++  a_window.owned_fragments = {a_fragment.id};
++  flux::RegionalRoutingWindow b_window;
++  b_window.id = 1U;
++  b_window.fragments = {b_fragment.id};
++  b_window.owned_fragments = {b_fragment.id};
++  regional.windows = {a_window, b_window};
++  flux::RegionalRouteTemplate a_template;
++  a_template.id = 0U;
++  a_template.fragment = a_fragment.id;
++  a_template.routing_layer = front;
++  a_template.selected_global_topology = true;
++  flux::RegionalRouteTemplate b_crossing;
++  b_crossing.id = 0U;
++  b_crossing.fragment = b_fragment.id;
++  b_crossing.routing_layer = front;
++  b_crossing.selected_global_topology = true;
++  auto b_dogleg = b_crossing;
++  b_dogleg.id = 1U;
++  b_dogleg.selected_global_topology = false;
++  b_dogleg.topology_centerline = {b_fragment.start, mm(60, 30), mm(85, 30),
++                                 mm(85, 50), mm(75, 60), b_fragment.end};
++  flux::RegionalBundleAssignment a_assignment;
++  a_assignment.window_id = 0U;
++  a_assignment.templates = {a_template};
++  a_assignment.selected_templates = {0U};
++  a_assignment.stop_reason = flux::RegionalBundleStopReason::complete;
++  flux::RegionalBundleAssignment b_assignment;
++  b_assignment.window_id = 1U;
++  b_assignment.templates = {b_crossing, b_dogleg};
++  b_assignment.selected_templates = {0U};
++  b_assignment.selected_template_conflicts = 1U;
++  b_assignment.stop_reason = flux::RegionalBundleStopReason::complete;
++  flux::RegionalBundleSelection dogleg_selection;
++  dogleg_selection.templates = {1U};
++  b_assignment.spline_candidate_shortlist = {dogleg_selection};
++  regional.bundle_assignments = {a_assignment, b_assignment};
++  const auto retained = regional;
++  flux::realize_regional_straight_candidate(board, global, regional);
++  require(!regional.spline_candidate_available && regional.straight_scene_evaluated &&
++              regional.straight_scene_portfolio_checks == 0U,
++          "the default straight transaction must retain selected crossing copper without replaying "
++          "a portfolio alternative");
++  auto enabled = retained;
++  enabled.configured.max_straight_portfolio_checks = 1U;
++  flux::realize_regional_straight_candidate(board, global, enabled);
++  require(enabled.spline_candidate_available && enabled.straight_scene_portfolio_checks == 1U &&
++              enabled.straight_scene_portfolio_improvements == 1U &&
++              enabled.straight_scene_drc_violations == 0U &&
++              enabled.straight_scene_open_connections == 0U &&
++              enabled.bundle_assignments[1].selected_templates == dogleg_selection.templates &&
++              std::all_of(enabled.native_realization_manifest.begin(),
++                          enabled.native_realization_manifest.end(), [](const auto& route) {
++                            return route.straight_realization && route.control_points.empty();
++                          }),
++          "one retained B dogleg must repair the complete A/B straight scene without changing "
++          "A into a curved realization");
++  auto rejected_then_legal = retained;
++  auto& alternatives = rejected_then_legal.bundle_assignments[1];
++  auto first_crossing = b_dogleg;
++  first_crossing.id = 2U;
++  first_crossing.topology_centerline = {b_fragment.start, mm(60, 30),
++                                       mm(60, 50), b_fragment.end};
++  auto second_crossing = b_dogleg;
++  second_crossing.id = 3U;
++  second_crossing.topology_centerline = {b_fragment.start, mm(40, 30),
++                                        mm(40, 50), b_fragment.end};
++  alternatives.templates.push_back(first_crossing);
++  alternatives.templates.push_back(second_crossing);
++  auto first_rejected = dogleg_selection;
++  first_rejected.templates = {2U};
++  auto second_rejected = dogleg_selection;
++  second_rejected.templates = {3U};
++  alternatives.spline_candidate_shortlist = {first_rejected, second_rejected, dogleg_selection};
++  rejected_then_legal.configured.max_straight_portfolio_checks = 3U;
++  flux::realize_regional_straight_candidate(board, global, rejected_then_legal);
++  require(rejected_then_legal.spline_candidate_available &&
++              rejected_then_legal.straight_scene_portfolio_checks == 3U &&
++              rejected_then_legal.straight_scene_portfolio_improvements == 1U &&
++              rejected_then_legal.straight_scene_trials == 4U &&
++              rejected_then_legal.linear_scaffold_checks == 4U &&
++              rejected_then_legal.linear_scaffold_rejections == 3U,
++          "rejected portfolio trials must contribute their exact copper checks and rejections "
++          "without replacing the legal selected transaction");
++  auto cancelled = retained;
++  cancelled.configured.max_straight_portfolio_checks = 1U;
++  std::stop_source stop;
++  stop.request_stop();
++  flux::realize_regional_straight_candidate(board, global, cancelled, stop.get_token());
++  require(!cancelled.spline_candidate_available && cancelled.straight_scene_portfolio_checks == 0U,
++          "a cancelled portfolio replay must not publish a partially rebuilt straight scene");
++}
++
+ void straight_regional_layer_adapters_preserve_connectivity() {
+   auto board = two_pad_board();
+   board.footprints.back().pads.front().layers = {LayerId{"B.Cu"}};
+@@ -9683,6 +9814,8 @@
+       {"regional_fragment_compression_preserves_tree_junctions", regional_fragment_compression_preserves_tree_junctions},
+       {"straight_regional_layer_adapters_preserve_connectivity", straight_regional_layer_adapters_preserve_connectivity},
+       {"straight_regional_lanes_require_exact_copper_proof", straight_regional_lanes_require_exact_copper_proof},
++      {"straight_scene_portfolio_replays_retained_window_alternative",
++       straight_scene_portfolio_replays_retained_window_alternative},
+       {"regional_capacity_tracks_longitudinal_demand",
+        regional_capacity_tracks_longitudinal_demand},
+       {"physical_checkpoint_ordering_is_feasibility_first_and_fail_closed",
+--- a/tests/python/verify_routing_corpus.py
++++ b/tests/python/verify_routing_corpus.py
+@@ -698,6 +698,8 @@
+     parser.add_argument("--shared-channel-copper", action="store_true")
+     parser.add_argument("--centerline-channel-cuts", action="store_true")
+     parser.add_argument("--max-regional-bundle-states", type=int)
++    parser.add_argument("--max-straight-portfolio-checks", type=int,
++                        help="experimental bound on physical checks of retained straight bundle alternatives; leaves the corpus manifest unchanged")
+     parser.add_argument("--expand-frozen-copper-scope", action="store_true")
+     parser.add_argument("--prioritize-frozen-scope-expansion", action="store_true")
+     parser.add_argument("--planning-timeout-seconds", type=int,
+@@ -707,6 +709,8 @@
+         parser.error("sampled and strict-medial controls are mutually exclusive")
+     if args.max_regional_bundle_states is not None and not 1 <= args.max_regional_bundle_states <= 1000000:
+         parser.error("--max-regional-bundle-states must be in 1..1000000")
++    if args.max_straight_portfolio_checks is not None and not 0 <= args.max_straight_portfolio_checks <= 4096:
++        parser.error("--max-straight-portfolio-checks must be in 0..4096")
+     if args.iteration_budget is not None and args.iteration_budget < 1:
+         parser.error("--iteration-budget must be positive")
+     if args.grid_pitch_nm_control is not None and args.grid_pitch_nm_control < 1:
+@@ -799,6 +803,8 @@
+         experiment_args += ["--centerline-channel-cuts"]
+     if args.max_regional_bundle_states is not None:
+         experiment_args += ["--max-regional-bundle-states", str(args.max_regional_bundle_states)]
++    if args.max_straight_portfolio_checks is not None:
++        experiment_args += ["--max-straight-portfolio-checks", str(args.max_straight_portfolio_checks)]
+     if args.dense_candidate_grid:
+         experiment_args += ["--dense-candidate-grid"]
+     if args.sampled_control:
+@@ -903,6 +909,7 @@
+             "strict_medial_control_override": args.strict_medial_control,
+             "grid_pitch_nm_control_override": args.grid_pitch_nm_control,
+             "planning_timeout_override_seconds": args.planning_timeout_seconds,
++            "max_straight_portfolio_checks_override": args.max_straight_portfolio_checks,
+             "boards": [
+                 {
+                     "id": board["id"],

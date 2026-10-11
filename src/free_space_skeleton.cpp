@@ -332,13 +332,18 @@ bool validate_free_space_chord_domain(const FreeSpaceDomain& domain, std::string
   return valid;
 }
 
+namespace {
+
 std::vector<std::optional<Nanometres>>
-assess_free_space_chords(const FreeSpaceDomain& domain,
-                         const std::vector<std::pair<Point, Point>>& chords) {
+assess_free_space_chords_impl(const FreeSpaceDomain& domain,
+                              const std::vector<std::pair<Point, Point>>& chords,
+                              bool validate_domain) {
   std::vector<std::optional<Nanometres>> result(chords.size());
-  FreeSpaceSkeletonResult validation;
-  if (!valid_domain(domain, FreeSpaceSkeletonConfig{}, validation, false)) {
-    return result;
+  if (validate_domain) {
+    FreeSpaceSkeletonResult validation;
+    if (!valid_domain(domain, FreeSpaceSkeletonConfig{}, validation, false)) {
+      return result;
+    }
   }
   std::vector<RoutingComputeSegment> compute_chords;
   compute_chords.reserve(chords.size());
@@ -382,6 +387,20 @@ assess_free_space_chords(const FreeSpaceDomain& domain,
     result[index] = Nanometres{static_cast<std::int64_t>(std::floor(clearance))};
   }
   return result;
+}
+
+} // namespace
+
+std::vector<std::optional<Nanometres>>
+assess_free_space_chords(const FreeSpaceDomain& domain,
+                         const std::vector<std::pair<Point, Point>>& chords) {
+  return assess_free_space_chords_impl(domain, chords, true);
+}
+
+std::vector<std::optional<Nanometres>>
+assess_validated_free_space_chords(const FreeSpaceDomain& domain,
+                                   const std::vector<std::pair<Point, Point>>& chords) {
+  return assess_free_space_chords_impl(domain, chords, false);
 }
 
 std::size_t skeleton_lane_capacity(const FreeSpaceSkeletonEdge& edge, Nanometres track_width,

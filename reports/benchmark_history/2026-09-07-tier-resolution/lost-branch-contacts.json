@@ -1,0 +1,24 @@
+[
+  {
+    "net": "kicad-net-21",
+    "branch": "global-route:kicad-net-21:1",
+    "trunk": "global-route:kicad-net-21:0",
+    "position_nm": {
+      "x_nm": 66490000,
+      "y_nm": 56890000,
+      "layer": "F.Cu"
+    },
+    "new_trunk_distance_nm": 650000.0
+  },
+  {
+    "net": "kicad-net-2",
+    "branch": "global-route:kicad-net-2:2",
+    "trunk": "global-route:kicad-net-2:0",
+    "position_nm": {
+      "x_nm": 72340000,
+      "y_nm": 95890000,
+      "layer": "F.Cu"
+    },
+    "new_trunk_distance_nm": 1066000.0
+  }
+]

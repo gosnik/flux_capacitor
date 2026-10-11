@@ -1,0 +1,175 @@
+--- a/src/regional_router.cpp
++++ b/src/regional_router.cpp
+@@ -15617,7 +15617,8 @@
+         (witness.stage != RoutabilityFailureStage::final_validation &&
+          witness.stage != RoutabilityFailureStage::quantization) ||
+         (witness.kind != RoutabilityFailureKind::packing_capacity_exceeded &&
+-         witness.kind != RoutabilityFailureKind::quantization_clearance))
++         witness.kind != RoutabilityFailureKind::quantization_clearance &&
++         witness.kind != RoutabilityFailureKind::via_site_exhausted))
+       continue;
+     ++result.source_exact_copper_witnesses;
+     if (!witness.source_segment_pairs.empty()) {
+--- a/src/quantized_copper_oracle.cpp
++++ b/src/quantized_copper_oracle.cpp
+@@ -24,6 +24,7 @@
+   geometry::AxisAlignedBounds bounds;
+   bool via{false};
+   std::optional<RoutabilitySourceSegment> source_segment{std::nullopt};
++  std::vector<RoutabilitySourceSegment> via_access_segments{};
+ };
+ 
+ [[nodiscard]] Point quantize(Point point, Nanometres pitch) {
+@@ -431,8 +432,21 @@
+       } else {
+         auto id = unique_object_id(base + "-via-" + std::to_string(via_index++), ids);
+         const auto bounds = disc_bounds(current.position, rules.via_diameter);
+-        evidence.emplace(id.value(), PrimitiveEvidence{path.net, path.connection_index,
+-                                                        layers.front(), bounds, true});
++        PrimitiveEvidence via_evidence{path.net, path.connection_index,
++                                       layers.front(), bounds, true};
++        // Preserve the actual branch on each side of this transition. A localized
++        // disk-overlap box need not touch its owner's track centerline, so nearest
++        // geometry alone cannot reliably recover the via's routing ownership.
++        const auto append_access = [&](std::size_t edge) {
++          const auto& a = path.points[edge];
++          const auto& b = path.points[edge + 1U];
++          if (a.layer == b.layer && a.position != b.position)
++            via_evidence.via_access_segments.push_back(
++                {path.net, path.connection_index, edge, a.layer, a.position, b.position});
++        };
++        if (index > 0U) append_access(index - 1U);
++        if (last_transition + 1U < path.points.size()) append_access(last_transition);
++        evidence.emplace(id.value(), std::move(via_evidence));
+         if (const auto found = route_bounds.find(path.net); found != route_bounds.end()) {
+           found->second = union_bounds(found->second, bounds);
+         } else {
+@@ -493,6 +507,7 @@
+     std::vector<geometry::AxisAlignedBounds> object_bounds;
+     bool involves_generated_via = false;
+     std::vector<RoutabilitySourceSegment> source_segments;
++    std::vector<const PrimitiveEvidence*> via_owners;
+     for (const auto& object : violation.object_ids) {
+       const auto found = evidence.find(object);
+       if (found == evidence.end()) {
+@@ -509,6 +524,32 @@
+       object_bounds.push_back(found->second.bounds);
+       if (found->second.source_segment)
+         source_segments.push_back(*found->second.source_segment);
++      if (found->second.via) via_owners.push_back(&found->second);
++    }
++    // Track/via conflicts belong to the track's layer. For via/via conflicts,
++    // choose a common attached routing layer when one exists. These source edges
++    // identify repair owners; they do not assert that the edges themselves collide.
++    if (!via_owners.empty()) {
++      if (!source_segments.empty()) {
++        layer = source_segments.front().layer;
++      } else if (via_owners.size() == 2U) {
++        std::optional<LayerId> common_layer;
++        for (const auto& access : via_owners.front()->via_access_segments) {
++          if (std::any_of(via_owners.back()->via_access_segments.begin(),
++                          via_owners.back()->via_access_segments.end(), [&](const auto& other) {
++                            return other.layer == access.layer;
++                          }) && (!common_layer || access.layer < *common_layer))
++            common_layer = access.layer;
++        }
++        if (common_layer) layer = *common_layer;
++      }
++      for (const auto* owner : via_owners) {
++        const auto access = std::find_if(owner->via_access_segments.begin(),
++                                         owner->via_access_segments.end(), [&](const auto& edge) {
++                                           return edge.layer == layer;
++                                         });
++        if (access != owner->via_access_segments.end()) source_segments.push_back(*access);
++      }
+     }
+     std::sort(nets.begin(), nets.end());
+     nets.erase(std::unique(nets.begin(), nets.end()), nets.end());
+@@ -562,7 +603,7 @@
+         relaxation,
+         "fine-grid provisional copper failed exact Flux DRC: " + violation.code,
+         false});
+-    if (!involves_generated_via && source_segments.size() == 2U &&
++    if (source_segments.size() == 2U &&
+         source_segments[0].net != source_segments[1].net) {
+       if (source_segments[1].net < source_segments[0].net)
+         std::swap(source_segments[0], source_segments[1]);
+--- a/tests/unit/core_tests.cpp
++++ b/tests/unit/core_tests.cpp
+@@ -3824,6 +3824,54 @@
+   }
+ }
+ 
++void exact_via_witnesses_create_regional_repair_scope() {
++  Board board;
++  board.outline = rectangle(0, 0, 40, 40);
++  board.layers = {{LayerId{"F.Cu"}, "F.Cu", LayerKind::copper, 0},
++                  {LayerId{"B.Cu"}, "B.Cu", LayerKind::copper, 1}};
++  board.nets = {{NetId{"approach-a"}, "a"}, {NetId{"approach-b"}, "b"}};
++  flux::GlobalRouteResult global;
++  global.paths = {
++      flux::GlobalRoutePath{NetId{"approach-a"}, 0U,
++          {{mm(20, 19.35), LayerId{"B.Cu"}}, {mm(20, 20), LayerId{"B.Cu"}},
++           {mm(20, 20), LayerId{"F.Cu"}}, {mm(20, 21.335), LayerId{"F.Cu"}}}},
++      flux::GlobalRoutePath{NetId{"approach-b"}, 0U,
++          {{mm(20.65, 16.385), LayerId{"F.Cu"}}, {mm(20.65, 20), LayerId{"F.Cu"}},
++           {mm(20.65, 20), LayerId{"B.Cu"}}, {mm(20, 20.65), LayerId{"B.Cu"}}}}};
++  flux::RegionalRouterConfig config;
++  config.enable_spline_realization = false;
++  config.max_bundle_search_states = 8;
++  config.max_alternative_template_checks = 1;
++  config.max_joint_alternative_template_checks = 1;
++  config.max_same_layer_detour_checks = 0;
++  config.max_physical_scope_retries = 0;
++  config.physical_conflict_witnesses = flux::probe_quantized_copper_feasibility(board, global).diagnoses;
++  const auto regional = flux::analyze_regional_conflicts(board, global, config);
++  require(config.physical_conflict_witnesses.size() == 2U &&
++              std::all_of(config.physical_conflict_witnesses.begin(),
++                          config.physical_conflict_witnesses.end(), [](const auto& witness) {
++                return witness.kind == flux::RoutabilityFailureKind::via_site_exhausted &&
++                       witness.source_segment_pairs.size() == 1U;
++              }), "the microcase must isolate exact via failures without track-track conflicts");
++  require(regional.source_exact_copper_witnesses == 2U &&
++              regional.mapped_exact_copper_pairs == 2U &&
++              regional.unmapped_exact_copper_pairs == 0U && !regional.windows.empty() &&
++              !regional.complete(),
++          "exact via failures must create scope or remain explicitly unresolved, never disappear");
++  auto reversed_global = global;
++  std::reverse(reversed_global.paths.begin(), reversed_global.paths.end());
++  require(flux::probe_quantized_copper_feasibility(board, reversed_global).diagnoses ==
++              config.physical_conflict_witnesses,
++          "via repair ownership and common layer must not depend on path enumeration order");
++  auto unavailable_layer = config;
++  for (auto& witness : unavailable_layer.physical_conflict_witnesses)
++    witness.resource.layer = LayerId{"In1.Cu"};
++  const auto unmapped = flux::analyze_regional_conflicts(board, global, unavailable_layer);
++  require(unmapped.source_exact_copper_witnesses == 2U &&
++              unmapped.unmapped_exact_copper_pairs == 2U && !unmapped.complete(),
++          "a via witness without a matching routing layer must remain explicitly unresolved");
++}
++
+ void regional_bundle_forward_checking_preserves_access_solutions() {
+   Board board;
+   board.outline = rectangle(0, 0, 100, 100);
+@@ -9068,6 +9116,8 @@
+        exact_copper_witnesses_create_missing_regional_scope},
+       {"regional_spline_tiers_are_selected_breadth_first",
+        regional_spline_tiers_are_selected_breadth_first},
++      {"exact_via_witnesses_create_regional_repair_scope",
++       exact_via_witnesses_create_regional_repair_scope},
+       {"regional_bundle_forward_checking_preserves_access_solutions",
+        regional_bundle_forward_checking_preserves_access_solutions},
+       {"parallel_spline_workers_shutdown_after_short_optimizations",
+--- a/include/flux/core/routability_knowledge.hpp
++++ b/include/flux/core/routability_knowledge.hpp
+@@ -90,7 +90,9 @@
+   // expansion without charging the same failure a second time through generic physical history.
+   bool contributes_to_history{true};
+   // Preserve pair associations when spatial diagnoses coalesce, rather than generating a
+-  // cross-product of nearby same-net branches. Empty for non-planar or approximate evidence.
++  // cross-product of nearby same-net branches. Via failures identify their attached
++  // planar routing edges as repair owners, not as an assertion that those edges collide.
++  // Empty when exact routing ownership is unavailable.
+   std::vector<RoutabilitySourceSegmentPair> source_segment_pairs{};
+ 
+   bool operator==(const RoutabilityDiagnosis&) const = default;

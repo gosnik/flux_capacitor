@@ -53,6 +53,9 @@ struct HydraulicPush {
   std::uint32_t exploration_score_quantum;
   std::uint32_t erosion_height_scale;
   std::uint32_t lateral_erosion_divisor;
+  std::int32_t anisotropy_axis_x;
+  std::int32_t anisotropy_axis_y;
+  std::uint32_t transverse_anisotropy_per_mille;
   std::uint32_t clearance_score_scale;
   std::uint32_t maximum_clearance_reward_cells;
   std::uint32_t downstream_pressure_score_scale;
@@ -87,6 +90,9 @@ struct HydraulicGpuSlot {
   bool clearance_cache_hit{false};
   bool polygon_raster{false};
   bool compact_output{false};
+  std::shared_ptr<const vulkan::ImmutableMaskLease> mask_lease;
+  bool mask_cache_hit{false};
+  bool mask_cross_pipeline_reuse{false};
   std::size_t compact_width{0U};
   std::size_t compact_height{0U};
   std::size_t compact_stride{0U};
@@ -127,6 +133,13 @@ public:
   [[nodiscard]] std::vector<HydraulicPathResult>
   solve_batch(const std::vector<HydraulicBatchItem>& items) {
     std::vector<HydraulicPathResult> results(items.size());
+    struct LeaseReset {
+      std::array<HydraulicGpuSlot, maximum_hydraulic_batch>& slots;
+      ~LeaseReset() {
+        for (auto& slot : slots)
+          slot.mask_lease.reset();
+      }
+    } release_leases{slots_};
     if (!ok()) {
       for (auto& result : results)
         result.diagnostic = diagnostic_;
@@ -144,6 +157,7 @@ public:
       const auto& config = *items[item_index].config;
       auto& slot = slots_[item_index];
       slot.active = false;
+      slot.mask_lease.reset();
       const auto polygon_segment_count =
           input.polygon_raster ? input.polygon_raster->boundary_segments.size() : 0U;
       if (input.width > std::numeric_limits<std::uint32_t>::max() ||
@@ -164,6 +178,23 @@ public:
       }
       slot.count = input.width * input.height;
       const auto byte_count = slot.count * sizeof(std::uint32_t);
+      std::vector<std::uint32_t> walkable(slot.count, 0U);
+      if (!input.walkable.empty())
+        std::transform(input.walkable.begin(), input.walkable.end(), walkable.begin(),
+                       [](std::uint8_t value) { return value == 0U ? 0U : 1U; });
+      slot.polygon_raster = input.polygon_raster.has_value();
+      slot.mask_cache_hit = false;
+      slot.mask_cross_pipeline_reuse = false;
+      if (!slot.polygon_raster) {
+        std::string mask_error;
+        if (!vulkan::Runtime::instance().acquire_immutable_mask(
+                input.width, input.height, input.walkable, vulkan::MaskConsumer::hydraulic,
+                slot.mask_lease, slot.mask_cache_hit, slot.mask_cross_pipeline_reuse, mask_error)) {
+          results[item_index].diagnostic =
+              "hydraulic GPU immutable mask preparation failed: " + mask_error;
+          continue;
+        }
+      }
       slot.compact_stride =
           input.compact_output_max_dimension > 0U
               ? std::max<std::size_t>(1U, (std::max(input.width, input.height) +
@@ -198,6 +229,8 @@ public:
       slot.buffer_reuses = 0U;
       slot.buffer_growths = 0U;
       for (std::size_t buffer = 0U; buffer < slot.buffers.size(); ++buffer) {
+        if (buffer == 0U && !slot.polygon_raster)
+          continue;
         if (slot.buffers[buffer].buffer != VK_NULL_HANDLE &&
             slot.buffers[buffer].size >= sizes[buffer])
           ++slot.buffer_reuses;
@@ -209,10 +242,6 @@ public:
         results[item_index].diagnostic = "hydraulic GPU persistent resources could not be prepared";
         continue;
       }
-      std::vector<std::uint32_t> walkable(slot.count, 0U);
-      if (!input.walkable.empty())
-        std::transform(input.walkable.begin(), input.walkable.end(), walkable.begin(),
-                       [](std::uint8_t value) { return value == 0U ? 0U : 1U; });
       std::vector<std::uint32_t> potential(slot.count, infinite_height);
       potential[input.target] = 0U;
       std::vector<std::uint32_t> zero(slot.count, 0U);
@@ -222,7 +251,8 @@ public:
                        initial_erosion.begin(),
                        [&](const auto prior) { return std::min(prior, config.maximum_erosion); });
       }
-      std::memcpy(slot.buffers[0].mapped, walkable.data(), byte_count);
+      if (slot.polygon_raster)
+        std::memcpy(slot.buffers[0].mapped, walkable.data(), byte_count);
       std::memcpy(slot.buffers[1].mapped, potential.data(), byte_count);
       std::memcpy(slot.buffers[2].mapped, potential.data(), byte_count);
       std::memcpy(slot.buffers[3].mapped, initial_erosion.data(), byte_count);
@@ -233,7 +263,6 @@ public:
       std::vector<std::uint32_t> initial_clearance(slot.count, infinite_height);
       slot.compute_clearance = false;
       slot.clearance_cache_hit = false;
-      slot.polygon_raster = input.polygon_raster.has_value();
       slot.compact_output = slot.compact_stride > 0U;
       if (slot.polygon_raster) {
         slot.compute_clearance = false;
@@ -336,6 +365,9 @@ public:
           config.exploration_score_quantum,
           config.erosion_height_scale,
           config.lateral_erosion_divisor,
+          config.anisotropy_axis_x,
+          config.anisotropy_axis_y,
+          config.transverse_anisotropy_per_mille,
           config.clearance_score_scale,
           config.maximum_clearance_reward_cells,
           config.downstream_pressure_score_scale,
@@ -434,6 +466,9 @@ public:
       result.gpu_batch_size = items.size();
       result.gpu_persistent_buffer_reuses = slot.buffer_reuses;
       result.gpu_buffer_growths = slot.buffer_growths;
+      result.gpu_mask_uploads = slot.polygon_raster || slot.mask_cache_hit ? 0U : 1U;
+      result.gpu_mask_upload_reuses = slot.mask_cache_hit ? 1U : 0U;
+      result.gpu_mask_cross_pipeline_reuses = slot.mask_cross_pipeline_reuse ? 1U : 0U;
       if (slot.compute_clearance && !slot.compact_output) {
         result.obstacle_clearance.resize(slot.count);
         std::memcpy(result.obstacle_clearance.data(),
@@ -514,10 +549,15 @@ public:
         std::memcpy(result.obstacle_clearance.data(),
                     slot.clearance_read_a != 0U ? slot.buffers[7].mapped : slot.buffers[9].mapped,
                     bytes);
-        const auto* walkable = static_cast<const std::uint32_t*>(slot.buffers[0].mapped);
         const auto* obstacles = static_cast<const std::uint32_t*>(slot.buffers[11].mapped);
-        std::transform(walkable, walkable + slot.count, result.walkable.begin(),
-                       [](std::uint32_t value) { return value != 0U ? 1U : 0U; });
+        if (slot.polygon_raster) {
+          const auto* rasterized = static_cast<const std::uint32_t*>(slot.buffers[0].mapped);
+          std::transform(rasterized, rasterized + slot.count, result.walkable.begin(),
+                         [](std::uint32_t value) { return value != 0U ? 1U : 0U; });
+        } else {
+          std::transform(input.walkable.begin(), input.walkable.end(), result.walkable.begin(),
+                         [](std::uint8_t value) { return value != 0U ? 1U : 0U; });
+        }
         std::copy(obstacles, obstacles + slot.count, result.nearest_obstacle_id.begin());
         result.terrain_height.assign(slot.count, infinite_height);
         for (std::size_t cell = 0U; cell < slot.count; ++cell) {
@@ -682,7 +722,9 @@ private:
     std::array<VkDescriptorBufferInfo, 15U> buffer_info{};
     std::array<VkWriteDescriptorSet, 15U> writes{};
     for (std::uint32_t index = 0U; index < slot.buffers.size(); ++index) {
-      buffer_info[index] = {slot.buffers[index].buffer, 0U, slot.buffers[index].size};
+      buffer_info[index] = {
+          index == 0U && slot.mask_lease ? slot.mask_lease->buffer() : slot.buffers[index].buffer,
+          0U, index == 0U && slot.mask_lease ? slot.mask_lease->size() : slot.buffers[index].size};
       writes[index].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
       writes[index].dstSet = slot.descriptor_set;
       writes[index].dstBinding = index;

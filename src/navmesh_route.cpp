@@ -1,3 +1,4 @@
+#include "flux/core/routing_kernel.hpp"
 #include "flux/core/navmesh_route.hpp"
 
 #include "flux/core/free_space_skeleton.hpp"
@@ -139,12 +140,24 @@ void topology_hash_append(std::uint64_t& hash, std::uint64_t value) {
   const auto middle_y = (static_cast<long double>(gate.left_boundary.y.value()) +
                          static_cast<long double>(gate.right_boundary.y.value())) /
                         2.0L;
-  const auto normal_x =
-      static_cast<long double>(gate.to_center.x.value() - gate.from_center.x.value());
-  const auto normal_y =
-      static_cast<long double>(gate.to_center.y.value() - gate.from_center.y.value());
-  return (static_cast<long double>(point.x.value()) - middle_x) * normal_x +
-         (static_cast<long double>(point.y.value()) - middle_y) * normal_y;
+  // Adaptive neighbors can have different sizes, so the center-to-center direction is not
+  // generally normal to their shared portal. Using it as a normal moves the side boundary away
+  // from the portal and makes a crossing depend on how finely its straight chord was sampled.
+  // The portal defines the separating line; the cell transition supplies only its orientation.
+  const auto normal_x = static_cast<long double>(gate.left_boundary.y.value()) -
+                        static_cast<long double>(gate.right_boundary.y.value());
+  const auto normal_y = static_cast<long double>(gate.right_boundary.x.value()) -
+                        static_cast<long double>(gate.left_boundary.x.value());
+  const auto direction_x = static_cast<long double>(gate.to_center.x.value()) -
+                           static_cast<long double>(gate.from_center.x.value());
+  const auto direction_y = static_cast<long double>(gate.to_center.y.value()) -
+                           static_cast<long double>(gate.from_center.y.value());
+  const auto orientation = normal_x * direction_x + normal_y * direction_y;
+  if (orientation == 0.0L)
+    return 0.0L; // No directed side transition can be certified for a degenerate gate.
+  const auto side = (static_cast<long double>(point.x.value()) - middle_x) * normal_x +
+                    (static_cast<long double>(point.y.value()) - middle_y) * normal_y;
+  return orientation > 0.0L ? side : -side;
 }
 
 struct TopologyGateIntersection {
@@ -511,6 +524,7 @@ PreparedNavMeshDomain prepare_navmesh_domain_impl(const OffsetFreeSpaceRegion& r
   result.minimum_boundary_clearance = config.minimum_boundary_clearance;
   result.search_bounds = config.search_bounds;
   result.adaptive_clearance_refinement = config.adaptive_clearance_refinement;
+  result.usped = config.usped;
   result.maximum_refinement_depth = config.maximum_refinement_depth;
   result.minimum_refined_cell_pitch =
       config.minimum_refined_cell_pitch.value() > 0
@@ -532,6 +546,45 @@ PreparedNavMeshDomain prepare_navmesh_domain_impl(const OffsetFreeSpaceRegion& r
   constexpr auto no_cell = std::numeric_limits<std::size_t>::max();
   result.cell_by_coordinate.assign(result.width * result.height, no_cell);
   result.cells_by_coordinate.resize(result.width * result.height);
+  std::vector<std::uint8_t> usped_refine;
+  if (config.usped.enabled && config.adaptive_clearance_refinement) {
+    if (config.usped.refinement_per_mille > 1000U ||
+        result.width > config.usped.maximum_cells / result.height) {
+      result.usped_diagnostic = "USPED prepass skipped: invalid fraction or raster budget";
+    } else {
+      const auto count = result.width * result.height;
+      std::vector<std::uint8_t> walkable(count, 0U);
+      std::vector<double> clearance(count, 0.0);
+      for (std::size_t i = 0; i < count; ++i) {
+        const Point center{
+            Nanometres{result.minimum.x.value() + static_cast<std::int64_t>(i % result.width) * pitch + pitch / 2},
+            Nanometres{result.minimum.y.value() + static_cast<std::int64_t>(i / result.width) * pitch + pitch / 2}};
+        const auto query = query_prepared_navmesh_point(result, center);
+        walkable[i] = query.inside && query.boundary_distance_nm >
+                                        config.minimum_boundary_clearance.value();
+        if (walkable[i]) clearance[i] = static_cast<double>(
+            (query.boundary_distance_nm - config.minimum_boundary_clearance.value()) / pitch);
+      }
+      result.usped_field = build_usped_field(result.width, result.height, walkable, clearance,
+                                             config.usped.maximum_cells);
+      if (result.usped_field.ok()) {
+        std::vector<std::size_t> order;
+        for (std::size_t i = 0; i < count; ++i)
+          if (walkable[i] && result.usped_field.refinement_priority[i] > 0) order.push_back(i);
+        std::sort(order.begin(), order.end(), [&](auto a, auto b) {
+          const auto& score = result.usped_field.refinement_priority;
+          return score[a] != score[b] ? score[a] > score[b] : a < b;
+        });
+        const auto selected = std::min(config.usped.maximum_refined_parents,
+            order.size() / 1000U * config.usped.refinement_per_mille +
+            order.size() % 1000U * config.usped.refinement_per_mille / 1000U);
+        usped_refine.assign(count, 0U);
+        for (std::size_t i = 0; i < selected; ++i) usped_refine[order[i]] = 1U;
+      } else {
+        result.usped_diagnostic = result.usped_field.diagnostic;
+      }
+    }
+  }
   struct CellCandidate {
     std::size_t x{0U};
     std::size_t y{0U};
@@ -583,6 +636,7 @@ PreparedNavMeshDomain prepare_navmesh_domain_impl(const OffsetFreeSpaceRegion& r
   std::vector<CellCandidate> candidates;
   candidates.reserve(candidate_batch_size);
   while (!pending.empty()) {
+    routing_kernel_checkpoint();
     candidates.clear();
     while (!pending.empty() && candidates.size() < candidate_batch_size) {
       candidates.push_back(std::move(pending.front()));
@@ -609,7 +663,12 @@ PreparedNavMeshDomain prepare_navmesh_domain_impl(const OffsetFreeSpaceRegion& r
           break;
         }
       }
-      if (!legal) {
+      const auto& proposed = candidates[index];
+      const auto usped_split = legal && !usped_refine.empty() &&
+          usped_refine[proposed.y * result.width + proposed.x] &&
+          proposed.refinement_level == 0U && config.maximum_refinement_depth > 0U &&
+          pitch >= 2 && pitch > result.minimum_refined_cell_pitch.value();
+      if (!legal || usped_split) {
         const auto& candidate = candidates[index];
         const auto cell_width = candidate.corners[2].x.value() - candidate.corners[0].x.value();
         const auto cell_height = candidate.corners[2].y.value() - candidate.corners[0].y.value();
@@ -637,6 +696,7 @@ PreparedNavMeshDomain prepare_navmesh_domain_impl(const OffsetFreeSpaceRegion& r
           continue;
         }
         ++result.refined_parent_cells;
+        if (usped_split) ++result.usped_refined_parents;
         const auto level = candidate.refinement_level + 1U;
         const std::array children{
             make_candidate(candidate.x, candidate.y, candidate.corners[0],
@@ -651,12 +711,22 @@ PreparedNavMeshDomain prepare_navmesh_domain_impl(const OffsetFreeSpaceRegion& r
                            Point{Nanometres{middle_x}, Nanometres{middle_y}}, candidate.corners[2],
                            level)};
         for (auto child : children) {
-          if (intersects_guide(child))
+          // A legal parent already belongs to the guide. Advisory subdivision must preserve its
+          // entire covered area rather than re-cropping it at the finer centre sampling scale.
+          if (usped_split || intersects_guide(child))
             pending.push_back(std::move(child));
         }
         continue;
       }
       if (result.cells.size() >= config.maximum_cells) {
+        if (result.usped_refined_parents > 0U) {
+          auto fallback_config = config;
+          fallback_config.usped.enabled = false;
+          auto fallback = prepare_navmesh_domain_impl(region, fallback_config, validate_source_topology);
+          fallback.usped = config.usped;
+          fallback.usped_diagnostic = "USPED refinement exceeded mesh budget; retained baseline decomposition";
+          return fallback;
+        }
         result.cell_budget_exhausted = true;
         result.diagnostic = "NavMesh cell budget exhausted";
         return result;
@@ -692,6 +762,46 @@ PreparedNavMeshDomain prepare_navmesh_domain(const OffsetFreeSpaceRegion& region
   return prepare_navmesh_domain_impl(region, config, true);
 }
 
+std::shared_ptr<const PreparedNavMeshDomain>
+NavMeshPreparationCache::prepare(const OffsetFreeSpaceRegion& region, const NavMeshConfig& config) {
+  // Construction stays outside the lock. Racing identical requests may do duplicate preparation,
+  // but publish one immutable result and cannot serialize unrelated regional work.
+  {
+    std::lock_guard lock(mutex_);
+    for (const auto& entry : entries_)
+      if (entry.region == region && entry.config == config) {
+        ++stats_.hits;
+        return entry.domain;
+      }
+    ++stats_.misses;
+  }
+  auto prepared = std::make_shared<const PreparedNavMeshDomain>(prepare_navmesh_domain(region, config));
+  const auto weight = [](const auto& domain) {
+    return domain.cells.size() + domain.cell_by_coordinate.size() + domain.usped_field.height.size();
+  };
+  const auto retained = weight(*prepared);
+  if (!prepared->ok() || retained > maximum_cells_ || maximum_entries_ == 0U)
+    return prepared;
+  std::lock_guard lock(mutex_);
+  for (const auto& entry : entries_)
+    if (entry.region == region && entry.config == config) return entry.domain;
+  while (!entries_.empty() &&
+         (entries_.size() >= maximum_entries_ ||
+          stats_.retained_cells > maximum_cells_ - retained)) {
+    stats_.retained_cells -= weight(*entries_.front().domain);
+    entries_.erase(entries_.begin());
+    ++stats_.evictions;
+  }
+  stats_.retained_cells += retained;
+  entries_.push_back({region, config, prepared});
+  return prepared;
+}
+
+NavMeshPreparationCache::Stats NavMeshPreparationCache::stats() const {
+  std::lock_guard lock(mutex_);
+  return stats_;
+}
+
 PreparedNavMeshPointQuery query_prepared_navmesh_point(const PreparedNavMeshDomain& domain,
                                                        Point point) {
   PreparedNavMeshPointQuery result;
@@ -714,6 +824,7 @@ PreparedNavMeshPointQuery query_prepared_navmesh_point(const PreparedNavMeshDoma
   if (!domain.cutout_bvh.empty())
     pending.push_back(0U);
   while (!pending.empty()) {
+    routing_kernel_checkpoint();
     const auto node_index = pending.back();
     pending.pop_back();
     const auto& node = domain.cutout_bvh[node_index];
@@ -813,7 +924,8 @@ NavMeshTopologySignature derive_navmesh_topology_signature(const NavMeshRouteRes
 }
 
 NavMeshTopologyCheck validate_navmesh_topology_signature(const NavMeshTopologySignature& signature,
-                                                         const std::vector<Point>& polyline) {
+                                                         const std::vector<Point>& polyline,
+                                                         bool allow_missing_gates) {
   NavMeshTopologyCheck result;
   if (!signature.valid) {
     result.reason = NavMeshTopologyCheckReason::invalid_signature;
@@ -875,8 +987,8 @@ NavMeshTopologyCheck validate_navmesh_topology_signature(const NavMeshTopologySi
       const auto scale = std::max(
           1.0L,
           std::hypotl(
-              static_cast<long double>(gate.to_center.x.value() - gate.from_center.x.value()),
-              static_cast<long double>(gate.to_center.y.value() - gate.from_center.y.value())));
+              static_cast<long double>(gate.right_boundary.x.value()) - gate.left_boundary.x.value(),
+              static_cast<long double>(gate.right_boundary.y.value()) - gate.left_boundary.y.value()));
       const auto side_tolerance = scale * 1.0e-9L;
       const auto forward = before_side < -side_tolerance && after_side > side_tolerance;
       const auto reversed = before_side > side_tolerance && after_side < -side_tolerance;
@@ -895,6 +1007,9 @@ NavMeshTopologyCheck validate_navmesh_topology_signature(const NavMeshTopologySi
     }
     result.offending_gate = gate.ordinal;
     if (intersections.empty()) {
+      if (allow_missing_gates) {
+        continue;
+      }
       result.reason = NavMeshTopologyCheckReason::missing_gate;
       result.diagnostic =
           "candidate did not cross selected NavMesh gate " + std::to_string(gate.ordinal);
@@ -923,7 +1038,9 @@ NavMeshTopologyCheck validate_navmesh_topology_signature(const NavMeshTopologySi
   }
   result.preserved = true;
   result.reason = NavMeshTopologyCheckReason::preserved;
-  result.diagnostic = "directed NavMesh gate sequence preserved";
+  result.diagnostic = allow_missing_gates
+                          ? "directed NavMesh gate subsequence preserved inside guard corridor"
+                          : "directed NavMesh gate sequence preserved";
   return result;
 }
 
@@ -946,6 +1063,7 @@ route_prepared_navmesh_flood_fill(const PreparedNavMeshDomain& prepared, Point s
       config.minimum_boundary_clearance != prepared.minimum_boundary_clearance ||
       config.search_bounds != prepared.search_bounds ||
       config.adaptive_clearance_refinement != prepared.adaptive_clearance_refinement ||
+      config.usped != prepared.usped ||
       config.maximum_refinement_depth != prepared.maximum_refinement_depth ||
       (config.minimum_refined_cell_pitch.value() > 0
            ? config.minimum_refined_cell_pitch != prepared.minimum_refined_cell_pitch
@@ -961,6 +1079,7 @@ route_prepared_navmesh_flood_fill(const PreparedNavMeshDomain& prepared, Point s
   result.cell_grid_width = prepared.width;
   result.cell_grid_height = prepared.height;
   result.adaptive_refined_parent_cells = prepared.refined_parent_cells;
+  result.usped_refined_parents = prepared.usped_refined_parents;
   result.adaptive_refined_leaf_cells = prepared.refined_leaf_cells;
   result.adaptive_rejected_leaf_cells = prepared.rejected_leaf_cells;
   result.adaptive_maximum_refinement_depth = prepared.maximum_realized_refinement_depth;
@@ -1005,26 +1124,31 @@ route_prepared_navmesh_flood_fill(const PreparedNavMeshDomain& prepared, Point s
         const auto coordinate =
             static_cast<std::size_t>(y) * prepared.width + static_cast<std::size_t>(x);
         for (const auto cell : prepared.cells_by_coordinate[coordinate]) {
-          if (result.cells[cell].contains(endpoint))
+          if (closed[cell] == 0U && result.cells[cell].contains(endpoint))
             return cell;
         }
       }
     }
     std::vector<std::pair<Point, Point>> endpoint_links;
     endpoint_links.reserve(result.cells.size());
+    bool inside_closed_cell = false;
     for (const auto& cell : result.cells) {
       if (cell.contains(endpoint)) {
-        return cell.id;
+        if (closed[cell.id] == 0U) return cell.id;
+        inside_closed_cell = true;
       }
       endpoint_links.emplace_back(endpoint, cell.center);
     }
+    // A shared-face endpoint can bind to either incident open cell. An endpoint wholly
+    // inside a dynamic wall cannot escape it through the static-domain fallback.
+    if (inside_closed_cell) return std::nullopt;
     const auto certificates = assess_prepared_navmesh_chords(prepared, endpoint_links);
     std::optional<std::size_t> selected;
     long double distance = std::numeric_limits<long double>::infinity();
     for (std::size_t index = 0U; index < result.cells.size(); ++index) {
       const auto& cell = result.cells[index];
       const auto candidate = geometry::point_distance_nm(endpoint, cell.center);
-      if (candidate < distance && certificates[index]) {
+      if (closed[cell.id] == 0U && candidate < distance && certificates[index]) {
         selected = cell.id;
         distance = candidate;
       }
@@ -1709,7 +1833,7 @@ NavMeshRouteResult route_prepared_navmesh_rrt_connect(const PreparedNavMeshDomai
 NavMeshRouteResult
 route_prepared_navmesh_hydraulic(const PreparedNavMeshDomain& prepared, Point start, Point goal,
                                  const NavMeshConfig& navmesh_config,
-                                 const NavMeshHydraulicConfig& hydraulic_config) {
+                                 const NavMeshHydraulicConfig& hydraulic_config, std::stop_token stop_token) {
   NavMeshRouteResult failure;
   failure.start = start;
   failure.goal = goal;
@@ -1719,6 +1843,7 @@ route_prepared_navmesh_hydraulic(const PreparedNavMeshDomain& prepared, Point st
   failure.cell_grid_width = prepared.width;
   failure.cell_grid_height = prepared.height;
   failure.hydraulic_direct_polygon_discovery = true;
+  if (stop_token.stop_requested()) { failure.diagnostic = "terrain discovery cancelled"; return failure; }
   if (!prepared.ok() || hydraulic_config.discovery_resolution_multiplier == 0U ||
       hydraulic_config.maximum_discovery_cells == 0U) {
     failure.diagnostic = "invalid direct polygonal hydraulic discovery request";
@@ -1845,7 +1970,7 @@ route_prepared_navmesh_hydraulic(const PreparedNavMeshDomain& prepared, Point st
         if (feedback.directional &&
             geometry::point_segment_distance_nm(discovery_point(cell), feedback.axis_start,
                                                 feedback.axis_end) >
-                static_cast<long double>(discovery_pitch.value())) {
+                static_cast<long double>(std::max(discovery_pitch, feedback.radius).value())) {
           continue;
         }
         input.downstream_pressure[cell] =
@@ -1861,6 +1986,18 @@ route_prepared_navmesh_hydraulic(const PreparedNavMeshDomain& prepared, Point st
       }
     }
   }
+  if (hydraulic_config.board_terrain_guidance) {
+    for (std::size_t cell = 0U; cell < discovery_cell_count; ++cell) {
+      const auto sampled = hydraulic_config.board_terrain_guidance->sample_cost(
+          hydraulic_config.board_terrain_layer, discovery_point(cell));
+      const auto bounded = static_cast<std::uint32_t>(std::min<std::uint64_t>(
+          hydraulic_config.flow.maximum_downstream_pressure, sampled));
+      input.downstream_pressure[cell] = input.downstream_pressure[cell] >
+                                              std::numeric_limits<std::uint32_t>::max() - bounded
+                                          ? std::numeric_limits<std::uint32_t>::max()
+                                          : input.downstream_pressure[cell] + bounded;
+    }
+  }
   failure.hydraulic_discovery_cells = discovery_cell_count;
   failure.hydraulic_field_origin = discovery_minimum;
   failure.hydraulic_field_cell_pitch = discovery_pitch;
@@ -1874,6 +2011,7 @@ route_prepared_navmesh_hydraulic(const PreparedNavMeshDomain& prepared, Point st
     const auto base_x = relative_x / discovery_pitch.value();
     const auto base_y = relative_y / discovery_pitch.value();
     for (std::int64_t ring = 0; ring <= 32; ++ring) {
+      if (stop_token.stop_requested()) return std::nullopt;
       std::vector<std::size_t> candidates;
       std::vector<std::pair<Point, Point>> links;
       for (auto dy = -ring; dy <= ring; ++dy) {
@@ -1919,13 +2057,33 @@ route_prepared_navmesh_hydraulic(const PreparedNavMeshDomain& prepared, Point st
   const auto source = bind_endpoint(start);
   const auto target = bind_endpoint(goal);
   if (!source || !target || *source == *target) {
-    failure.diagnostic = "direct polygonal hydraulic discovery could not bind its endpoints";
+    failure.diagnostic = stop_token.stop_requested()
+        ? "hydraulic discovery cancelled during endpoint binding"
+        : "direct polygonal hydraulic discovery could not bind its endpoints";
     return failure;
   }
   input.source = *source;
   input.target = *target;
 
-  const auto flow = solve_hydraulic_erosion_path(input, hydraulic_config.flow);
+  const auto flow = solve_hydraulic_erosion_path(input, hydraulic_config.flow, stop_token);
+  failure.used_height_evolution = flow.used_height_evolution;
+  failure.height_evolution_invoked = flow.height_evolution_invoked;
+  failure.height_evolution_gpu_invoked = flow.height_evolution_gpu_invoked;
+  failure.height_evolution_gpu_dispatches = flow.height_evolution_gpu_dispatches;
+  failure.height_evolution_gpu_mask_uploads = flow.height_evolution_gpu_mask_uploads;
+  failure.height_evolution_gpu_mask_upload_reuses = flow.height_evolution_gpu_mask_upload_reuses;
+  failure.height_evolution_gpu_mask_cross_pipeline_reuses = flow.height_evolution_gpu_mask_cross_pipeline_reuses;
+  failure.height_evolution_field_us = flow.height_evolution_field_us;
+  failure.height_evolution_extraction_us = flow.height_evolution_extraction_us;
+  failure.height_evolution_iterations = flow.height_evolution_iterations;
+  failure.height_evolution_expanded_nodes = flow.height_evolution_expanded_nodes;
+  failure.height_evolution_changed_cells = flow.height_evolution_changed_cells;
+  failure.indexed_clearance_map_builds = flow.indexed_clearance_map_builds;
+  failure.indexed_clearance_map_reuses = flow.indexed_clearance_map_reuses;
+  failure.indexed_clearance_map_cells = flow.indexed_clearance_map_cells;
+  failure.indexed_clearance_map_records = flow.indexed_clearance_map_records;
+  failure.indexed_clearance_map_references = flow.indexed_clearance_map_references;
+  failure.indexed_clearance_map_fallbacks = flow.indexed_clearance_map_fallbacks;
   if (!flow.ok()) {
     failure.hydraulic_relaxation_passes = flow.relaxation_passes;
     failure.hydraulic_droplet_steps = flow.droplet_steps;
@@ -1935,6 +2093,9 @@ route_prepared_navmesh_hydraulic(const PreparedNavMeshDomain& prepared, Point st
     failure.hydraulic_gpu_batch_size = flow.gpu_batch_size;
     failure.hydraulic_gpu_buffer_reuses = flow.gpu_persistent_buffer_reuses;
     failure.hydraulic_gpu_buffer_growths = flow.gpu_buffer_growths;
+    failure.hydraulic_gpu_mask_uploads = flow.gpu_mask_uploads;
+    failure.hydraulic_gpu_mask_upload_reuses = flow.gpu_mask_upload_reuses;
+    failure.hydraulic_gpu_mask_cross_pipeline_reuses = flow.gpu_mask_cross_pipeline_reuses;
     failure.hydraulic_cpu_fallback = flow.cpu_fallback;
     failure.search_budget_exhausted = flow.budget_exhausted;
     failure.diagnostic = "hydraulic topology proposal failed: " + flow.diagnostic;
@@ -1967,8 +2128,39 @@ route_prepared_navmesh_hydraulic(const PreparedNavMeshDomain& prepared, Point st
   // Remove raster-scale wiggles with exact visibility pulling before projecting into the coarse
   // resource lattice. A shortcut can change samples but cannot cross an obstacle or leave the
   // represented free-space region.
+  const auto crosses_pressure_barrier = [&](Point first, Point last) {
+    if (!hydraulic_config.preserve_pressure_barrier_sides) {
+      return false;
+    }
+    const auto length = geometry::segment_length_nm(first, last);
+    const auto samples = std::max<std::uint64_t>(
+        1U, (length + static_cast<std::uint64_t>(discovery_pitch.value()) - 1U) /
+                static_cast<std::uint64_t>(discovery_pitch.value()));
+    for (std::uint64_t sample = 0U; sample <= samples; ++sample) {
+      const auto point = Point{
+          Nanometres{static_cast<std::int64_t>(std::llround(
+              static_cast<long double>(first.x.value()) +
+              static_cast<long double>(last.x.value() - first.x.value()) * sample / samples))},
+          Nanometres{static_cast<std::int64_t>(std::llround(
+              static_cast<long double>(first.y.value()) +
+              static_cast<long double>(last.y.value() - first.y.value()) * sample / samples))}};
+      if (point.x < discovery_minimum.x || point.x >= discovery_maximum.x ||
+          point.y < discovery_minimum.y || point.y >= discovery_maximum.y) {
+        continue;
+      }
+      const auto x =
+          discovery_index(point.x.value(), discovery_minimum.x.value(), discovery_width);
+      const auto y =
+          discovery_index(point.y.value(), discovery_minimum.y.value(), discovery_height);
+      if (input.downstream_pressure[y * discovery_width + x] > 0U) {
+        return true;
+      }
+    }
+    return false;
+  };
   std::vector<Point> pulled{riverbed.front()};
   for (std::size_t first = 0U; first + 1U < riverbed.size();) {
+    if (stop_token.stop_requested()) { failure.diagnostic = "terrain corridor certification cancelled"; return failure; }
     std::vector<std::pair<Point, Point>> chords;
     chords.reserve(riverbed.size() - first - 1U);
     for (auto last = riverbed.size() - 1U; last > first; --last) {
@@ -1979,7 +2171,8 @@ route_prepared_navmesh_hydraulic(const PreparedNavMeshDomain& prepared, Point st
     for (std::size_t index = 0U; index < chords.size(); ++index) {
       const auto last = riverbed.size() - 1U - index;
       if (certificates[index] &&
-          certificates[index]->value() >= prepared.minimum_boundary_clearance.value()) {
+          certificates[index]->value() >= prepared.minimum_boundary_clearance.value() &&
+          !crosses_pressure_barrier(riverbed[first], riverbed[last])) {
         selected = last;
         break;
       }
@@ -2156,11 +2349,32 @@ route_prepared_navmesh_hydraulic(const PreparedNavMeshDomain& prepared, Point st
         static_cast<std::uint64_t>(sampled_free_cells[sample]) * 65'535U / sampled_cells[sample]);
   }
   result.used_hydraulic_erosion = result.ok();
+  result.used_height_evolution = flow.used_height_evolution;
+  result.height_evolution_invoked = flow.height_evolution_invoked;
+  result.height_evolution_gpu_invoked = flow.height_evolution_gpu_invoked;
+  result.height_evolution_gpu_dispatches = flow.height_evolution_gpu_dispatches;
+  result.height_evolution_gpu_mask_uploads = flow.height_evolution_gpu_mask_uploads;
+  result.height_evolution_gpu_mask_upload_reuses = flow.height_evolution_gpu_mask_upload_reuses;
+  result.height_evolution_gpu_mask_cross_pipeline_reuses = flow.height_evolution_gpu_mask_cross_pipeline_reuses;
+  result.height_evolution_field_us = flow.height_evolution_field_us;
+  result.height_evolution_extraction_us = flow.height_evolution_extraction_us;
+  result.height_evolution_iterations = flow.height_evolution_iterations;
+  result.height_evolution_expanded_nodes = flow.height_evolution_expanded_nodes;
+  result.height_evolution_changed_cells = flow.height_evolution_changed_cells;
+  result.indexed_clearance_map_builds = flow.indexed_clearance_map_builds;
+  result.indexed_clearance_map_reuses = flow.indexed_clearance_map_reuses;
+  result.indexed_clearance_map_cells = flow.indexed_clearance_map_cells;
+  result.indexed_clearance_map_records = flow.indexed_clearance_map_records;
+  result.indexed_clearance_map_references = flow.indexed_clearance_map_references;
+  result.indexed_clearance_map_fallbacks = flow.indexed_clearance_map_fallbacks;
   result.used_hydraulic_gpu = flow.used_gpu;
   result.hydraulic_gpu_clearance_cache_hit = flow.gpu_clearance_cache_hit;
   result.hydraulic_gpu_batch_size = flow.gpu_batch_size;
   result.hydraulic_gpu_buffer_reuses = flow.gpu_persistent_buffer_reuses;
   result.hydraulic_gpu_buffer_growths = flow.gpu_buffer_growths;
+  result.hydraulic_gpu_mask_uploads = flow.gpu_mask_uploads;
+  result.hydraulic_gpu_mask_upload_reuses = flow.gpu_mask_upload_reuses;
+  result.hydraulic_gpu_mask_cross_pipeline_reuses = flow.gpu_mask_cross_pipeline_reuses;
   result.hydraulic_cpu_fallback = flow.cpu_fallback;
   if (!result.ok() && result.diagnostic.empty()) {
     result.diagnostic = "hydraulic riverbed failed certified NavMesh realization";

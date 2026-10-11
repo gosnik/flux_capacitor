@@ -1,0 +1,37 @@
+{
+  "board": "pt2399_delay", "tier": 0,
+  "normal_timeout_seconds": 600,
+  "normal_outcome": "timeout during second regional scope retry",
+  "router_sha256": "ea3adf3e0232223757d1d1220eb5d997065cecfdc4ab230dd0d3c8f8cf89d936",
+  "source_revision": "25e3b884be9b359d9c5bf0cc4fbb6cc836fd4f82",
+  "dirty_worktree": true,
+  "configuration": {"iterations": 6, "feedback_retries": 0, "shadows": "enforced", "full_strength_first_pass": true, "expand_frozen_copper_scope": true},
+  "scope_pair_counts": [4, 5, 8],
+  "unmapped_pairs": [0, 0, 0],
+  "completed_regional_analyses": [
+    {"time_seconds": 437.167849, "windows": 4, "complete_bundles": 3, "generated_candidates": 228, "evaluated_candidates": 21},
+    {"time_seconds": 571.961460, "windows": 4, "complete_bundles": 3, "generated_candidates": 654, "evaluated_candidates": 21}
+  ],
+  "observed_blockers": [
+    {"candidate": "kicad-net-23:1:0:1", "blocker": "kicad-net-4:0:0:8", "layer": "F.Cu", "code": "track_track_arc_clearance", "deficit_nm": 318916},
+    {"candidate": "kicad-net-23:1:0:1", "blocker": "kicad-net-4:0:0:9", "layer": "F.Cu", "code": "track_track_arc_clearance", "deficit_nm": 450000},
+    {"candidate": "kicad-net-23:1:0:1", "blocker": "kicad-net-3:5:0:4", "layer": "B.Cu", "code": "track_clearance", "deficit_nm": 450000}
+  ],
+  "evidence_source": "exact candidate-native checks recorded in telemetry; not final accepted copper",
+  "drc_status": "not_evaluated",
+  "regressions": "10/10 selected checks passed, including two KiCad DRCs",
+  "diagnostic_timeout_seconds": 900,
+  "diagnostic_outcome": "incomplete plan after bounded scope retries",
+  "diagnostic_runtime_seconds": 730.0978342470044,
+  "diagnostic_metrics": {
+    "paths": 50, "unrouted_nets": 0, "global_overflow": 19,
+    "scope_retries": 2, "generated_candidates": 3940,
+    "evaluated_candidates": 10, "locally_legal_candidates": 4,
+    "last_native_scene_conflicts": 2, "last_native_scene_fixed_conflicts": 2,
+    "final_candidate_available": false
+  },
+  "remaining_reported_window": {"id": 3, "nets": ["kicad-net-17", "kicad-net-4"], "selected_templates": [0, 7], "layer": "F.Cu"},
+  "remaining_exact_pairs_and_categories": "not exported by benchmark binary; subsequent reporting fix added last-scene diagnoses and manifest status",
+  "interpretation": "partially supported; original region no longer unresolved, but no accepted copper or tier pass",
+  "tier_promoted": false
+}

@@ -7,7 +7,9 @@
 #include <cstdint>
 #include <functional>
 #include <limits>
+#include <memory>
 #include <optional>
+#include <stop_token>
 #include <vector>
 
 namespace flux {
@@ -49,9 +51,12 @@ struct QuinticPHSegment {
   long double route_parameter_start{0.0L};
   long double route_parameter_end{1.0L};
   std::size_t interpolation_branch{0U};
+  bool operator==(const QuinticPHSegment&) const = default;
 };
 
 enum class PHJoinContinuity { tangent, curvature };
+
+struct PreparedSplineCorridor;
 
 struct QuinticPHRoute {
   // These interpolation nodes, not arbitrary Bézier controls, are the
@@ -62,7 +67,10 @@ struct QuinticPHRoute {
   std::vector<long double> node_parameters;
   std::vector<SplineVector> node_derivatives;
   std::vector<QuinticPHSegment> segments;
-  std::vector<Polygon> convex_corridor;
+  // Immutable prepared corridor geometry is shared by every control-point candidate. A route
+  // optimization wave may clone thousands of candidates; copying the complete NavMesh guard
+  // union into each one would dominate both memory traffic and exact-certificate runtime.
+  std::shared_ptr<const PreparedSplineCorridor> prepared_corridor;
   long double parameter_exponent{0.5L};
   long double tangent_scale{1.0L};
   PHJoinContinuity requested_continuity{PHJoinContinuity::tangent};
@@ -73,6 +81,7 @@ struct QuinticPHRoute {
   // rounded corner cannot bow the intervening straight span across a boundary.
   // Magnitudes remain derived from the local parameterization after deformation.
   std::vector<SplineVector> node_tangent_directions;
+  bool operator==(const QuinticPHRoute& other) const;
 };
 
 struct SplineSample {
@@ -93,7 +102,9 @@ struct PHCurvatureExtremum {
   long double curvature_per_nm{0.0L};
 };
 
-struct PHInflection { long double parameter{0.0L}; };
+struct PHInflection {
+  long double parameter{0.0L};
+};
 
 // Exact homogeneous degree-nine Bézier representation of a signed PH offset.
 struct PHRationalOffset {
@@ -132,11 +143,43 @@ struct PHOffsetSubdivisionBounds {
   std::int64_t maximum_y_nm{0};
 };
 
+// Prepared conservative subdivision of a polynomial quintic PH centreline. Bounds use
+// outward-rounded doubles so the common separation proof is inexpensive and vectorizable; the
+// long-double Bezier controls remain attached for fail-closed refinement. Rational degree-nine
+// offsets are needed only when this hierarchy cannot prove separation or penetration.
+struct PHBezierCertificateNode {
+  std::array<SplineVector, 6U> bezier;
+  std::array<double, 4U> outward_bounds{}; // minimum x/y, maximum x/y
+  long double first_parameter{0.0L};
+  long double last_parameter{1.0L};
+  std::size_t first_child{std::numeric_limits<std::size_t>::max()};
+  std::size_t second_child{std::numeric_limits<std::size_t>::max()};
+  std::size_t depth{0U};
+};
+
+struct PreparedPHSegmentCertificate {
+  std::uint64_t geometry_fingerprint{0U};
+  std::vector<PHBezierCertificateNode> nodes;
+};
+
+enum class PHCenterlineClearanceVerdict { separated, colliding, ambiguous };
+
+struct PHCenterlineClearanceStats {
+  std::size_t node_pairs{0U};
+  std::size_t simd_batches{0U};
+  std::size_t simd_lanes{0U};
+  std::size_t double_separation_proofs{0U};
+  std::size_t long_double_collision_proofs{0U};
+  std::size_t multiprecision_comparisons{0U};
+  std::size_t ambiguous_leaf_pairs{0U};
+  bool node_budget_exhausted{false};
+};
+
 struct PHInterpolationConfig {
   long double parameter_exponent{0.5L}; // centripetal; 1 selects chord length
   long double tangent_scale{1.0L};
   PHJoinContinuity continuity{PHJoinContinuity::tangent};
-  long double continuity_tolerance_nm{10.0L};
+  long double curvature_tolerance_per_nm{1.0e-10L};
   std::size_t maximum_continuity_iterations{24U};
 };
 
@@ -147,6 +190,7 @@ public:
   [[nodiscard]] bool valid() const;
   [[nodiscard]] bool update(const QuinticPHRoute& route);
   [[nodiscard]] const std::vector<SplineDifferential>& samples() const { return samples_; }
+
 private:
   std::size_t segment_count_{0U};
   std::vector<long double> parameters_;
@@ -159,6 +203,7 @@ struct SplineClearanceProbe {
   bool represented_legal{false};
 };
 using SplineClearanceEvaluator = std::function<SplineClearanceProbe(SplineVector)>;
+using SplineRouteConstraintEvaluator = std::function<bool(const QuinticPHRoute&)>;
 
 struct SplineContinuousEnvelopeConfig {
   Nanometres hull_tolerance{Nanometres::from_mm(0.02)};
@@ -245,6 +290,17 @@ struct SplineTrajectoryOptimizationConfig {
   std::size_t maximum_iterations{24U};
   std::size_t maximum_candidate_checks{4096U};
   std::size_t maximum_adaptive_control_insertions{2U};
+  // When a straightened span cuts an obstacle, replace the broad detour with two
+  // interpolation stations on the approach/departure sides of the blocked interval.
+  // This is deliberately bounded: the signed-distance field is sampled only while
+  // producing a small set of hard-certified candidates.
+  bool enable_paired_obstacle_supports{true};
+  std::size_t maximum_paired_obstacle_support_pairs{1U};
+  std::size_t maximum_paired_obstacle_probes{32U};
+  // Optional final gate for the bounded post-polish tautening proposal.  It is deliberately not
+  // part of the ordinary candidate constraint: callers can preserve a downstream realization
+  // invariant without charging every coordinate-descent proposal for that expensive check.
+  SplineRouteConstraintEvaluator postpolish_route_constraint;
   std::size_t maximum_multistart_attempts{4U};
   // Optional advisory whole-chain XPBD preconditioner. The returned interpolation nodes are
   // accepted only through the ordinary CPU shape/corridor/clearance comparator and exact gates.
@@ -268,6 +324,9 @@ struct SplineTrajectoryOptimizationResult {
   std::size_t accepted_control_moves{0};
   std::size_t elastic_predeformed_controls{0};
   std::size_t adaptive_controls_inserted{0};
+  std::size_t paired_obstacle_support_attempts{0};
+  std::size_t paired_obstacle_supports_inserted{0};
+  std::size_t paired_obstacle_support_recoveries{0};
   std::size_t multistart_attempts{0};
   std::size_t multistart_recoveries{0};
   std::size_t initial_violations{0};
@@ -303,11 +362,15 @@ struct SplineTrajectoryOptimizationResult {
   std::size_t gpu_polish_exact_shortlist_checks{0U};
   std::size_t parallel_exact_waves{0U};
   std::size_t parallel_exact_checks{0U};
+  long double initial_arc_length_nm{0.0L};
+  long double final_arc_length_nm{0.0L};
+  long double initial_regularity{0.0L};
+  long double final_regularity{0.0L};
   long double initial_objective{0.0L};
   long double final_objective{0.0L};
 };
 
-enum class SplineFittedPieceKind { segment, circular_arc };
+enum class SplineFittedPieceKind { segment, circular_arc, cubic_bezier };
 struct SplineFittedPiece {
   SplineFittedPieceKind kind{SplineFittedPieceKind::segment};
   Point start;
@@ -315,21 +378,26 @@ struct SplineFittedPiece {
   Point end;
   long double first_parameter{0.0L};
   long double last_parameter{0.0L};
+  Point control1{};
+  Point control2{};
+
+  bool operator==(const SplineFittedPiece&) const = default;
 };
 
-[[nodiscard]] std::vector<long double> select_quintic_ph_parameters(
-    const std::vector<SplineVector>& points, long double exponent = 0.5L);
-[[nodiscard]] std::optional<QuinticPHSegment> interpolate_quintic_ph_segment(
-    SplineVector start, SplineVector end, SplineVector start_derivative,
-    SplineVector end_derivative);
-[[nodiscard]] std::optional<QuinticPHRoute> make_quintic_ph_route(
-    const std::vector<Point>& polyline, const PHInterpolationConfig& config = {});
-[[nodiscard]] std::optional<QuinticPHRoute> make_topology_preserving_quintic_ph_route(
-    const std::vector<Point>& polyline, Nanometres corner_guard,
-    const PHInterpolationConfig& config = {});
-[[nodiscard]] std::optional<QuinticPHRoute> make_corner_rounded_quintic_ph_route(
-    const std::vector<Point>& polyline, Nanometres corner_guard,
-    const PHInterpolationConfig& config = {});
+[[nodiscard]] std::vector<long double>
+select_quintic_ph_parameters(const std::vector<SplineVector>& points, long double exponent = 0.5L);
+[[nodiscard]] std::optional<QuinticPHSegment>
+interpolate_quintic_ph_segment(SplineVector start, SplineVector end, SplineVector start_derivative,
+                               SplineVector end_derivative);
+[[nodiscard]] std::optional<QuinticPHRoute>
+make_quintic_ph_route(const std::vector<Point>& polyline, const PHInterpolationConfig& config = {});
+[[nodiscard]] std::optional<QuinticPHRoute>
+make_topology_preserving_quintic_ph_route(const std::vector<Point>& polyline,
+                                          Nanometres corner_guard,
+                                          const PHInterpolationConfig& config = {});
+[[nodiscard]] std::optional<QuinticPHRoute>
+make_corner_rounded_quintic_ph_route(const std::vector<Point>& polyline, Nanometres corner_guard,
+                                     const PHInterpolationConfig& config = {});
 [[nodiscard]] std::optional<QuinticPHRoute>
 make_run_aligned_quintic_ph_route(const std::vector<Point>& polyline, Nanometres corner_guard,
                                  const PHInterpolationConfig& config = {});
@@ -338,9 +406,11 @@ make_run_aligned_quintic_ph_route(const std::vector<Point>& polyline, Nanometres
 // rebuild when the existing prepared chain is structurally unavailable.
 [[nodiscard]] bool rebuild_quintic_ph_route_around_control(QuinticPHRoute& route,
                                                            std::size_t control_index);
-[[nodiscard]] bool enforce_quintic_ph_continuity(
-    QuinticPHRoute& route, PHJoinContinuity continuity, long double tolerance_nm = 10.0L,
-    std::size_t maximum_iterations = 24U);
+[[nodiscard]] long double quintic_ph_max_curvature_jump(const QuinticPHRoute& route);
+[[nodiscard]] bool enforce_quintic_ph_continuity(QuinticPHRoute& route, PHJoinContinuity continuity,
+                                                 long double curvature_tolerance_per_nm = 1.0e-10L,
+                                                 std::size_t maximum_iterations = 24U,
+                                                 std::stop_token stop_token = {});
 [[nodiscard]] bool insert_quintic_ph_interpolation_node(QuinticPHRoute& route,
                                                         long double parameter);
 // Attaches an independently certified convex corridor to an already prepared PH chain. This does
@@ -348,63 +418,119 @@ make_run_aligned_quintic_ph_route(const std::vector<Point>& polyline, Nanometres
 [[nodiscard]] bool set_quintic_ph_corridor(QuinticPHRoute& route,
                                            const std::vector<Polygon>& convex_regions);
 
-[[nodiscard]] SplineVector evaluate_quintic_ph(const QuinticPHRoute& route,
-                                               long double parameter);
-[[nodiscard]] SplineDifferential evaluate_quintic_ph_differential(
-    const QuinticPHRoute& route, long double parameter);
-[[nodiscard]] std::vector<long double> quintic_ph_bezier_basis(
-    const QuinticPHRoute& route, long double parameter);
-[[nodiscard]] std::vector<SplineVector> quintic_ph_bezier_controls(
-    const QuinticPHRoute& route);
+[[nodiscard]] SplineVector evaluate_quintic_ph(const QuinticPHRoute& route, long double parameter);
+[[nodiscard]] SplineDifferential evaluate_quintic_ph_differential(const QuinticPHRoute& route,
+                                                                  long double parameter);
+[[nodiscard]] std::vector<long double> quintic_ph_bezier_basis(const QuinticPHRoute& route,
+                                                               long double parameter);
+[[nodiscard]] std::vector<SplineVector> quintic_ph_bezier_controls(const QuinticPHRoute& route);
 [[nodiscard]] long double quintic_ph_arc_length(const QuinticPHSegment& segment,
                                                 long double parameter = 1.0L);
-[[nodiscard]] std::vector<PHCurvatureExtremum> quintic_ph_curvature_extrema(
-    const QuinticPHSegment& segment);
-[[nodiscard]] std::vector<PHInflection> quintic_ph_inflections(
-    const QuinticPHSegment& segment);
+[[nodiscard]] std::vector<PHCurvatureExtremum>
+quintic_ph_curvature_extrema(const QuinticPHSegment& segment);
+[[nodiscard]] std::vector<PHInflection> quintic_ph_inflections(const QuinticPHSegment& segment);
 
-[[nodiscard]] PHRationalOffset make_quintic_ph_offset(
-    const QuinticPHSegment& segment, long double signed_distance_nm);
-[[nodiscard]] SplineVector evaluate_quintic_ph_offset(
-    const PHRationalOffset& offset, long double parameter);
+[[nodiscard]] PHRationalOffset make_quintic_ph_offset(const QuinticPHSegment& segment,
+                                                      long double signed_distance_nm);
+[[nodiscard]] SplineVector evaluate_quintic_ph_offset(const PHRationalOffset& offset,
+                                                      long double parameter);
 [[nodiscard]] std::vector<PHOffsetIntersection> intersect_quintic_ph_offsets(
     const PHRationalOffset& first, const PHRationalOffset& second,
     Nanometres tolerance = Nanometres{10}, std::size_t maximum_subdivision_depth = 18U,
-    std::size_t maximum_intersections = 64U,
-    std::size_t maximum_subdivision_nodes = 1'000'000U,
+    std::size_t maximum_intersections = 64U, std::size_t maximum_subdivision_nodes = 1'000'000U,
     PHOffsetIntersectionStats* stats = nullptr);
-[[nodiscard]] std::vector<PHOffsetSubdivisionBounds> subdivide_quintic_ph_offset_bounds(
-    const PHRationalOffset& offset, std::size_t subdivision_depth = 3U,
-    Nanometres outward_guard = Nanometres{10});
+[[nodiscard]] std::vector<PHOffsetSubdivisionBounds>
+subdivide_quintic_ph_offset_bounds(const PHRationalOffset& offset,
+                                   std::size_t subdivision_depth = 3U,
+                                   Nanometres outward_guard = Nanometres{10});
+[[nodiscard]] PreparedPHSegmentCertificate
+prepare_quintic_ph_segment_certificate(const QuinticPHSegment& segment,
+                                       std::size_t subdivision_depth = 6U);
+[[nodiscard]] PHCenterlineClearanceVerdict certify_quintic_ph_segment_clearance(
+    const PreparedPHSegmentCertificate& first, const PreparedPHSegmentCertificate& second,
+    long double required_separation_nm, Nanometres numerical_guard = Nanometres{10},
+    std::size_t maximum_node_pairs = 16'384U,
+    PHCenterlineClearanceStats* stats = nullptr);
 
-[[nodiscard]] std::vector<SplineSample> adaptive_tessellate_quintic_ph(
-    const QuinticPHRoute& route, Nanometres tolerance, std::size_t maximum_depth,
-    std::size_t maximum_samples);
-[[nodiscard]] std::vector<SplineFittedPiece> fit_spline_samples_to_lines_and_arcs(
-    const std::vector<SplineSample>& samples, Nanometres tolerance,
-    std::size_t maximum_arc_samples, std::size_t maximum_pieces);
-[[nodiscard]] SplineShapeCertificate certify_quintic_ph_shape(
-    const QuinticPHRoute& route, const SplineShapeCertificationConfig& config = {});
-[[nodiscard]] SplineContinuousEnvelopeCertificate certify_quintic_ph_continuous_envelope(
-    const QuinticPHRoute& route, Nanometres minimum_clearance,
-    const SplineClearanceEvaluator& clearance_evaluator,
-    const SplineContinuousEnvelopeConfig& config = {});
+[[nodiscard]] std::vector<SplineSample> adaptive_tessellate_quintic_ph(const QuinticPHRoute& route,
+                                                                       Nanometres tolerance,
+                                                                       std::size_t maximum_depth,
+                                                                       std::size_t maximum_samples);
+[[nodiscard]] std::vector<SplineFittedPiece>
+fit_spline_samples_to_lines_and_arcs(const std::vector<SplineSample>& samples, Nanometres tolerance,
+                                     std::size_t maximum_arc_samples, std::size_t maximum_pieces);
+// Checks integer native geometry, not the PH design curve. Invalid/disconnected primitives
+// return infinity; a single valid primitive has no internal join and returns zero.
+[[nodiscard]] long double native_spline_max_join_angle(const std::vector<SplineFittedPiece>& pieces);
+struct NativeSplineFitConfig {
+  Nanometres tessellation_tolerance{Nanometres::from_mm(0.02)};
+  Nanometres fit_tolerance{Nanometres::from_mm(0.02)};
+  std::size_t maximum_depth{10U};
+  std::size_t maximum_samples{4'096U};
+  std::size_t maximum_arc_samples{24U};
+  std::size_t maximum_pieces{4'096U};
+  long double maximum_join_angle_radians{0.035L};
+  std::size_t maximum_refinement_attempts{8U};
+  bool operator==(const NativeSplineFitConfig&) const = default;
+};
+struct NativeSplineFitStats {
+  std::size_t attempts{0U};
+  std::size_t peak_samples{0U};
+  std::uint64_t tessellation_us{0U};
+  std::uint64_t lattice_filter_us{0U};
+  std::uint64_t line_arc_fit_us{0U};
+  std::uint64_t tangent_biarc_fit_us{0U};
+};
+// Bounded refinement of the positional fit until the emitted arc/line joins meet the angular
+// policy. Failure is explicit: never label a polygonal kink as a smooth native realization.
+[[nodiscard]] std::vector<SplineFittedPiece>
+fit_quintic_ph_to_native_copper(const QuinticPHRoute& route, const NativeSplineFitConfig& config,
+                                std::stop_token stop_token = {},
+                                NativeSplineFitStats* stats = nullptr);
+[[nodiscard]] std::vector<SplineFittedPiece>
+fit_quintic_ph_to_cubic_copper(const QuinticPHRoute& route, const NativeSplineFitConfig& config,
+                               std::stop_token stop_token = {});
+[[nodiscard]] SplineShapeCertificate
+certify_quintic_ph_shape(const QuinticPHRoute& route,
+                         const SplineShapeCertificationConfig& config = {});
+[[nodiscard]] SplineContinuousEnvelopeCertificate
+certify_quintic_ph_continuous_envelope(const QuinticPHRoute& route, Nanometres minimum_clearance,
+                                       const SplineClearanceEvaluator& clearance_evaluator,
+                                       const SplineContinuousEnvelopeConfig& config = {});
 
-[[nodiscard]] std::size_t shove_quintic_ph_interpolation_corridor(
-    QuinticPHRoute& route, long double parameter, SplineVector normal, Nanometres distance,
-    Nanometres maximum_corridor_displacement);
+[[nodiscard]] std::size_t
+shove_quintic_ph_interpolation_corridor(QuinticPHRoute& route, long double parameter,
+                                        SplineVector normal, Nanometres distance,
+                                        Nanometres maximum_corridor_displacement);
 [[nodiscard]] long double quintic_ph_curvature_objective(const QuinticPHRoute& route,
                                                          std::size_t samples = 32U);
-[[nodiscard]] SplineTrajectoryOptimizationResult optimize_quintic_ph_trajectory(
+[[nodiscard]] SplineTrajectoryOptimizationResult
+optimize_quintic_ph_trajectory(QuinticPHRoute& route,
+                               const SplineTrajectoryOptimizationConfig& config,
+                               const SplineClearanceEvaluator& clearance_evaluator,
+                               const SplineRouteConstraintEvaluator& route_constraint = {});
+struct PHRouteTighteningStatistics {
+  std::size_t candidate_checks{0U};
+  std::size_t paired_attempts{0U};
+  std::size_t paired_supports_inserted{0U};
+};
+
+// Removes redundant interpolation anchors only when rebuilding preserves the complete hard
+// route certificate and strictly shortens the exact PH arc length.
+[[nodiscard]] bool tauten_quintic_ph_route(
     QuinticPHRoute& route, const SplineTrajectoryOptimizationConfig& config,
-    const SplineClearanceEvaluator& clearance_evaluator);
-[[nodiscard]] SplineTrajectoryOptimizationResult deform_quintic_ph_elastic(
-    QuinticPHRoute& route, SplineVector new_start, SplineVector new_end,
-    const SplineTrajectoryOptimizationConfig& config,
-    const SplineClearanceEvaluator& clearance_evaluator);
-[[nodiscard]] SplineTrajectoryOptimizationResult deform_quintic_ph_elastic_at(
-    QuinticPHRoute& route, long double collision_parameter, SplineVector obstacle_normal,
-    Nanometres displacement, const SplineTrajectoryOptimizationConfig& config,
-    const SplineClearanceEvaluator& clearance_evaluator);
+    const SplineClearanceEvaluator& clearance_evaluator,
+    const SplineRouteConstraintEvaluator& route_constraint = {},
+    std::size_t maximum_removals = 16U,
+    PHRouteTighteningStatistics* statistics = nullptr);
+[[nodiscard]] SplineTrajectoryOptimizationResult
+deform_quintic_ph_elastic(QuinticPHRoute& route, SplineVector new_start, SplineVector new_end,
+                          const SplineTrajectoryOptimizationConfig& config,
+                          const SplineClearanceEvaluator& clearance_evaluator);
+[[nodiscard]] SplineTrajectoryOptimizationResult
+deform_quintic_ph_elastic_at(QuinticPHRoute& route, long double collision_parameter,
+                             SplineVector obstacle_normal, Nanometres displacement,
+                             const SplineTrajectoryOptimizationConfig& config,
+                             const SplineClearanceEvaluator& clearance_evaluator);
 
 } // namespace flux

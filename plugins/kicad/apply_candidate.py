@@ -24,7 +24,7 @@ UUID_PATTERN = re.compile(
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
 SUPPORTED_CHANGE_SET_VERSION = 1
-SUPPORTED_BOARD_SCHEMA = 21
+SUPPORTED_BOARD_SCHEMA = 22
 TOP_LEVEL_KEYS = {
     "ok",
     "version",
@@ -34,10 +34,11 @@ TOP_LEVEL_KEYS = {
     "footprint_transforms",
     "tracks",
     "track_arcs",
+    "track_beziers",
     "vias",
     "diagnostics",
 }
-INVENTORY_KEYS = {"footprints", "tracks", "track_arcs", "vias"}
+INVENTORY_KEYS = {"footprints", "tracks", "track_arcs", "track_beziers", "vias"}
 FOOTPRINT_KEYS = {"id", "reference", "state"}
 FOOTPRINT_CHANGE_KEYS = {"id", "reference", "source", "candidate"}
 FOOTPRINT_STATE_KEYS = {"position_nm", "rotation_microdegrees", "side"}
@@ -49,6 +50,17 @@ ARC_KEYS = {
     "layer",
     "start_nm",
     "middle_nm",
+    "end_nm",
+    "width_nm",
+    "locked",
+}
+BEZIER_KEYS = {
+    "id",
+    "net",
+    "layer",
+    "start_nm",
+    "control1_nm",
+    "control2_nm",
     "end_nm",
     "width_nm",
     "locked",
@@ -71,6 +83,7 @@ class LiveBindings:
     unknown_layer: Any
     via_through: Any
     via_blind_buried: Any
+    bezier_type: type | None = None
 
 
 def _mapping(value: Any, path: str) -> Mapping[str, Any]:
@@ -135,7 +148,7 @@ def _footprint_state(value: Any, path: str) -> Mapping[str, Any]:
 
 def _route_state(value: Any, kind: str, path: str) -> Mapping[str, Any]:
     state = _mapping(value, path)
-    expected = {"track": TRACK_KEYS, "track_arc": ARC_KEYS, "via": VIA_KEYS}[kind]
+    expected = {"track": TRACK_KEYS, "track_arc": ARC_KEYS, "track_bezier": BEZIER_KEYS, "via": VIA_KEYS}[kind]
     _exact_keys(state, expected, path)
     _uuid(state["id"], f"{path}.id")
     _string(state["net"], f"{path}.net")
@@ -150,6 +163,13 @@ def _route_state(value: Any, kind: str, path: str) -> Mapping[str, Any]:
         _string(state["layer"], f"{path}.layer")
         _point(state["start_nm"], f"{path}.start_nm")
         _point(state["middle_nm"], f"{path}.middle_nm")
+        _point(state["end_nm"], f"{path}.end_nm")
+        _integer(state["width_nm"], f"{path}.width_nm", minimum=1)
+    elif kind == "track_bezier":
+        _string(state["layer"], f"{path}.layer")
+        _point(state["start_nm"], f"{path}.start_nm")
+        _point(state["control1_nm"], f"{path}.control1_nm")
+        _point(state["control2_nm"], f"{path}.control2_nm")
         _point(state["end_nm"], f"{path}.end_nm")
         _integer(state["width_nm"], f"{path}.width_nm", minimum=1)
     else:
@@ -214,6 +234,9 @@ def validate_change_set(document: Any) -> Mapping[str, Any]:
         "track_arc": _indexed_states(
             inventory["track_arcs"], "track_arc", "source_inventory.track_arcs"
         ),
+        "track_bezier": _indexed_states(
+            inventory["track_beziers"], "track_bezier", "source_inventory.track_beziers"
+        ),
         "via": _indexed_states(inventory["vias"], "via", "source_inventory.vias"),
     }
     all_source_route_ids: set[str] = set()
@@ -249,7 +272,8 @@ def validate_change_set(document: Any) -> Mapping[str, Any]:
         seen_transforms.add(item_id)
 
     final_route_ids = set(all_source_route_ids)
-    for kind, field in (("track", "tracks"), ("track_arc", "track_arcs"), ("via", "vias")):
+    for kind, field in (("track", "tracks"), ("track_arc", "track_arcs"),
+                        ("track_bezier", "track_beziers"), ("via", "vias")):
         seen_changes: set[str] = set()
         source_phase = True
         previous_source = ""
@@ -317,6 +341,7 @@ def change_set_counts(change_set: Mapping[str, Any]) -> dict[str, int]:
         "footprint_transforms": len(change_set["footprint_transforms"]),
         "track_operations": len(change_set["tracks"]),
         "track_arc_operations": len(change_set["track_arcs"]),
+        "track_bezier_operations": len(change_set["track_beziers"]),
         "via_operations": len(change_set["vias"]),
     }
 
@@ -355,6 +380,16 @@ def _live_route_state(item: Any, kind: str, bindings: LiveBindings) -> dict[str,
             "end_nm": [int(item.end.x), int(item.end.y)],
             "width_nm": int(item.width),
         }
+    if kind == "track_bezier":
+        return {
+            **common,
+            "layer": bindings.layer_name(item.layer),
+            "start_nm": [int(item.start.x), int(item.start.y)],
+            "control1_nm": [int(item.control1.x), int(item.control1.y)],
+            "control2_nm": [int(item.control2.x), int(item.control2.y)],
+            "end_nm": [int(item.end.x), int(item.end.y)],
+            "width_nm": int(item.attributes.stroke.width),
+        }
     start_layer = bindings.layer_name(item.padstack.drill.start_layer)
     end_layer = bindings.layer_name(item.padstack.drill.end_layer)
     return {
@@ -378,7 +413,9 @@ def verify_live_source(
     board: Any, change_set: Mapping[str, Any], bindings: LiveBindings
 ) -> dict[str, dict[str, Any]]:
     inventory = change_set["source_inventory"]
-    live: dict[str, dict[str, Any]] = {"footprint": {}, "track": {}, "track_arc": {}, "via": {}}
+    live: dict[str, dict[str, Any]] = {
+        "footprint": {}, "track": {}, "track_arc": {}, "track_bezier": {}, "via": {}
+    }
     for item in board.get_footprints():
         item_id = str(item.id.value).lower()
         if item_id in live["footprint"]:
@@ -397,6 +434,15 @@ def verify_live_source(
             raise ChangeSetError(f"live board repeats {kind} id {item_id!r}")
         live[kind][item_id] = item
 
+    if bindings.bezier_type is not None:
+        for item in board.get_shapes():
+            if not isinstance(item, bindings.bezier_type) or not str(item.net.name):
+                continue
+            item_id = str(item.id.value).lower()
+            if item_id in live["track_bezier"]:
+                raise ChangeSetError(f"live board repeats track_bezier id {item_id!r}")
+            live["track_bezier"][item_id] = item
+
     for item in board.get_vias():
         item_id = str(item.id.value).lower()
         if item_id in live["via"]:
@@ -413,7 +459,8 @@ def verify_live_source(
         if _live_footprint_state(item, bindings) != expected["state"]:
             raise ChangeSetError(f"stale live footprint precondition for {item_id!r}")
 
-    for kind, field in (("track", "tracks"), ("track_arc", "track_arcs"), ("via", "vias")):
+    for kind, field in (("track", "tracks"), ("track_arc", "track_arcs"),
+                        ("track_bezier", "track_beziers"), ("via", "vias")):
         expected = {str(item["id"]).lower(): item for item in inventory[field]}
         if set(live[kind]) != set(expected):
             raise ChangeSetError(f"live {kind} membership differs from the saved source inventory")
@@ -458,6 +505,13 @@ def _apply_route_state(
         item.mid = bindings.vector(*_point(state["middle_nm"], "track_arc.middle_nm"))
         item.end = bindings.vector(*_point(state["end_nm"], "track_arc.end_nm"))
         item.width = int(state["width_nm"])
+    elif kind == "track_bezier":
+        item.layer = _layer(str(state["layer"]), bindings)
+        item.start = bindings.vector(*_point(state["start_nm"], "track_bezier.start_nm"))
+        item.control1 = bindings.vector(*_point(state["control1_nm"], "track_bezier.control1_nm"))
+        item.control2 = bindings.vector(*_point(state["control2_nm"], "track_bezier.control2_nm"))
+        item.end = bindings.vector(*_point(state["end_nm"], "track_bezier.end_nm"))
+        item.attributes.stroke.width = int(state["width_nm"])
     else:
         item.position = bindings.vector(*_point(state["position_nm"], "via.position_nm"))
         layers = [_layer(str(name), bindings) for name in state["layers"]]
@@ -487,7 +541,8 @@ def apply_routing_transaction(
 
     changes = [
         (kind, change)
-        for kind, field in (("track", "tracks"), ("track_arc", "track_arcs"), ("via", "vias"))
+        for kind, field in (("track", "tracks"), ("track_arc", "track_arcs"),
+                            ("track_bezier", "track_beziers"), ("via", "vias"))
         for change in change_set[field]
     ]
     counts = change_set_counts(change_set)
@@ -514,7 +569,7 @@ def apply_routing_transaction(
         if removed:
             board.remove_items(removed)
 
-        for kind in ("track", "track_arc", "via"):
+        for kind in ("track", "track_arc", "track_bezier", "via"):
             updated_expected = [
                 change["candidate"]
                 for change_kind, change in changes
@@ -550,8 +605,11 @@ def apply_routing_transaction(
                 item_type = {
                     "track": bindings.track_type,
                     "track_arc": bindings.arc_type,
+                    "track_bezier": bindings.bezier_type,
                     "via": bindings.via_type,
                 }[kind]
+                if item_type is None:
+                    raise ChangeSetError("KiCad bridge does not expose BoardBezier support")
                 requested = [
                     _apply_route_state(
                         item_type(), state, kind, bindings, nets, assign_id=True
@@ -638,7 +696,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
 
         from kipy import KiCad
-        from kipy.board_types import ArcTrack, Track, Via, ViaType
+        from kipy.board_types import ArcTrack, BoardBezier, Track, Via, ViaType
         from kipy.geometry import Vector2
         from kipy.proto.board.board_types_pb2 import BoardLayer
         from kipy.util.board_layer import canonical_name, layer_from_canonical_name
@@ -653,6 +711,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             unknown_layer=BoardLayer.BL_UNKNOWN,
             via_through=ViaType.VT_THROUGH,
             via_blind_buried=ViaType.VT_BLIND_BURIED,
+            bezier_type=BoardBezier,
         )
         kicad = KiCad(client_name="flux_capacitor candidate preview/apply")
         kicad.check_version()
@@ -674,7 +733,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             counts = apply_routing_transaction(board, change_set, bindings)
             applied = any(
                 counts[key]
-                for key in ("track_operations", "track_arc_operations", "via_operations")
+                for key in ("track_operations", "track_arc_operations", "track_bezier_operations",
+                            "via_operations")
             )
         if source_bytes_ready != source.read_bytes():
             raise ChangeSetError("live candidate operation unexpectedly modified the saved source")

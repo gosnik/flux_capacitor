@@ -1,0 +1,96 @@
+{
+  "created_utc": "2026-10-08T10:25:22.823705+00:00",
+  "method": "Non-overlapping ordinary channels->assignments and assignments->straight event intervals, paired in source order. Source emission points in src/regional_router.cpp:16479,16484,16496. Summed wall time, not exclusive CPU profiling.",
+  "limitations": [
+    "Counters refer to selected result, not whole-run cumulative work.",
+    "Candidate-generation/assignment interval includes nested geometry and constraint checks; no internal cost attribution available.",
+    "V74/V75 overlap; no controlled across-run speed claim.",
+    "Straight path only; inactive curved/GPU operators cannot be ranked from these runs."
+  ],
+  "runs": [
+    {
+      "experiment": "V73",
+      "source": "build/corrected-history-control-20261008/tier1/tier-1-bm_svf/telemetry/bm_svf-global.jsonl",
+      "command_duration_s": 2520.7647303740014,
+      "timed_phase_seconds": {
+        "regional_candidate_generation_and_assignment": 2396.7392130000007,
+        "straight_realization_and_scene_validation": 87.68788999999958
+      },
+      "timed_phase_percent": {
+        "regional_candidate_generation_and_assignment": 95.0798455770365,
+        "straight_realization_and_scene_validation": 3.4786225363836114
+      },
+      "matched_intervals": {
+        "regional_candidate_generation_and_assignment": 8,
+        "straight_realization_and_scene_validation": 8
+      },
+      "unattributed_seconds": 36.33762737400093,
+      "selected_result_counters": {
+        "regional_bundle_search_states": 794559,
+        "regional_access_assignment_states": 4369985,
+        "regional_partial_access_assignment_states": 4413939,
+        "regional_lane_solver_cache_hits": 3933624,
+        "regional_lane_solver_states": 1404,
+        "regional_accepted_alternative_templates": 707,
+        "regional_selected_alternative_templates": 23,
+        "cumulative_global_iterations": 11
+      }
+    },
+    {
+      "experiment": "V74",
+      "source": "build/assembled-feedback-20261008/tier1/tier-1-bm_svf/telemetry/bm_svf-global.jsonl",
+      "command_duration_s": 3413.541366284,
+      "timed_phase_seconds": {
+        "regional_candidate_generation_and_assignment": 3226.3265719999995,
+        "straight_realization_and_scene_validation": 147.42760600000037
+      },
+      "timed_phase_percent": {
+        "regional_candidate_generation_and_assignment": 94.5155258367997,
+        "straight_realization_and_scene_validation": 4.318904919570108
+      },
+      "matched_intervals": {
+        "regional_candidate_generation_and_assignment": 11,
+        "straight_realization_and_scene_validation": 11
+      },
+      "unattributed_seconds": 39.78718828400042,
+      "selected_result_counters": {
+        "regional_bundle_search_states": 794559,
+        "regional_access_assignment_states": 4369985,
+        "regional_partial_access_assignment_states": 4413939,
+        "regional_lane_solver_cache_hits": 3933624,
+        "regional_lane_solver_states": 1404,
+        "regional_accepted_alternative_templates": 707,
+        "regional_selected_alternative_templates": 23,
+        "cumulative_global_iterations": 13
+      }
+    },
+    {
+      "experiment": "V75",
+      "source": "build/dogleg-alternatives-20261008/tier1/tier-1-bm_svf/telemetry/bm_svf-global.jsonl",
+      "command_duration_s": 2757.842261399004,
+      "timed_phase_seconds": {
+        "regional_candidate_generation_and_assignment": 2617.6944,
+        "straight_realization_and_scene_validation": 103.87918899999943
+      },
+      "timed_phase_percent": {
+        "regional_candidate_generation_and_assignment": 94.91820604243297,
+        "straight_realization_and_scene_validation": 3.7666834849105317
+      },
+      "matched_intervals": {
+        "regional_candidate_generation_and_assignment": 9,
+        "straight_realization_and_scene_validation": 9
+      },
+      "unattributed_seconds": 36.26867239900503,
+      "selected_result_counters": {
+        "regional_bundle_search_states": 812870,
+        "regional_access_assignment_states": 4391597,
+        "regional_partial_access_assignment_states": 4428368,
+        "regional_lane_solver_cache_hits": 3986858,
+        "regional_lane_solver_states": 1450,
+        "regional_accepted_alternative_templates": 715,
+        "regional_selected_alternative_templates": 21,
+        "cumulative_global_iterations": 11
+      }
+    }
+  ]
+}

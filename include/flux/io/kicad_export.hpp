@@ -26,7 +26,7 @@ struct ExportedObjectId {
 
 struct KicadExportOptions {
   std::string generator{"flux_capacitor"};
-  std::string generator_version{"0.139.0"};
+  std::string generator_version{"0.140.0"};
   bool verify_round_trip{true};
   // Write a review-only copper artifact from a lossy/invalid canonical projection. Source byte
   // identity and supported-design-change checks remain enforced, but strict semantic round-trip
@@ -44,7 +44,7 @@ struct KicadExportResult {
 };
 
 // Produces a new board artifact by patching only supported footprint positions and
-// top-level track/via objects. Unknown source syntax is retained verbatim. The source
+// top-level track, arc, electrical cubic-curve, and via objects. Unknown source syntax is retained verbatim. The source
 // text must match the imported source snapshot, and a result is withheld if strict
 // semantic round-trip verification fails.
 [[nodiscard]] KicadExportResult export_kicad_candidate(std::string_view source_contents,
@@ -110,6 +110,20 @@ struct KicadTrackArcChangeState {
   auto operator<=>(const KicadTrackArcChangeState&) const = default;
 };
 
+struct KicadTrackBezierChangeState {
+  ObjectId id;
+  std::string net_name;
+  LayerId layer;
+  Point start;
+  Point control1;
+  Point control2;
+  Point end;
+  Nanometres width;
+  bool locked{false};
+
+  auto operator<=>(const KicadTrackBezierChangeState&) const = default;
+};
+
 struct KicadViaChangeState {
   ObjectId id;
   std::string net_name;
@@ -137,10 +151,12 @@ struct KicadChangeSet {
   std::vector<KicadFootprintSnapshot> source_footprints;
   std::vector<KicadTrackChangeState> source_tracks;
   std::vector<KicadTrackArcChangeState> source_track_arcs;
+  std::vector<KicadTrackBezierChangeState> source_track_beziers;
   std::vector<KicadViaChangeState> source_vias;
   std::vector<KicadFootprintTransformChange> footprint_transforms;
   std::vector<KicadRoutingChange<KicadTrackChangeState>> tracks;
   std::vector<KicadRoutingChange<KicadTrackArcChangeState>> track_arcs;
+  std::vector<KicadRoutingChange<KicadTrackBezierChangeState>> track_beziers;
   std::vector<KicadRoutingChange<KicadViaChangeState>> vias;
 
   bool operator==(const KicadChangeSet&) const = default;

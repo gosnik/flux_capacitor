@@ -1,0 +1,24 @@
+{
+  "source": "user-reported comparison; not rerun or independently certified by Flux",
+  "board": "bm_svf",
+  "tier": 1,
+  "nets": {
+    "routed": 25,
+    "total": 25
+  },
+  "pad_pairs": {
+    "routed": 78,
+    "total": 78
+  },
+  "wall_seconds": 7.3,
+  "astar_expansions": 699298,
+  "final_segments": 615,
+  "through_vias": 73,
+  "copper_length_mm": 925.353,
+  "rule_escalations": 0,
+  "internal_represented_drc_violations": 0,
+  "permitted_same_net_crossings": 2,
+  "kicad_drc_certificate": null,
+  "reference_source_inspected": "https://github.com/drandyhaas/KiCadRoutingTools/tree/0db4b103f95a63995e8e2c2b2c8c0e3077a2388a",
+  "reference_source_is_benchmark_revision": false
+}

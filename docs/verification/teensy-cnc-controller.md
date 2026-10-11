@@ -1385,3 +1385,43 @@ must not be accepted as reviewed MCU/SoC classification.
 Tentative optimize/export may produce a review candidate after step 3 passes strictly. That
 candidate must not be accepted, applied live, or fabricated until post-process envelope review and
 all remaining final-acceptance steps pass.
+
+## Fresh routing attempts — 2026-09-05
+
+The current source differs from the August baseline. The strict import is lossless:
+198 footprints, 111 nets, zero tracks/arcs/vias, 420 open connections, no import or
+core errors, and 197 non-lossy warnings. Source revision is
+`kicad-20241229:pcbnew:c1a8bfed6929a939`. KiCad 10.0.4 source DRC reports 420
+unconnected items and 32 `lib_footprint_issues`; this is source-board DRC, not a
+routed-candidate result.
+
+- PCB SHA-256: `38856ea2c4e6030125727a5933e77f882ef66b4b96e469cbce7df305321f26dc`.
+- Project SHA-256: `d5a729cb8bf02c192f9bcab7f988cc71b56f641811d1c97ffd984b601fa4d58b`.
+- Artifacts: `build/verification/teensy_cnc/frontier-20260905/`.
+
+The ordinary `autoroute-kicad` preset stopped immediately with `invalid_input`:
+its fixed planar grid could not preserve the resolved copper spacing. A 1.3 mm
+sampled-clearance global attempt then reached a 1,200-second diagnostic limit
+without a complete checkpoint (1,199,860 KiB peak RSS). That first search lacked
+the project's effective netclass snapshot and is explicitly not a full-rule test.
+
+The official KiCad IPC exporter subsequently captured a version-3 snapshot from
+an isolated byte-identical PCB/project copy opened in KiCad 9.0.8. All nine classes
+and their effective net memberships were exported, including project board-rule
+minimums. Both source bindings were verified against the original project before
+passing `--netclasses project.flux_netclasses` to a second full-board attempt.
+The isolated editor process was closed after capture. Snapshot SHA-256 is
+`461766720f2864d2a4f7b90cd60d89822bd42820883447e246d316ee1263720a`.
+
+That rule-bound search also reached its 1,200-second limit (1,305,132 KiB peak RSS).
+It used one global iteration, 50,000 expansions per search, two static seed workers,
+search diversification, and a 1.3 mm grid with sampled clearance reservations.
+The trace records epoch startup but no completed routing checkpoint, so routed-net
+and final conflict counts are unavailable. This exposes a preparation/first-search
+performance frontier, not evidence that the board is physically unroutable. No
+candidate was exported and final candidate KiCad DRC was not reached. PCB and
+project hashes were identical before and after both attempts.
+
+The 2026-09-05 benchmark history records commands, executable/snapshot hashes,
+timeouts and memory. These attempts preserve the existing source project and its
+`DO NOT FABRICATE` status.

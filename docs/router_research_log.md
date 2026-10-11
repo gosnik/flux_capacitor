@@ -1922,3 +1922,7554 @@ the before-checkpoint for the subsequent frontier comparison.
 Keep. The optimization removes recomputation without relaxing or replacing any geometric
 certificate. Run the rebuilt executable through BM-SVF after the isolated before-run completes;
 profile again if exact PH reconstruction remains the dominant regional cost.
+
+## Experiment 34 — Discrete global feedback and homotopy-constrained PH realization
+
+### Failure
+
+The retained old-binary BM-SVF run exhausted its 7,200-second Tier-1 budget after completing only
+one full global/regional epoch and entering the second global epoch near the timeout. The first
+global allocation found all 25 coarse paths, but every nominally cheap intermediate physical probe
+then ran full PH realization, XPBD/PNS, residual-cone repair, and quantization over 81 windows and
+16 residual cones. This prevented the five configured global-feedback epochs from consuming the
+breadth of discrete packing, terminal, lane, layer, and via evidence they were designed to learn.
+
+During the correction, the retained curved-materialization risk fixture exposed a second boundary
+failure. Its five-node route created a 5,359-cell NavMesh guard union. Every PH candidate copied
+that union and repeatedly sorted all cell boundaries, taking 155.45 CPU seconds for one fixture.
+The coarse whole-cell certificate also omitted legal clearance-boundary slivers, while an
+unconstrained GPU precondition found physically clear geometry by changing obstacle-side homotopy.
+
+### Hypothesis
+
+Intermediate epochs need only the regional combinatorial diagnosis; continuous realization is
+authoritative only for the final retained checkpoint. Separately, sharing one prepared corridor,
+filtering hull queries by cached bounds, using the exact offset domain for bounded sub-cell
+recovery, and applying the selected route-class predicate during candidate selection should make
+PH realization both faster and topologically correct.
+
+### Change
+
+- Intermediate feedback probes disable spline realization explicitly. They stop after conflict
+  decomposition and bounded corridor/packing/terminal/lane/layer/via analysis; CLI evidence reports
+  both the disabled mode and zero evaluated spline candidates.
+- PH routes share one immutable prepared corridor across candidate copies. Cached cell bounds
+  reject unrelated regions before exact union interval construction.
+- A subdivided hull omitted by conservative whole-cell rasterization may use the exact prepared
+  offset-domain distance only while remaining within one hull diameter plus tolerance of the
+  selected guard union.
+- Seed candidates are scored against the same exact offset domain used by trajectory optimization.
+  This retained the legal tight corner around the risk fixture's blocker.
+- GPU preconditioning, interpolation multistarts, adaptive controls, and CPU-shortlisted moves now
+  reject a candidate before promotion when its ordered topology gates or obstacle winding differ.
+  Continuous collision normals are projected to nearby PH interpolation nodes, and exact clearance
+  improvement breaks violation-count plateaus before soft curve cost.
+- The former monolithic risk test was split so curved materialization can be qualified directly
+  without rerunning unrelated global/regional scenarios.
+
+### Verification
+
+The focused curved transaction now produces native connected line/arc copper and passes exact
+represented DRC in about 14 seconds. Before the prepared corridor it failed after 155.45 CPU
+seconds with 1,801 residual continuous-corridor violations; the prepared but otherwise unchanged
+certificate reproduced the same failure in 8.93 seconds, isolating a roughly 17-fold certificate
+speedup before the correctness repair. The retained PH invariant and inter-sample obstacle rebound
+tests pass. The complete obstacle/capacity/regional/via/PNS risk test passes in 208.43 seconds and
+proves every intermediate feedback candidate reports spline realization disabled with zero spline
+candidates evaluated. Qualified Tier-0 and rebuilt Tier-1 results are recorded separately below
+once their mandatory telemetry, PNG, connectivity, and KiCad DRC gates complete.
+
+### Decision
+
+Keep pending board qualification. This implements the intended nested-loop boundary without
+weakening any regional, continuous, quantized, connectivity, or DRC authority. The BM-SVF rerun
+must demonstrate that the global loop now reaches additional feedback epochs within its two-hour
+budget.
+
+## Experiment 34 — Conflict-directed exact regional master
+
+### Failure
+
+The bounded continuous shortlist could reject every realization while retaining the same corridor
+side, layer span, via region, or run-up decisions. Promoting more continuous candidates therefore
+repeated an already disproved discrete state. The later residual-cone retry could aggregate nearby
+windows, but it did not use the PH/copper rejection as a lazy constraint or generate new columns
+specifically for the implicated runs.
+
+### Hypothesis
+
+The retained regional templates, access choices, via sites, layer sequences, and packed cross
+sections already form a finite exact-master domain. Keeping PH geometry outside that master avoids
+an intractable mixed continuous search. A failed exact realization can instead forbid its stable
+complete discrete selection, identify the route runs in its failure core, and generate new
+topology/layer/via columns only for those runs.
+
+### Change
+
+- Added stable physical master keys for template geometry and layer sequence, via site/span, and
+  ordered cross sections. Retry-local IDs are deliberately excluded.
+- Added bounded lazy no-good filtering after the complete access and lane assignment has been
+  constructed. The constraints cannot prune an unrelated partial state or authorize copper.
+- Expanded each failed PH realization to its complete `(net, connection, run)` fragment set within
+  the window. Only that bounded set owns new homotopy/corridor/layer/via generation; surrounding
+  window routes remain fixed master variables.
+- Reran the existing deterministic exact CSP for several bounded separation rounds. Every failed
+  PH/quantized candidate contributes another no-good; a complete realization may replace only its
+  own window on a strict feasibility-first improvement.
+- Exposed core, column, master-rerun, clause, rejection, recovery, and exhaustion counts through
+  result state, CLI JSON, and normal telemetry.
+
+### Decision
+
+Retain pending fixture and tier qualification. The implementation does not treat the discrete
+master as copper authority: PH continuous-envelope and topology checks, quantized mutual
+clearance, whole-board connectivity, represented copper DRC, and external KiCad DRC remain the
+commit gates. Bounded failure still escalates to the broader residual-cone/global feedback loop.
+
+## Production feature — Confined anisotropic conflict erosion
+
+### Failure
+
+The ordinary hydraulic family discovers global layer-local topology with an isotropic raster
+metric. Once PH or quantized copper rejects a complete regional state, that global field does not
+encode the implicated run direction, the attributed same-layer blocker envelopes, or the need to
+try both lateral sides without perturbing unrelated nets.
+
+### Research
+
+Anisotropic fast-marching and Hamiltonian fast-marching methods model direction-dependent motion
+through a local metric rather than changing obstacle membership. That separation matches Flux:
+the metric may rank topology proposals, while conservative polygon free space and exact copper
+predicates remain authoritative.
+
+- J. A. Sethian and A. Vladimirsky, anisotropic front propagation and ordered upwind methods:
+  <https://doi.org/10.1073/pnas.201222998>
+- J.-M. Mirebeau, Hamiltonian fast marching for anisotropic/non-holonomic models:
+  <https://www.ipol.im/pub/art/2019/227/>
+
+### Feature
+
+- Added an integer direction-dependent hydraulic metric. The raster-axis cross product scales
+  transverse reverse-potential steps and bank-erosion diffusion; ratio 1000 preserves isotropy.
+- Implemented identical bounded arithmetic in the CPU oracle and Vulkan shader.
+- Added a pressure-side-preserving visibility-pull mode without allowing pressure to change the
+  polygon-derived walkable mask.
+- Integrated two signed lateral erosion priors only into the exact conflict-directed regional
+  master. Work is confined to the attributed window and route run, separately budgeted, and
+  blocker-clearing proposals become ordinary same-layer topology columns.
+- Published configuration, check/accept/reject, backend, and exact-chord diagnostics through the
+  regional result, CLI JSON, and telemetry. ADR 0169 records the production contract.
+
+### Verification
+
+The focused directional field test proves greater transverse potential, reduced transverse bank
+erosion, unchanged walkability, validation of a missing axis, and byte-identical CPU/Vulkan
+potential, erosion, flow, and riverbed output. Existing polygon-discovery and concurrent Vulkan
+batch equivalence tests pass with anisotropy enabled. The broad obstacle/capacity/regional fixture
+passes and asserts that a present exact conflict core invokes the confined phase, with every check
+accounted as accepted or rejected.
+
+The qualified Tier-0 board's global phase retained 50 paths, zero unrouted nets, and zero sampled,
+corridor, or clearance-shadow overflow. It correctly invoked the feature zero times because no
+regional physical failure existed. Current dirty-worktree detailed routing nevertheless stopped on
+one unrelated pre-existing PH trajectory with one unintended inflection and seven unrounded
+non-junction bends; it reported zero opens and zero represented copper violations but did not reach
+external KiCad DRC. The non-canonical contended result is recorded in
+`reports/benchmark_history/2026-09-04-confined-anisotropic-erosion-feature.json`.
+
+### Decision
+
+Keep the feature. It is deterministic, bounded, dormant without an exact attributed conflict, and
+cannot weaken free-space or copper legality. Tier-0 promotion remains blocked by the separate PH
+shape failure and must not be reported as green until that route completes and external KiCad DRC
+passes.
+
+## Experiment 35 — Persistent failure-directed routing session
+
+### Failure
+
+The interleaved planner could label a discrete-only regional probe complete and return before PH
+realization. If detailed materialization later rejected that topology, final feedback accumulated
+every previously affected net, reran global PathFinder for lane/via/quantization failures, rebuilt
+the complete regional state, and anchored later attempts to the last exact-score winner. A worse
+but structurally different exploratory state was discarded and could therefore be regenerated on
+the next pass. Regional diagnoses from discarded global portfolios also entered shared history.
+
+### Hypothesis
+
+Successful copper should appear sooner if each failure returns to the nearest solver with enough
+authority to change it, while global negotiation remains live only for an explicit or repeated
+topology failure. Exact promotion at the first plausible discrete checkpoint should either finish
+early or create a useful physical failure core before the planner spends further PathFinder
+epochs.
+
+### Change
+
+- Added immediate full-regional promotion for a complete discrete intermediate probe. The
+  provisional and promoted outcomes are separately observable.
+- Made regional failure history private to each retained global portfolio and merged only the
+  selected portfolio into the next epoch.
+- Added deterministic failure dispatch for local geometry, regional lane/escape/layer/via state,
+  and global topology. A repeated unchanged downstream diagnosis escalates one level.
+- Rebuilt the affected-net cone from the current diagnosis each pass instead of retaining a
+  monotonically growing union.
+- Retained the newest exploratory routing state as the next working checkpoint while preserving
+  the feasibility-first best exact result as the only selectable transaction.
+- Added incremental exact materialization for a complete regional PH/multilayer plan.
+- Added one persistent planning-to-copper coordinator and adopted it in direct KiCad detailed
+  routing and WorkPlan execution. Fresh full integrated-placement candidates use the same bounded
+  feedback loop; incremental proposal screens remain cheap.
+
+### Verification
+
+The focused global/regional/detailed transaction test proves immediate promotion, full promotion
+success, incremental regional rematerialization, persistent-session completion, and the three
+failure-dispatch classes on the deterministic two-pad board. Build, broader risk tests, and tier
+measurements follow in the associated benchmark record.
+
+### Decision
+
+Keep pending tier comparison. No path, overflow, connectivity, clearance, or DRC acceptance rule
+was relaxed; the change removes redundant upstream work and stale cross-topology feedback.
+
+## Experiment 36 — Advisory boosted-tree regional candidate ranking
+
+### Failure
+
+Regional windows retain several discrete corridor/lane/layer/via states, then pay the expensive
+PH/XPBD and quantized-envelope realization in heuristic order. The first exact-legal state stops
+the window search. Existing scalar and diversity objectives have no learned estimate of which
+physically plausible state is most likely to survive continuous realization.
+
+### Hypothesis
+
+A gradient-boosted learning-to-rank model trained on pre-realization state features and exact
+post-realization outcomes can move legal states earlier in the bounded shortlist. Reordering alone
+should reduce continuous candidates and time-to-first-legal without reducing search coverage or
+weakening exact authority.
+
+### Research
+
+- XGBoost implements grouped LambdaMART learning-to-rank with `rank:ndcg`:
+  <https://xgboost.readthedocs.io/en/stable/tutorials/learning_to_rank.html>.
+- LightGBM exposes `lambdarank` and `rank_xendcg`, but the first experiment uses XGBoost because a
+  single stable exporter is sufficient to compare the mechanism:
+  <https://lightgbm.readthedocs.io/en/latest/Parameters.html#objective>.
+
+### Change
+
+- Added an 18-feature, schema-versioned pre-realization contract covering current rank, template,
+  via, layer, channel, topology-cost, lane-slack, contention, and search-state evidence.
+- Added append-only JSONL observations labelled with the exact topology, shape, mutual-clearance,
+  quantization, completion, and runtime outcomes of every evaluated candidate.
+- Added a training-only XGBoost/LambdaMART script. It groups candidates by regional window,
+  validates by board revision, verifies exported inference against XGBoost margins, and emits a
+  compact Flux-owned tree ensemble.
+- Added bounded C++ inference with strict feature-schema, size, finite-number, child-reference,
+  reachability, and cycle validation. No XGBoost runtime dependency enters `flux_core`.
+- Integrated ranking immediately before regional realization. It performs a stable descending
+  learned-score reorder but never prunes a retained state. A missing or rejected model preserves
+  heuristic order. Exact PH/XPBD, quantization, connectivity, copper DRC, and commit gates are
+  unchanged.
+- Exposed collection and model paths through CLI flags and published load, scoring, movement,
+  write, and diagnostic counters in CLI JSON.
+
+### Before
+
+No learned candidate evidence existed. Candidate order came exclusively from the discrete
+objective and diversity beam, and no reusable per-candidate exact training record was emitted.
+
+### After
+
+The focused C++ test loads and evaluates a synthetic split tree, verifies deterministic scores,
+and rejects feature-schema drift. The checked-in six-row/two-window observation fixture trains a
+16-tree XGBoost model whose exported scorer reproduces XGBoost margins and ranks the best fixture
+candidate first in both groups. The development build and focused unit test pass.
+
+The complete disabled-ranker Tier-0 regression passes: `pt2399_delay` produces all 50 paths and
+then exact copper with zero opens, zero internal copper violations, 110 straight tracks, 59 arcs,
+two vias, and zero external KiCad 9.0.8 error-level DRC violations. Global and detailed stages took
+148.46 and 368.02 seconds respectively. The run reports the ranker unrequested with zero scored,
+reordered, or logged candidates, demonstrating that the default path remained dormant. Structured
+results are in
+`reports/benchmark_history/2026-09-05-regional-candidate-ranker-tier0.json`.
+
+### Interpretation
+
+The integration boundary is safe enough for a real benchmark experiment: model error changes
+work order only. The fixture demonstrates format and inference equivalence, not routing-quality
+generalisation. Real results require observations from multiple board families; row-random
+validation would leak nearly identical candidates and is explicitly avoided.
+
+### Decision
+
+Retain as disabled-by-default instrumentation and advisory search ordering pending Tier-0/Tier-1
+data collection and board-held-out comparison. Do not use learned scores for pruning or legality.
+
+### Next hypothesis
+
+Collect baseline observations across every practical lower/frontier board, measure top-1/top-4
+exact-candidate recall and PH realization time, then compare the same fixed model against
+unchanged heuristic ordering. Promote only if lower tiers remain green and median/time-to-first-
+legal improves without a completion regression.
+
+## Experiment 37 — Preserve global rip-up authority before regional PH
+
+### Failure
+
+The first Tier-1 feedback epoch performed 13 hard-capacity rip-ups, but the selected checkpoint
+still had 26 sampled-resource overflows, three corridor overflows, 332 clearance-shadow
+conflicts, and 143 regional conflicts. The planner then spent roughly ten minutes building the
+regional discrete portfolio and more than thirty minutes attempting exact PH candidates before a
+second PathFinder epoch could run. Rip-up was active, but immediate exact promotion starved it of
+the remaining 29 configured global iterations.
+
+### Hypothesis
+
+Sampled and corridor overflow, plus unresolved global lane transitions, are owned directly by
+PathFinder and its rip-up/LNS operators. Sending such a checkpoint to regional continuous
+realization cannot repair its still-negotiable global allocation efficiently. Conversely,
+clearance-shadow and physical-width pressure must remain eligible for regional diagnosis because
+they represent the sub-grid packing failure that the global model only approximates.
+
+### Change
+
+- Deferred intermediate regional work while sampled overflow, corridor overflow, or unaccepted
+  global lane transitions remain.
+- Preserved intermediate regional handoff for globally connected checkpoints whose remaining
+  pressure is clearance-shadow or physical-envelope based.
+- Required the same global-resource gate before immediate exact PH promotion.
+- Kept the final epoch's full regional/PH/XPBD/copper transaction mandatory even if global
+  negotiation exhausts its budget.
+- Added an explicit `regional-probe-deferred` telemetry event and separate sampled/corridor fields
+  to each feedback-candidate record.
+
+### Before
+
+`build/tiers-check-20260905-xpbd-gpu-ph-tier1/tier-1-bm_svf/telemetry/bm_svf-global.jsonl`
+shows one short PathFinder pass followed by a long regional/PH phase. The run was stopped after
+about 41 minutes when it entered its fallback exact wave without returning to global negotiation.
+
+### Verification
+
+The transactional global-to-detailed regression proves that intermediate candidates with
+PathFinder-owned overflow do not enter regional or PH realization, while later/final exact gates
+remain enabled. Tier benchmark comparison follows.
+
+### Decision
+
+Keep pending Tier-0 and Tier-1 measurements. This changes solver scheduling only; it does not
+relax connectivity, capacity, physical-copper, or DRC acceptance.
+
+## Experiment 38 — Strict KiCadRoutingTools oracle trace on Tier 1
+
+### Failure
+
+The post-sequencing `bm_svf` run exhausted its 7,200-second allowance. Flux completed all 30
+PathFinder passes and reported 9,801,533 search expansions, but its retained all-net checkpoint
+still had 19 sampled overflows, three corridor overflows and 324 clearance shadows. It constructed
+a 542-assignment regional portfolio, repeated several bounded conflict waves, constructed a second
+410-assignment portfolio, and timed out while starting assignment 56. No copper transaction was
+committed.
+
+### Hypothesis
+
+An external successful route on the identical stripped board can distinguish intrinsic board
+infeasibility from a Flux search/representation failure. A time-ordered copper trace can identify
+whether success depends on global negotiation, many simultaneous route changes, or small targeted
+victim exchanges.
+
+### Research
+
+KiCadRoutingTools documents a direct Rust-accelerated octilinear grid A*, MPS endpoint ordering,
+incremental per-net obstacle caching, forward/backward failure probes, exact blocker attribution,
+and bounded N+1 rip-up. Its route-trace mode records every copper commit, rip and restore without
+changing routing decisions.
+
+### Change
+
+No Flux algorithm changed. KiCadRoutingTools main revision
+`ec2bf0e1021c0ed95c45b14664d02c56777a0974` (v0.22.0) was installed in an isolated build
+directory. The exact `bm_svf` fixture was routed with a 0.2 mm track, 0.2 mm clearance,
+0.7/0.3 mm via, escalation disabled, standard fabrication floor, strict sizes and external KiCad
+10 DRC. Full copper tracing, verbose diagnostics, A* statistics, memory diagnostics, layer PNGs
+and a 71-frame replay were retained.
+
+### Before
+
+Flux timed out after 7,200 seconds with no committed board. The trace contains 8,494 semantic
+events, 155 route rip-ups and 342 hydraulic-field updates and occupies 831,964,957 bytes.
+
+### After
+
+KiCadRoutingTools routed 25/25 nets and 78/78 pad pairs in 7.30 seconds wall time using 699,298 A*
+expansions, 615 final segments, 73 through-vias and 925.353 mm of copper. There were no rule
+escalations. KRT's internal checker reports zero represented DRC violations and two permitted
+same-net crossings. KiCad 10 reports zero opens and no routing error under the untouched project;
+the only generated finding is one 0.0452 mm dangling-track warning. The 69-event trace contains
+eight rips and one restore and occupies 79,915 bytes.
+
+The route uses long board-perimeter detours and both layers. The useful repair chain was local:
+`Net-(U4A--)` completed after ripping `Net-(R4-Pad1)`; the latter then completed after ripping and
+successfully re-routing `Net-(U4B--)`; an unsafe `V_SUPPLY` restore was rebuilt at the end.
+
+### Interpretation
+
+The strict reference route proves that the placement is physically routable on two layers. Flux's
+frontier failure is therefore search/representation/scheduling, not intrinsic geometry. KRT avoids
+Flux's principal semantic gap by searching and committing in one conservative quantized-copper
+occupancy representation. It preserves long detours automatically, treats vias as ordinary A*
+states, and invokes expensive repair only for the specific failed frontier. Flux instead spends
+most of the run exact-realizing large portfolios whose global allocations already retain physical
+overflow, and its coarse no-goods often preserve the responsible run/layer/via relation.
+
+### Decision
+
+Keep the trace as a differential oracle. The highest-value next experiment is a strict KRT-like
+quantized-copper feasibility master between global allocation and PH realization. It should search
+the full-board fine domain, commit exact-size via/layer states into an incremental obstacle map,
+use bidirectional frontier attribution for bounded N+1 victim exchanges, and pass the resulting
+complete legal topology to PH fitting. PH remains final geometry; the oracle is a fast physical
+legalizer/candidate generator, not a replacement router.
+
+Full results and artifact paths are in
+`reports/krt_bm_svf_comparison_2026-09-05.md` and
+`reports/benchmark_history/2026-09-05-krt-bm-svf-reference.json`.
+
+## Experiment 39 — Early quantized-copper feasibility oracle
+
+### Failure
+
+The strict KRT comparison proved that `bm_svf` is routable on two layers, while Flux passed an
+all-net but physically incompatible global allocation into hours of regional realization. The
+global representations did not provide an exact integer-copper verdict before PH work, and useful
+long perimeter/layer-changing alternatives were too weakly represented.
+
+### Hypothesis
+
+Materializing the selected global allocation on a fine manufacturing lattice and exact-checking
+its real track/via envelopes between PathFinder epochs will expose opens and physical conflicts
+cheaply enough to feed the responsible nets and regions back upstream. Retaining one explicit
+perimeter homotopy and reducing the blanket via bias should preserve the two structural choices
+demonstrated by KRT's successful route.
+
+### Research
+
+KRT's Rust router searches a 0.1 mm grid using clearance-aware swept moves, ordinary layer-change
+states, incremental obstacle maps, and failed-frontier blocker attribution. Flux already has
+stronger polygonal topology discovery, layer-wise hydraulic fields, exact clearance shadows, and
+continuous PH realization; the missing useful invariant was KRT's shared search/physical copper
+representation. The appropriate integration is therefore a critic/feasibility master, not a
+replacement of NavMesh or PH.
+
+### Change
+
+- Added a default-enabled 0.1 mm quantized-copper oracle between global allocation and regional
+  realization.
+- Preserved exact path endpoints, snapped interior vertices/vias, represented complete multi-layer
+  via chains, and reused same-net vias or plated through-hole pads.
+- Ran exact dynamic-copper DRC and connectivity on the provisional primitive set.
+- Converted exact violations and opens into localized, net-attributed quantization diagnoses,
+  telemetry events, routability history, and the next incremental reroute cone.
+- Added oracle opens and exact violation counts to retained global-portfolio comparison after the
+  existing topology/regional feasibility dimensions and before abstract overflow/cost.
+- Added one protected perimeter-biased static seed family and prevented endpoint-only NavMesh
+  shortening from erasing its homotopy.
+- Reduced the ordinary via preference from eight planar steps to three while leaving every exact
+  via legality gate unchanged.
+- Made every global lattice node an implicit via candidate; the former rule-spacing stride pruned
+  legal individual sites merely to guarantee that adjacent unselected candidates could coexist.
+  Exact selected via envelopes and DRC now own that compatibility decision.
+- Made clearance shadows advisory when the multi-epoch quantized oracle owns physical feedback.
+  Shadow raster samples are coalesced into the strongest witness per net-pair/kind/layer/local
+  region and retained for telemetry, conflict graphs, and regional repair scope. They no longer
+  add `total_overflow`, hard-block transitions, affect present cost, or write generic edge/node
+  history in that mode.
+- Retained connection-run identity in exact oracle diagnoses. Run/run conflicts now request a
+  lane/template change; generated-via conflicts request a via-site change; malformed transition
+  chains request a layer-sequence change. These typed exact no-goods replace raster-shadow
+  history in later global epochs.
+
+### Before
+
+The prior 7,200-second Tier-1 run ended with 19 sampled overflows, three corridor overflows, 324
+clearance shadows, no accepted copper, and no direct measurement of the selected checkpoint's
+integer-copper connectivity/DRC state.
+
+### After
+
+The focused deterministic test rejects crossing quantized routes and accepts a legal
+`F.Cu -> B.Cu -> F.Cu` route with two vias. On the first `bm_svf` global checkpoint the oracle
+measured 769 exact dynamic-copper violations and 11 opens despite 25/25 abstractly routed nets;
+the selected allocation used zero vias. The oracle plus the deferred regional probe completed in
+approximately 0.63 seconds after PathFinder, so it did not create a new material bottleneck. The
+five-minute bounded run then remained inside construction of the next global epoch, identifying
+portfolio rebuilding rather than physical probing as the immediate runtime cost.
+
+The focused shadow-ownership regression retains the crossing's regional conflict witness while
+reporting shadow history increment zero and excluding its witness count from `total_overflow`.
+Only the exact quantization diagnosis enters physical no-good history. Direct single-pass planner
+configurations retain legacy shadow negotiation so disabling feedback cannot silently discard the
+only physical signal.
+
+### Interpretation
+
+The hypothesis is strongly supported as a diagnostic and feedback mechanism. The earliest
+physical failure is now observable before PH, and the zero-via checkpoint directly supports more
+permissive layer exploration. The current oracle evaluates selected topology; it does not yet run
+KRT-style local fine-grid repair. Its attributed conflict cone is the correct boundary for that
+next experiment.
+
+### Decision
+
+Keep pending Tier-0 requalification. Next, retain immutable discovery/domain products across
+feedback epochs and use the oracle's failed region for bounded fine-grid multilayer victim exchange
+before invoking regional PH.
+
+Detailed architecture and measurements are in
+`reports/path_discovery_quantized_oracle_2026-09-05.md`.
+
+## Experiment 40 — Incremental hierarchical PH realization
+
+### Failure
+
+Regional realization repeatedly rebuilt complete PH tessellations and signed degree-nine offsets
+after a local interpolation-control move. Exact mutual-clearance closure then used midpoint
+subdivision for every surviving offset pair, with a 50,000-node allowance per pair. Independent
+regional windows were evaluated serially even though they read the same immutable board snapshot.
+
+### Hypothesis
+
+A persistent per-span certificate hierarchy should preserve unaffected geometry when a local PH
+control changes. Conservative centreline-distance bounds should prove most route pairs separated
+or colliding before rational offsets are constructed. Processing independent windows concurrently
+should reduce elapsed realization time without changing candidate order or exact acceptance.
+
+### Research
+
+[Sederberg and Nishita's Bézier clipping](https://doi.org/10.1016/0010-4485(90)90039-F)
+uses the convex-hull property to exclude parameter regions that cannot contain an intersection and
+reports an advantage for higher-degree curves. [Chang, Choi, Kim and
+Wang](https://doi.org/10.1016/j.cag.2011.03.025) formulate minimum distance between Bézier curves
+using culling, bounding volume hierarchies and dynamic subdivision, specifically to converge faster
+than ordinary binary subdivision. Flux needs a clearance predicate rather than a complete
+intersection enumeration, so the minimum-distance hierarchy is the more direct first-stage test;
+the existing rational PH offset isolator remains the fail-closed ambiguous fallback.
+
+### Change
+
+- Added prepared quintic Bézier certificate trees with outward-rounded double AABBs, retained
+  long-double controls, deterministic geometry fingerprints and bounded traversal.
+- Added a precision cascade: cheap conservative double separation, native-SIMD batches of
+  subdivision bounds, long-double on-curve penetration witnesses, 50-decimal comparison only for
+  genuinely near-tangent samples, then the existing long-double degree-nine rational-offset
+  isolation only for ambiguous leaves.
+- Changed exact regional pair closure to skip rational-offset construction for centreline pairs
+  whose required copper-envelope separation is already certified.
+- Made regional geometry refresh compare span fingerprints. Only changed PH spans rebuild their
+  adaptive tessellation, hierarchy and signed offsets; route-pair verdicts are revision-keyed so
+  unrelated certificates remain usable.
+- Added bounded content-addressed segment and route-pair caches keyed by geometry, layer,
+  clearance, corridor revision and board obstacle snapshot. Their deterministic lifetime covers
+  one complete realization invocation, including recursive shortlist and fallback waves.
+- Grouped spline assignments by regional window, retained sequential first-exact-legal evaluation
+  within each group, and scheduled up to four groups against private result/geometry state.
+  Results are reduced in original window order and nested exact-candidate workers remain one.
+- Added telemetry/CLI counters for window workers, incremental span rebuild/reuse and centreline
+  certificate outcomes.
+- Corrected the KiCad 10 AppImage benchmark adapter: the AppImage is a multi-call launcher and must
+  receive `kicad-cli` before ordinary PCB subcommands. Analysis PNG export now uses that form.
+
+### Before
+
+The preceding Tier-0 qualification reached its ten-minute board limit and then failed while
+rendering diagnostics because the harness invoked the KiCad 10 AppImage as a direct `kicad-cli`
+binary. Regional exact work still reconstructed complete per-candidate offset state.
+
+### After
+
+The focused PH test deterministically proves a 2 mm-separated pair from double hulls and proves an
+orthogonal collision from long-double curve points. The regional crossing regression remains
+deterministic and accepts the new centreline hierarchy as the preferred exact path without
+requiring rational-offset broadphase work. The KiCad 10 AppImage successfully exports both copper
+layers through the corrected adapter.
+
+On the bounded Tier-0 run, five regional windows used four workers. All 36 route-pair certificate
+queries were proved separated at the root double hull: zero pairs reached rational-offset
+construction, zero exact offset nodes were visited, and 13 unchanged spans were reused while 62
+were rebuilt. PH realization itself accounted for 72.46 seconds of the 562.86-second routing run;
+the remaining time was dominated by alternative corridor/run-up construction. The board did not
+qualify: all 20 nets had global paths and sampled/corridor overflow were zero, but windows 0 and 2
+could not construct a topology-and-shape-legal PH seed for the `kicad-net-10`/`kicad-net-11` and
+`kicad-net-11`/`kicad-net-8` crossings. The quantized-copper oracle independently reported four
+physical conflict diagnoses and zero opens. Three legal near-result windows were exported as
+analysis PNGs after correcting the harness to parse structured exit-code-3 results before applying
+the qualified-tier gate.
+
+### Interpretation
+
+The local mechanism is strongly supported: exact legality remains fail-closed, the observed
+route-pair workload no longer constructs rational offsets, and window concurrency is active.
+Tier evidence moves the frontier upstream: route-pair certification is not the reason Tier 0 is
+currently incomplete. The earliest remaining failure is topology-seed realization for two
+crossing windows, while most wall time is spent generating and screening alternative regional
+corridors rather than checking PH pair clearance.
+
+### Decision
+
+Keep. Do not spend the next experiment refining offset intersection because ambiguity was zero on
+the frontier run. Instrument the topology-seed rejection split (corridor/gate versus PH shape),
+then change the smallest upstream decision that prevents the two unresolved crossing windows from
+forming any spline candidate.
+
+## Experiment 41 — Exact-static regional detour topology strip
+
+### Failure
+
+The instrumented Tier-0 run rejected 1,312 of 1,342 topology-seed candidates on corridor or gate
+preservation, while only eight candidates failed PH shape. Both unresolved windows required one
+exact-static-checked regional detour around a crossing.
+
+### Hypothesis
+
+Regional detours might be physically legal but unable to round a NavMesh portal because only
+selected global routes received a narrow route-specific topology strip. Giving checked detours the
+same strip would permit a same-homotopy PH corner cut while downstream obstacle and copper checks
+remained authoritative.
+
+### Change
+
+Temporarily attached the existing half-cell checked-centreline strip to exact-static regional
+detours as well as selected global routes. No clearance or DRC gate was relaxed.
+
+### Before
+
+The adaptive-precision Tier-0 run took 572.73 seconds, rejected 1,312 topology seeds on corridor or
+gate preservation and eight on shape, retained three legal window candidates, and left two windows
+unresolved.
+
+### After
+
+The strip run took 565.41 seconds and produced exactly the same 1,312 corridor/gate rejections,
+eight shape rejections, three legal window candidates and two unresolved windows. It again emitted
+three near-result PNG sets.
+
+### Interpretation
+
+The hypothesis is disproven. The failing candidates do not consult this strip, or their failure is
+the directed gate sequence rather than cell-union containment. The small runtime difference is
+noise relative to the unchanged search and result metrics.
+
+### Decision
+
+Revert the strip. Next split topology failure into cell containment versus directed-gate order and
+record the first failed sample/gate. Do not broaden topology corridors without identifying which
+certificate is rejecting the curve.
+
+## Experiment 42 — Ordered gate subsequence and retry ownership transfer
+
+### Failure
+
+Tier 0 rejected 1,130 PH seeds because a smooth curve did not cross every raster-derived NavMesh
+gate even though it remained inside the selected guard-cell union. After allowing those redundant
+gates to be omitted, five windows found exact-legal local bundles, but final assembly rejected two
+different replacements for fragment `kicad-net-11/0/0/1`.
+
+### Hypothesis
+
+Guard containment plus the unique, forward, ordered sequence of every gate actually crossed is a
+stronger representation of the selected geometric corridor than requiring a smoothed curve to
+visit raster-only gates. The duplicate writer is independent: a conflict-directed retry promotes
+an adjacent articulation fragment but replaces only its source window, leaving the old owner
+assignment authoritative.
+
+### Change
+
+Regional PH certification first proves guard-cell containment, then accepts an ordered subsequence
+of the selected directed gates. Strict gate equality remains the default everywhere else. Residual
+and conflict-directed checkpoint merge now transfers publication ownership for every fragment
+owned by the retry, so frozen context can participate in certification but cannot emit a second
+copper replacement.
+
+### Before
+
+The strict-gate run took 562–573 seconds, retained three legal candidates, and left two windows
+unresolved. Topology seed rejection comprised 1,130 missing-gate failures, 182 cell-containment
+failures, and eight shape failures.
+
+### After
+
+Tier-0 global/regional routing took 188.09 seconds. All 50 connections had paths, sampled and
+corridor overflow were zero, all five regional windows had complete bundles, nine PH realizations
+were retained, and `regional_spline_candidate_available` became true. The candidate diagnostic was
+`complete regional spline transaction assembled`; conflicting articulation was false. Detailed
+materialization was reached for the first time in this sequence.
+
+### Interpretation
+
+Strongly supported. The strict raster gate list was rejecting same-corridor continuous geometry,
+and retry ownership—not PH legality—prevented atomic assembly. The next failure moved downstream:
+exact materialization reports three open connections and 37 copper violations after its fallback.
+
+### Decision
+
+Keep both scoped changes. Exact connectivity and copper DRC remain authoritative.
+
+## Experiment 43 — Adaptive-precision PH certificates and prepared chord domains
+
+### Failure
+
+PH curve-pair predicates used long-double work throughout. A live stack sample of the newly
+reachable detailed phase also showed one route worker repeatedly revalidating the same immutable
+free-space polygon domain for every rectangle chord, spending more than thirteen minutes in
+polygon-boundary distance work.
+
+### Hypothesis
+
+Outward-rounded double hulls can prove the common separated case, SIMD can screen batches of
+subdivision nodes, long double can retain authority for ambiguous leaves, and multiprecision is
+needed only for degenerate contact comparisons. Separately, validating a source-run domain once
+and batching its six rectangle chords should remove invariant O(boundary²) work without changing
+legality.
+
+### Change
+
+Prepared PH certificate nodes now retain outward-rounded double bounds. Native SIMD evaluates
+AABB lower-distance candidates; every apparent separation receives a directed-rounding scalar
+confirmation so multiply/add rounding cannot turn an upper estimate into a proof. Ambiguous nodes
+use the existing long-double hierarchy and rational-offset isolator, with 50-digit comparison only
+inside a 64-epsilon near-tangent band. Counters expose SIMD batches/lanes and multiprecision use.
+The detailed source-polyline fallback now validates its immutable free-space domain once and uses
+the same exact chord predicates through a prevalidated six-chord batch.
+
+### Before
+
+The first post-ownership detailed command remained active for 13:46; its sampled worker stack was
+`assess_free_space_chord -> valid_domain -> polygon_boundary_distance_nm`.
+
+### After
+
+The comparable detailed command completed in about 7:13. A second stack sample contained no
+`valid_domain`; four route workers were concurrently performing NavMesh preparation, polygon
+Boolean operations, and PH containment. Tier-0 global PH metrics reported 454 SIMD batches/lanes,
+zero ambiguous pairs, and zero multiprecision comparisons. Root-hull separation means this board
+offers no cross-call SIMD lane occupancy; the scalar double proof is already constant-time there.
+
+### Interpretation
+
+The prepared-domain hypothesis is strongly supported and removed the measured hot stack. The
+precision cascade is validated and fail-closed, but its SIMD throughput benefit is inconclusive on
+this board because every call separates at its single root pair.
+
+### Decision
+
+Keep. Future performance work should batch independent segment-pair roots across routes rather
+than claiming speedup from one-lane SIMD calls.
+
+## Experiment 44 — Interior pad/via attachment boundaries
+
+### Failure
+
+`kicad-net-16` was one of three nets open after exact detailed materialization. Its selected coarse
+tree passes within the copper of a through-hole terminal while another connection ends at the pad.
+The PH chain collector recognizes only exact endpoint incidences.
+
+### Hypothesis
+
+Splitting a straight carrier at an exact same-net pad/via centre before PH collection would retain
+an otherwise bypassed electrical attachment.
+
+### Change
+
+Exact pad/via centres lying in a carrier interior become PH chain boundaries. A synthetic
+four-terminal route verifies that an interior pad remains connected after curved realization.
+
+### After
+
+The focused regression passes, but Tier 0 is unchanged: the open nets remain 2, 16, and 17, with
+the same 348 fallback tracks and 37 copper violations.
+
+### Interpretation
+
+The mechanism is real in isolation but is not the frontier-board cause. The Tier-0 open exists
+outside this exact-centre attachment case, likely in regional multilayer stitching or a
+non-centreline copper contact.
+
+### Decision
+
+Keep the narrowly defined topology-preservation behavior and its regression. Do not broaden it to
+arbitrary copper proximity without an exact failing witness. Next preserve/export the failing
+detailed candidate and trace the three pad groups through materialization.
+
+## Experiment 45 — Static-tree attachment certificates
+
+### Failure
+
+The saved no-arc Tier-0 candidate confirmed that nets 2, 16 and 17 each contained two physically
+separate copper components. KiCad's connectivity engine independently reported the same three
+opens. The loose components ended at ordinary lattice nodes rather than at failed PH or
+quantization boundaries.
+
+### Hypothesis
+
+Static portfolios are generated as connected growing trees, but their branches are subsequently
+NavMesh/PH-reprojected independently. A child branch can terminate at an interior node of an
+earlier carrier; if that carrier's endpoint-only reprojection removes the node, the portfolio
+remains syntactically complete while its physical tree becomes open.
+
+### Change
+
+Before static refinement, each complete tree now records every downstream branch-attachment node
+on its earlier carrier. A carrier reprojection is accepted only if its refined lattice path still
+contains all those nodes. Failure retains the original connected carrier and increments explicit
+attachment-certificate telemetry. This changes neither clearance rules nor route scoring.
+
+### Before
+
+Tier 0 had 50 global paths, zero sampled/corridor overflow, three open connections on nets 2, 16
+and 17, and 37 copper violations (32 track-clearance and five track-via-clearance).
+
+### After
+
+The full diagnostic Tier-0 run certified 150 attachment nodes and rejected nine destructive
+reprojections. Exact detailed connectivity improved from three opens to zero. Copper violations
+also fell from 37 to 26, all track-clearance violations, distributed across five attributed
+net-pair families in six regional windows. The exact regional transaction rejected the remaining
+conflicts, so no illegal
+board was committed. Runtime was approximately 185 seconds for the standalone global pass and
+535 seconds for detailed routing. All 24 core tests pass.
+
+### Interpretation
+
+Strongly supported. All observed opens were caused by loss of an interior static-tree junction,
+not by PH fitting, pad contact, or the connectivity checker. Preserving the junction moved the
+frontier cleanly from topology/connectivity failure to physical regional packing.
+
+### Decision
+
+Keep the certificate and regression. The next experiment must address the exact same-layer
+packing conflicts; it must not weaken the exact regional transaction or KiCad DRC gates.
+
+## Experiment 46 — Fair G2 PH selection and single native-copper handoff
+
+### Failure
+
+Beautiful flowing curves are a product objective, but two different representations still made
+the realization boundary both expensive and ambiguous. Algebraically valid quintic PH branches
+were ranked without an explicit fairness term, the optional higher-order join compared
+parameter-dependent second derivatives, and regional routing could spend bounded rational-offset
+work on a curve that would ultimately be discarded in favour of KiCad arcs and segments. Worse,
+detailed routing reconstructed a new PH route from the accepted regional tessellation instead of
+consuming the native pieces that regional routing had checked.
+
+### Hypothesis
+
+Fairness-aware PH branch selection plus one post-optimization geometric-G2 promotion should improve
+visible flow without entering the inner candidate loop. Fitting the selected PH route immediately
+and making represented native copper authoritative should remove unnecessary rational-offset work
+in the common case. Carrying those exact pieces into detailed routing should eliminate the
+regional/detailed realization mismatch.
+
+### Research
+
+Quintic PH Hermite interpolation retains polynomial speed, exact arc length, and rational offsets,
+while fair-PH construction treats curvature distribution as a primary quality measure rather than
+an endpoint-only property. Geometric G2 continuity requires tangent direction and scalar curvature
+continuity; equality of parameter-scaled second-derivative vectors is the stronger and
+parameterization-dependent C2 condition. KiCad has no electrical Bézier track primitive, so its
+straight-track and circular-track-arc representation is the physical object Flux must certify.
+The resulting architecture is recorded in ADR 0171.
+
+### Change
+
+- PH branch scoring now penalizes scale-normalized total curvature variation and more than one
+  interior curvature extremum, after the existing cusp, loop, inflection, and shape gates.
+- Join certification compares signed scalar curvature. A damped finite-difference Newton solve
+  changes only internal tangent magnitudes, preserving interpolation points and G1 directions.
+- Detailed routing makes one bounded G2 promotion attempt after trajectory optimization and before
+  arc fitting. A failed promotion retains the already legal G1 curve.
+- Final regional windows are fitted to native arcs/segments and checked together on a disposable
+  board. Clean native scenes skip rational-offset intersection; rejected scenes retain continuous
+  envelope/offset diagnostics for attribution.
+- Regional realizations retain their native pieces. Detailed materialization locates the exact
+  centerline interval, emits those pieces byte-for-byte (including reversed path orientation), and
+  protects native straight pieces from a second spline collector pass.
+- CLI metrics expose G2 attempts/promotions/fallbacks, regional native checks, and exact native
+  pieces consumed at the detailed handoff.
+
+### Before
+
+The first integration version checked native pieces regionally but discarded them at handoff. Its
+Tier-0 detailed pass took roughly 650 seconds, fell back to 332 straight tracks and one via, and
+ended with zero opens but 26 track-clearance violations. Ten G2 promotions were attempted; one
+succeeded. This reproduced the existing physical-packing frontier rather than qualifying Tier 0.
+
+### After
+
+All focused PH, curved-materialization, regional-transaction, and impossible-crossing regressions
+pass. The full C++ unit suite passes in 119.83 seconds. A synthetic transaction proves an exact
+regional arc crosses detailed materialization byte-for-byte as connected, DRC-clean copper.
+
+The qualified Tier-0 global pass took 187.62 seconds, retained all 50 paths, and checked six native
+windows containing 114 fitted pieces. Five windows were legal; one rejected portfolio candidate
+reported nine native violations. No route pair required exact rational-offset isolation. Regional
+PH realization consumed 48.90 seconds.
+
+The detailed pass took 366.86 seconds and consumed 12 accepted regional PH runs directly as 40
+arcs and 10 straight pieces. Structural validation and connectivity were clean, but full-board DRC
+reported 29 violations: 27 track-to-arc and two track-to-track clearance failures. The first was a
+2,775 nm clearance deficit between a non-window `kicad-net-19` track and a retained
+`kicad-net-3` regional arc. The board was correctly withheld and external KiCad DRC did not run.
+
+That first handoff protected each complete connection containing a regional span, which retained
+avoidable raster geometry outside the immutable interval. A focused refinement now applies the
+ordinary pull-tight and continuous path optimizer independently to the open intervals on both
+sides while preserving the native span exactly. The targeted detailed rerun consumed the same 12
+regional runs as 40 arcs and 10 straight pieces, reduced tracks from 368 to 240, and reduced
+full-scene violations from 29 to 19 (17 track-to-arc and two track-to-track). It took 383.15
+seconds. Connectivity and structural validation remained clean; the board was again withheld.
+
+### Interpretation
+
+The representation-boundary hypothesis is strongly supported: exact native pieces now survive
+the handoff, the common regional path avoids rational-offset isolation, and runtime is comparable
+to the last recorded successful detailed-pass duration rather than the initial 650-second
+reconstruction/fallback run. The experiment also moved the earliest observable mismatch upstream.
+Per-window native DRC is incomplete when a curve approaches route copper outside that window;
+full-board detailed DRC is now exposing those cross-window interactions precisely. Preserving only
+the exact native interval helps but does not solve that missing cross-window coordination.
+
+### Decision
+
+Keep the fair branch ranking, geometric-G2 promotion, native regional gate, exact handoff, metrics,
+and regression. Tier 0 is not promoted by this run. The next hypothesis is that complete-candidate
+native DRC evidence must be fed back to the responsible regional windows (or those windows must
+include a halo of immutable/non-window route copper) before local native legality can authorize the
+all-window candidate.
+
+## Experiment 47 — Native realization review corrections
+
+### Failure
+
+The Experiment-46 Tier-0 pt2399_delay run had zero opens but 19 represented-copper violations
+(17 track/arc, two track/track), 147 unrounded bends, 0/4 G2 promotions and 383.15 seconds in
+detailed materialization. External KiCad DRC was not reached. The working tree was already dirty;
+these records are a historical comparison, not an isolated clean-commit A/B result.
+
+Review identified whole-supporting-disk arc obstacles, inconsistent regional ownership at native
+handoff, incomplete outside-window scene evidence, missing exported join-angle checks, early G2
+fallback commitment, configuration bypass, endpoint-extremum miscounting, a dense G2 Jacobian
+solve, and a chord-proxy gate still vetoing the native representation.
+
+### Hypothesis and ranked changes
+
+1. Sweep-local conservative obstacles preserve physically empty space around shallow arcs.
+2. An ownership-resolved manifest prevents duplicate/context copper publication.
+3. Assembled native/provisional/via scene evidence moves cross-window failures upstream.
+4. Quantized join-angle validation and complete native-transaction G1 fallback preserve the
+   intended flowing geometry without weakening copper DRC.
+5. Shared fit-policy checks, correct interior extrema, local tridiagonal promotion and removal
+   of the redundant chord-proxy physical veto improve consistency and bounded cost.
+
+### Research
+
+- KiCad SHAPE_ARC exposes bounded-error arc-to-polyline conversion:
+  https://docs.kicad.org/doxygen/classSHAPE__ARC.html . Flux uses its own conservative chord
+  envelopes, expanded by the exact circular sagitta plus integer-rounding guard; no code copied.
+- LAPACK documents tridiagonal linear systems:
+  https://netlib.org/lapack/explore-html/d6/ddb/group__gtsv_ga6b06a11b8e2dced10bc9cd3c20a09484.html .
+  Flux's local join residual has three neighboring derivative dependencies. A bounded Thomas
+  solve replaces dense elimination; unlike pivoting DGTSV it deliberately declines small pivots,
+  since G2 is optional and the G1 transaction is retained.
+
+### Verification criteria
+
+Focused tests must preserve both sides of the arc copper envelope while freeing unswept space;
+reject policy/budget mismatches; publish shared boundary copper once; distinguish fixed from
+provisional cross-window conflicts; bound quantized join angles; and preserve cancelled G1 input.
+Run the complete core suite and Tier 0. A reduction in raw DRC report count is not sufficient:
+record opens, physical categories, runtime and publication outcome. Do not promote a tier without
+external KiCad DRC.
+
+### Result
+
+The core suite passed in 224.34 seconds (with a concurrent tier run), then 220.02 seconds on
+the subsequent build. The broader non-corpus run passed 115/122 tests. Five CLI expectation
+failures match the pre-change log `build/dev/Testing/Temporary/LastTest.log.tmpbc337`. A constrained
+refinement export timed out at the explicit 300-second bound, and its dependent DRC could not
+load the missing board. No pre-change completed timing is available for that constrained test.
+
+Tier 0 finished global/regional search after 531.27 seconds: 50 paths, zero unrouted nets,
+overflow 16, three failed spline bundles, 22 evaluated joint candidates, two legal native
+windows from 11 checks, and no complete routing plan. Detailed routing and KiCad DRC were not
+reached. The actual harness uses one router iteration for this qualified-tier probe; the earlier
+Experiment-46 hand-written configuration said 30, so use the captured command configurations
+rather than that summary for comparison. Artifacts: `build/native-review-fixes-tier0`.
+
+### Refinement — construct native tangency instead of only rejecting kinks
+
+A diagnostic replay of the first eight rejected-realization events reconstructed their PH
+Bezier controls from telemetry. Six failed the 0.035-radian join bound even after all eight
+positional refinement attempts; their remaining errors ranged from about 0.050 to 0.531 radians.
+The two straight examples already fit. This demonstrates that denser independent circle fitting
+is not an adequate general tangent-continuity mechanism. Adjacent integer-point deduplication
+and invalid quantized-circle handling are useful robustness corrections, but no collapsed
+pieces occurred in these eight examples and they do not explain this failure.
+
+The smallest targeted correction is equal-distance Hermite biarc fitting after the cheap
+positional fit fails its angle check. The construction follows the geometric derivation in
+Ryan Juckett's primary technical account: https://www.ryanjuckett.com/biarc-interpolation/ .
+Only the equations are used; no implementation is copied. PH design, topology, DRC and routing
+search are unchanged. Farthest-fitting bounded local intervals preserve native tangency, and
+integer tangent/position checks reject rounding damage. The initial diagnostic replay recovered
+all six failed fits, using 16–82 pieces rather than requiring ever denser independent circles.
+This replay is geometry evidence, not board qualification. Final core and tier results follow.
+
+The final tangent-matched implementation passed the complete core suite in 119.25 seconds,
+restoring approximately the pre-experiment core-suite runtime instead of the 220-second
+positional-refinement trial. New tests cover one-attempt native fitting, dense positional probes,
+piece-budget exhaustion, reversed native handoff, selected width provenance, and proposed vias.
+Final source/executable hashes and tier artifacts are recorded in
+`reports/benchmark_history/2026-09-05-native-review-fixes.json`.
+
+The final native-arc/multilayer export regression selection passed all nine tests, including
+external KiCad DRC, in 30.30 seconds. The final Tier-0 run took 443.09 seconds in global/regional
+search: 50 paths, zero unrouted nets, overflow 16, one failed spline bundle (versus three in the
+positional-refinement trial), 12 evaluated joint candidates, four legal native windows from five
+checks, 275 native pieces checked, and zero native-fit failures. The 35 native copper violations
+are aggregated rejected-candidate evidence, not a final-board DRC count. No complete regional
+transaction was available, so detailed export and Tier-0 KiCad DRC were not run.
+
+The remaining window is 2: nets `kicad-net-11` and `kicad-net-8` on B.Cu around
+x=42.5–43.5 mm, y=28.5–29.5 mm, with a 0.45 mm coarse conflict deficit. Net 11 is immutable
+articulation context; net 8 owns three templates, including two statically checked alternatives.
+All three candidate states emitted zero spline realizations. This precedes native fitting, and
+the generic `curvature_infeasible` diagnosis does not yet prove the exact constructor mechanism.
+The next focused investigation should inspect PH construction/guard binding and immutable
+articulation context, not further tune the native fitter.
+
+Decision: retain the locally verified representation/correctness fixes and tangent-matched
+fitting; keep ADR 0171 experimental. The refinement recovered the intended fit mechanism and
+restored core-suite runtime, but did not qualify Tier 0. No higher tier is promoted or claimed.
+
+## Experiment 48 — Directed adaptive-portal predicates
+
+### Failure
+
+The fresh Tier-0 baseline (`build/frontier-20260905/baseline`) took 453.93 seconds,
+found all 50 paths and no unrouted nets, but retained overflow 16 and no complete
+regional plan. Detailed export and KiCad DRC were not reached. The core baseline
+passed in 133.43 seconds. All five corpus boards passed strict import/provenance
+preflight. These runs preserve the already modified working tree; its initial
+patch and executable hash are retained under the baseline directory.
+
+New seed diagnostics isolate window 2 on B.Cu: the immutable net-11 context is a
+straight horizontal seed from (51,29) to (37.5,29) mm. For each of the three
+net-8 assignments, all 160 seed candidates fail the directed-gate check, with
+zero construction, containment or shape rejections. This is a certificate-stage
+failure, not evidence of curvature infeasibility. Structured diagnosis:
+`reports/diagnoses/2026-09-05-tier0-directed-gates.json`.
+
+### Ranked hypotheses and research
+
+1. **Portal-side predicate depends on tessellation.** Adaptive neighboring cells
+   have offset centers. Their center vector is not a portal normal. A synthetic
+   vertical portal reproduced the defect: a forward straight chord passes,
+   while insertion of two collinear samples makes the same crossing fail.
+   Smallest experiment: orient the true portal normal by the cell transition.
+   Cost stays O(gates × segments); no extra route search or copper relaxation.
+2. **Concatenated gate sequences disagree with a shortened seed.** Individual
+   gate membership does not establish sequence order. Record the failing gate
+   and replay its complete signature before changing sequence policy.
+3. **Immutable articulation context carries a different owner's topology.**
+   Reuse of the owner's exact realization may be necessary, but it is a larger
+   transaction change and is ranked after correcting/replaying the predicate.
+
+Primary references inspected:
+
+- KiCadRoutingTools `ec2bf0e1021c0ed95c45b14664d02c56777a0974`,
+  `docs/rip-up-reroute.md`, `docs/routing-architecture.md` and the existing strict
+  bm_svf comparison. https://github.com/drandyhaas/KiCadRoutingTools/blob/main/docs/rip-up-reroute.md
+  Its useful invariant is attribution at the failed geometric boundary, with
+  bounded blocker exchanges and preserved/restored surrounding copper. Flux
+  retains NavMesh/hydraulic discovery, PH geometry and exact native validation;
+  no upstream implementation is copied.
+- Kallmann and Kapadia, SIGGRAPH 2014 navigation course, geometric path-planning
+  and funnel sections: https://people.cs.rutgers.edu/~mk1353/pdfs/2014-siggraph-course-navigation-slides.pdf
+  Portal orientation and ordered traversal are geometric predicates; route
+  sampling should not change their answer. This motivates a predicate repair,
+  not replacement of Flux's continuous routing architecture.
+
+### Minimum experiment and verification
+
+Replace the skew cell-center normal by the portal normal, retaining cell centers
+only to orient the transition. Add a deterministic micro-test for subdivision
+invariance, reverse traversal, repeated crossing, tangency and reversed portal
+vertex order. The micro-test failed on the original implementation. Measure the
+frontier again and run core and external-DRC export regressions. Reject any
+change that merely skips a true reversed or repeated portal crossing. Results
+and subsequent refinements will be recorded below.
+
+### First result and causal refinement
+
+The portal-normal micro-test now passes, including reversed/repeated-crossing
+rejection, and the complete core suite passed in 135.17 seconds. This fixes a
+real adaptive-mesh defect, but the detailed Tier-0 replay establishes a different
+direct cause of the persistent straight-context rejection: gates 12–23 are exact
+copies of gates 0–11. The raw straight seed itself fails at gate 12.
+
+Tracing those copies upstream found that `assemble_window_templates` enumerated
+all channels after alternative generation. A channel's occupant was incorrectly
+interpreted as retained global membership, so alternative-template channels were
+concatenated into the original template. Two unselected alternatives consequently
+imposed duplicate directed gates on immutable context. Their free-space cells
+also enlarged the original template's guard. Removing duplicate gates downstream
+would hide that provenance mistake and would leave the incorrect guard union.
+
+The refinement explicitly marks alternative-only channels at all four candidate
+generators. Retained template assembly and retained packing assessment exclude
+those channels; each alternative still explicitly selects its own channel. The
+crossing micro-board checks both retained-template isolation and the presence of
+independently selectable alternatives. This preserves Flux's portfolio and
+continuous realization interfaces while correcting the earliest bad binding.
+
+### Measured planning outcome
+
+| Tier-0 configuration | Planning seconds | Complete regional plan | Failed spline bundles | Evaluated joint candidates | Seed gate rejections |
+| --- | ---: | --- | ---: | ---: | ---: |
+| Initial dirty-tree baseline | 453.93 | no | 1 | 12 | 1120 |
+| Additional diagnostics only | 466.65 | no | 1 | 12 | 1120 |
+| Portal-normal correction only | 483.61 | no | 1 | 12 | 1120 |
+| Alternative-channel isolation plus portal correction | 277.06 | yes | 0 | 5 | 115 |
+
+The normal correction is independently supported by its failing-before/passing-after
+micro-test, but did not solve this board's direct blocker. Channel provenance is
+strongly supported: all five ordinary repair windows now complete, and the
+retained assembled plan becomes available. Its 36 native-versus-provisional
+outside-window conflicts remain advisory; there are zero native/fixed-scene
+conflicts. These are not final-board DRC results. Runs overlapped other bounded
+benchmarks, so timings are indicative rather than isolated performance estimates.
+
+The crossing/multilayer regression passed with the channel-provenance assertion.
+All nine native-arc/multilayer export regressions passed, including external KiCad
+DRC. The full non-corpus suite passed 116/123 tests: the same five CLI expectation
+failures, 300-second constrained-export timeout, and dependent missing-board DRC
+failure documented in Experiment 47 remain. No new failure category appeared.
+
+The manifest's remaining `global_complete` promotion targets were tightened to
+`detailed_complete`, preserving tier statuses. A topology-only success must not
+promote any of the five boards under the current acceptance contract. The
+source-bound benchmark-manifest test passed after this policy correction.
+
+
+## Experiment 49 — Exact materialization witnesses define regional repair scope
+
+### Failure and hypothesis
+
+The corrected Tier-0 one-iteration detailed attempt completed in 876.3 seconds:
+zero opens, 16 track/arc clearance violations, five implicated net pairs, two
+feedback passes and zero improvements. The first pair is net 17 versus net 1,
+33,444 nm below its required 450,000 nm centerline separation. Ten coalesced
+physical regions cover pairs (1,17), (3,4), (10,11), (7,8), and (8,11), all B.Cu.
+Regional feedback currently transfers these witnesses only as XPBD history costs;
+conflict extraction still reads the original global shadows/capacity reports.
+Thus downstream conflicts cannot enlarge the exact joint repair scope.
+
+### Research and ranking
+
+1. Pass current exact failure witnesses to regional conflict extraction, keeping
+   their net pairs, physical bounds and deficits. This directly tests the missing
+   representation boundary with existing regional partition/search machinery.
+2. Expand every regional window by a fixed margin. Less targeted; risks large
+   coupled regions and arbitrary parameter tuning, so defer.
+3. Replace local search by full CBS. Much larger change; defer until evidence
+   shows Flux's existing exact regional master cannot solve an accurately scoped
+   conflict set.
+
+KiCadRoutingTools' blocker-attributed bounded reroute and Sharon et al.'s CBS
+(https://webdocs.cs.ualberta.ca/~nathanst/papers/sharon2015cbsjournal.pdf, 2015,
+sections 1 and 4) both motivate conflict-directed scope/constraints. CBS assumes
+discrete time agents and has exponential worst-case search; Flux's static copper
+packing differs, so this experiment borrows only witness-driven decomposition,
+not its temporal search or optimality guarantees. Extraction adds bounded
+O(witnesses × net-pairs × fragments) work; regional search budgets stay intact.
+
+### Minimum experiment
+
+Supply current final-validation/quantization pair witnesses only while global
+paths are unchanged. Attribute them to same-layer intersecting fragments, expose
+mapped/unmapped counts, and create ordinary regional conflict edges. Do not reuse
+stale exact witnesses after global replanning. A synthetic shadow-free crossing
+must create a repair window only with a valid exact witness; unknown nets/layers
+must remain explicitly unmapped. Success requires fewer final physical conflicts
+on Tier 0; scope extraction alone does not establish board improvement.
+
+## Experiment — USPED-informed initial NavMesh refinement (2026-09-05)
+
+### Failure and hypothesis
+
+User-requested experiment: use terrain structure to inform NavMesh subdivision before routing.
+The latest recorded Tier-0 physical frontier is a regional construction failure before native
+fitting; it has not been attributed to insufficient mesh resolution. Hypothesis: clearance-derived
+flow concentration and transport divergence identify useful extra refinement regions. This is not
+a claim that USPED will fix the frontier.
+
+### Research and choice
+
+Inspected the local LittlePlanets terrain CPU USPED routine and GPU capacity/divergence shaders,
+README, and MIT licence. Reference physics: `A^1.6 sin(slope)^1.3` transport and flux divergence.
+See https://grass.osgeo.org/grass80/manuals/addons/r.divergence.html .
+Chose one bounded, geometry-only CPU prepass rather than iterative landscape modification or
+per-net sediment simulation. Clearance-only refinement remains the control and the default.
+
+### Change
+
+Mapped immutable polygon obstacles/board exterior to masked mountains and residual clearance to
+descending slopes/valleys. Implemented D8 accumulation, rill capacity, conservative masked-edge
+divergence and normalized refinement priority. No rain or flux enters masked cells; flats remain
+sinks and unit rainfall alone does not trigger arbitrary subdivision. No terrain displacement.
+
+Integrated opt-in subdivision of certified coarse cells, preserving ordinary boundary refinement,
+existing legal-region coverage, exact child checks, and a baseline rebuild on mesh-budget overflow.
+Added prepared-domain diagnostics/fields, configuration provenance, CLI `--usped-navmesh`, and a
+bounded on/off JSON benchmark runner. ADR 0172 gives contracts, complexity and limitations.
+
+### Before / after
+
+- Existing clipped-passage regression passed before integration.
+- Synthetic mesh: 192 baseline cells -> 258 cells, 22 USPED-refined parents from 120 raster cells;
+  certified route retained, mountain exclusion preserved. Tight budget restores the 192-cell mesh.
+- Mountain/valley, flat, diagonal-mask, signed divergence/conservation, repeatability, invalid-input,
+  config mismatch, raster-budget and mesh-budget tests pass.
+- Initial full core suite passed 28/28; final verification is recorded in the USPED summary report.
+- Final cap-chain global probe: both modes 4 paths, zero unrouted, zero overflow, zero NavMesh
+  failures. Route-summed cells 33,208 -> 45,496; enabled route-summed extra parents 4,096.
+  Wall times 1.282s / 1.208s are contended single runs and do not establish a speedup.
+- Tier-0 bounded smoke: both modes exceeded 60s before publishing JSON. Concurrent build/test
+  activity and rebuilding between trials also prevent a controlled comparison. No detailed board
+  or external KiCad DRC was produced. Tier 1 and higher were not promoted or evaluated here.
+
+### Interpretation / decision
+
+Mechanism and integration verified; board-quality hypothesis remains inconclusive. Retain as an
+explicitly disabled-by-default experiment, not a mandatory routing stage. No tier qualification.
+Reports: `2026-09-05-usped-cap-chain-final.json` and `2026-09-05-usped-tier0-bounded.json` under
+`reports/benchmark_history/`. No source board was edited.
+
+### Next experiment
+
+Run isolated, full-duration Tier-0 on/off trials with a fixed executable and the same hard mesh
+budget, reporting actual cells as well. Measure surviving detailed realizations and final DRC;
+compare against clearance-only refinement at a matched actual cell count before adding GPU work.
+
+## Experiment — 2026-09-05: Restore rip-up opportunities through iteration budgets
+
+### Failure / hypothesis
+
+Tier-0 planning defaults to one global iteration. The CLI also caps physical
+feedback retries at iterations minus one, disabling feedback. Test whether
+budgets 4 and 8 improve physical completion versus a fresh one-iteration run.
+
+### Change / experiment
+
+Added an experimental `--iteration-budget` override to the corpus runner, applied
+to planning and detail phases without editing the manifest. Added a structured
+summary tool that retains oracle metrics, feedback probes and timeout telemetry;
+missing DRC remains unevaluated. No routing algorithm or default was changed.
+Ran the same executable sequentially with 1, 4 and 8 iterations and the existing
+600-second planning limit. Source hashes and binary identity are preserved.
+
+### Before / after
+
+- 1: 169.455 seconds, incomplete; 50 paths, zero unrouted nets, overflow 16,
+  76 native-scene conflicts, zero feedback passes. Provisional oracle: 32
+  violations, zero opens. No final KiCad DRC.
+- 4: timeout at 600 seconds; first epoch completed with 48 oracle violations and
+  zero opens. Second epoch started with 21 physical-history entries. No final JSON
+  or final DRC; final conflict count unknown.
+- 8: timeout at 600 seconds; same first-epoch evidence; second epoch started with
+  a two-iteration PathFinder budget. No final JSON or final DRC.
+
+### Interpretation / decision
+
+Extra feedback opportunities are activated, but improved copper is unproven.
+Code inspection revealed that enabling feedback also makes clearance shadows
+advisory, and changes first-epoch regional probing/promotion. This is a comparison
+of the coupled CLI modes, not an isolated test of extra identical rip-up rounds.
+Keep the reproducible experiment tooling; leave router defaults unchanged.
+No tier promotion. The first intermediate round consumes most of the time budget.
+
+### Next hypothesis
+
+Separate feedback rounds, global iteration budget and physical-conflict policy;
+hold policy fixed and profile/bound intermediate regional work. Raising the
+iteration constant alone has not demonstrated a practical fix.
+Detailed diagnosis: `reports/diagnoses/2026-09-05-ripup-budget-coupling.md`.
+Structured history: `reports/benchmark_history/2026-09-05-ripup-budget-sweep.json`.
+
+## Experiment — 2026-09-05: Oracle-first versus full-strength first-pass scheduling
+
+The explicit feedback-count and shadow-policy controls isolate scheduling from
+the previous coupled CLI modes. Oracle-first scheduling returns known exact
+provisional-copper failures upstream before intermediate regional search. The
+final full regional/DRC transaction remains mandatory.
+
+At fixed N=4/R=3 with advisory shadows, enabled scheduling completed epochs at
+105.281, 213.688 and 318.918 seconds, with provisional violation counts 48, 38, 50
+and zero opens. Its final epoch timed out at 600 seconds. The disabled control
+completed only one epoch and also timed out. It overlapped an independent Tier-0
+process, so timings do not establish an isolated speedup. Both used the same
+binary. Full core and nine arc/multilayer export/DRC checks passed. Keep oracle-first
+disabled by default: more feedback is observed, but final copper benefit is unproven.
+See `reports/diagnoses/2026-09-05-oracle-first-feedback.md` and the corresponding
+structured benchmark history.
+
+The user then explicitly requested a bundled first-pass "kitchen sink" experiment.
+`--full-strength-first-pass` front-loads compatible bounded global and regional
+operators, while retaining later feedback and every final legality gate. This is
+the opposite scheduling hypothesis: broad early coordinated repair may avoid
+revisiting an under-explored first topology. It does not imply maximum hardware
+parallelism, a topology-backend rewrite or relaxed clearances. The exact scope,
+budgets and exceptions are documented in
+`reports/diagnoses/2026-09-05-full-strength-first-pass.md`.
+
+Full-strength outcome: first exposed a cone-repair integration bug (selective-only
+invalidation remained enabled after selective rerouting was disabled; an invalid
+empty repair could replace the incumbent). Cleared the dependent option and
+rejected invalid/cancelled repair candidates; an actual cone-repair regression
+passes. The full core suite and nine arc/multilayer export/DRC checks pass.
+
+Corrected Tier-0 trial: timeout at 600 seconds, no final board/DRC. Telemetry
+records 18 completed primary/cone PathFinder iterations and a completed first
+epoch at 511.083 seconds. Provisional oracle: 32 violations, zero opens. Four
+regional windows had three complete bundles, with two conflict-directed
+recoveries; assembled spline candidate remained unavailable. The experiment
+exercises substantially more machinery but does not qualify the tier. Keep the
+general integration fix and retain the broad mode only as an opt-in experiment.
+Structured result: `reports/benchmark_history/2026-09-05-full-strength-first-pass.json`.
+
+## Experiment — 2026-09-06: Frozen outside-copper context at local native selection
+
+Failure: Tier-0 pt2399_delay, N6/R0/enforced/full-strength, completes global
+topology (50 paths, zero unrouted nets) in a failed 518.570-second plan. Local
+native checks report zero violations, but full native assembly reports 39
+conflicts, six classified fixed. Window 3's selected F.Cu bulge crosses the
+untouched continuation of another net outside its owned stub.
+
+Hypothesis: the first-locally-legal exit selects a candidate without considering
+the global copper that assembly subsequently retains. Complete local context
+will reject that candidate while alternate templates remain available.
+
+Research: KiCad NODE branch/root collision queries preserve unchanged obstacles
+and exclude explicitly overridden items. Concept only, no GPL code copied.
+Source, ranked alternatives and geometry are recorded in
+`reports/diagnoses/2026-09-06-frozen-copper-context.md` (plus JSON).
+
+Change: opt-in `--frozen-copper-context`, temporary exact-check Board containing
+source copper plus every global planar fragment not owned by the current
+window. Fragment-level exclusion preserves same-net outside continuations.
+Contexts are cached per window within a realization invocation. Missing owners
+fail closed. Neither source nor accepted copper is modified. Proposed vias and
+joint inter-window motion remain separate issues; final checks are unchanged.
+
+Success criterion: more useful candidate exploration and fewer actual final
+physical conflicts, ideally complete DRC-clean copper; a drop in assembly
+conflicts due solely to withholding assembly is not improvement. Regression
+criterion: default tests remain green; added micro-test proves outside-copper
+crossing detection and ownership/layer/source invariants. Baseline structured
+history: `reports/benchmark_history/2026-09-06-frozen-context-baseline.json`.
+
+After: 431.656 seconds, still 50 paths/zero unrouted nets and three complete
+bundles out of four. Candidates evaluated 4 → 21; locally legal candidates
+4 → 3; native local violation reports 0 → 87. Window 3's final eight retained
+states all fail native clearance, including B.Cu alternatives. Assembly was
+withheld: its zero conflicts are NOT an improvement over the baseline's 39.
+Physical-scope retries 1 → 0. Provisional oracle remains 32 violations/zero
+opens. No final board or KiCad DRC; no tier promotion. The faster failure is
+consistent with avoiding a late assembly/scope retry, not faster successful
+routing. The core suite and nine arc/multilayer checks (including two KiCad
+DRCs) passed in 173.18 seconds; the focused transactional test also passed.
+
+Interpretation: missing context is supported as a local acceptance gap. Simply
+freezing it does not make this portfolio geometrically feasible. Keep only as
+an opt-in diagnostic experiment, disabled by default. It has not earned default
+routing-policy status. Structured comparison:
+`reports/benchmark_history/2026-09-06-frozen-context-comparison.json`.
+
+Next hypothesis: preserve the identities and physical regions of outside
+fragments rejected during native validation and feed them into coordinated
+scope expansion. Currently these become generic window-level clearance
+failures, while scope retries consume only assembled-native/linear-scaffold
+witnesses. Candidate failure before assembly therefore loses the very evidence
+needed to enlarge ownership. Establish the exact blocker pairs before changing
+scope; telemetry snapshots may contain stale repair-cone alternatives and are
+not an authoritative reconstruction of the selected global board.
+
+## Experiment — 2026-09-06: Exact frozen-fragment scope feedback
+
+Failure: the frozen-context experiment exposed 87 local native violation reports
+but triggered zero physical-scope retries; window 3 remained unresolved. Local
+assessment retained no outside fragment identity. Existing nearest-net/layer
+witness mapping also cannot represent a candidate that changes layers while
+retaining its original fragment identity.
+
+Hypothesis: retain exact candidate/blocker IDs and couple those original
+fragments after the retained candidate fails, rather than repeatedly repairing
+the same two clipped stubs. Research: MA-CBS selective coupling
+(https://ojs.aaai.org/index.php/SOCS/article/download/18244/18035/21760).
+Its time-based MAPF assumptions and completeness/optimality guarantees do not
+transfer to persistent PCB copper and bounded Flux search. Concept only, no
+external code copied. Scope-size limits control exponential joint-search risk.
+
+Change: collision-safe frozen-track provenance maps; deduplicated native
+candidate/blocker records on each assignment; telemetry and unresolved JSON;
+opt-in `--expand-frozen-copper-scope` to seed the existing conflict graph using
+exact IDs. Only retained unresolved assignments contribute. Missing IDs,
+already-owned blockers and duplicate pairs do not trigger another retry.
+The existing physical retry/net/fragment/search limits remain unchanged.
+
+Focused ownership/provenance/deduplication tests pass. A synthetic candidate
+layer-change test confirms exact IDs create a joint cross-layer repair window
+where nearest-net/layer attribution cannot. Full regression and frontier trial
+pending. Detailed diagnosis/ranking:
+`reports/diagnoses/2026-09-06-frozen-scope-feedback.md`.
+
+Normal-budget outcome: 600-second timeout during the second scope retry, no
+final board/DRC. Scope attribution works: exact pairs 4 → 5 → 8, all mapped.
+First analysis at 437.168s and first retry at 571.961s both retain 3/4 complete
+bundles; discrete candidates 228 → 654. Core plus nine arc/multilayer checks
+passed in 173.94s. Keep scope expansion disabled by default. One identical-binary
+900-second diagnostic trial was run to finish the bounded work; normal
+600-second qualification remains failed. The runner records its timeout
+override explicitly and leaves the corpus manifest unchanged.
+
+Oracle inspection with KiCad's parser: the preserved reference keeps REF on
+F.Cu nearly straight and routes +5V around its left side; GND occupies the
+B.Cu horizontal channel. This is topology evidence only, not a fresh DRC
+certification. It suggests testing a broader +5V/connection corridor change
+if fragment-scope expansion still fails. No reference tracks are copied.
+
+Extended outcome: finished in 730.098 seconds, still no accepted board or DRC.
+Two scope retries, 3940 generated discrete states, 10 evaluated/4 locally legal
+candidates in the last analysis. The original region is no longer the reported
+unresolved window; the remaining window is +9V/+5V with two locally legal F.Cu
+templates. Last native-scene counters report 2 fixed conflicts (earlier
+full-strength-only control: 39). Global overflow remains 19 with 50 paths and zero
+unrouted nets. Assembly is subsequently withdrawn, so these counters may
+describe an earlier assessed scene, not the final retained local state.
+
+Decision: partial support for precise feedback/coupling, not a tier pass or a
+normal-budget success. Keep disabled by default. Preserve provenance and
+add last-scene diagnostic/object output plus manifest status: the benchmark
+binary omitted the exact remaining pairs/categories. Do not guess a via failure
+or immediately retune topology. Classify that separate assembly failure next.
+Full comparison: `reports/benchmark_history/2026-09-06-frozen-scope-feedback-final.json`.
+
+Final reporting-only build verification: all 10 selected checks passed again
+in 171.65 seconds (core 144.95 seconds; two KiCad DRC checks included). Python
+compilation and invalid-timeout rejection passed; `git diff --check` is clean.
+The final binary differs from the benchmark binary only through the subsequent
+native-scene reporting changes described above; no new routing policy was
+enabled after the recorded experiment.
+
+## Experiment — 2026-09-06: Candidate-via local context
+
+Reporting-only reproduction finished in 718.651 s and identifies both last-scene
+reports as track_via_clearance, 125000 nm deficit each: GND B.Cu native track
+versus two new +5V vias. Local native assessment omitted these vias. Whole-net
+assembly invalidation also marked an unrelated +5V/+9V window incomplete.
+Exact details and ranked hypotheses:
+`reports/diagnoses/2026-09-06-candidate-via-context.md` and `.json`.
+
+Research: KiCad interactive routing validates vias as physical collision objects
+(https://docs.kicad.org/7.0/en/pcbnew/pcbnew.html). Reuse Flux's exact predicates,
+not external source code. Minimum experiment: include resolved candidate vias in
+the opt-in frozen-context native scene, retain all attached fragment owners for
+rejection/feedback, use assembly dimensions and same-net via/plated-pad reuse.
+No change to normal defaults, clearances or search/retry budgets. Synthetic
+planar-fit/via-collision, shared-via provenance/reuse and invalid-span tests added.
+Verification and identical-configuration frontier trial pending.
+
+Rejection-only outcome: 900-second timeout in enlarged-scope candidate search.
+Local via/blocker telemetry and exact scope feedback now work, but this does not
+establish better routing quality. Regression checks passed 10/10 (181.52 s),
+including two KiCad DRCs; expanded ownership/reuse micro-test also passed.
+History: `reports/benchmark_history/2026-09-06-candidate-via-context.json`.
+
+Refinement: feed the selected candidate via copper disks into the existing
+regional clearance evaluator and CPU/GPU proximity broad phase, on every spanned
+layer. Net and layer filtering remains explicit. Via dimensions use assembly
+rules, and candidate-scene cache fingerprints include via geometry/span/net.
+This is still gated by frozen context. The existing trajectory optimiser, not
+a new solver, successfully rebounds around the synthetic 125000 nm via deficit;
+shape/corridor/continuous certification passes. Added disk broad-phase checks.
+Full regression and identical-configuration refined frontier trial pending.
+
+Refined outcome: also a 900-second timeout. First analysis 433.404 s; enlarged
+retry has 3 windows / 50 templates at 497.552 s. Retained six-route profiles still
+show one mutual/quantisation failure. GND is no longer falsely reported mutually
+legal at the spline stage, but no legal real-region deformation has been found.
+The isolated rebound works in the actual regional two-iteration/64-check budget
+(44 checks, no exhaustion); it also remains legal after native arc/segment fitting.
+10/10 regressions pass (183.53 s, two KiCad DRCs); expanded micro-test passes.
+History: `reports/benchmark_history/2026-09-06-candidate-via-guidance.json`.
+
+Keep default off; correctness/observability improved, benchmark completion did
+not. Do not increase local iteration constants on this evidence. Next isolate
+the real six-fragment window with its actual ownership and guard constraints,
+then determine whether corridor topology or search blocks the otherwise available
+rebound. Escalate to whole-connection/corridor feedback if locally trapped.
+Net-wide full-scene invalidation is a separate known repair-targeting defect.
+
+## Experiment — 2026-09-06: Default repeated physics and conflict-directed rerouting
+
+### Failure and hypothesis
+
+User requested the kitchen-sink policy as the default, including physical push/shove
+followed by rip-up/reroute and another physical attempt. The former full-strength
+option only applied to epoch zero; later intermediate epochs disabled realization.
+Prior frozen-context N6/R0 trials also exhausted 900 seconds in local rebuilding.
+Hypothesis: maintain full physical feedback on every epoch and give failed repair
+an upstream topology retry before spending the local scope-rebuild budget.
+
+### Research and ranking
+
+KiCad documents complementary shove and obstacle-walkaround operations
+(https://docs.kicad.org/7.0/en/pcbnew/pcbnew.html); VPR documents bounded
+PathFinder iterations (https://docs.verilogtorouting.org/_/downloads/en/v8.0.0/pdf/).
+These support separating local displacement from topology search, not a claim
+that either guarantees legal Flux copper. Ranked: (1) reuse the existing physical
+and typed-feedback loop on all epochs; (2) enlarge local scope repeatedly;
+(3) introduce a new joint solver. Select (1), the smallest integration change;
+retain (2) for the final epoch and defer (3).
+
+### Change
+
+Default full-strength core and CLI policy, compatible global operators and full
+regional physics on every epoch, frozen copper/via context, bounded retries.
+Intermediate scope retries are deferred; final epoch keeps configured scope repair.
+Explicit legacy/oracle scheduling remains available. Default retry counts clamp to
+short total budgets; explicit invalid CLI budgets remain rejected. No DRC changes.
+Added default/legacy CLI tests, short-budget and three-epoch failure tests.
+
+Follow-up inspection found retained exact outside-copper pairs were not converted
+to upstream diagnoses: window-only summaries could omit the blocker net. Feed the
+exact candidate/blocker net pair, layer and deficit into corridor-change history;
+do not feed pairs from now-complete assignments. Add focused regression coverage.
+
+### Verification and benchmark interpretation
+
+Policy-only Release build passed 45 selected checks (10 core/arc/multilayer,
+32 route/detail CLI, 3 new default/opt-out parser tests), including two KiCad DRC
+fixtures. Outside-blocker follow-up verification pending. The retry scheduling test
+forces a window-size failure; it checks physical consultation across epochs, not
+successful XPBD movement. Existing rebound tests exercise actual deformation.
+
+Earlier timing trials used Debug, not Release. Record build identity separately;
+do not attribute optimization-build speedup to policy. Policy-only normal Tier 0
+and N6 repeated-repair trials are running at the unchanged 600-second limit.
+No tier promotion until complete output and final DRC pass.
+
+Final outside-blocker build verification: 45/45 selected checks passed in 84.50 s,
+core 79.62 s; two KiCad DRC fixtures passed. The initial new test expected exact
+fragment IDs in output, but the existing diagnostic builder coalesces IDs by
+physical region. Corrected the assertion to check kind, actual layer, deficit,
+relaxation and both net owners. No coalescing-policy change was needed.
+Structured verification: `reports/benchmark_history/2026-09-06-default-physics-verification.json`.
+
+Policy-only N6/R4/enforced-shadow Release trial timed out at 600 s. Three physical
+epochs completed; XPBD ran again after the first upstream reroute, verifying the
+new scheduling mechanism on a real board. The intermediate oracle changed from
+32 violations / 0 opens to 0 violations / 9 opens: **not an improvement in legal
+completion**. History retained the earlier portfolio. Concurrent jobs and a build
+type change prevent a clean performance comparison to prior Debug timings.
+History: `reports/benchmark_history/2026-09-06-default-physics-policy-control.json`.
+
+The normal one-iteration planning probe finished in 435.384 s with 50 paths,
+zero unrouted nets, three complete regional assignments and an available native
+manifest with zero final-scene conflicts. It required two local scope retries.
+Raster shadow overflow remained 19; exact scene acceptance is distinct from that
+proxy. The corpus subsequently launches a **30-iteration** detail command, not a
+one-iteration command. Detailed output and final KiCad DRC are still pending.
+This normal run used the policy-only binary for planning and the final
+outside-blocker build for detail; preserve phase identities in its report.
+
+Outside-blocker N6/R4 trial also timed out at 600 s. Its first epoch carries
+24 history entries versus 23 in the policy-only control, consistent with the
+new blocker-pair diagnosis. Three epochs complete; later oracle results still
+have 9 opens. The policy and attribution fixes are verified, but reliable tier
+completion is not established. Keep the broad default as explicitly requested;
+do not describe this as benchmark qualification. Comparison:
+`reports/benchmark_history/2026-09-06-default-physics-blocker-feedback.json`.
+
+Normal detail audit ended by explicit SIGTERM just after the 600-second audit
+cap (608 s observed before termination), not by the unchanged 2400-second corpus
+timeout. Last completed detail epoch: 58 oracle violations / 10 opens, after an
+earlier 98 / 10. No final output or KiCad DRC. This is **partial verification**,
+not proof that the full-budget corpus run fails. Normal partial history and phase
+binary identities: `reports/benchmark_history/2026-09-06-default-physics-normal-partial.json`.
+All experiment subprocesses are stopped. No source board was modified.
+
+## Experiment — 2026-09-06: Certify the seed before further negotiation
+
+Failure and ranked hypotheses are preserved in
+`reports/diagnoses/2026-09-06-seed-certification.md` and `.json`.
+N1 previously accepted an internal native scene, while N6/N30 delayed or denied
+that seed's physical certification opportunity. Full strength used N-R initial
+iterations, disabled initial scope retries, and enabled advisory shadows solely
+because later retries were available. More budget therefore changed the seed
+and its legalization allowance before testing physical feasibility.
+
+Research: VPR distinguishes first-iteration costs and keeps the best legal
+solution on reconvergence (https://docs.verilogtorouting.org/en/latest/vpr/command_line_usage/).
+OpenROAD separates global guides from detailed search/repair and DRC
+(https://openroad.readthedocs.io/en/latest/main/src/drt/README.html).
+Inference for Flux: preserve the opportunity to certify the initial seed; do not
+equate a better proxy-ranked topology with a better physical incumbent.
+
+Minimum change: reuse the existing seed-first epoch allocation for full strength,
+allow the configured scope budget on the initial/final epochs, and keep default
+initial shadows consistent with N1. Explicit shadow overrides still apply.
+Subsequent epochs retain all compatible operators, physics and bounded feedback.
+Failed seeds consume the remaining iteration budget through existing negotiation.
+No new clearance rules, solver, topology backend or board-specific conditions.
+
+Focused regression passes: N8 certifies on epoch one with full scope allowance,
+and retains the same paths as N1; native detailed handoff remains legal.
+Existing three-epoch failed-window test checks repeated physical consultation.
+Full regressions and normal Tier 0 qualification are running. A separate N1
+control runs both planning and detail at one iteration to test final legality,
+not merely planning acceptance. Control planning binary is the prior Release
+974f5509ed80b5c1fc05b3d31cb8920d33dd8629916f151a7f0a082f4dcbaf79;
+its detail phase will use the new Release binary
+40c9e0203cdcc5f574d0ec211f53bdab592ec3f713d04befe4cf4e1612c74cfb.
+The changed branches do not alter N1/R0 behavior. Normal qualification uses the
+new binary for both phases. Concurrent timing is not a controlled speed test.
+
+Outcome: both N1 and normal-budget detail reach an internally connected,
+copper-legal candidate (0 opens, 0 copper violations), but fail the curve gate
+with six unrounded bends. Normal detail now accepts its first global seed rather
+than consuming 26 global iterations first. Scheduling hypothesis supported;
+keep it, but no tier promotion. Full history:
+`reports/benchmark_history/2026-09-06-seed-certification-results.json`.
+The extra failed-seed budget test passes: N6/R2 consumes epochs 1+3+2=6.
+
+## Experiment — 2026-09-06: Native straight adapter seams
+
+Final copper replay identifies all six unresolved bends at native straight
+adapter boundaries; all 54 eligible board-level PH tasks committed successfully.
+Those adapters were excluded from chain collection by blanket native protection.
+Exact pairs/coordinates are in `reports/diagnoses/2026-09-06-native-straight-seams.json`;
+ranked hypotheses and physical interpretation are in the companion `.md`.
+This is a geometry-ownership boundary failure, not missing global routability.
+
+Research: CGAL topology-preserving polyline simplification retains endpoints and
+intersections as constraints while permitting interior geometry changes
+(https://doc.cgal.org/5.4.4/Polyline_simplification_2/index.html).
+Flux uses its existing PH and exact copper/connectivity transactions, not CGAL
+code. Minimum change permits unlocked native straight adapters to enter the
+board-level degree-two chain solver. Native arcs remain immutable; ordinary
+straight runs without bends remain untouched. No final bend or DRC relaxation.
+
+Micro-test: two separately certified straight native fragments meeting at a bend
+must become connected, copper-legal curved geometry with zero unrounded bends.
+It passes; the existing native-arc byte-for-byte test also passes. A first test
+incorrectly encoded the bend inside one native fragment, which the existing
+native join-angle gate correctly rejects before handoff; corrected the fixture
+to reproduce the observed inter-fragment seam.
+Full regression and normal Tier 0 rerun pending. Release binary:
+ae82b85d29aa40fbc826fbecb257e1d5d2ef0ac3ee7052c36c38bc602dbd367b.
+Benchmark recorder now retains structured failed-detail output before the same
+qualification checks, instead of burying its metrics in a command-error string.
+
+Outcome: 46 selected regression checks passed. Normal Tier-0 detail finished in
+393.135 s with zero opens and zero internal copper violations, but six bends.
+Those six now belong to one +5V chain: other native adapter seams were repaired.
+53/54 PH tasks committed, 82 added tracks, 291 arcs and 5 vias. The remaining
+chain fails eight minimum-radius checks and no clearance/topology checks, after
+falling back to a source-polyline corridor. Keep for refinement; no tier promotion
+and no final KiCad DRC evaluated. Diagnostic replay also finds one pre-existing
+sharp native/ordinary arc join; this was not introduced by adapter unprotection
+and remains a separate curve-quality issue, not a reason to relax qualification.
+
+## Experiment — 2026-09-06: Curvature-sized certified fallback corridor
+
+Failure: the remaining Tier-0 staircase uses a fallback guard initially only
+31.25 micrometres wide per side (250 micrometre cell pitch divided by eight).
+Required minimum bend radius remains 250 micrometres. A circular right-angle
+rounding at that radius needs about 73.2 micrometres of centreline deviation.
+Hypothesis: fallback guard construction, rather than available physical free
+space, prevents sufficient rounding. Candidate ranking: first widen the proven
+guard independently of sample spacing; next investigate seed simplification;
+only then reconsider global corridor topology if exact physical space is absent.
+
+Research: Zayou and Arslan, *Graph-Theoretic Bezier Curve Optimization over Safe
+Corridors for Safe and Smooth Motion Planning*, https://arxiv.org/abs/2310.01190,
+construct convex safe corridors around clearance-aware reference paths before
+curve optimization. This supports separating corridor geometry from reference
+sampling; it is not evidence that Flux's particular chain is feasible. No code
+copied. Complexity here remains sampled cells times obstacle predicates, with
+bounded logarithmic width shrinking; wider cells may increase clearance probes.
+
+Minimum change: fallback requests initial half-width equal to the configured
+minimum radius, capped by the control corridor, while retaining cell-pitch/4
+sampling. Every cell still shrinks until exact free-space certification succeeds.
+Also reject any cell containing a hole vertex: edge/diagonal chords alone miss
+an entirely enclosed off-diagonal hole. No clearance, radius, connectivity or
+final DRC requirement changes. Other callers retain their initial width policy.
+
+Micro-test forces coarse NavMesh search exhaustion and requires a legal curved
+fallback at 1 mm minimum radius. It passes before the change as well, so it is
+coverage, not a reproduction of the measured staircase failure. Real Tier-0
+normal-budget before/after comparison is the mechanism test; pending in
+`build/curvature-corridor-tier0`. Keep only if benchmark evidence supports it.
+
+Local evidence: an additional open right-angle micro-case also passes with either
+width. Built `flux-replay-detailed-chain` (explicit, excluded-from-all diagnostic
+target) to reconstruct the final recorded surrounding copper, freeze it, remove
+exact named straight segments, and rerun just their unchanged chain. It checks
+source revision, track identity, layer, width and every segment before replay.
+Input is `reports/diagnoses/2026-09-06-tier0-staircase-chain.json`; geometry is
+diagnostic data only, never selected by router code. The same real-chain replay
+fails with six bends under the old width and succeeds with zero under the new
+width; both have zero opens and zero internal copper violations. This supports
+the hypothesis with a controlled mechanism reproduction. Full-board context can
+still differ because other PH chains are realized concurrently before merging.
+History: `reports/benchmark_history/2026-09-06-curvature-corridor-local.json`.
+44 selected checks passed (102.04 s), including two KiCad DRC fixtures; the new
+right-angle micro-case passed separately. Final Tier-0 DRC remains pending.
+
+Full-board outcome: **keep**. Normal Tier 0 passes all 50 connections, zero opens,
+zero internal copper violations and zero unrounded bends. All 54 PH tasks commit;
+75 added straight tracks, 299 arcs, 5 vias. Planning 347.618 s, detail 397.483 s
+(prior detail 393.135 s; concurrent build/test activity makes this only indicative).
+KiCad 9.0.8 reports no error violations, no unconnected items and no schematic
+parity errors under the unchanged benchmark rule set. Final board and layer PNGs
+are in `build/curvature-corridor-tier0/tier-0-pt2399_delay/`.
+History: `reports/benchmark_history/2026-09-06-curvature-corridor-tier0.json`.
+The first failing tier is now Tier 1, `bm_svf`; begin a recorded N1 seed diagnostic
+with a 900 s planning cap before selecting its next mechanism experiment.
+
+Visual/shape caveat: the final Tier-0 front layer retains the previously diagnosed
+native/ordinary arc join and some visibly wavy native curves. Passing the current
+benchmark is not a claim that all inter-fragment curvature is visually ideal.
+Keep this separate quality debt visible; do not conflate it with KiCad copper DRC
+or the now-resolved straight-adapter/fallback-radius failure.
+
+## Experiment — 2026-09-06: Tier-1 capacity warm-up comparison
+
+Initial evidence in `reports/diagnoses/2026-09-06-tier1-seed.{md,json}`: the first
+seed routes 25 nets topologically but retains sampled and corridor
+overflow; exact physical extraction produces 129 conflict edges and 23 windows.
+The committed reference uses layer excursions for the most repeated net pair.
+Hypothesis: a brief capacity-negotiation warm-up before expensive regional work
+may select necessary vias and substantially reduce physical scope.
+
+Research: VPR explicitly separates first-iteration congestion from later present
+and historical costs (https://docs.verilogtorouting.org/en/latest/vpr/command_line_usage/).
+OpenROAD normally rejects congested global output unless `-allow_congestion` is
+requested (https://openroad.readthedocs.io/en/latest/main/src/grt/README.html).
+These support testing capacity convergence separately from geometry; they do not
+prove that zero abstract overflow guarantees PCB legality. No external code used.
+
+Minimum experiment: N4/R0 versus N1/R0, keeping full-strength physical operators,
+rules, route backend and pitch unchanged. Four reaches this board configuration's
+existing hard-capacity start; this is a diagnostic configuration comparison, not
+a filename-dependent router policy. Measure vias, overflow, conflict component
+size, runtime, and exact copper acceptance. Keep no new heuristic without an
+actual outcome; both bounded comparison and seed result are pending.
+
+Telemetry correction: the via counter is not the number of planned layer
+transitions. The 78 selected paths have 24 transitions overall, but all seven
+selected paths for the implicated pair remain on F.Cu with zero transitions.
+Use path geometry and final materialized via counts, not that zero counter, for
+the comparison. N4's early evidence already shows later global iterations lose
+nets and the completeness-first checkpoint restores the original seed; simply
+running four iterations may therefore not change physical work at all.
+
+Tier-0 repeatability: a second normal-budget run passes the same 50 connections,
+75 tracks, 299 arcs, 5 vias, zero opens/bends/internal violations and external
+KiCad DRC. Detail wall time 494.367 s while frontier probes ran concurrently;
+do not infer an algorithmic timing regression from that load. Record:
+`reports/benchmark_history/2026-09-06-tier0-repeatability.json`.
+
+Tier-1 N1/R0 reaches the 900 s diagnostic cap in residual alternative generation;
+it has not exhausted the normal 7200 s benchmark budget. No final copper/DRC.
+N1 and N4 selected 78-path geometry hashes are identical:
+`b1c1535af4da65f70c943fa1608999ed771aa0355aba1356a149a79390554a43`.
+Thus the warm-up-only hypothesis is unsupported at the selected checkpoint.
+No warm-up policy change is retained. N4 residual pass still pending.
+
+Next isolated control uses existing oracle-first feedback with 30 iterations,
+legacy scheduling explicitly selected, and a 900 s diagnostic cap. This tests
+whether physical history can change topology before exhaustive local repair.
+Full-strength remains the normal default; the control is not a policy change.
+Artifact root: `build/curvature-corridor-tier1-oracle-control`.
+
+N4/R0 also reaches the 900 s cap in residual repair. The selected path geometry
+is exactly identical to N1/R0; no capacity warm-up change is justified. The
+oracle-first mode reaches successive global epochs quickly but reproduces the
+previously documented Tier-1 804→724→804 provisional-violation oscillation,
+with 6→8→8 opens. This is revalidation on the current Release build, not a new
+algorithm discovery. It also uses the legacy advisory-shadow policy, so it is a
+mode-level control, not an isolated change of timing alone.
+
+Next backend control: two unaccepted direct-medial lane transitions persist in
+the oracle epochs despite zero sampled/corridor overflow. Compare the same N1
+full-strength configuration with only the manifest's `--direct-medial` omitted.
+This tests whether the direct-medial embedding/handoff is the earlier blocker,
+without changing pitch, clearance or physical operators. Added an explicitly
+recorded diagnostic runner option `--disable-direct-medial`; no corpus manifest
+or default routing policy changed. Do not infer a backend fix until measured.
+
+The omit-only control is rejected at CLI validation: configured hard-capacity
+repair requires a medial resource backing. No routing occurred and no geometry
+claim is made. Correct the control to replace direct-medial with strict-medial,
+which retains that backing and all repair knobs while testing grid-edge search
+instead of direct medial edges. Runner option is `--strict-medial-control`;
+the unusable omit-only option was removed. The failed invocation remains recorded
+at `build/curvature-corridor-tier1-grid-control`.
+
+Strict-medial control outcome: 16.91 s to epoch completion, only 21 selected
+paths, 15 unrouted nets, 57 provisional opens and 2 provisional copper violations.
+The runner's exit 0 is an expected unlocked-board incomplete probe, not a tier
+pass. Exact metadata comparison confirms only direct→strict medial changed.
+Reject a backend replacement: reduced collisions come with lost connectivity.
+The diagnostic option remains available, but the corpus/default is unchanged.
+History: `reports/benchmark_history/2026-09-06-tier1-strict-medial-control.json`.
+
+Standalone width regression established: add a central track keepout to the
+right-angle micro-case, preventing the open-space detour from disappearing.
+The new width passes; temporarily restoring the old fallback call leaves two
+unrounded bends and fails the test. Restored the curvature-aware call afterward.
+This reproduces the general mechanism without any benchmark coordinates or
+external telemetry fixture. The proposed larger recorded-copper fixture was not
+added, since the compact synthetic case now catches the regression directly.
+
+Oracle-first control also reaches its 900 s diagnostic planning cap, in residual
+repair. It changes topology earlier, but does not establish a legal solution or
+justify a default-policy change. All Tier-1 controls retain exact rules and none
+qualifies the board. Keep the verified Tier-0 fixes and the diagnostic tooling;
+reject warm-up-only/backend-switch remedies. Next frontier work should isolate
+one connected native conflict window and feed its repeated outside-copper or
+infeasible-lane witness into alternative allocation, rather than enlarging all
+local search budgets. Full-strength remains the default.
+
+Final verification: restored production CLI hash remains
+`a207a0253daff3a0e09a663b9b85f86c2cf6b4a94ca054bfbfa5b2822fd0129e`,
+identical to both Tier-0 DRC-passing runs. All 44 selected CTest checks pass in
+81.36 s, including all 30 core cases (58.63 s), the obstacle-width regression and
+two native-copper KiCad DRC fixtures. Python compilation and diff whitespace
+checks pass. All benchmark/control subprocesses have finished; no abandoned
+experiment is enabled in normal routing. Existing unrelated work is preserved.
+
+## Experiment — Tier-1 early frozen-scope escalation (2026-09-06)
+
+Failure: the N1 full-strength probe repeatedly rejects native candidates against
+an outside-owned trace, then spends the rest of its 900-second diagnostic budget
+in same-scope residual repair. Diagnosis and exact fragment identities are in
+`reports/diagnoses/2026-09-06-tier1-scope-scheduling.json`. A normal 7200-second
+manifest baseline is running on a frozen copy of the verified Tier-0 binary.
+
+Hypothesis: changing repair ownership earlier avoids searching an unnecessarily
+frozen problem. This is not a proof that every outside collision needs merging:
+an alternative could avoid the blocker, so benchmark comparison is essential.
+
+Research: [Tolpin, Justifying and Improving Meta-Agent CBS](https://arxiv.org/abs/1410.6519)
+studies the tradeoff between separate-agent search and merging conflicting agents.
+Flux is static copper routing, not time-indexed MAPF; use the selective grouping
+idea only, without importing completeness or optimality claims. [KiCad shove
+implementation](https://docs.kicad.org/doxygen/pns__shove_8cpp_source.html)
+updates colliding line geometry and propagates it through a line stack; locked
+joints can prevent the move. This reinforces the distinction between geometry
+search and authority to move its blocker. No source code is copied.
+
+Ranking: (1) reorder existing scope expansion; (2) push repeated pair evidence
+into global allocation; (3) measure alternative-cache reuse. The first has the
+smallest integration footprint. It uses the existing bounded, deduplicated exact
+fragment witness collector and leaves all legality gates unchanged. Scope growth
+can increase combinatorial cost, so this starts as an opt-in experiment.
+
+Success: earlier scope progress and better final feasibility/runtime, with Tier 0
+still DRC-clean. Regression: lost connections, new DRC failures, or expanded
+search costing more without solving the targeted mechanism. The final allowed
+scope pass must still run all existing local repair algorithms; no-budget and
+duplicate-witness cases must not skip them. Tests will exercise these decisions.
+
+Initial checks: all 44 selected CTests passed (126.51 s), including the new
+budget/duplicate/legal-candidate scheduling assertions. The experimental CLI
+hash is `d54d2d9d20a57b8090d9f8a13955ca5196e1102841311a49b87ad82a1752c6a1`.
+Selected global path hashes match each control exactly: Tier 0 has 50 paths,
+Tier 1 has 78. This isolates the regional scheduling comparison at the seed.
+
+Intermediate evidence, not final routing success: Tier 0 follows the same
+4→3→3 windows and 4→6→9 exact-witness sequence without the intervening
+conflict-directed retries; planning finished in 414.572 s under concurrent load
+with a native candidate (detailed/KiCad validation pending). Tier 1 escalates at
+568.32 s after ordinary certification, growing exact witnesses 146→205,
+conflict edges 129→187, and owned fragments 114→151. The frozen baseline was
+still in residual repair after 1045 s. Scope growth may create oversized
+components, so earlier escalation alone does not establish a routing improvement.
+
+Broader verification: 120/127 non-corpus CTests passed in 231.39 s. Seven demo
+expectations failed. Each failed command was rerun on the frozen baseline and
+experimental binaries; full stdout hashes and exit codes match exactly. Record
+these pre-existing failures without weakening their expectations. Details are in
+`reports/benchmark_history/2026-09-06-early-scope-verification.json`.
+
+Tier-0 result: PASS with the opt-in experiment, zero opens/copper violations/
+unrounded bends and external KiCad DRC clean. The exported board is byte-for-byte
+identical to the retained passing baseline (SHA256
+`459bffc8258348a89eafcc275a35decdfc59e8afb1278b0731a58e0fd9df35ac`):
+75 tracks, 299 arcs, 5 vias. Planning 414.572 s; detail 566.803 s. Concurrent load
+precludes claiming a wall-time speedup. Full history:
+`reports/benchmark_history/2026-09-06-early-scope-tier0.json`.
+
+Tier-1 next observed limit: at 1115.95 s the expanded scope reports window 0
+ineligible and window 2 exhausting 100000 discrete states. Earlier ownership
+growth works, but now exceeds bounded regional solving capability. This is not
+a Tier-1 solution. Investigate moving that explicit scope-size failure upstream
+before spending on other independent native windows: enlarging an already
+oversized exact component cannot make it fit the same regional size limit.
+
+Refinement hypothesis: the first expansion contains a 15-net exact component,
+exceeding the existing 12-net local limit. Its global-topology failure is known
+at window construction (568.4 s), but is not published until after unrelated
+alternative/native searches (1115.95 s), then expansion continues. Preserve the
+size limit and return its existing `replan_global_topology` diagnosis immediately.
+This is a search-budget limitation, not proof of physical unroutability. Selective
+coupling research above explicitly warns that joint search grows with group size;
+Flux already has the required bounded-window failure/feedback interface.
+
+Small refinement to the opt-in scheduler: before corridor/portfolio construction,
+if any required exact region exceeds the existing net/fragment bounds, emit its
+ineligible assignment and return the checkpoint failure upstream. Do not fabricate
+failures for unsearched eligible windows, publish partial success, relax bounds,
+or claim a board solution. Decomposition-only inspection remains unchanged.
+Add a micro-test containing one oversized interaction and a separate eligible
+crossing, checking that the latter is not needlessly searched and that all source
+fragments plus the explicit global-replan diagnosis remain available. Tier-0
+output must remain identical; Tier-1 must actually reach new global epochs.
+
+Refinement local verification: the oversized-plus-independent-crossing test
+passes; all 44 focused CTests pass (110.38 s, core suite 80.54 s). CLI SHA256 is
+`e44f6f83c0e98654aecb03d36bb8b90c5a26333eb0b792856f9c41fb7053e967`.
+Normal-budget runs started in `build/tier1-early-scope-v2-20260906` and
+`build/tier0-early-scope-v2-20260906`. V1 is frozen separately for reproduction.
+
+Source-policy caveat found while reviewing the prior KRT oracle: Flux corpus
+commands omit optional `--netclasses` snapshots. Their 0.25 mm default tracks
+are not the 0.2 mm tracks used by the recorded KRT run; the project's 0.7 mm
+minimum via diameter also needs authoritative ingestion before relying on the
+internal checker alone. The external benchmark DRC still enforces the project.
+Added an explicit caveat to the KRT report. No source rules, dimensions, manifest
+or acceptance thresholds changed in the scheduling experiment. A future rule-
+ingestion audit must stay separate from this comparison, not quietly substitute
+narrower traces to obtain a tier pass.
+
+## Control — strict-medial sampling resolution (2026-09-06)
+
+Failure: the earlier 650000 nm strict-medial seed had 15 unrouted nets, 57
+terminals without seeds, and no expansion-limited searches. Thus rejecting the
+backend from that one resolution did not isolate whether coarse sampling lost
+usable routes. It also had 31 accepted continuous-to-lattice reprojections.
+
+Hypothesis: finer sampling improves terminal/tree connectivity without changing
+copper width or clearance. [LaValle, notions of completeness](https://lavalle.pl/planning/node182.html)
+distinguishes failure at a finite resolution from absence of a continuous path.
+Flux's finite searches and adaptive domains are not proved resolution-complete;
+this motivates a control, not a correctness claim. Test 250000 nm (a detailed
+corridor scale, not Tier 0's global pitch) against the preserved 650000 nm
+strict-medial N1 control. Keep all
+other operators, dimensions and rules unchanged, without the new escalation flag.
+Bound the diagnostic run at 900 s. A lower conflict count caused by missing nets
+does not count as improvement. No backend/pitch default or manifest change.
+
+Outcome: invalid input in 0.240 s, before routing. The existing planar-resource
+model requires pitch at least width-plus-clearance, multiplied by sqrt(2) for
+diagonals. With 0.25 mm traces and 0.2 mm clearance, the diagonal minimum is about
+0.6364 mm. The guard correctly rejects 0.25 mm; do not bypass it without a
+multi-cell copper occupancy model. Zero paths/zero reported unrouted nets here
+are not successful connectivity. The unlocked harness's expected-probe exit 0
+is not tier qualification. Reject this parameter-only remedy and preserve its
+artifact in `build/tier1-strict-250-control-20260906`.
+
+### Scheduler V2 intermediate result and next refinement
+
+Tier 0 passes again with V2: planning 412.584 s, detail 435.301 s, external DRC
+clean, identical board SHA256 and 75/299/5 tracks/arcs/vias. V2's first Tier-1
+epoch finishes at 563.0 s (684 provisional violations, 5 provisional opens),
+versus the baseline still working on that epoch after 2600 s. New topology is
+indeed explored in an eight-iteration global epoch. At 643.9 s its oversized
+regions return promptly, but at 644.04 s the scheduler replays the original
+406-fragment / 146-witness / 483-alternative seed as a retained fallback, delaying
+the next global feedback epoch again. This is not a solved tier.
+
+Next bounded scheduler refinement: intermediate feedback epochs should physically
+evaluate their newly generated global checkpoint before replaying old portfolios.
+Keep all portfolios retained and evaluate them with full strength in the final
+epoch. The initial and final epochs are unchanged; no search family or legality
+gate is disabled. This trades intermediate fallback effort for earlier global
+feedback, not a claim that an old topology is mathematically infeasible. Tests
+must verify the same total global budget, one fresh intermediate candidate,
+continued physical consultation, and retained final fallback availability.
+
+Preserve V2's running executable unchanged while building a private V3 binary
+against the updated static core; corpus detail phases must not silently switch
+binaries midway through a run.
+
+V3 verification: the new scheduler micro-test and all 44 focused CTests pass
+(93.78 s; core 83.19 s). Private and release CLI SHA256:
+`7f0a2894d1b42ae55bb9926a2713c0b41b6cd11dd1a6167bff6bebbcb0405e5f`.
+On resumption both earlier long Tier-1 processes were absent with no run-result;
+termination cause is unknown. Preserve these as inconclusive, not timeouts.
+Baseline telemetry reached epoch 2 at 3120.26 s; V2 at 563.09 s but then replayed
+the seed. Structured partial history is `2026-09-06-early-scope-interrupted-controls.json`.
+V3 Tier-0 verification and Tier-1 N30/1200 s diagnostic are running separately.
+
+## Experiment — exact source-segment conflict attribution (2026-09-06)
+
+Failure: a synthetic two-net T-junction reproduces the suspected Tier-1 scope
+loss without expensive native search. Net A has a horizontal carrier connection
+and a vertical tap; net B crosses their junction diagonally. The quantized oracle
+reports four raw violations, coalesced into two diagnoses identifying A/0–B/0 and
+A/1–B/0. Regional mapping reports two mapped pairs but creates only A/0–B/0 and
+owns two fragments instead of three. Nearest-fragment attribution discards the
+connection identities and tie-breaks both reports onto the carrier. This is a
+proven micro-test bug; its contribution to the complete Tier-1 failure remains
+to be measured. No final physical solution is claimed.
+
+Candidate ranking: (1) preserve typed source segment pairs through the oracle
+and coalescing, (2) infer connection IDs by parsing diagnostic strings, (3) own
+every nearby same-net branch. Prefer (1): precise, independent of diagnostic text,
+and does not enlarge windows with unrelated copper. Reject (2)'s brittle string
+contract and (3)'s unmeasured over-expansion.
+
+Research: [KiCad SHOVE](https://docs.kicad.org/doxygen/classPNS_1_1SHOVE.html)
+retains item/line links and operates on collision participants and connected
+clusters. This supports preserving physical participant identity, not copying
+its Manhattan/line solver or treating proximity as ownership. No external code
+is copied. The source-page fetch timed out; the available class documentation
+is sufficient only for this representation-level comparison.
+
+Hypothesis: exact planar source-edge pairs let regional extraction own both
+branches immediately, avoiding retries against an accidentally frozen tap.
+Keep coarse witnesses' spatial fallback; typed witnesses that no longer match
+source geometry must remain explicitly unmapped, never silently reassigned.
+Coalescing must retain every distinct pair. Match source edge ranges across
+collinear fragment merging and validate layer/source geometry. Complexity is
+linear in fragments per reported participant (same order as existing nearest
+search), with bounded witness storage. Via ownership is unchanged.
+
+Success criterion: two exact edges and three owned fragments on the junction,
+including after path reordering and collinear splitting; stale provenance is
+unmapped. Run the existing suite and both frontier/lower-tier benchmarks before
+promotion. V3 benchmark binaries remain unchanged to isolate scheduling results.
+
+Local result: all junction variants pass, including preserving three source pairs
+inside two coalesced diagnoses after splitting the carrier. All 44 focused CTests
+pass (104.90 s; core 94.55 s), and three interrupted-history tests pass. Frozen
+attribution CLI SHA256 is `ff4f0e19f1abb1bc4e631df434a0adc2c332a4c7c94ec0eec4d76dba5c231909`.
+Full builds succeed without new missing-initializer warnings. Exact source pairs
+and regional mapping counts are exposed in CLI JSON. Broader CTests and corpus
+runs remain in progress; no tier promotion yet.
+
+Tier-1 intermediate evidence: the same seed has 146 oracle diagnoses and 684
+provisional violations/5 opens. Typed mapping identifies 317 exact pairs with
+zero unmapped (previously 135/3) and 19 windows owning 127 fragments. It exposes a
+13-net/59-fragment required component immediately at 74.20 s, before native
+search. V3 spatial attribution reached an oversized scope only after native
+search/expansion at 517.61 s in its concurrent run. This supports earlier precise
+ownership, not a controlled whole-run speedup. The third V4 epoch still has
+2663 provisional violations and 3 opens, so additional global feedback has not
+yet produced physically feasible copper. Do not optimize for mapped-pair counts
+or interpret earlier budget rejection as routing completion.
+
+V4 Tier-1 outcome: the full N30 budget finishes in 457.946 s, below its diagnostic
+1200 s cap. Still incomplete: 78 combinatorial paths, sampled overflow 42,
+corridor overflow 1, total overflow 50, selected provisional oracle 1428 copper
+violations/2 opens, 2 malformed paths, 1196 tracks and 41 vias. No detailed export
+or KiCad DRC was reached. Harness expected-PROBE success is not tier qualification.
+The attribution mechanism is fixed locally and upstream feedback is reachable;
+physical routability is not solved. Keep the scheduling policy opt-in.
+
+V3 Tier 0 passes and remains byte-identical to the restored baseline
+(`459bffc8258348a89eafcc275a35decdfc59e8afb1278b0731a58e0fd9df35ac`).
+V4's broader suite passes 121/128; all seven failures match the frozen baseline
+exit codes and JSON after removing only new diagnostic fields. Expectations were
+not relaxed. V4 Tier-0 detail verification remains running.
+
+## Experiment — coherent quantization of endpoint via chains (2026-09-06)
+
+Failure: completed V4 Tier-1 report now makes two malformed-path diagnoses visible.
+The last telemetry checkpoint has coincident source transitions at path ends
+that become non-coincident under the oracle's snapping rule: e.g. net 12,
+connection 2, endpoint (56.74, 91.99) mm stays fixed while its adjacent via-layer
+point snaps to (56.7, 92.0) mm. Similar examples occur on nets 21 and 14. The last
+telemetry checkpoint need not be the final selected portfolio, so three observed
+examples must not be equated with its two selected malformed paths.
+
+Earliest loss: the provisional oracle quantizes vertices independently and exempts
+only first/last array entries, splitting a single physical via site across layers.
+This is not evidence that the global router selected a lateral layer jump.
+Conversely, rounding can conceal a genuinely non-coincident source transition.
+
+Research: [CGAL snap-rounding manual](https://doc.cgal.org/latest/Snap_rounding_2/index.html)
+treats an arrangement vertex consistently when replacing it on a finite lattice.
+Flux needs only the shared-site invariant here, not a new arrangement solver or
+an ISR/topology-preservation claim. No CGAL dependency/code is introduced.
+
+Ranked options: (1) snap consecutive equal-position source vertices as one site,
+preserving the site if it touches a protected endpoint; (2) stop protecting pad
+endpoints; (3) remove the coincidence check. Choose (1), linear in path length.
+Reject (2) because it changes terminal policy and (3) because it hides real
+malformation. Validate source transition coincidence before quantization so it
+cannot be accidentally repaired by rounding.
+
+Micro-test: off-grid start/end F.Cu→In1.Cu→B.Cu chains must yield two vias and one
+connected track both with and without endpoint protection. A source transition
+displaced by one nanometre, but rounded into the same cell, must remain malformed.
+Success is removal of false malformation, not acceptance of colliding copper;
+all DRC/connection checks remain authoritative. Preserve the V4 binary/results
+for a matched next experiment.
+
+Micro-test outcome: fails on V4 with one malformed path/one open; passes after
+shared-site quantization and pre-snap source validation. All 45 focused CTests
+pass (101.02 s, core 90.37 s). V5 is frozen at
+`892d1078ace2857b425ef23c1ffd1a67429156ef1f2c817bf00b27f479186ce4`.
+Tier-1 initial selected paths match V4 exactly (including widths; comparison
+hash `a88a7b34663d93454f018cc283935a853fca18e759df99835e5599ca197166bd`).
+Provisional opens drop 5→0, while violations rise 684→764 because previously
+omitted malformed paths now participate in DRC. This supports the false-oracle-
+failure hypothesis, not routing legality. V4 Tier 0 has also now passed external
+DRC with a byte-identical output board. V5 Tier-0 default and opt-in controls and
+the complete-budget Tier-1 search remain in progress.
+
+V5 intermediate refinement evidence: epochs 1–3 each retain zero provisional
+opens (764, 1297, 2216 copper violations respectively). Epoch 4 constructs 25
+required windows at 463.57 s with no window exceeding the existing size limits,
+so it enters ordinary portfolio/native search instead of returning immediately.
+This differs from V4, where every checkpoint was locally oversized. It is not a
+proof that the geometry fits or that the extra runtime is worthwhile. Kernel
+VmHWM sampled during the V5 run was 727036 KiB; this is an observed high-water
+mark up to the sample, not the final whole-run memory peak.
+
+Separate next audit, not implemented: the planner's partial-candidate ranking
+counts incomplete *assignments*, while early oversized-scope return emits only
+the ineligible assignments and leaves other windows unsearched. Unsearched
+windows must not be mistaken for solved windows when comparing progress. Any
+ranking refinement needs a synthetic comparison and benchmark isolation; do not
+fabricate failure assignments merely to influence scoring.
+
+Final V5 verification: Tier 0 passes under both default kitchen-sink policy and
+the opt-in scheduler. Both produce the same baseline board SHA256, 75 tracks,
+299 arcs, 5 vias, zero opens, zero internal copper violations and clean external
+KiCad DRC. Default planning/detail times are 432.762/521.395 s; opt-in times are
+439.395/501.928 s under concurrent load. No shape or clearance relaxation.
+The broader suite passes 121/128 in 177.35 s, with the same seven baseline-
+identical demo contracts; focused verification passes 45/45.
+
+Tier 1 reaches the 1200 s diagnostic cap during ordinary native realization of
+epoch 4. Portfolio construction alone spans 463.72–918.20 s (89 corridors,
+649 alternatives, 25 assignments). Native candidates then expose movable outside
+blockers; e.g. candidate `kicad-net-5:3:0:5` versus blocker
+`kicad-net-9:1:0:6` on F.Cu, including 450000 nm track/arc clearance deficit.
+The ordinary pass has not finished by the cap, so after-pass escalation cannot
+yet act. This is not a normal 7200 s timeout verdict and no final DRC is available.
+Do not claim that V5 preserves V4's 458 s full-search runtime: corrected feedback
+now leads to actual native searches, which remain expensive and unsuccessful in
+this bounded run. Retain the two proven correctness fixes and keep scheduling
+changes experimental. All run histories and blocker telemetry are preserved.
+
+Next frontier hypothesis: the whole ordinary portfolio/native batch delays
+action on exact scope blockers already known during candidate certification.
+First reproduce a multi-window case where an exact outside participant is needed,
+then test bounded early scope escalation inside the batch while retaining final
+fallback search. Separately audit unknown-versus-solved window ranking above.
+Neither hypothesis authorizes accepting incomplete copper or skipping final DRC.
+
+Handoff state: all benchmark subprocesses finished; reports are persisted, no
+tier was promoted, and no clearance or fixture rule changed. Changes remain
+uncommitted: these fixes depend on substantial pre-existing uncommitted router
+infrastructure, so committing isolated hunks would not form a buildable revision
+and committing the whole worktree would mix unrelated experiments. Frozen CLI
+binaries and source/test logs preserve the individual comparisons without
+discarding or staging the user's other work.
+
+## Experiment — in-batch frozen-scope escalation (2026-09-06)
+
+### Failure and hypothesis
+
+V5 reaches Tier 1's fourth physical epoch with 25 windows and then spends the
+rest of a 1200-second diagnostic budget in native realization. Exact frozen-
+copper conflicts are visible before the whole batch returns. The hypothesis was
+that a retained exact outside participant could interrupt unrelated native work,
+expand ownership, and rerun the regional problem earlier.
+
+This follows KiCad PNS's participant/linked-item model rather than treating
+proximity as ownership: [KiCad `SHOVE`](https://docs.kicad.org/doxygen/classPNS_1_1SHOVE.html)
+and its [implementation](https://docs.kicad.org/doxygen/pns__shove_8cpp_source.html)
+operate on explicit collision participants and connected items. Flux retained
+its own continuous/corridor representation and copied no external code.
+
+### Changes and controls
+
+V6 interrupted immediately on a rank-zero native witness and marked untouched
+candidates fail-closed. V7 removed a deterministic parallel batch barrier but
+kept immediate interruption. Both failed Tier 0: earlier physical epochs
+expanded on transient candidate conflicts, selected 14 rather than 10 native
+spline runs, and left 30 non-junction bends without PH realization. Zero opens
+and zero copper reports do not rescue malformed geometry; both variants are
+rejected.
+
+V8 required at least eight windows and waited for a complete per-window
+shortlist reduction. Tier 0 has four windows, so the scheduler remained dormant
+and passed with the exact V5 output SHA256: 75 tracks, 299 arcs, 5 vias, zero
+opens, zero internal violations, and clean KiCad DRC. V8's Tier-1 run observed
+the known net-5/net-9 blocker at ranks 2–4, but ordinary failure reduction chose
+a different diagnostic candidate and no escalation fired. It was stopped at
+980 seconds once that no-op was demonstrated.
+
+V9 preferred an exact expandable witness only among failed candidates in a
+large interruptible batch; any legal candidate still won. All 31 core tests
+passed. The 1200-second Tier-1 run reproduced the same first three exact-oracle
+checkpoints (764, 1297, 2216 violations; zero opens) and the same 25-window,
+226-fragment, 89-corridor, 649-alternative fourth checkpoint. Portfolio
+generation completed at 705.598 seconds. No completed window retained a new
+outside participant as its decisive failure, so scope escalation remained zero.
+
+### Interpretation and decision
+
+The hypothesis is disproven. The net-5/net-9 conflict was real but transient
+candidate evidence, not proof that every candidate in its window required wider
+ownership. Immediate use regressed Tier 0; delayed use never fired on Tier 1.
+Revert the scheduling code rather than retain an inactive heuristic. Preserve
+the frozen binaries and artifacts as negative results.
+
+The run exposes a stronger next mechanism. Windows 2–11 and several later
+windows each started 16 candidates: the full eight-state active tier followed
+immediately by an eight-state fallback tier, while later windows remained
+uncharacterised at timeout. Regional spline tiers are scheduled depth-first per
+window. Next experiment: evaluate the active tier breadth-first across every
+independent window, reduce that complete checkpoint, then promote and evaluate
+fallback tiers only for failed windows, still in parallel. Do not remove any
+push/shove, rip-up, topology, quantization, native-copper, connectivity, or KiCad
+DRC gate; change scheduling order only.
+
+## Experiment — Breadth-first regional spline tiers
+
+### Failure
+
+On Tier-1 `bm_svf`, four independent native workers evaluated each window's active shortlist and
+fallback reserve depth-first. In the V9 1,200-second trace, thirteen early windows reached sixteen
+candidate starts while several later windows received only one to six. Topological connectivity
+was complete, but the batch did not establish a complete first-tier physical checkpoint.
+
+### Hypothesis
+
+Completing the active tier for every independent window before promoting any fallback state would
+remove scheduler starvation without pruning route diversity or bypassing PH, XPBD, native-copper,
+connectivity, or DRC gates.
+
+### Research
+
+OpenROAD TritonRoute documents a staged detailed-routing flow with search-and-repair boundaries.
+Flux applies the same bounded-stage principle to its continuous regional windows while retaining
+its existing exact algorithms: https://openroad.readthedocs.io/en/latest/main/src/drt/README.html
+
+### Change
+
+The parallel regional executor now runs active candidate shortlists with fallback promotion
+disabled, performs the existing stable reduction, then advances failed windows through fallback
+waves behind explicit deterministic barriers. Completed/ineligible windows are not copied into a
+fallback task. Shared PH caches retain their invocation lifetime, and telemetry publishes every
+tier transition and pending-window count.
+
+### Before
+
+Controlled V9 (`--prioritize-frozen-scope-expansion`, 1,200 seconds) reached the same epoch-4
+portfolio at 705.598 seconds. Fallback work began at 788.886 seconds. Thirteen early windows
+consumed all sixteen active-plus-fallback candidates while later windows remained only partially
+characterised. There was no final DRC result.
+
+### After
+
+V10 reproduced the first three checkpoints exactly: 764, 1,297, and 2,216 exact-copper
+violations, all with zero opens. Its identical epoch-4 problem contained 25 windows, 226 owned
+fragments, 89 corridors, and 649 alternatives. The portfolio was ready at 684.785 seconds. Every
+eligible window received its active tier (at most eight candidates) before the barrier fired at
+1,011.128 seconds; only then were fifteen failed windows admitted to fallback. Eleven fallback
+windows were promoted before the same 1,200-second timeout.
+
+Tier 0 passed with 50 paths, 75 tracks, 299 arcs, 5 vias, zero opens, zero internal violations,
+and zero external KiCad DRC violations. Its generated board SHA-256 remained byte-identical to the
+V5/V8 reference (`459bffc8258348a89eafcc275a35decdfc59e8afb1278b0731a58e0fd9df35ac`).
+
+### Interpretation
+
+The hypothesis is strongly supported. The scheduler now obtains complete active-tier evidence
+before reserve work and lower-tier copper is unchanged. Tier 1 still does not finish: epoch-4
+portfolio generation costs about 356 seconds and its active native tier costs about 326 seconds.
+
+### Decision
+
+Keep. The next isolated experiment is an eight-worker regional width on the 24-core benchmark
+host; candidate budgets, stable reduction, tier ordering, and exact gates remain unchanged.
+
+## Experiment — Eight regional spline workers
+
+### Hypothesis
+
+The four-worker breadth-first batch underuses the 24-core host. Doubling only the independent
+window-worker bound should shorten the active tier while preserving stable reduction, candidate
+ordering, and all exact legality gates.
+
+### Before and after
+
+The controlled four-worker V10 active tier took 326.343 seconds after its portfolio became ready.
+V11 reached the same 25-window, 226-fragment, 89-corridor, 649-alternative problem and reproduced
+the preceding exact checkpoints (764, 1,297 and 2,216 violations, all with zero opens). Although
+its absolute barrier occurred 23.5 seconds earlier, its portfolio was ready 24.5 seconds earlier.
+The isolated eight-worker active tier therefore took 327.324 seconds: about one second slower.
+Observed resident memory rose from roughly 1.0 to 1.6 GiB and CPU demand from 119% to 205%.
+
+Tier 0 remained clean and byte-identical with 75 tracks, 299 arcs, 5 vias, zero opens, zero internal
+violations, and zero KiCad DRC violations, but it exposed only three independent windows and did
+not exercise the increased bound.
+
+### Interpretation and decision
+
+The hypothesis is disproven. A single large window, whose candidates remain deliberately
+sequential, determines the barrier. Revert the worker bound to four and retain the V11 binary and
+run artifacts as a negative result.
+
+The candidate trace localizes the next experiment: each slow window-1 candidate takes roughly
+40–45 seconds, while its GPU XPBD solve takes only about 0.3 seconds. Native candidate assessment
+then calls whole-board copper DRC and discards every report that lacks a generated object. Test the
+existing exact dynamic-object DRC API at that call site; it retains generated-to-static and mutual
+generated-copper checks while omitting immutable source-only pairs. Final whole-board DRC and
+external KiCad DRC remain mandatory.
+
+## Experiment — Exact dynamic regional native DRC
+
+### Failure and hypothesis
+
+The Tier-1 active spline tier remained a 326–327 second barrier. Candidate traces appeared to put
+roughly 30 seconds between GPU XPBD completion and native-copper rejection, and regional assessment
+ran canonical whole-board DRC even though it retained only reports involving proposal objects. The
+hypothesis was that the existing selected-object DRC API could perform the exact proposal-facing
+check without revisiting immutable source-only pairs.
+
+TritonRoute uses the analogous ownership boundary: a detailed-routing worker queries intersecting
+shapes and owners, modifies only objects in its standard box, retains fixed surrounding shapes in
+its extended box for cost and DRC, and commits only a clean private result. See the
+[TritonRoute paper](https://vlsicad.ucsd.edu/Publications/Journals/j133.pdf) and the maintained
+[OpenROAD DRT integration](https://github.com/The-OpenROAD-Project/OpenROAD/blob/master/src/drt/README.md).
+Flux keeps its continuous window model and final whole-board/KiCad validation; the comparison
+supports only the selected-proposal versus fixed-context boundary.
+
+### Parity failure and correction
+
+The first V12 implementation failed the Tier-0 control despite reporting zero opens and zero copper
+violations: it selected a different regional trajectory and detailed realization rejected 79
+non-PH bends. A byte-identical candidate differential isolated window 3, rank 6. Canonical DRC
+marked both routes illegal, while dynamic DRC marked the route owning endpoint vias legal.
+
+`check_dynamic_copper_rules` checked selected tracks and arcs against static vias, but its selected-
+via loop omitted the symmetric checks against static tracks and arcs. V13 added those relationships
+with the same distance predicates, clearance rules, codes and object order as canonical DRC. A
+deterministic micro-test now proves equality between the canonical proposal-relevant subset and
+dynamic DRC for selected-track/static-via and selected-via/static-track cases, while an unrelated
+static-static violation remains excluded.
+
+### Results
+
+V13 restored exact Tier-0 behaviour: 50 paths, 75 tracks, 299 arcs, 5 vias, zero opens, zero internal
+violations and zero KiCad DRC violations. The generated board SHA-256 is still
+`459bffc8258348a89eafcc275a35decdfc59e8afb1278b0731a58e0fd9df35ac`. Regional metrics also returned
+to the control values: 5 native windows, 299 pieces, 29 violations and 3 legal windows.
+
+The controlled Tier-1 run reproduced all upstream checkpoints and the same 25-window,
+226-fragment, 89-corridor, 649-alternative fourth epoch. Its portfolio was ready at 698.526 seconds
+and the active-tier barrier fired at 1025.571 seconds, a 327.045-second active duration. This is
+indistinguishable from V10's 326.343 seconds and V11's 327.324 seconds. Across all active and
+fallback work observed before timeout, 209 bounded DRC calls consumed 14.335 seconds total with a
+33.885 ms median. The critical early calls were about 25–36 ms.
+
+### Interpretation and decision
+
+The correctness boundary is supported and the asymmetric-via defect was real, so keep the fixed
+selected-object DRC and its parity tests. The performance hypothesis is disproven: native DRC is
+not the 30–40 second candidate bottleneck. A replay of the first slow window's 20 recorded PH
+Bezier chains likewise completed all native line/arc fits in about 2.4 ms, disproving native fitting
+as the cause. Retain phase-level timing and the diagnostic native-fit replay tool; next isolate PH
+interpolation selection, XPBD preparation, elastic/PNS shoves, trajectory polish, adaptive pair
+repair, post-polish certification and quantization feedback on that exact window.
+
+## Experiment — Phase profile and parallel exact spline neighborhoods
+
+### Failure and measured mechanism
+
+V14 added behavior-free timing around each regional candidate phase. A release-build control
+reproduced the exact first three Tier-1 checkpoints and the same 25-window, 226-fragment,
+89-corridor, 649-alternative fourth epoch. Two window-1 candidates took 40.78 and 42.22 seconds.
+Joint shove consumed 13.28/13.41 seconds, trajectory polish 12.31/12.14 seconds, adaptive pair
+repair 4.18/4.29 seconds, and interpolation selection 6.01/8.19 seconds. XPBD consumed only
+0.43/0.57 seconds; native fit, quantization and exact DRC remained milliseconds.
+
+The three largest repair phases all use `optimize_quintic_ph_trajectory`. Its exact move proposals
+are immutable and already stored by candidate slot, but regional calls left its bounded worker pool
+at one. The experiment therefore changes execution width, not search breadth: four workers evaluate
+the same exact neighborhood, and the caller reduces results in the original deterministic order.
+The four outer window workers bound nested exact work to at most sixteen threads on the 24-core
+benchmark host.
+
+This follows the independent-private-work pattern documented by
+[TritonRoute](https://vlsicad.ucsd.edu/Publications/Journals/j133.pdf) and maintained in
+[OpenROAD DRT](https://github.com/The-OpenROAD-Project/OpenROAD/blob/master/src/drt/README.md),
+without importing their grid representation or relaxing Flux's exact continuous/native/KiCad
+acceptance gates.
+
+### Results
+
+All 32 core units pass. Tier 0 remains byte-identical and fully legal: 75 tracks, 299 arcs, 5 vias,
+zero opens, zero malformed bends, zero internal violations and zero KiCad DRC violations. Global
+runtime fell from 298.82 to 254.10 seconds, detailed runtime from 400.07 to 366.22 seconds, and
+global regional-spline realization from 10.62 to 6.44 seconds.
+
+On Tier 1, window-1 rank 0 fell from 40.78 to 26.99 seconds. Joint shove fell 13.28→6.00 seconds,
+trajectory polish 12.31→5.06 seconds, and adaptive pair repair 4.18→2.54 seconds. The complete
+active-tier duration fell from 327.05 to 205.86 seconds (37.1 percent) after subtracting portfolio
+readiness. All fifteen failed windows completed their fallback wave by 1104.14 seconds, whereas
+V13 promoted only eleven before the 1200-second cap.
+
+The additional time exposed the next stage rather than a legal solution. A conflict-directed
+master built an eight-fragment core but found zero complete states (`stop=2`). Three residual cones
+were then built; the run reached 170/384 residual alternative checks with 168 accepted at timeout.
+No final KiCad DRC result exists, so Tier 1 remains unresolved.
+
+### Decision and next hypothesis
+
+Keep. The hypothesis is strongly supported by exact lower-tier output identity, measured phase
+speedups and greater Tier-1 search coverage. The benchmark frontier has moved downstream: run V15
+beyond the short diagnostic cap to finish residual-cone generation/realization and identify the
+first physical failure after conflict-directed repair.
+
+## Experiment — Forward checking in residual bundle allocation (V16)
+
+### Failure and control
+
+An extended V15 run reached the ordinary active-tier barrier in 205.883 seconds,
+reproducing the shorter control's 205.858 seconds. Ordinary spline work completed
+at 1067.534 seconds. Residual cone 0 then exhausted 100,000 bundle states with no
+access/lane-feasible selection; cone 1 retained 584 selections but had 19–22
+native-illegal routes in each observed active realization. The 1800-second limit
+expired in cone 1's first reserve wave. Cone 2 remained unexamined.
+
+The 178-second cone-0 portfolio duration includes generation, preliminary
+screening, DFS and leaf validation. It cannot be attributed solely to enumeration.
+The original trace also does not distinguish raw DFS leaves from late access or
+lane rejection. This measurement gap is part of the experiment.
+
+### Hypothesis and ranked alternatives
+
+The bounded DFS previously checked via identity and an aggregate channel envelope,
+then applied access and run-layer constraints only to complete choices. Moving
+proved pairwise contradictions into forward checking should reach useful choices
+under the same state bound. This is the smallest change to the existing allocator.
+Maintaining arc consistency is the second candidate; an exact SAT/CP-SAT regional
+backend is third because it requires a larger model and integration. Increasing
+the state limit is not justified by the current evidence.
+
+[Haralick and Elliott](https://www.ijcai.org/Proceedings/79-1/Papers/004.pdf)
+motivate forward checking and fail-first search. Their binary constraint setting
+matches template-pair compatibility, but Flux still needs higher-order lane and
+coupled-net constraints. [Wood and Rutenbar](https://users.ece.cmu.edu/~rutenbar/pdf/rutenbar-satisfpga97.pdf)
+show how simultaneous routing resource constraints can express regional
+feasibility; their fixed FPGA fabric differs from Flux's continuous copper.
+No external implementation was copied.
+
+### Change and bounds
+
+The final bundle search keeps the existing variable and value order, caches exact
+pairwise access support, rejects incompatible adjacent alternative layers, and
+checks remaining domains before descending. Complete leaves check coupled-net
+and access constraints. A bounded access query that exhausts its budget remains
+unknown and cannot prune a branch. Preliminary screening and column generation
+keep their control behavior, isolating the final enumeration experiment.
+
+Pair support has at most quadratic storage in the template count; the existing
+DFS remains exponentially bounded by `max_bundle_search_states`. Each distinct
+pair receives one access query with its own bounded budget, avoiding Experiment
+15's rejected shared-budget prefix behavior. Full access/lane certification still
+runs downstream. This may add overhead on weakly constrained products, which the
+new per-search timer and rejection counters will expose.
+
+Diagnostic telemetry records replayable allocator inputs, raw retained leaf
+counts, early access/layer pruning, domain wipeouts, late access/coupling/packing
+rejections and search duration. The standalone replay compares both policies on
+the same scene without rerunning global routing or generating copper.
+
+### Local verification
+
+A synthetic twelve-fragment binary product contains an early terminal escape
+contradicted by the final fragment. At a 128-state bound the control remains below
+the bad escape; forward checking reaches the good escape. Exhaustive checking
+retains all 2048 feasible combinations. A nominated via collision remains
+supported when relocation is available; exhausting a one-state access query also
+retains the topology. Removing relocation proves and rejects the fixed collision.
+
+The initial full core run passed 32/33 tests. The remaining crossing fixture
+completed with legal copper, but its historical assertion expected one shared
+partial-access budget. The assertion now measures the per-query bound; the new
+micro-test checks the stronger requirement that exhaustion never prunes a viable
+route. The focused crossing test passes after the worker shutdown correction
+below. A further micro-test preserves a completion where an earlier fragment
+supplies another runup representative of the same physical via. Pairwise queries
+relax to all equivalent representatives; complete-leaf checks still certify the
+actual representative. The GPU reservoir now applies the same leaf checks.
+
+### Tier-0 result and Tier-1 verification
+
+V16 passes Tier 0: 50 paths, 75 tracks, 299 arcs, 5 vias, zero opens, zero internal
+copper violations and zero KiCad DRC violations. Copper SHA-256 remains
+`459bffc8258348a89eafcc275a35decdfc59e8afb1278b0731a58e0fd9df35ac`.
+Global/detail durations were 269.751/329.697 seconds with some concurrent unit-test
+work, so this is a correctness comparison rather than isolated timing evidence.
+Tier 1 is running with V16b, which includes the representative guard, GPU-reservoir
+leaf checks and the independent worker-lifetime correction below.
+
+## Correctness repair — Exact spline worker shutdown
+
+The focused crossing test stalled at 71 CPU seconds, with all nine threads waiting
+on futexes and no progress over several minutes. Source audit found two shutdown
+hazards in `BoundedWorkerPool`: the stop predicate changed outside the condition
+variable's mutex, permitting a missed wakeup; and implicit member destruction
+destroyed synchronization state before the worker vector joined its threads.
+The [C++ condition-variable requirements](https://eel.is/c++draft/thread.condition.condvar)
+and [jthread lifetime rules](https://eel.is/c++draft/thread.jthread.cons) establish
+the required wait-state lifetime. Debugger attachment was unavailable, so the
+test's precise blocked stack was not captured.
+
+A regression repeatedly starts and destroys four-worker pools through short
+public spline optimizations. The old implementation passed three batches of 512
+optimizations, then hung in batch four under a three-second process timeout.
+After requesting stop under the mutex, notifying after unlock, and explicitly
+joining before member destruction, all 40 batches (20,480 optimizations) passed
+in 25.321 seconds. The previously stalled crossing regression also passes.
+
+Keep the lifetime fix. It changes no routing or geometric acceptance policy.
+Earlier Tier-1 diagnostic timeouts showed active search; this finding is not
+evidence that those runs were deadlocked. Full core and benchmark verification
+continue alongside the forward-checking experiment; the complete core suite
+passes 34/34. Results are separately recorded
+outcomes in `reports/benchmark_history/2026-09-06-spline-worker-shutdown.json`.
+
+The isolated worker fix and lifecycle regression are committed as `d1a06aa`;
+the other ongoing router changes remain uncommitted. The broad integration run
+passed 118/129 checks. Seven failures reproduce the previously recorded demo
+expectation failures. Two duplicate corpus jobs were deliberately terminated
+because the exclusion expression missed their `flux_cli_` prefix; these are
+cancellations, not routing verdicts. A constrained-export test hit the imposed
+120-second limit and its dependent DRC lacked an output board. That pair needs a
+rerun with its normal budget. Raw results: `build/forward-check-v16b-ctest.xml`.
+
+The constrained-export rerun passes all four setup/export/KiCad-DRC/cleanup
+checks in 85.30 seconds with a 600-second ceiling; the export itself takes
+84.88 seconds. Combining that rerun with the first integration pass gives
+120/127 passing non-core, non-corpus checks, with the same seven previously
+recorded demo expectation failures. The independently run core suite passes
+34/34. Rerun artifact: `build/forward-check-v16b-constrained-rerun.xml`.
+
+### Additional V16 diagnosis — Forced channel occupancy
+
+Replay of ordinary window 0 isolates a two-fragment aggregate capacity conflict:
+channel 61 offers 1.092 mm, but two singleton-domain occupants require 1.100 mm.
+Both policies stop at 20 states without exhaustion. The machine-readable diagnosis
+records exact fragment identities and coordinates in
+`reports/diagnoses/2026-09-06-tier1-forced-channel-pair.json`. This is an infeasible
+recorded discrete portfolio, not proof that physical copper cannot fit. These
+fragments do not occupy parallel full-length strips.
+
+For a follow-up, rank forced-occupant-directed column generation first, a
+longitudinal cross-section occupancy micro-test second, and upstream complete-run
+rerouting third. [TritonRoute's guide preprocessing](https://vlsicad.ucsd.edu/Publications/Conferences/363/c363.pdf)
+splits, merges and bridges guides before panel-level constrained routing. Its
+preferred-direction panels differ from Flux's continuous corridors; the useful
+idea is revisiting the representation before committing detailed geometry.
+[Current OpenROAD track assignment](https://raw.githubusercontent.com/The-OpenROAD-Project/OpenROAD/master/src/drt/src/ta/FlexTA.cpp)
+also separates initial assignment from search/repair. No implementation was
+copied, and no new capacity heuristic has been activated while V16 is measured.
+
+## Experiment — Forward propagation of existing resource constraints (V17)
+
+### Failure and hypothesis
+
+V16b residual cone 0 still reaches 100,000 states without a choice, but its
+portfolio duration falls from 178.032 to 84.850 seconds. Exact replay explains the
+mechanism: the control emits 87,447 unchecked leaves; access forward checking
+rejects five impossible via pairs and then repeatedly hits the capacity gate
+(21,422 capacity rejections). Bundle enumeration itself takes only 0.315 seconds
+in the instrumented run. Much of the old cost was downstream screening.
+
+Hypothesis: future domains are checked for access support, but not for the same
+aggregate capacity and nominated-via identity constraints already enforced on a
+selected fragment. Checking those existing constraints before descending should
+escape the capacity-dead prefix without increasing the state budget or changing
+the physical model. This refines the same forward-checking family researched in
+V16; it adds no new routing algorithm or relaxed rule.
+
+### Minimal change and local result
+
+Precompute each template's resource use. During forward checking, reject a future
+option if it cannot join the current nominated via identities or channel envelope.
+Counters distinguish capacity and identity support failures. The extra checks
+are bounded by the existing DFS state/domain sizes; storage is linear in template
+resource memberships. They remain opt-in while the benchmark variant is tested.
+
+On exactly the recorded cone-0 scene, access-only search retains zero choices;
+resource propagation retains 48,550 access/coupling/aggregate-capacity-screened
+choices under the same 100,000-state cap. No access query exhausts its bound.
+Replay took 22.902 seconds under concurrent benchmark load. This is not a lane-
+packing or copper result. A twelve-fragment capacity ordering trap is escaped
+under 128 states, and all 2048 feasible combinations survive exhaustive checking.
+An analogous nominated-via-identity ordering trap also passes, including exhaustive
+preservation of all 2048 feasible choices.
+
+### Verification plan
+
+Freeze a binary with resource propagation enabled, then restore the working-tree
+default to disabled until Tier-0, full-core and Tier-1 results justify retention.
+Use unchanged source boards, clearances and 100,000-state bounds. Success means
+the newly reachable choices survive downstream packing and improve physical
+repair; producing more combinatorial choices alone does not promote a tier.
+
+The enabled V17 binary (`205a54a904c6cb98d61239fda1d613710f749ccf3a365787aa1fb49c7af80445`)
+passes all 34 core tests. Its Tier-0 global stage finishes in 261.619 seconds;
+detailed routing and final KiCad validation are still pending. Both the source
+default and the normal Release CLI have been restored to resource propagation
+disabled; only the frozen V17 benchmark binaries enable it.
+
+Tier 0 passes with V17: 50 paths, 75 tracks, 299 arcs, 5 vias, zero opens, zero
+internal copper/validation errors and zero KiCad DRC violations. Global/detail
+durations are 261.619/356.473 seconds; some work overlapped regression checks and
+compilation, so this is not isolated timing evidence. The copper hash remains
+`459bffc8258348a89eafcc275a35decdfc59e8afb1278b0731a58e0fd9df35ac`.
+Tier 1 is now running with the same 1800-second planning limit as the V15/V16
+controls. No tier has been promoted from discrete replay results.
+
+### Independent oracle at 0.25 mm track width
+
+The earlier reference used narrower 0.20 mm tracks. A new KiCadRoutingTools run
+uses 0.25 mm tracks, 0.20 mm clearance, 0.70 mm vias and 0.30 mm drills with
+strict sizes, escalation off and DRC-setting repair disabled. It connects all
+78 pad pairs / 25 nets with 601 tracks and 68 vias in 8.61 seconds wall time,
+307,984 KiB peak RSS. Output dimensions were independently inspected. KiCad
+9.0.8 reports zero errors and zero unconnected items with a byte-identical
+original project copied beside the output. This is an existence oracle, not
+a Flux pass or an implementation of the curved-trace objective.
+
+For the forced channel-61 pair, the oracle uses a different layer/escape topology:
+net 25 approaches from the west after a nearby layer transition, while net 26
+escapes southeast and remains on F.Cu. This supports regenerating meaningful
+terminal/corridor/layer choices rather than relaxing the recorded aggregate
+capacity gate. No oracle tracks or coordinates were integrated into Flux.
+Full evidence: `reports/diagnoses/2026-09-06-tier1-025mm-topology-oracle.md` and
+`reports/benchmark_history/2026-09-06-krt-bm-svf-025mm-oracle.json`.
+
+## Correctness audit — Missing project rules invalidated Tier-0 qualification
+
+### Failure and evidence
+
+The oracle's explicit original-project validation exposed a harness asymmetry:
+Flux's corpus checked the temporary final board without copying its project.
+KiCad therefore used defaults. The unchanged Tier-0 copper hash previously marked
+green has **208 errors under its original project: 199 track-width and 9
+hole-to-hole violations, zero opens**. The project requires 0.70 mm tracks and
+0.25 mm drill spacing; Flux routed with 0.25 mm tracks and no imported drill floor.
+The patched harness independently reproduces the rejection with KiCad 9.0.8.
+
+All earlier Tier-0 zero-DRC claims for copper hash
+`459bffc8258348a89eafcc275a35decdfc59e8afb1278b0731a58e0fd9df35ac`
+are corrected: they establish default-rule legality only, not benchmark acceptance
+under the source project. This is a validation defect, not a routing regression
+caused by forward checking. The manifest's mandatory Tier-0 gate remains active
+and now fails honestly; work returns to Tier 0 before further tier promotion.
+
+### Research, ranked fix and verification
+
+[KiCad's PCB documentation](https://docs.kicad.org/master/en/pcbnew/pcbnew.html)
+distinguishes board constraints from netclass defaults and stores custom rules
+in a sibling `.kicad_dru`. Preserve all relevant context, not just the PCB file.
+First fix external validation, then import the already-supported minimum rules
+before routing; audit netclass/custom-rule completeness separately.
+
+The harness now copies and hashes the unchanged project and optional custom rules
+under the candidate basename, rejects missing/mismatched context, preserves rules
+beside accepted boards and keeps DRC-rejected boards as diagnostic artifacts.
+Six focused Python tests pass. The exact existing Tier-0 artifact is rejected with
+the expected 208 errors through the repaired gate. No rule or geometry was relaxed.
+Machine-readable diagnosis: `reports/diagnoses/2026-09-06-tier0-project-rule-context.json`.
+Next experiment: feed the project's minimum fabrication rules into canonical file
+import, preserving nominal routing policy and using existing rule resolution/DRC.
+
+The isolated validation fix is committed as `601228a`.
+
+## Experiment V18 — Project minimum rules before topology selection
+
+File-based import now loads the sibling project's eight minimum fabrication
+constraints atomically, with bounded JSON input and explicit rule provenance.
+It preserves nominal routing defaults, so net-specific policy is not silently
+rewritten. Missing/invalid fields in a present project fail closed; standalone
+boards explicitly report that no project minima were loaded. String-only import
+remains independent of the filesystem. This is not full netclass/custom-rule
+resolution. Regional diagnostic schema 2 also binds resolved rules so pre-audit
+traces cannot silently be replayed under different dimensions.
+
+The focused import/export/invalid-input regression passes. All 35 core tests pass
+in 97.52 seconds, all five corpus boards pass source preflight, and six context
+tests, four summary tests and three preflight/bridge integration checks pass.
+
+The corrected Tier-0 default fails before search: its 0.50 mm orthogonal lattice
+cannot guarantee spacing for 0.70 mm tracks plus 0.20 mm clearance. This is the
+next upstream defect, not evidence that the board cannot route. A controlled
+0.90 mm pitch run is in progress with unchanged rules.
+
+An independent strict 0.70 mm KiCadRoutingTools run connects all 50 pad pairs /
+20 nets with 148 straight tracks and one via. KiCad 9.0.8 reports zero errors and
+zero opens under a byte-identical original project. The reference tool's own
+modified output project was deliberately not used. This establishes feasibility
+at the actual project constraints, not a Flux pass or a flowing-curve solution.
+Structured evidence: `2026-09-06-project-minimum-import.json` and
+`2026-09-06-krt-pt2399-070mm-oracle.json` in `reports/benchmark_history/`.
+
+### V17 final disposition after the running control finished
+
+The 1800-second historical Tier-1 run timed out. Resource propagation let residual
+cone 0 retain 584 access/lane states from 48,550 screened choices, but all eight
+active native scenes remained illegal (20/24, 24/29, 24/27, 22/26, 23/27, 22/26,
+24/28, 24/28 routes). Twenty-one native evaluations completed before timeout;
+none had fewer than 20 illegal routes, and neither later cone was reached.
+The whole cone-0 portfolio cost 159.841 seconds, including 23.292 seconds of DFS.
+
+The discrete-search hypothesis is supported, but the physical improvement
+hypothesis is not. Leave resource propagation **disabled**; it moved the dead end
+downstream and consumed time that previously reached cone 1. Record this rather
+than promoting a combinatorial success. This run also predates project-minimum
+import and cannot qualify under corrected rules. Future frontier work is Tier 0.
+
+## Experiment V19 — Separate candidate pitch from occupied copper spacing
+
+V18's legal-pitch control (0.90 mm) returns all 50 paths, zero missing nets and
+zero quantized opens in 322.248 seconds, but retains 26 global overflow, 25
+clearance-shadow conflicts and 50 exact quantized-copper violations. One of three
+regional assignments completes. No final copper is accepted. The coarse samples
+solve configuration validity, not physical allocation.
+
+The [reference configuration](https://github.com/drandyhaas/KiCadRoutingTools/blob/main/docs/configuration.md)
+and pinned local source use 0.10 mm samples independently of 0.70 mm routed width.
+The [sampling-based motion-planning framework](https://msl.cs.uiuc.edu/~lavalle/planning/node219.html)
+likewise separates graph samples from collision-free connections. The useful
+concept is configuration-space sampling, not copying the reference implementation
+or its output-project rewrites.
+
+Rank a bounded dense-candidate experiment first, automatic coarsening of default
+pitch second, and terminal/navmesh alternative generation third. V19 permits a
+sub-envelope planar pitch only when sampled copper-clearance conflicts are
+reserved and enforced, never when disabled or advisory. This changes a search
+domain gate, not the required copper spacing. Retain exact physical negotiation,
+quantized-copper checks and original-project final DRC. Keep the option disabled
+while testing. Full diagnosis: `reports/diagnoses/2026-09-06-tier0-lattice-vs-copper.json`.
+
+V19 passes all 36 core tests (77.33 seconds), including a 0.70 mm route on a
+0.50 mm candidate grid, rejection without enforced shadows, and exact rejection
+of overlapping wide routes on different sampled lines. The stable non-core,
+non-corpus regression run passes 121/128 checks with the same seven known demo
+expectation failures. A first run overlapped CLI relinking and is superseded by
+the stable rerun; its 30 failed process launches are not code regression evidence.
+
+Tier 0 does not improve: 50 paths and zero opens remain, but overflow rises from
+26 to 40, shadow conflicts from 25 to 40, and coalesced quantized diagnoses from
+9 to 12. Raw DRC counts rise from 50 to 149 with more track primitives (586 to
+1083), so raw count alone is not a physical severity comparison. Runtime falls
+from 322.248 to 228.967 seconds under non-isolated load. No final copper passes.
+Leave dense candidates **disabled**, and preserve the experiment and tests.
+
+## Experiment V20 — Give measured conflicts another upstream epoch
+
+The corrected-rule Tier-0 control already finds all connections. Its remaining
+defects include unlike-net crossing/overlapping tracks (seven coalesced diagnoses)
+and a via/track plus drill/copper conflict (two diagnoses), chiefly involving GND
+and its crossing neighbours. The mandatory Tier-0 manifest supplies only one
+global iteration, leaving no later feedback epoch for these physical witnesses.
+
+Rank a bounded iteration/feedback budget increase first, expanded joint scope
+second, and new terminal/corridor alternatives third. This reuses existing
+negotiated congestion and upstream physical feedback; it adds no new algorithm.
+Test four total iterations with three feedback retries at the better 0.90 mm
+sampling pitch, keeping physical shadows enforced and all project rules fixed.
+The manifest is unchanged during the experiment. A successful result still needs
+final original-project KiCad DRC and an explicit, documented budget decision.
+
+V20 timed out at 600 seconds during epoch 4. Epochs 2 and 3 reduce the raw copper
+count from 50 to 2 only by leaving eight connections open. They repeatedly rip
+up net 11 for net 8 and roll the unsuccessful retry back. This is not improvement.
+
+## Experiment V21 — Fresh scope priority at the same four-epoch budget
+
+The existing scope-priority option finishes all four epochs in 357.412 seconds,
+evaluating six regional portfolios instead of repeatedly deepening each retained
+checkpoint in intermediate epochs. All physical dimensions and the binary are
+identical to V20. The final selected connected checkpoint remains 50 paths,
+26 overflow, 25 shadows and 50 quantized DRC errors (46 track-clearance,
+2 track-via-clearance, 2 hole-clearance), with no opens. Fresh later checkpoints
+still have eight opens and two errors. No final copper or KiCad DRC pass exists.
+Keep this as an experimental scheduling control, not a tier promotion.
+
+## Experiment V22 — More inner negotiation before adding heuristics
+
+Control: sixteen total PathFinder iterations, three feedback retries, scope
+priority and enforced shadows at 0.90 mm; original project rules unchanged.
+This checks whether resetting local negotiation after one iteration hides useful
+ordering/rip-up diversification. The frozen pre-fix binary is used throughout.
+
+## Experiment V23 — Found paths lost by terminal membership lookup
+
+V21's first three attempted nets fail after only 4–10 expansions, before any
+other net routes. Crucially, the recorded reason is `unmatched_multisource_terminal`,
+not frontier exhaustion: search returned a path and terminal attribution lost it.
+`filter_pin_access` retains candidates by radius/manhattan preference; the consumer
+uses binary search on that unsorted numeric node sequence.
+
+The [C++ binary-search precondition](https://eel.is/c++draft/alg.binary.search)
+requires partitioning by the comparison. Ordinary
+[find](https://eel.is/c++draft/alg.find) imposes no ordering requirement and is
+linear in the bounded access domain (16 by default). Rank direct membership first,
+numeric re-sorting second (changes preference/tie order), an auxiliary index third
+(unnecessary state). The smallest correction preserves the geometric preference
+order and fixes only membership. It changes no physical acceptance criterion.
+
+Diagnosis: `reports/diagnoses/2026-09-06-tier0-terminal-membership.json`.
+Add a deterministic adaptive-ring multi-source micro-test and explicitly inspect
+hard-capacity pass failures so a successful static seed cannot hide this defect.
+
+V22 completed in 361.519 seconds and reproduced the same selected 50 violations,
+zero opens, 26 overflow and eight unmatched-terminal failures in the constructive
+pass. Additional nominal budget did not repair attribution. Do not promote the
+larger budget. V23's short offset two-pad micro-board, with 0.70 mm traces and
+0.90 mm samples, fails before the fix even though its static seed succeeds;
+inspecting the constructive pass catches the hidden failure.
+
+V23 result: all 37 core tests pass. Global allocation completes in 62.437 seconds
+with all 50 paths, no opens, no overflow and no shadow conflicts. Detailed routing
+takes 127.457 seconds and produces 95 tracks, 118 arcs and four vias with zero
+internal copper violations and zero opens. It correctly refuses completion because
+two chains retain eleven unrounded corners: net 17 on F.Cu (five) and net 4 on
+B.Cu (six). Of 68 parallel spline tasks, 66 commit and none fails merge checks.
+No original-project KiCad DRC has yet accepted final copper. Keep the focused
+terminal fix (`263aa64`); the tier remains unqualified under corrected rules.
+
+## Experiment V24 — Immutable source holes during diagnostic quantization
+
+V23's two remaining oracle errors are distinct from its curve failure. Selected
+paths reuse Q1 pad 2 at (20.04, 51.5) mm and U1 pad 2 at (35.54, 57) mm. The
+0.10 mm diagnostic grid shifts both interior transitions by 40 micrometres,
+misses exact source-hole reuse, and emits duplicate vias. Canonical pad drill
+diameters are 0.8 and 1.1 mm, independently verified with KiCad's board API.
+
+[KiCad's pad model](https://docs.kicad.org/master/en/pcbnew/pcbnew.html)
+distinguishes plated multilayer holes from new vias and non-plated holes. Flux
+already models the necessary net/layer/position identity; preserve exact matching
+source features as immutable anchors before rounding. Reject proximity-based
+inference, wrong-net ownership, unplated holes and incomplete layer coverage.
+
+The new interior-anchor regression fails before the change and passes afterward
+for existing vias and plated pads, with both endpoint-preservation settings.
+Negative ownership/plating/layer cases remain rejected. This fixes diagnostic
+feedback; it does not exempt generated copper from hole or clearance DRC.
+
+V24 result: all 37 core tests pass. The real-board oracle now reports zero errors
+and zero opens, without any fabricated source-pad vias. The detailed candidate
+still has eleven unfinished corners, but its preserved strict export passes
+KiCad 9.0.8 under the byte-identical original project: zero errors and zero opens.
+This is a physical milestone, **not tier promotion**: the benchmark additionally
+requires completed flowing geometry. The harness now preserves rejected detailed
+copper and its explicitly non-qualifying diagnostic DRC separately from final
+artifacts; a successful diagnostic check cannot change qualification.
+
+The V23 broad regression run passed 119/128 checks: seven prior demo expectation
+failures plus one constrained-placement export stopped at 645 seconds and its
+dependent DRC (missing output). The export was still consuming CPU, so this is a
+bounded runtime failure, not a proven deadlock. A 300-second isolated rerun is in
+progress; do not silently count the interrupted check as passing.
+
+## Experiment V25 — Isolate the two remaining curve chains
+
+Detailed replay freezes the recorded final neighbouring copper, verifies source
+revision and exact track identity, and removes only the selected chain. Net 4's
+six corners become legal curved copper in this context; net 17's five do not.
+Thus a bounded retry against committed surrounding curves is a plausible recovery
+for the first chain. It cannot by itself explain the second failure.
+
+Net 17 tests 24 seeds, none exact-legal. Optimization reduces continuous-envelope
+violations from 377 to 140 with zero final shape or bend-radius violations and no
+certificate budget exhaustion. Rank stale-context retry (net 4), incomplete guard
+coverage near the board edge (net 17), conservative hull-union certification, and
+insufficient seed geometry as separate hypotheses. Instrument corridor versus
+actual clearance rejections before modifying physical acceptance or adding retries.
+
+The net-17 diagnostic records seven sampled-clearance violations and 140 corridor
+violations, with zero continuous-clearance violations. Reapplying the existing
+exact source-polyline guard augmentation when no terminal stub changed leaves all
+these metrics identical. Revert this experimental condition; additional guard
+geometry did not earn a default change. The relevant research directions are
+[CHOMP's collision/smoothness refinement](https://publications.ri.cmu.edu/storage/publications/pub_files/2009/5/icra09-chomp.pdf)
+and [IRIS's certified convex free-space regions](https://groups.csail.mit.edu/robotics-center/public_papers/Deits14.pdf),
+but neither is a reason to bypass exact clearance or rewrite the spline system.
+
+Next isolated experiment: a bounded second realization attempt only after other
+chains actually commit. Use a two-net nested-corner micro-board to distinguish
+stale surrounding straight copper from genuine insufficient bend room.
+
+## Experiment V26 — Bounded committed-context spline retry
+
+The synthetic nested-corner board reproduces the mechanism without benchmark net
+names or coordinates in routing policy. At a fixed 1 mm minimum bend radius, one
+parallel transaction commits and the other retains a sharp corner. With one
+bounded retry against committed copper, the remaining chain also completes with
+zero opens and exact copper DRC clean. The single-pass negative control is part
+of the regression, so a successful seed cannot hide the mechanism.
+
+Implement at most two board-level realization batches. Collect only currently
+unrounded chains, retain immutable scene snapshots per batch and the same exact
+transaction/DRC/connectivity gates, and stop immediately if a batch commits nothing.
+Expose retry task/commit counts and context-pass attribution in failure diagnostics.
+This is a local context refresh, not another global routing algorithm or relaxed
+spline criterion. Run the real Tier-0 control unchanged apart from this mechanism.
+
+V26 result: the retry attempts two chains and commits one. Unfinished bends fall
+from eleven to five; net 4 now completes, leaving only net 17 on F.Cu. Global
+allocation takes 63.677 seconds with 50 paths, zero overflow and zero oracle errors.
+Detailed realization takes 140.810 seconds (V24: 121.396), with 88 tracks, 136 arcs,
+four vias, zero internal copper errors and zero opens. The exact diagnostic export
+also passes original-project KiCad DRC with zero errors and zero opens. Keep the
+bounded retry: its synthetic negative control and measured real-board recovery
+support the hypothesis. It does not solve the remaining chain or qualify the tier.
+
+Verification: 38/38 core tests, 7/7 rule-context tests, 4/4 summary tests. The other
+non-corpus regression run passes 119/126, retaining the seven recorded demo
+expectation failures. Its constrained-placement export and dependent DRC were
+explicitly excluded after the separate 300-second export timeout. A frozen V20
+control completes that same export in 66.462 seconds; the frozen V24 diagnostic
+times out at 180.400 seconds while continuing routing work. This is an unresolved
+performance regression, not a successful check or a proven deadlock. Details are
+in `reports/benchmark_history/2026-09-06-constrained-placement-runtime.json`.
+
+Do not report pcbnew's naive total route length: its arc GetLength call emits an
+integer-overflow assertion on both V24 and V26. Preserve the exact PCB hashes and
+leave this metric unavailable until independently calculated and checked.
+
+Independent length check: evaluate the final telemetry's exact three-point native
+arcs with a translated circumcircle/angle formula and cross-check each arc using
+the two constituent chord/asin lengths (agreement within one nanometre). V24 is
+415.751 mm; V26 is 410.745 mm. All sweeps are below 58.340 degrees, but one nearly
+straight fitted arc has a 6520.115 mm radius. The pcbnew GetLength sum undercounts
+and is discarded; this also identifies a native-fit robustness issue to inspect.
+
+## Experiment V27 — Test one-sided source-corridor room
+
+The remaining net-17 chain runs 50 micrometres from the offset left board edge.
+Its ordinary NavMesh search succeeds (zero certificate fallbacks), but no seed
+passes exact certification. The existing source-corridor augmentation shrinks all
+four rectangle sides together when any one side is blocked. Hypothesis: independent
+exact-certified inward expansion can recover useful bend room without moving a
+boundary or changing clearance. First reproduce on a two-terminal edge-adjacent
+micro-board with a fixed one-millimetre bend radius and forced coarse-search
+fallback. Only then test certified augmentation on the real recorded chain.
+
+Rank bounded axis-aligned inflation first, a full convex regional inflation solver
+second, and extra trajectory iterations third. The general rationale is the
+collision-free convex-region approach described by
+[Deits and Tedrake](https://groups.csail.mit.edu/robotics-center/public_papers/Deits14.pdf).
+This experiment would reuse Flux's exact rectangle boundary/diagonal and enclosed
+hole tests; it is not an IRIS implementation or a port of third-party code.
+Success requires recovered exact-legal curves, unchanged original-project DRC,
+and lower-tier regression coverage. Otherwise revert the experiment.
+
+The synthetic negative control fails with two unfinished bends and 306 continuous
+corridor violations, despite zero sampled-clearance failures. Independent bounded
+side inflation recovers both bends under the same radius, exact copper DRC and
+connectivity checks. Test all four X/Y reflections before retention.
+
+The real net-17 replay does **not** improve, including an isolated control that
+applies the expanded source-corridor augmentation to every successful offset
+NavMesh route. It retains exactly 140 corridor defects and seven sampled-clearance
+failures. Revert that unconditional augmentation; this experiment supports a
+fallback-corridor correctness fix but does not explain the frontier chain. Keep
+the two conclusions separate and rerun the full board before retention.
+
+V27 verification: all four reflected synthetic cases pass, as do all 39 core
+tests, 7 rule-context tests and 4 summary tests. The other regression set remains
+119/126 with the same seven demo expectation failures (32.31 seconds); the
+separately measured constrained-placement timeout is still unresolved, not green.
+The full Tier-0 control takes 59.532 seconds globally and 134.280 seconds in detail.
+Its strict diagnostic export is **byte-identical to V26** (`b892957d…`): 88 tracks,
+136 arcs, four vias, five unfinished bends, zero original-project KiCad errors and
+zero opens. Keep the bounded fallback correction and its mirrored tests, but do
+not attribute timing noise or frontier progress to it. Tier 0 remains unqualified,
+and later tiers remain locked behind it. Raw and concise V27 results are preserved
+under `reports/benchmark_history/2026-09-06-one-sided-corridor*.json`.
+
+Next: determine why all real-chain spline seeds leave represented free space,
+including whether whole-route source-corridor augmentation declines because one
+source span has no positive-width cell. The synthetic failure was real but not
+the frontier mechanism; further symmetric width tuning is not justified. Also
+retain the separate open placement candidate-evaluation performance regression.
+
+## Experiment V28 — Preserve straight-run tangents in rounded PH seeds
+
+The unchanged V27 binary reproduces the five-corner net-17 failure. New sampled
+diagnostics locate a physical, not merely certificate, defect: at a 0.25 mm corner
+guard the long vertical PH span bows from x=15.900 mm to x=15.634 mm, while the
+offset edge permits only 0.050 mm spare clearance. The worst point is midway along
+the nominally straight run, not at a corner. Increasing the guard worsens the bow.
+All seven source polyline nodes are inside the offset free space.
+
+Hypothesis: automatic bisector tangents at trimmed corner shoulders contaminate
+the intervening straight spans. Rank a bounded run-aligned Hermite seed first,
+joint derivative/position optimization second, and upstream rerouting third.
+PH path-planning literature explicitly constructs local corner transitions from
+endpoint/tangent boundary data; see
+[Farouki et al., Path planning with Pythagorean-hodograph curves](https://escholarship.org/content/qt1p74v16x/qt1p74v16x_noSplash_b96f4af98e043267182c1ebac949ed85.pdf).
+Use Flux's existing quintic Hermite solver, not copied implementation code.
+
+Minimum experiment: retain incident run directions as explicit shoulder tangent
+constraints, preserving them across rebuilds and adaptive control insertion. Add
+this seed family only after the existing portfolio fails exact certification.
+Keep its tangent magnitudes and node positions optimizable and keep every final
+physical/shape/topology gate. A mirrored U-shaped micro-route must reproduce the
+old outward bow and demonstrate no outward bow with the new seed, including after
+rebuild and control insertion. A successful seed is not yet a tier pass.
+
+The mirrored micro-test passes: the existing seed bows more than 50 micrometres
+outward while the aligned seed retains the exact straight-run boundary before
+and after rebuild, exact subdivision and another rebuild. Malformed direction
+metadata fails closed. All 40 core tests pass. The other regression set remains
+119/126 (34.09 seconds), with the seven previously recorded expectation failures
+and the separately unresolved constrained-placement timeout not counted as green.
+
+The real frozen-context chain replay now completes: four of eight aligned seeds
+pass exact certification, zero initial/final continuous defects, zero shape/radius
+defects, 16 fitted arcs, zero opens and exact copper DRC clean. The original 24
+seeds all fail. New sampled probes show the aligned source seeds no longer bow
+outside, though some still fail curvature/shape checks; the selected legal seed
+must pass the full certificate. Full-board and normal-budget controls are pending.
+
+V28 full-board result: Tier 0 passes original-project KiCad DRC with all 50 paths,
+82 tracks, 152 arcs, four vias, zero opens and zero unfinished bends. Detailed
+runtime is 130.693 seconds versus the fresh baseline's 133.192 seconds; timing
+differences under shared load are not a speedup claim. A second run using the
+normal corpus budget also passes with only the required 0.90 mm pitch override.
+Keep the run-aligned seed family. A frozen copy of the verified binary is used
+for the newly reopened Tier-1 probe.
+
+## Experiment V29 — Derive the CLI's unspecified pitch from source rules
+
+The geometry fix passes both controlled and normal-budget Tier-0 runs. The
+unmodified CLI sampling default is still 0.50 mm, incompatible with this board's
+original 0.70 mm minimum trace width plus 0.20 mm clearance. An explicit 0.90 mm
+control works, so this is a default-configuration failure, not routing congestion.
+Do not encode the benchmark identity or relax spacing in the manifest.
+
+Factor the existing global validator's required-pitch calculation into a shared
+read-only helper, preserving selected-net/open-net scope, pair gaps and the
+diagonal spacing factor. The CLI uses that same floor only when the user omitted
+the pitch; explicit pitches and the opt-in dense-grid experiment keep their
+existing semantics and validation. Retain the reported configured pitch so the
+selection is inspectable. Test the helper independently, then run the Tier-0
+corpus command with no configuration overrides and the existing regression set.
+
+V29 result: the no-overrides corpus invocation passes original-project KiCad DRC,
+all 50 connections, zero opens and zero unfinished bends. The selected pitch is
+0.90 mm. Global/detail runtimes are 73.308/131.839 seconds; final copper is
+byte-identical to both V28 successful controls (SHA-256 `2e0197607f1b…`), with
+82 tracks, 152 arcs and four vias. All 41 core tests pass. The other regression
+set remains 119/126 (42.19 seconds), with the same seven known demo expectations
+and the separately unresolved constrained-placement timeout excluded explicitly.
+Keep the rule-derived default. No manifest routing parameters or source rules
+changed. Focused PH kernel commit: `7cd59fc`; detailed integration and other
+pre-existing experiments remain in the working tree.
+
+## Experiment V30 — Match physical feedback to actual copper precision
+
+The reopened Tier-1 `bm_svf` probe times out at 600 seconds during regional repair.
+At 38.619 seconds it selects 78 connection paths covering 25 nets, but retains
+17 sampled overflows, three corridor overflows and 4.551 mm physical overflow.
+The earlier hard-capacity iteration had zero overflow but six unrouted nets;
+these are different checkpoints, not a physically complete solution.
+
+A matched replay of snapshot 587 materializes only the 78 active selected paths,
+excluding 388 retained portfolio alternatives. Original project hash is unchanged.
+The default 100 micrometre probe reports 930 raw copper violations: 774 track,
+65 edge, 10 pad, 51 track/via, 28 hole and two via clearances. At both 10 micrometres
+and exact integer nanometres there are 853: 752 track, 71 track/via, 28 hole and
+two via clearances. All versions have zero opens, 22 new vias, no malformed paths.
+The 64 conflict events in the original telemetry are an emission cap, not the
+total physical conflict count (261 coalesced diagnoses at the original pitch).
+
+Failure mechanism: feedback snaps already legal static-obstacle paths onto an
+unrelated coarse lattice, creating pad/edge conflicts and hiding some via/track
+conflicts before expensive regional solving. This does not explain away the
+853 real remaining collisions. Final PH copper already rounds to integer
+nanometres, matching [KiCad's documented internal precision](https://docs.kicad.org/9.0/en/pcbnew/pcbnew.html#capabilities).
+[OpenROAD's detailed-routing separation](https://openroad.readthedocs.io/en/latest/main/src/drt/README.html)
+also reinforces distinguishing assignment from exact DRC/search-and-repair;
+no external algorithm code is copied.
+
+Ranked candidates: (1) remove artificial coarse rounding from default physical
+feedback, retaining explicit coarse probes for controlled experiments;
+(2) conflict-directed packing/layer alternatives for the remaining physical
+interaction graph; (3) expanded regional joint search, which currently reaches
+an 11-net scope with zero complete discrete states after 557 seconds.
+First hypothesis: matching the probe to actual copper precision removes false
+history and uncovers hidden collisions without changing any clearance rule.
+Micro-tests must show both false-positive and false-negative coarse rounding,
+including mirrored geometry; then rerun Tier 0 and a matched bounded Tier 1.
+Full tier completion remains the acceptance authority, not the replay count.
+
+V30 result: mirrored false-positive/false-negative edge controls pass, as do
+42/42 core tests, 7/7 project-rule-context tests and 4/4 summary tests. Existing
+via/anchor regressions explicitly retain a 100 micrometre control so the new
+default cannot bypass their snapping coverage. Other regressions remain 119/126
+(38.78 seconds), with the same seven known failures and the previously measured
+constrained-placement export timeout still separately unresolved. The CLI reports
+the physical probe's configured pitch.
+
+Tier 0 passes again with no overrides: global/detail 62.575/136.415 seconds,
+50 connections, 82 tracks, 152 arcs, four vias, zero unfinished bends and clean
+original-project KiCad DRC. Final copper remains byte-identical (`2e0197607f1b…`).
+Tier 1 still times out at 600 seconds, now with correctly attributed physical
+witnesses. Keep native precision as a feedback-correctness fix; do not count the
+77-report difference as a routing improvement or a tier resolution.
+
+A bounded whole-net portfolio replay tests all 25 recorded seed-slot combinations
+for the largest exact pair (nets 1 and 7). Both selected paths share the segment
+(48.290,61.440) to (47.640,62.090) mm on F.Cu. The selected net-1 connection 9 is
+the perimeter fallback; net-7 connection 0 matches shortest/perimeter. All 25
+combinations preserve zero opens, but none eliminates their mutual conflicts.
+Best pair count falls from 21 to three coalesced diagnoses; best whole-board raw
+count falls only from 853 to 833 with two additional vias. No alternative is
+accepted or exported. These portfolios do not contain a clean answer for even
+this pair in the frozen surrounding allocation. Results are preserved in
+`reports/benchmark_history/2026-09-07-native-probe-portfolio-replay.json`.
+
+### Next frontier mechanism — Longitudinal channel overcount
+
+The native-precision first ordinary window has 53 fragments across eleven nets.
+It produces no complete state after only 13 DFS states (no budget exhaustion).
+Exact replay with access checking disabled, enabled, and resource-forward checking
+all reproduces the capacity rejection. Channel 0 has maximum recorded width
+1.940 mm, yet 15 forced fragments spanning different physical regions are charged
+as 6.950 mm of simultaneous lanes. Four mutually separated source spans already
+form a minimal aggregate contradiction: 2.000 mm demand versus 1.940 mm, although
+their minimum pairwise centreline distance is 0.615 mm, above the 0.450 mm
+required spacing. These four spans are not a board unsatisfiability core.
+
+This strengthens the previously unresolved V16 longitudinal-occupancy hypothesis,
+without rediscovering it as a new tuning idea. The downstream lane solver repeats
+the same all-occupants-in-one-section assumption, so disabling just the DFS
+capacity gate would only move the failure. The next minimum experiment must
+represent local cross-section occupancy consistently in both stages, start with
+a disjoint longitudinal micro-case and retain exact topology/copper certification.
+Compare guide decomposition in
+[Kahng, Wang and Xu's TritonRoute paper, section 3.2](https://vlsicad.ucsd.edu/Publications/Conferences/363/c363.pdf);
+its preferred-direction panels are not a drop-in model for Flux's curved corridors.
+The source spans, selected channel and replay counts are recorded in
+`reports/diagnoses/2026-09-07-tier1-longitudinal-overcount.json`.
+
+## Experiment V31 — Local longitudinal channel demand
+
+Fresh replay reproduces the first Tier-1 window's capacity rejection in 13 states,
+with no search exhaustion; Tier 0 is rerun unchanged before integration. Rank
+(1) shared local-demand scopes for DFS and lane packing, (2) complete geometric
+channel decomposition, (3) forced-occupant alternative generation. The first is
+the smallest experiment that addresses both consumers of the false inequality.
+
+Classical channel density measures simultaneous longitudinal occupancy, not the
+total number of route fragments; see the original research abstract on
+[channel-routing lower bounds](https://www.sciencedirect.com/science/article/abs/pii/S0167926098000042).
+The full text was unavailable. TritonRoute's
+[guide preprocessing and panel assignment](https://vlsicad.ucsd.edu/Publications/Conferences/363/c363.pdf)
+also separates physical resource regions before detailed solving. Flux has arbitrary
+directions and varying widths, so neither Manhattan assumption is imported.
+
+Minimum experiment: group existing cross sections by template copper-envelope
+support along each wall's normal. Reuse the same scope in capacity checks and
+the existing exact lane-order solver; retain every local lane target for PH.
+Unknown/degenerate evidence retains conservative demand, and final topology,
+native copper, connectivity and original KiCad DRC remain mandatory. Preparation
+cost is proportional to channel sections times candidate polyline vertices;
+cache the derived model outside candidate enumeration. Test disjoint longitudinal
+runs, truly competing runs, mirrored walls, envelope-only contact and missing
+evidence. Success requires useful discrete candidates and lower-tier legality,
+not merely fewer pruned states or a lower raw DRC count.
+
+V31 result: 43/43 core tests passed, plus 7/7 rule-context and 4/4 summary tests.
+The other bounded CTest set remains 119/126 with the same seven known failures;
+the previously measured constrained-placement export timeout and its dependent
+DRC test remain excluded and unresolved. Tier 0 passes with all 50 connections,
+82 tracks, 152 arcs, four vias, zero opens/unfinished bends and zero original-project
+KiCad DRC reports. Copper is byte-identical to V30 (`2e0197607f1b…`). Global/detail
+times are 69.696/133.117 seconds versus the fresh control's 59.489/131.568 seconds;
+these shared-machine timings do not establish a speedup. Tier 1 still times out
+at the matched 600-second bound. The first ordinary window remains empty in ten
+states; later windows reach spline realization, but this was also true of V30.
+Decision: refine, not a tier promotion or a demonstrated board-level improvement.
+
+## Experiment V32 — Finite cross-section support
+
+The schema-3 ablation exposes a weakness of V31's infinite transverse strips:
+a section at y=83 mm can charge an x-aligned branch near y=92 mm. Replace strip
+projection by segment-to-finite-wall distance using the existing geometry kernel,
+expanded by half trace width plus its unchanged clearance. Retain conservative
+whole-channel demand when no sampled section is supported. Reversed walls,
+true competition and endpoint-envelope contact remain covered; add a lateral
+separation micro-case with positive local support for both branches.
+
+Result: 43/43 core tests pass. Replaying the identical first Tier-1 context
+still produces no choices (ten states with ordinary access checking). The
+finite-only variation is not sent through another full board run: its intended
+first-window improvement is already absent in exact allocator replay. A newly
+exposed unsupported fragment, net 13 / connection 1 / run 0 / fragment 0, touches
+none of channel 0's finite walls and therefore conservatively participates in
+every local constraint. Its recorded source span is x=49.653 mm, y=83.566–84.840 mm;
+channel membership came from overlapping corridor cells, not a usable local
+cross section. This is not justification for silently dropping its demand.
+Decision: refine upstream; finite occupancy alone does not resolve the frontier.
+The full six-policy records and forced demand witnesses are preserved in
+`reports/diagnoses/2026-09-07-tier1-local-support-ablation.json`.
+
+## Experiment V33 — Regenerate missing local resource evidence
+
+Hypothesis: coarse cell overlap marks a fragment as already assigned, suppressing
+the existing per-fragment physical-section fallback even when all sampled walls
+are remote. Before the existing fallback, remove only unsupported governed
+memberships (never the route fragments) when finite, nondegenerate geometry
+demonstrates absence of local support. Existing free-space chord certification
+then builds their local section; its existing narrow provisional fallback and
+all exact final legality gates are unchanged. This applies only with the local
+occupancy experiment enabled. No board identity, net name or coordinate is used.
+
+Minimum test: two conflicting synthetic routes lie inside a broad corridor cell
+whose only wall sample is remote. Both governed fragments must survive and acquire
+local finite-section support. Benchmark the frontier and Tier 0 after the test.
+The integration point follows the previously cited TritonRoute guide-preprocessing
+principle: repair resource-region evidence before assigning physical tracks.
+
+V33 result: the synthetic coverage test, all 43 core tests, and the new isolated
+finite-support test pass. The broader integration checks are 120/127 in 33.42
+seconds (the same seven failures; the existing constrained-placement timeout and
+dependent DRC remain excluded). Tier 0 again passes original KiCad rules with
+identical final copper: global/detail 60.130/133.710 seconds. Tier 1 still times
+out at 600 seconds. Its first ordinary window now has 164 templates/111 alternatives
+but zero choices in eight states, not an exhausted search. Regeneration removes
+the remote unknown occupant from the demonstrated forced-capacity cores, but does
+not resolve shared same-net demand. This supports the missing-evidence diagnosis,
+not a claim of improved board routing.
+
+At snapshot 587 the actual Tier-1 allocation is unchanged: all 78 connections,
+but 853 native-grid internal copper reports (752 track, 71 track/via, 28 hole,
+two via clearances), zero opens, 1,288 straight tracks and 22 vias. These are
+diagnostic polylines, not completed curved copper or final KiCad acceptance.
+The largest pair is still nets 1/7 on F.Cu (21 coalesced diagnoses); first-window
+nets 13/14 also retain ten actual pair diagnoses. Model contradictions and real
+physical collisions therefore coexist and must not be conflated.
+
+Decision: do not promote V31–V33's integration. Restore the verified default
+whole-channel policy and retain `--local-channel-occupancy` as an explicit,
+reported experiment. Commit only the independently tested finite-support kernel,
+public interface and isolated tests (`e9cebf0`), preserving the unrelated dirty
+worktree. Full before/after records are in
+`reports/benchmark_history/2026-09-07-local-support-summary.json` and linked raw runs.
+
+Next ranked hypothesis: canonical shared-copper demand, then connected local
+junction demand, then upstream topology alternatives for any genuine surviving
+bottleneck. Two net-14 connection fragments contain exactly the same source span;
+two adjacent net-5 fragments meet at one bend yet cause a 1.100 mm two-lane
+inequality at a 0.794 mm section. Blanket per-net deduplication would be wrong
+for distant branches or different candidate geometry. Start with a micro-case
+containing duplicate shared trunks, an adjoining bend and two independent
+parallel branches. Any capacity change must also preserve joint physical lane
+targets, all connection identities and exact copper certification.
+
+Research context: [OpenROAD's Steiner-tree module](https://openroad.readthedocs.io/en/latest/main/src/stt/README.html)
+represents multi-pin net topology as trees; its rectilinear assumptions are not
+imported. [Its detailed router](https://openroad.readthedocs.io/en/latest/main/src/drt/README.html)
+separately reports guide coverage and DRC. These reinforce distinguishing physical
+resource evidence and shared topology from final copper legality. No external
+code is copied, and the next shared-demand mechanism is not yet implemented.
+
+Final default verification: local demand is explicitly reported as disabled,
+43/43 core tests pass, both CLI policy tests pass, and the broader CTest set is
+122/129 in 34.49 seconds with no new failures. A final no-override Tier-0 run
+passes original-project KiCad DRC with the same accepted PCB hash. Its structured
+record is `reports/benchmark_history/2026-09-07-local-support-default-tier0-raw.json`.
+Tier 1 remains the frontier; no higher tier is promoted or silently skipped as solved.
+
+## Experiment V34 — Exact shared-copper lane identities
+
+Failure reproduced on V33's source-bound first ordinary Tier-1 context: no choices
+in eight states. One core charges two identical net-14 spans separately; other
+cores also include adjacent bends, so exact-duplicate removal alone may be insufficient.
+Rank (1) exact template-copper identities, (2) local connected junction demand,
+(3) physical interval-union packing. The first has a monotone capacity bound:
+adding a selected duplicate does not consume a second resource; adding an independent
+branch cannot reduce previous demand. Selection-dependent connected-component
+merging would not have this property and cannot simply reuse partial-DFS pruning.
+
+[VPR's route-tree documentation](https://docs.verilogtorouting.org/en/latest/api/vpr/route_tree/)
+updates occupancy from a net tree while preserving sink identities. Its
+[routing-file contract](https://docs.verilogtorouting.org/en/latest/vpr/file_formats/#routing-file-format-route)
+also warns against counting shared segments repeatedly. Flux needs geometric
+identities instead of FPGA node IDs; no external source code is copied.
+
+Minimum experiment: canonicalize exact same-net/layer/dimension polylines (including
+reversal), keep missing geometry unique, count identities in DFS, forward checking
+and GPU-shortlist CPU validation, and assign duplicate owners the same packed lane.
+Keep access/via choices and all original fragment IDs. Distinct branches, different
+widths, different layers and different alternative geometry remain independent.
+Preparation is O(total polyline size plus ordered-map identity lookup); shared
+occupancy is monotone and avoids selected-dependent graph recomputation. Test
+duplicate trunks against independent branches, then replay the frozen frontier,
+then run both tiers. Baseline executables are frozen before editing.
+
+Frozen replay result: one of 164 templates aliases an identical trunk. The first
+local core drops from 2.000 to 1.550 mm demand but remains wider than its 1.220 mm
+section; zero choices still result in eight states (seven with resource-forward
+checking). The 43 core tests and identity/CLI micro-tests pass. Broad CTest is
+124/131 with the same seven known demo failures; the known constrained-export
+timeout and dependent DRC remain explicitly excluded. Board runs are pending.
+
+## Experiment V35 — Cut crossing versus clearance-only demand
+
+V34's contact instrumentation locates a smaller mechanism: channel 20 section 1
+charges both sides of one bend, but only fragment 2 crosses it. Fragment 3 ends
+281.5 um away, outside its 125 um copper radius and inside its 325 um clearance
+envelope. Channel 0's net-13 fragments and channel 20 section 2's net-5 fragments
+show the same clearance-only contact. See the source-bound diagnosis
+`reports/diagnoses/2026-09-07-tier1-shadow-vs-cut.json`.
+
+Rank: (1) cut-crossing allocation demand, (2) same-net capsule interval-union
+packing, (3) upstream topology changes for surviving actual copper conflicts.
+The first is the smallest isolated experiment and remains a monotone estimate.
+[Maurer's routing tutorial, pp. 4–5](https://cs.baylor.edu/~maurer/aida/tech-reports/da10_90.pdf)
+describes cut density as a lower bound, separate from completing legal routing.
+Its fixed-width rectilinear channels do not match Flux's free-space geometry;
+only the distinction between crossing demand and geometric legality is reused.
+No external code is copied.
+
+Experiment: require finite centerline contact for local allocation scopes and
+regenerate missing local samples with that same criterion. Retain width and
+clearance in the packing inequality, every fragment, full clearance obstacles,
+via/access checks and final copper DRC. Unknown geometry remains conservative.
+Do not interpret a passing cut estimate as physical packing certification.
+Test an adjacent bend with a clearance-only neighbor and a genuine two-route
+crossing; replay before spending another full board run. Keep the default intact.
+
+Result: the same first window now retains 584 lane-packed states (eight active,
+512 reserve), versus zero before, with no late access/coupling/packing rejections.
+However, it enumerates 91,114 choices at the 100,000-state limit. Enumeration costs
+26.31 s and the full first-window selection finishes 131.27 s after context
+publication. All ordinary portfolios finish at 579.79 s versus 364.18 s in V34.
+The 600 s board run reaches native spline repair but cannot export final copper.
+The unchanged allocation still has 78 paths, zero diagnostic opens and 853 native
+internal DRC reports. No tier promotion is justified.
+
+Tier 0 passes with both options and reproduces the accepted PCB hash. Core tests
+pass 43/43, including duplicate-owner lane placement and alternative-order rollback;
+the isolated kernel and six CLI policy tests pass. Broad CTest is 126/133 with
+the same seven demo failures and the same explicitly excluded constrained-export
+timeout. Seven project-rule and four history-summary Python tests pass. Commit
+`94aa691` contains only the independently compiled/tested demand kernel, public
+API and micro-tests; integration remains opt-in in the pre-existing dirty tree.
+Structured frozen and regenerated replay records are in
+`reports/benchmark_history/2026-09-07-cut-demand-{frozen,fresh}-replay.json`.
+
+Decision: retain as a measured experimental allocation correction, not a default.
+It removes the diagnosed false rejection but moves the bottleneck into evaluating
+far more complete assignments. Physical clearance/width rules remain unchanged.
+
+## Experiment V36 — Bound existing bundle search after cut-demand recovery
+
+Hypothesis: exhaustive evaluation of tens of thousands of admissible allocations
+starves continuous copper repair. This was previously invisible because the
+same window rejected in eight states. The existing bounded DFS already has a
+state limit, and its retained physical portfolio is capped at 584 states; test
+a 4,096-state control before introducing another search algorithm. A frozen probe
+still yields 3,686 access-screened allocations in about 1.1 s at that limit.
+
+Change: expose the existing regional bundle-state limit as a reported CLI/benchmark
+override, retaining the 100,000 default. Run the same first failing board and Tier 0
+with exact identity/cut demand and the smaller bound. No routing family or DRC
+gate is disabled. Success requires earlier physical repair with useful candidate
+diversity and ultimately certified Tier-1 completion. Regressions in Tier 0 or
+reduced geometric progress reject default promotion. If this fails, investigate
+lazy/diversity-preserving candidate consumption rather than blindly lowering limits.
+
+Result: the 4,096-state limit is present in the actual recorded Tier-1 context.
+First-window enumeration falls from 26.307 to 1.065 s; complete selection from
+131.274 to 5.289 s. Both runs retain 584 complete lane-packed states, eight active
+and 512 reserve. Counts do not establish identical candidate identities/diversity.
+All 22 ordinary portfolios finish at 373.169 s instead of 579.792 s. At the same
+600 s limit, continuous routing reaches all 22 windows instead of four. The first
+window completes four candidate evaluations, each taking 45.6–58.3 s; the longer
+budget run had only started its first one. Nevertheless, final copper is not
+exported and Tier 1 remains unresolved. This supports the starvation mechanism,
+not a copper-completion claim.
+
+The first window's native-context diagnostics contain only 1–2 individually legal
+native routes per candidate, from 26–29 reported route entries; these are not
+whole-board DRC results. Time is dominated by interpolation, joint shove and
+trajectory polish, not native arc fitting or DRC. Next: inspect the failing
+candidate geometry and boundary/corridor constraints before further parameter
+tuning. In particular, audit whether source-relative lane-order preservation can
+retain an invalid crossing; rotations between sections must be distinguished from
+actual route-order reversals before changing that rule. This remains a hypothesis,
+not a diagnosed cause on the benchmark.
+
+Tier 0 passes unchanged at this bound (61.312 s planning, 143.217 s detail), with
+the same PCB hash, 50 connections, zero opens and original-project KiCad DRC.
+The final no-override V35 run also passes. V36 changes only CLI/benchmark exposure
+of the existing bound; the routing core remains the 43/43-tested implementation.
+The latest broad CTest result is 129/136 in 37.87 s, with exactly the same seven
+known failures/exclusions. All ten isolated demand/CLI checks pass after rebuilding.
+
+Decision: keep the explicit override and the experimental corrections available;
+leave production defaults unchanged pending physical completion evidence. Complete
+raw runs, source/executable identities and comparison metrics are linked from
+`reports/benchmark_history/2026-09-07-channel-demand-summary.json`. No higher tier
+is promoted and no DRC or fabrication rule is relaxed.
+
+## Experiment V37 — Restore straight-section routing as the default
+
+User direction: preserve the spline implementation but route straight sections until
+all tiers pass. Baseline workspace was already dirty at `94aa691`; a file snapshot
+of touched files is retained in `build/straight-change-baseline`. Prior experiments
+remain intact. The ladder is Tier 0 pt2399_delay, Tier 1 bm_svf, Tier 2 zigbee_sensor,
+Tier 3 ch32v003_usb, Tier 4 usbgpib; only Tier 0 was previously qualified.
+
+Failure: V36 reaches complete abstract assignments but spends 45–58 s per first-window
+continuous candidate and cannot export Tier 1 in 600 s. The earlier exact replay
+contains 853 physical reports even at 1 nm quantization, including track/track,
+track/via, hole and via/via collisions. Rounding is therefore not the only blocker.
+Current controls are in `build/straight-baseline-tier{0,1}`; the Tier 1 control has
+an explicitly bounded 180 s planning budget, not a full-budget qualification run.
+
+Hypothesis: removing compulsory curve realization isolates straight copper packing
+and returns time to congestion negotiation. Merely emitting a spline tessellation
+as segments would not test this hypothesis. Gate regional realization, automatic
+promotion, global spline seeds, and residual PH repair; preserve all implementations.
+Disable arbitrary continuous point refinement in straight CLI output, retain the
+existing 45-degree pull-tight and discrete fallbacks. Require zero output arcs in
+the corpus, and retain the old rounded-shape gates for explicit curved controls.
+
+Research: KiCad separates mitered 45/90-degree corners from rounded modes and checks
+clearance while routing; see https://docs.kicad.org/9.0/en/pcbnew/pcbnew.pdf and
+https://gitlab.com/kicad/code/kicad/-/blob/HEAD/pcbnew/router/pns_routing_settings.cpp .
+This supports a distinct representation policy, without changing fabrication rules.
+No external implementation is copied. Ranked next mechanisms: (1) avoid mandatory
+continuous realization, a small representation-policy change with no new solver;
+(2) feed actual straight-copper conflicts to existing negotiated rerouting if the
+same physical pairs remain; (3) expand coherent conflict regions only if (2) stalls.
+The first is explicitly requested and experimentally separable; the others await
+straight-mode evidence. Cost is the existing polyline materialization/search cost;
+loss of curved deformations may expose additional routing failures.
+
+Tests: deterministic full-strength straight-plan micro-test plus the retained
+explicit curved-plan regression; Python acceptance tests require no arcs without
+relaxing opens, structural or copper checks. Before/after tier results pending.
+
+V37 first results: straight Tier 0 passes all 50 connections, zero opens/errors,
+239 straight tracks, zero arcs and five vias. Planning took 9.057 s and detail
+9.359 s in `build/straight-v1-tier0`. The newly run original-binary Tier 0 control
+actually timed out at 600 s (it does not reproduce the earlier recorded green
+baseline within that bound); the 180 s original-binary Tier 1 control also timed
+out. Concurrent runs/build activity mean these timings are not isolated performance
+measurements. Tier 1 straight snapshot 613 has all 78 paths but 23 sampled
+and one corridor overflow. Native-coordinate replay has 733 raw DRC reports:
+632 track clearances, 71 track/via clearances and 30 hole clearances; no opens or
+malformed primitives. It is diagnostic evidence, not a KiCad-qualified board.
+
+## Experiment V38 — Return straight-copper conflicts to negotiation before regional search
+
+Failure: straight Tier 1 spends over 300 s in the first regional portfolio after
+only one global epoch. Its exact native-coordinate scaffold is already colliding.
+A smallest witness is net 1 connection 6 segment 4 and net 16 connection 3 segment 5:
+both use F.Cu from (50.240,78.340) to (49.590,78.990) mm. This collision is in the
+selected coarse paths before regional routing, curve fitting or quantization.
+The original-project external oracle proves a solution exists, not that this
+particular allocation can be deformed legally. See the V37 replay JSONL for bounds
+and the larger net-pair groups; 202 coalesced diagnoses are not 733 separate collisions.
+
+Ranked hypotheses: (1) eager regional enumeration consumes the negotiation budget
+on a known colliding allocation; (2) shared direct-medial capacity assumes multiple
+lanes which straight fallback does not materialize; (3) sampling lacks useful lanes.
+Test (1) with the existing intermediate-probe deferral: straight full-strength
+routing may retain global operators, but cannot spend the full regional portfolio
+while sampled/corridor overflow remains. Curved scheduling stays unchanged. Exact
+copper remains the final acceptance gate. Expected effect: more global epochs in
+the same runtime; success requires fewer actual copper conflicts and eventual DRC.
+
+Research: VPR's negotiated routing accumulates congestion history between iterations
+and treats channel width as a separate routability control:
+https://docs.verilogtorouting.org/en/latest/vpr/command_line_usage/ .
+Fixed FPGA channels differ from Flux's geometry, so this experiment only changes
+when Flux returns to its existing negotiated search. No solver code is copied.
+Cost remains bounded by the existing global iteration and regional state limits.
+The risk is deferring a regional deformation that could legalize a congested seed;
+retain that full attempt in the final epoch and retain the global portfolio beam.
+
+Independent controls use existing sampled routing at 0.65 mm and a copper-rule
+0.45 mm candidate spacing, with unchanged board rules and enforced shadows.
+The first sampled invocation was rejected because medial-only hard-capacity flags
+remained; the runner control now removes those flags and records its exact args.
+The first 0.45 mm control was correctly rejected by the diagonal-spacing guard;
+its replacement explicitly uses the existing dense-candidate mode with physical
+shadows enforced. Neither invalid invocation is a routing experiment success.
+
+V38 first refinement: deferring sampled/corridor overflow works: epoch 1 ends at
+73.98 s with 351 history entries, and epoch 2 produces an overflow-free global
+allocation at 112.46 s. But 74 exact copper witnesses still trigger another large
+regional portfolio, because the existing readiness check ignores exact-oracle
+failures once sampled overflow is zero. For straight mode, the existing oracle-first
+condition must also own these intermediate epochs. Refine that condition, retain
+the full final regional attempt, and rerun. The initial deferred run is stopped
+once that gate mismatch is demonstrated; it is neither a pass nor a completed
+600-second comparison. No result is promoted solely for zero abstract overflow.
+
+## Experiment V39 — Match direct-chord capacity to straight realization
+
+Failure: the V37 selected paths contain coincident copper on a shared direct/global
+segment. Flux already has `single_lane_direct_voronoi_resources`, whose invariant
+explicitly says conventional materialization cannot realize multiple packed lanes
+on one direct chord. Straight planning was leaving that switch false while the
+continuous backend was disabled. This is a representation mismatch, independent
+of whether later rip-up can eventually find a better path.
+
+Hypothesis/change: activate the existing capacity-one direct-chord model whenever
+straight geometry is selected, including feedback and incremental paths. Preserve
+the multi-lane mode for explicit curved routing. This does not alter widths, via
+sizes or clearance. No new capacity estimator is introduced. The V38 feedback
+schedule remains held constant for this comparison. Test the geometry-policy
+binding on a synthetic board and repeat the frontier/lower tier. Expected effect:
+shared direct-chord selections become visible as global congestion rather than
+unrealizable lane packing. Regression criterion: Tier 0 or explicit curved tests
+fail, or the frontier loses more feasible geometry than it gains.
+
+## Experiment V40 — Enforce physical shadows through all straight-routing epochs
+
+V38 and V39 both reach zero sampled overflow but retain hundreds of physical
+reports. Code tracing shows the default enclosing feedback policy makes clearance
+shadows advisory after the first epoch; `physical_shadow_blockers` are then absent
+from hard-capacity rejection even though exact copper failures are recorded.
+That policy was intended to leave room for continuous multi-lane legalization.
+
+Run the existing `--feedback-shadow-policy enforced` control with the same V39
+straight geometry, 30-iteration ceiling and 600 s diagnostic bound. Unlike the
+sampled controls, this retains hard-capacity rip-up and the existing direct-medial
+backend. The hypothesis is that actually reserving neighbouring copper will
+prevent physical conflicts from being recreated as soon as an exact diagnosis
+returns upstream. Risk: conservative shadows or ordering traps can leave opens;
+those remain failures, and source clearances are never reduced. The default is
+unchanged until the result is measured. This uses existing PathFinder/history and
+physical reservation mechanisms; VPR research is recorded under V38.
+
+Diagnostic detailed check: replay snapshot 1191 through the real straight materializer,
+not only the per-edge oracle. It emits 527 tracks/0 arcs/47 vias and still fails
+internal copper DRC (201 reports). KiCad with the original project rejects it with
+193 error reports: 64 clearance, 61 crossings, 45 shorting items, 23 mask bridges,
+and nine unconnected items. This validates the physical-failure mechanism and
+exposes the internal/external connectivity difference on already illegal copper.
+The replay tool now supports a clearly non-authoritative `--detail-preview` mode;
+it retains source/export checks and never promotes a tier. V38's reduced oracle
+report count is not evidence that final copper is legal.
+
+### V37–V40 final verification and decisions
+
+- V37: keep straight geometry as the requested default. Three Tier-0 runs reproduce
+  the same PCB SHA-256 `80a1b05ab922172d5079f0fa95eb4f967a17573e03866b3ffffcd20307534e95`:
+  50 connections, 239 tracks, zero arcs, five vias, approximately 498.664 mm of
+  track, zero internal errors/opens and zero original-project KiCad errors/opens.
+  Most segments are orthogonal; four existing terminal-access segments have other
+  straight orientations. No curve or rounded-bend requirement is imposed in this mode.
+  The final run takes 9.652 s planning plus 9.826 s detail; runs were not isolated.
+- V38: retain geometry-dependent intermediate deferral. Four physical feedback
+  epochs finish before the final regional attempt, versus spending the entire
+  600 s in first-epoch regional enumeration. Exact probe counts are 733, 561, 642,
+  599 with zero internal opens. This supports the scheduling mechanism but shows
+  oscillation and no completed Tier 1. The final regional attempt still times out
+  at 600 s. Do not interpret abstract zero overflow as copper legality.
+- V39: keep the existing capacity-one direct-chord model bound to straight mode,
+  because this is the representable copper invariant. It is not a tier-solving
+  algorithm: probe counts 733, 560, 614, 633 show no material additional gain over
+  V38, and final regional enumeration again reaches the 600 s limit. No further
+  capacity heuristic is added. Tier 0 remains identical.
+- V40: do not promote the forced-enforcement override. It spends the 600 s control
+  budget in hard-capacity rip-up after the initial epoch without a completed
+  copper candidate. The hypothesis remains inconclusive; enforcement alone does
+  not overcome the current search/order trap within this bound.
+- Sampled controls: do not change defaults. The 0.65 mm sampled run stagnates in
+  569.878 s with 78 paths, zero unrouted nets, eight sampled and 162 shadow
+  overflows. Dense 0.45 mm sampling times out at 600 s. The rejected CLI/spacing
+  controls are separately identified as invalid experiments, not successes.
+
+The complete core suite passes 43/43, preserving explicit curve/PH tests and adding
+straight full-strength, residual-collision and feedback-deferral checks. Broad
+CTest is 127/134 in 22.10 s with the same seven previously documented demo failures.
+The known constrained-refine export fixture was independently stopped after
+600 s (its dependent DRC consequently also failed) and excluded from that bounded
+broad run. Eight Python project-rule/geometry gate tests and four history tests
+pass. The replay tool compiles, exports only a diagnostic candidate, and external
+KiCad correctly rejects that candidate. `git diff --check` is clean.
+
+All five source fixtures pass hash/strict-import preflight. Tiers 2–4 remain locked
+and were not routed: they respectively have 8, 3 and 17 canonical validation errors.
+No source placement or fabrication rule was changed. Tier 1 controls use 600 s,
+not its full 7200 s manifest planning allowance; no claim of exhaustive failure or
+impossibility is made. The benchmark ladder remains Tier 0 qualified, Tier 1 frontier.
+
+Next hypothesis: the two policies now expose the real tradeoff. Advisory physical
+feedback repeatedly recreates track/via conflicts; enforcing every physical shadow
+traps sequential hard-capacity rip-up. Construct a general micro-board with a pad
+escape crossing a neighbouring via shadow, then test a bounded joint escape/via
+reroute under frozen surrounding copper. Attribute the seed/portfolio choice that
+requires the crossing before adding penalties or widening regional enumeration.
+The post-feedback replay's net 13/net 16 via conflicts and net 13/net 7 terminal
+crossing are concrete diagnostic witnesses, never implementation keys.
+
+Machine-readable raw history, configuration/binary/source identities, peak emitted
+metrics and observed memory are indexed by
+`reports/benchmark_history/2026-09-07-straight-routing-summary.json`.
+The exact external DRC diagnosis is in
+`reports/diagnoses/2026-09-07-straight-tier1.json`.
+Changes remain on top of the pre-existing dirty research tree; no broad unrelated
+commit was created. The starting touched-file snapshot and a patch relative to it
+are in `build/straight-change-baseline`, so this work is separately recoverable
+without discarding the existing experiments.
+
+
+## V41 — Screen alternative KRT inputs for Tiers 2–4 (2026-09-07)
+
+**Failure:** The current locked Tier 2–4 inputs have 8 / 3 / 17 structural
+validation blockers. The user requested alternative boards from KRT.
+
+**Hypothesis:** Other real two-layer inputs can preserve increasing routing demand
+while passing Flux's strict import and KiCad's pre-routing geometry checks.
+
+**Research and experiment:** Screened 99 KRT catalog candidates with pcbnew 9.0.8,
+Flux inspect-kicad and error-level external DRC using original project rules. An
+early structural-error-only screen incorrectly shortlisted PicoFX and GB-CART256K;
+the full corpus preflight rejected unsupported drills / pad approximations. The
+final selection requires strict=true, lossy=false, zero import errors, zero core
+errors and zero stripped-board DRC violations beyond expected opens. No router,
+source placement or DRC rules were changed.
+
+**Result:** Staged FT2232H JTAG/UART (117 connections), Nintendo Power cartridge
+(148) and Nascom EPROM card (415) as proposed levels 2–4. All 3 strict preflights
+pass; all 5 active corpus source preflights retain their existing results.
+FT2232H and Nascom references are error/open-free. Nintendo Power's original
+reference has one starved thermal, two copper-edge errors and one open; its
+stripped input is clean. Exact revisions, original projects, full licenses and
+source/reference/prepared hashes are preserved.
+
+**Decision:** Keep as a separate all-locked candidate corpus. This is input
+qualification, not routed-tier success. Proposed difficulty is based on physical
+fanout and connection demand and still requires actual routing measurements.
+The existing active tiers are retained.
+
+**Evidence:** `reports/benchmark_history/2026-09-07-krt-tier-alternatives/README.md`
+and `summary.json`; fixtures under `tests/fixtures/routing-corpus/alternatives/`.
+
+**Next:** When adopting the candidate ladder, retain the original unsupported
+boards as compatibility regressions and continue to require clean final Flux
+copper and external KiCad DRC before any tier promotion.
+
+## Experiment V42 — Separate candidate density from copper occupancy
+
+**Failure:** Straight Tier 1's 0.65 mm direct-medial checkpoint has 78 connected
+paths but hundreds of exact copper conflicts. Enforced shadows instead trap
+hard-capacity repair. Tier 0 was reverified in `build/tier-resolution-tier0-baseline`.
+The current 600-second frontier reproduction runs in
+`build/tier-resolution-tier1-baseline`.
+
+**Candidate explanations (ranked):** (1) candidate spacing and sparse terminal/via
+sites eliminate useful legal packing choices; (2) hard-capacity repair commits a
+poor ordering before negotiated history develops; (3) exact physical feedback is
+not strong enough to change the chosen homotopy. The earlier 0.45 mm sample control
+used broad scheduling and did not isolate ordinary negotiated routing.
+
+**Research:** VPR documents negotiated congestion with separate search/iteration
+controls (https://docs.verilogtorouting.org/en/latest/vpr/command_line_usage/).
+KiCad's walkaround routing follows obstacle boundaries with H/V/45 tracks rather
+than treating the obstacle clearance as a routing-site pitch
+(https://github.com/KiCad/kicad-doc/blob/master/src/pcbnew/pcbnew_interactive_router.adoc).
+These motivate a candidate-domain control, not a solver port or clearance change.
+
+**Smallest experiment:** Use the existing sampled backend, enforced exact-distance
+clearance shadows, legacy single-epoch negotiation, and 30 iterations at 0.65 mm
+(control) and 0.25 mm (dense-candidate treatment). Hold source rules, track/via
+sizes, seed and scheduling constant. Regional/detail and external KiCad acceptance
+remain mandatory. Capture full runner artifacts. Success requires fewer physical
+conflicts and eventually zero opens/DRC, not merely zero abstract overflow.
+No router default changes until measured. If fine sampling also stalls, inspect
+which terminal access or physical reservation first excludes the missing route.
+
+## Experiment V43 — Do not defer sampled copper conflicts to absent lane assignment
+
+**Measured mechanism:** In `populate_route_congestion`, physical shadow witnesses
+between two sampled edges are discarded whenever both belong to a corridor with
+spare lane capacity. `sampled_planar_edge_capacity` likewise lets multiple nets
+own one sampled edge. This is explicitly justified in code by later lateral lane
+assignment. Straight materialization does not move these sampled centerlines into
+separate lanes. V39 corrected direct medial chords but left this ordinary sampled
+case active. The V42 controls consequently omit some real collisions from history.
+
+**Hypothesis:** Make deferred corridor lane assignment an explicit global policy;
+straight planners disable it, while curved/direct global callers retain the
+existing default. A sampled chord must then reserve one copper path and its true
+physical shadows remain reportable even inside a wide corridor. Corridor-wide
+capacity estimates remain available for guidance. This is the same representation
+consistency requirement as V39, extended to the measured missing case, not a new
+packing heuristic. VPR's separate routing resources and KiCad's clearance boundary
+routing are the sources recorded under V42.
+
+**Experiment:** Gate capacity inheritance and the shadow exemption together;
+record the policy in results/checkpoint identity, propagate straight mode through
+incremental routing, test that a physically wide corridor retains independent
+capacity-one sampled tracks, and benchmark frontier plus Tier 0. Preserve explicit
+curved tests. Snapshot before edits: `build/tier-resolution-v43-baseline`.
+
+### V43 intermediate validation
+
+Tier 0 remains complete with clean external DRC after capacity-one sampled
+reservation. The first attempt at a coincident-corridor micro-board found a valid
+alternate lane in both modes; it did not reproduce the exemption directly. Retain
+it as a two-net straight-copper preservation regression, together with the explicit
+sample-capacity check. Do not claim it proves a large-board packing solution.
+The frontier's exact probe sequence changes from 733/560/614/633 to
+733/520/662/674: its second epoch improves, later epochs still oscillate. No tier
+promotion is justified by that partial change.
+
+## Experiment V44 — More frequent physical feedback within the same search budget
+
+**Failure:** Both the original and corrected straight planner spend only four
+intermediate epochs on exact copper evidence before final regional enumeration.
+Later inner PathFinder iterations achieve zero abstract overflow but cannot
+consume new detailed-copper diagnoses until the next outer epoch.
+
+**Hypothesis:** Allocate the same 30 global iterations across 15 physical-feedback
+epochs instead of five, so newly measured copper collisions affect search sooner.
+This tests feedback frequency with the existing negotiated-history mechanism,
+not a larger iteration budget or new penalty. Expected benefit: the minimum
+exact conflict count improves across epochs rather than returning to the same
+conflict-rich states. Final copper still requires full internal and KiCad DRC.
+The runtime bound is 900 seconds to allow the additional exact probes; this is
+not a runtime comparison against the 600-second controls. Sources: VPR negotiated
+congestion and KiCad physical obstacle handling, recorded under V42.
+
+### V43 final decision — revert
+
+The full core suite exposed a lower-level regression: the previously accepted two-net WorkPlan differential-pair transaction now ends with global overflow 4 and two opens. The new preservation fixture passed, but did not cover this legitimate coarse-corridor allocation. Core tests were 43/44; the broader selected suite was 126/133 with the same seven existing demo failures. Tier 0 remained accepted, while Tier 1 still timed out at 600 seconds. The blanket single-sampled-lane restriction does not earn promotion: straight materialization still has valid uses for coarse corridor sharing. Reverted all V43 production and test changes to the pre-experiment snapshot, preserving the rejected patch under `build/tier-resolution-v43-rejected/`. Do not infer that every sampled resource must be capacity one merely because final copper uses straight sections. V44 runs on the frozen V43 executable and must be interpreted as a rejected-base exploration.
+
+## Experiment V45 — clearance-qualified rip-up cuts
+
+### Failure and evidence
+Tier 1 remains blocked at physical realization (zero topological opens does not imply legal copper). First-epoch hard-capacity recovery repeatedly probes soft routes and uses the resulting owner sets as rip-up candidates. `soft_capacity_route_blockers` currently ignores `ClearanceShadowCertificate.available_nm` entirely, whereas hard A* compares that certificate against the chosen trace/via radius plus clearance. Certificates are collected to cover the maximum possible radius; membership alone is not a collision. The helper also collects shadow owners when shadows are advisory. Thus nearby legal copper can enter the cut and inflate the coordinated repair neighborhood. This is a source-level inconsistency, not yet evidence that correcting it completes Tier 1.
+
+### Ranked hypotheses
+1. Filter probe shadow owners using actual selected trace widths, via diameter, and active shadow policy: small, directly matches A* legality.
+2. Filter shared Voronoi owners by actual capacity overflow: related but deferred to isolate the clearance mechanism.
+3. Increase conflict-set search breadth: defer until owner attribution is accurate.
+
+### Research
+[Sharon et al., Conflict-Based Search](https://ojs.aaai.org/index.php/AAAI/article/view/8140/7998) derives search constraints from detected pairwise conflicts. Flux is a static copper allocator, not time-expanded MAPF, so no CBS completeness guarantee transfers. The applicable principle is to build repair scope from actual conflicts rather than broad-phase proximity. Integration point: existing bounded non-committing probe and progressive rip-up; no new search family or external code. Cost stays linear in certificate observations on the probe.
+
+### Hypothesis and experiment
+Filtering legally separated or policy-inactive shadow observations will reduce false blocker pressure without dropping true trace/via conflicts. Preserve all existing sampled/corridor ownership checks for this experiment. Add diagnostic counts, test the mechanism with existing bottleneck fixtures, then run core regressions, Tier 0 and Tier 1 under the same defaults. Success requires preserved lower-tier correctness and measurable frontier benefit; no DRC rules change.
+
+## Experiment V46 — enforce the requested ordinary straight-track angles
+
+### Failure
+An exported Tier-0 copper audit found 239 tracks: 133 horizontal, 102 vertical, and four arbitrary-angle pad-access segments (two reciprocal pairs), despite zero arcs. The existing straight-mode switch disables spline/continuous refinement but does not constrain off-grid terminal adapters. This is a geometry-policy gap relative to the requested horizontal/vertical/45-degree sections, not a KiCad DRC failure.
+
+### Hypothesis / change
+Use a bounded exact-clearance adapter for newly generated non-octilinear segments. Preserve existing copper and exact same-net branch/pad/via contacts, then try the two shortest diagonal-plus-axis paths and the two Manhattan paths. Accept only candidates clear against represented copper; keep the final structural/connectivity/DRC gate and reject any unfinished angle conversion. Preserve the spline implementation and its explicit curved mode. Add a synthetic off-grid pad-access test and an exported-copper angle assertion for straight benchmark runs. This is deterministic local geometric legalization; no source board, endpoint, width or clearance changes.
+
+### Research
+KiCad's [interactive-router documentation](https://github.com/KiCad/kicad-doc/blob/master/src/pcbnew/pcbnew_interactive_router.adoc) describes ordinary 45-degree routing. Here the four bounded two-segment constructions are elementary octilinear geometry; no third-party implementation is copied.
+
+### V44/V45 final measurements
+
+V44 used 14 completed intermediate oracle probes: 733, 520, 807, 738, 554, 712, 571, 687, 791, 798, 599, 832, 808, 901 violations, all with zero internal oracle opens. It timed out in regional enumeration at 900 seconds. More frequent feedback did not converge and its V43 base was reverted. Do not promote this override.
+
+V45 excluded 117 legally separated shadow observations, passed its focused bottleneck fixture and all 44 core tests, and preserved Tier 0. Tier-1 intermediate copper counts were exactly the baseline 733/560/614/633; the run timed out at 600 seconds. Keep the narrow attribution correction, with no claim of improved tier completion.
+
+### V46 angle validation
+
+The final Tier-0 board has 243 tracks (135 horizontal, 104 vertical, four 45-degree), zero arcs, five vias, 50 connections, 498.861562 mm track length, and zero original-project KiCad errors/opens. Before conversion it had 239 tracks and 498.664 mm, including four arbitrary-angle adapters. Only off-angle carriers are split at existing same-net electrical contacts. The focused test covers a blocked first elbow, a legal alternate, preserved interior via contact and fail-closed rejection when every bounded adapter is blocked. Nine Python rule-context/angle-gate checks pass. Full core validation is being completed.
+
+### Frontier runtime audit
+
+All V42–V46 diagnostic runs used the existing `build/dev` Debug executable; Tier 1's actual manifest allowance is 7,200 seconds, while those runs explicitly used 600/900-second diagnostic caps. A fresh unchanged-parameter Tier-1 run now uses the full manifest allowance. Rebuild the existing Release preset as an independent performance control, with executable hashes recorded separately. A Debug timeout alone cannot establish what the full Release benchmark can achieve. Source inspection also shows that with spline realization disabled, regional template enumeration does not build a replacement centerline candidate; the exact final behavior must be recorded before adding a separate straight regional realizer.
+
+### Alternative ladder adoption
+
+Adopted the already vetted KRT alternatives as active locked Tiers 2–4: FT2232H JTAG/UART, Nintendo Power cartridge and Nascom EPROM/80bus. Tier 0/1 entries are unchanged. The former three fixtures and their original expected source errors remain in `compatibility/manifest.json`. Active preflight is 5/5 with no source errors; compatibility preflight is 3/3 under the previous expected allowances. None of the replacement tiers has been promoted by preflight.
+
+V46 final Debug core validation: **45/45 passed**, including the retained spline/PH tests and WorkPlan regression. Broad selected CTest is **126/133**, with the same seven baseline demo failures; no new failures.
+
+## Experiment V47 — optimized-build completeness control
+
+Rebuilt the existing Release preset with unchanged router code and parameters. Tier 0 again passes external KiCad DRC and the H/V/45 export gate. Tier 1 reproduces the same first four oracle counts (733/560/614/633) in about 31 seconds rather than 155 seconds for the simultaneous Debug full-budget run. This is build-mode performance, not an algorithmic routing improvement. Both jobs retain the configured 7,200-second bound pending a complete result.
+
+The earlier V42 0.25 mm sampled-candidate control was inconclusive after only three Debug iterations. Repeat that existing experiment in Release with the same 30-iteration, enforced-clearance, no-outer-feedback settings and a recorded 900-second bound. Geometry rules remain unchanged. This follow-up is justified by the measured build-speed difference, not by retuning clearance or selecting a lucky seed. It is exploratory and cannot promote a tier without final detailed/export/DRC gates.
+
+## Experiment V48 — bound the measured regional portfolio explosion
+
+The optimized full Tier-1 run reaches the ordinary window-0 bundle context after about 258 seconds. The recorded region contains 11 nets and a 100,000-state template-search bound. A frozen-context replay at 256 states yields 174 access-screened choices under the current whole-channel policy in about 50 ms, with no forced capacity contradiction. These are partial allocation candidates, not legal copper. The production routine evaluates every enumerated choice through full access selection, pairwise template conflicts and lane packing before reducing it to a small retained pool; it has no progress event inside that loop.
+
+Run the existing `--max-regional-bundle-states 256` control on Tier 1 in Release (same 30 routing iterations, 900-second diagnostic bound), while retaining the unchanged full-budget baseline. Hypothesis: the first bounded portion already contains useful discrete assignments, and screening tens of thousands more delays concrete physical failure evidence. This is an isolated existing parameter control, not a promoted default, and it may lose route diversity. Frozen scene and 21 replay-policy records are retained in this run's report directory. A successful search bound must still survive all detailed and external DRC gates.
+
+### First complete regional outcome (V47 full Release)
+
+At 522.7 seconds the first retained Tier-1 candidate completes discrete regional analysis: 44 windows, 44 complete bundles, 116 lane cross-sections, nine geometric lane reorders, 88 avoided lane inversions and no lane-solver exhaustion. This is not a completed routing plan. In straight mode `solve_windows` skips both `realize_bundle_splines` and `build_regional_spline_candidate`, so the selected assignments do not replace the globally conflicting centerlines. The next focused hypothesis is an explicit piecewise-linear regional realization of existing lane/template/via assignments, with preserved electrical contacts and exact whole-board copper acceptance; simply setting completeness flags or copying template centerlines without the physical gate is invalid. Preserve this completed allocation as an oracle for a small synthetic lane-packing micro-board. The full run continues evaluating retained portfolios.
+
+### V47/V48 completed frontier comparison and decision
+
+The full Release benchmark finishes (within its 7,200-second allowance) in **1,115.174 s**, unqualified. The selected topology has 78 paths, zero unrouted nets and zero abstract overflow. All 44 regional bundles are complete, but the physical graph still has 151 conflict edges and no regional replacement candidate is published. The exact copper probe has **560 violations: 436 track clearance, 105 track-via clearance and 19 hole clearance**, with 1,204 provisional segments, 48 vias and zero internal opens. This is not final copper or external KiCad acceptance.
+
+The existing 256-state regional control finishes in **617.164 s** with the same selected abstract/physical verdict, while reducing selected regional search states from 371,615 to 2,529 and generated candidates from 205,287 to 1,609. Keep it as an exploratory control rather than changing the default before the missing straight realization can evaluate portfolio quality. The 0.25 mm Release grid control reaches ten iterations but times out at 900 s; its last completed iteration has six sampled and 231 shadow conflicts. Do not promote the denser grid. The redundant full Debug control was explicitly cancelled after Release reproduced its global checkpoints and oracle sequence; it is not mislabeled as a timeout or a completed baseline.
+
+Final retained verification: Debug and Release each pass **45/45 core tests**; nine Python rule-context/angle checks pass; broad Debug CTest is **126/133**, retaining the same seven documented demo failures. Final Tier 0 has identical ordinary-angle copper in both builds and passes original-project external KiCad DRC. `git diff --check` passes. Focused retained experiment patches, all 19 run records, source-ladder preflights, region replay and the completed frontier diagnosis are in `reports/benchmark_history/2026-09-07-tier-resolution/`. No tier above Tier 0 is promoted.
+
+
+## Experiment V49 — Straight regional lane realization
+
+### Failure
+Tier 1 `bm_svf`: V47 selected 78 paths, zero abstract overflow, 44 complete regional bundles, but no replacement geometry. Exact global copper still had 560 violations (436 track, 105 track/via, 19 hole). Straight mode disabled the only regional geometry producer together with PH interpolation.
+
+### Hypotheses and ranking
+1. Missing assignment-to-copper handoff (direct source evidence): first construct integer straight lane targets and retain exact assembled-scene proof.
+2. Inadequate endpoint/via packing: inspect the first realized scene before expanding access search.
+3. Wrong global corridor choices: use surviving physical conflicts to drive upstream alternatives after geometry exists.
+
+### Research
+OpenROAD documents track assignment, initial detailed routing, search/repair, and DRC as distinct stages: https://openroad.readthedocs.io/en/latest/main/src/drt/README.html . This supports separating straight realization from the existing PH stage; no external source code was copied. A deterministic lane-target polyline is the minimum experiment, with linear construction cost plus the existing exact whole-scene oracle. It does not establish that assigned lanes can be joined legally.
+
+### Change
+Added an explicit straight realization path using packed cross-section targets, selected terminal/via access, integer diagonal-first doglegs, existing ownership/path splicing, native-scene checks, and an independent whole-path quantized copper proof. PH code stays available and straight transactions do not claim PH certificates. Initial alternative elbow or joint rerouting search is deliberately absent, so failure diagnoses can identify the next mechanism. The existing linear scaffold counters measure proofs/rejections.
+
+### Verification plan
+Two-net shared-copper fixture must become legal; static wall and cancellation must reject. Run core and Tier 0, then the V48 bounded Tier-1 control (256 bundle states, 900-second allowance), retaining original project DRC and angle gates. Full default Tier 1 is required before promotion.
+
+### Baseline preservation
+Touched pre-experiment files and frozen Release CLI are in `build/tier-resolution-v49-baseline/`. Previous uncommitted work was preserved.
+
+### V49 intermediate evidence
+Release core 46/46 and Python corpus/angle tests 9/9 passed. Tier 0 remained qualified: 50 connections, 243 ordinary-angle tracks, 5 vias, zero final internal errors/opens and original-project KiCad DRC errors. The first three bounded Tier-1 portfolios reached straight assembly but failed multilayer-plan validation (net IDs 22/0, 13/3, 21/1); the fourth reached exact copper rejection. These are diagnosed implementation stages, not new tier passes.
+
+## Experiment V50 — Coalesce redundant straight layer adapters
+
+### Failure
+V49 first Tier-1 portfolio, window 4, net `kicad-net-22` connection 0: source F.Cu fragment ends at the original F.Cu-to-B.Cu via (66.49,57.54 mm). Its selected replacement already runs on B.Cu. Appending the fragment return adapter and then the original via creates B.Cu→F.Cu→B.Cu at one position; the ordered multilayer planner correctly rejects that sequence. The same failure recurred on two other portfolios.
+
+### Hypothesis and change
+A zero-length layer return introduced by assembly is redundant when both surrounding runs use the same layer. Coalesce these adapter excursions in straight transactions before multilayer parsing. Preserve PH assembly and the strict public multilayer validator. Require the whole-board straight oracle to report zero opens as well as legal copper, so an intermediate-layer branch cannot lose its physical via unnoticed. Count collapsed adapters explicitly.
+
+### Minimum experiment
+Synthetic F.Cu route followed by B.Cu continuation, with the repaired fragment moving its transition earlier: expect one remaining real via and legal copper. Add a front-only branch at the removed adapter: require rejection for an open. Compare the same bounded Tier-1 configuration after core/Tier-0 verification.
+
+### Research/integration
+This is a path-assembly invariant repair supported by the captured route and the existing `plan_multilayer_route` contract, within the track-assignment/detailed-routing separation documented for V49. No new routing algorithm or external code was introduced.
+
+### V50 first portfolio: exact matched reconstruction
+All 490 source fragment endpoints matched recorded snapshot 1112. The 38 emitted complete multilayer plans plus the remaining single-layer fragment replacements reproduced the production oracle exactly: 796 violations, 2 opens, 1,077 segments, 94 vias. The matching original allocation was 560 violations, 0 opens, 1,204 segments, 48 vias. Categories after straight realization: 582 track clearance, 127 track/via, 63 hole clearance, 5 hole/hole, 5 track/edge, 5 track/pad, 6 via clearance, 3 via/edge. The first wider scope retry improved to 756 violations / 1 open, still rejected. Reconstruction artifacts and provenance are in `build/tier-resolution-v50-tier1/first-scene/`; this diagnostic cannot qualify a tier.
+
+The two opens were traced to lost same-net tree contacts, not removed vias. Net 21 branch connection 1 ends on connection 0 at (66.49,56.89 mm), F.Cu; the replacement trunk moved 0.65 mm away. Net 2 branch connection 2 ends on connection 0 at (72.34,95.89 mm), F.Cu; the replacement trunk moved 1.066 mm away and changed layer. All original vias on these nets remained. `make_fragments` merges across collinear vertices even when another connection ends there, erasing that electrical anchor before template selection.
+
+## Experiment V51 — Compare retained source topology with exact copper
+
+### Failure / hypothesis
+The preferred discrete state nearly doubled physical vias and worsened DRC. The allocator already retains a packed source-topology fallback, but the new straight consumer initially evaluated only the preferred discrete state. Compare two assembled scenes using exact connectivity and copper, retaining the source fallback when it improves the result.
+
+### Change / bounded experiment
+Use already retained source-topology/source-via selections from active/reserve pools. Evaluate at most one additional complete scene, rank acceptance, evaluated proof, opens, DRC count, then native conflicts. No new lane assignments or relaxed rules are invented. A synthetic failed outside-board detour now falls back to the legally packed source lanes; its focused regression passes. Diagnostic scope-only replay compares V50/V51 before another full tier run.
+
+### Next independently evidenced hypothesis
+Preserve shared same-net connection endpoints during collinear regional-fragment compression. This addresses the earliest stage which loses the two measured branch contacts.
+
+## Experiment V52 — Preserve tree junctions during fragment compression
+
+### Failure
+The V50 exact reconstruction isolated opens on nets 21 and 2. Both original tree branch endpoints were existing vertices on another connection's straight run, but `make_fragments` removed those vertices while merging collinear edges. Later detour/layer templates no longer knew the shared points were electrical anchors. No original via was removed on either net.
+
+### Hypothesis and minimal change
+Index selected connection endpoints by net/layer/position and forbid collinear merges across those vertices. Keep source-edge identities and fragment endpoint authority intact. Complexity is logarithmic endpoint lookup per candidate merge; no geometry or routing rule is weakened. This experiment covers recorded vertices; arbitrary off-vertex physical junctions remain a separate concern.
+
+### Research
+KiCad's optimizer explicitly supports topology and preserved-vertex constraints alongside collinear merging: https://docs.kicad.org/doxygen/classPNS_1_1OPTIMIZER.html . Its topology code separately manages line simplification and joint structure: https://docs.kicad.org/doxygen/pns__topology_8cpp_source.html . Flux's source graph already contains the measured junction vertices, so preserving them during compression is smaller than adding a new geometric repair stage. No KiCad source code was copied.
+
+### Local verification
+A three-terminal T fixture retains two trunk fragments around the shared endpoint. Moving both halves to offset lanes preserves the branch and exact copper connectivity. The focused regression passed. Tier 0 was rerun and remains qualified with original-project KiCad DRC and ordinary track-angle audit. Core regression and updated Tier-1 comparison follow.
+
+### V51/V52 verification results
+V51 exact-witness-only 15-window replay: 953→892 DRC reports, 1→0 opens, planned via transitions 70→60. This is a scoped comparison, not the production 45-window benchmark. Keep the bounded source-fallback comparison as a partial improvement. V52 Release core passed 48/48 after updating the provenance test's expected fragment counts for the intentionally preserved vertex; stale index/geometry/layer checks remain unchanged. Broader tests remain 126/133 with the same seven prior CLI demo failures. Python rule/angle tests passed 9/9. Typed feedback now retains exact straight-scene witnesses without inventing PH/PNS failures from absent curve certificates.
+
+V52 first production portfolio and its wider scopes: 733/0, 725/0, 644/0 (DRC reports/opens). A second matched reconstruction reproduced the 644-report scene exactly: 505 source fragments, 37 windows, 1,032 segments, 64 vias; categories 498 track clearance, 94 track/via, 39 hole clearance, 4 hole/hole, 7 track/pad, 2 via clearance. This remains illegal copper. The first portfolio's two measured tree-contact opens are gone.
+
+## Experiment V53 — Diagnostic exact whole-net portfolio swaps
+
+### Failure and hypothesis
+After correct branch preservation, the first portfolio still has 644 physical reports. Largest paired diagnoses include nets 16/5 on B.Cu and 21/22 on F.Cu. Retained whole-net source alternatives may be physically better than the individually preferred regional detours. Test those alternatives against the same frozen copper before changing production selection.
+
+### Experiment
+A diagnostic script invokes the existing exact portfolio replay for the largest remaining pairs, retaining only improvements in (opens, raw DRC reports, vias). Complete connection sets are required for every slot; each accepted update is independently replayed to reproduce its measured oracle. Cap at 16 pair attempts and stop when the five largest remaining groups have no improving retained pair. The script changes no production routing policy and cannot qualify a tier.
+
+### Result
+13 pair attempts, 25 whole-net combinations each where available. The diagnostic scene improved 644→419 reports, with zero opens throughout, and 64→49 vias. It then stalled: all five current largest conflict pairs rejected every available improvement. Selected geometry, per-pair cases and executable hash are retained in `build/tier-resolution-v52-tier1/portfolio-sweep/`; the durable summary is `V53-diagnostic-portfolio-sweep.json`.
+
+### Decision
+Keep this as oracle evidence, not an active routing heuristic. The available portfolio has a physical local minimum under pair swaps; merely increasing repeated pair attempts cannot solve it. Next investigate new corridor/via alternatives or a larger coordinated repair scope, using exact copper costs and preserved tree anchors. A straight detailed preview is checked separately under original project rules before drawing any external-DRC conclusion.
+
+### V53 detailed and KiCad rejection
+The 419-report provisional diagnostic produced 615 segments, zero arcs, 49 vias and 219 internal copper reports after straight detailed materialization; internal opens remained zero. With the byte-identical original project, KiCad rejected it with 209 errors: 65 clearance, 63 shorting items, 53 track crossings, 26 solder-mask bridges, 2 hole/hole, plus 9 unconnected items. The independent angle audit found 5 unresolved non-ordinary segments (189 horizontal, 210 vertical, 211 diagonal45); ordinary-angle conversion was requested but could not legalize every segment amid the conflicts. This preview is explicitly rejected. Compared with the earlier V40 diagnostic (193 external errors and the same 9 unconnected items), provisional report minimization did not translate to improved final copper. Do not promote the diagnostic pair-sweep heuristic; preserve the negative result to avoid repeating the same optimization target.
+
+### V52 completed production comparison
+The 256-state Tier-1 run completed in 1,698.735897 seconds, with 12 exact straight scenes over four retained portfolios; none qualified. The first portfolio's 733/0 → 725/0 → 644/0 sequence retained connectivity, while a second portfolio still had one open. Durable scene metrics are in `reports/benchmark_history/2026-09-07-tier-resolution/V52-completed-tier1.json`. The completed benchmark exposed an independent result-retention bug; do not treat final zero regional counters as absence of executed geometry.
+
+## Experiment V54 — Keep evaluated regional assessments over unknown checkpoints
+
+### Failure and hypothesis
+The completed V52 run selected an earlier deferred regional result over all four physically examined portfolios. The comparator counts incomplete bundle assignments, so an unexamined empty list erroneously appears better than positive measured failures. This discards the final physical diagnosis and its feedback authority.
+
+### Smallest experiment
+Add explicit `regional_evaluated` state to the plan result and CLI report. After completion/connectivity/topology gates, prefer evaluated assessments before comparing regional failure counts. Mark the state only when regional analysis is invoked, including exact promotion. Keep existing copper acceptance unchanged. Extend the existing oracle-first feedback fixture to require a retained evaluated final assessment; it fails on the pre-change executable with the precise deferred-checkpoint assertion. No new routing algorithm or external source code is involved.
+
+### Verification
+The pre-change fixture failed at the new assertion; the fixed Release core suite passes 48/48. Broader CLI tests remain 126/133 with the same seven baseline demo failures. Tier 0 qualifies again with a byte-identical final PCB (243 H/V/45 tracks, 5 vias, zero internal opens, zero KiCad errors/unconnected). Keep this correction. The completed V52 Tier-1 board result remains attributed to its original executable; it was not rerun after this selection-only correction.
+
+The default Debug CLI was also rebuilt through V54; its Tier-0 benchmark independently qualifies again (`build/tier-resolution-v54-dev-tier0`). Both normal development and Release executables include the correction.
+
+## Experiment V55 — One early straight physical feedback transaction
+
+Tier 1's 12 measured V52 straight scenes all occur in the final epoch. The straight-only intermediate predicate disables realization, and the exact coarse oracle defers regional analysis while provisional copper is illegal. Therefore none of the newly exposed assembled-copper failures can affect a later global epoch. Ranked explanations: (1) physical feedback arrives too late; (2) retained corridor/via portfolios lack the needed joint alternative; (3) fixed diagonal-first elbows introduce avoidable collisions. Test the scheduling mechanism first using existing interfaces.
+
+The opt-in `--early-straight-feedback` experiment permits one bounded first-epoch straight transaction, one portfolio and zero physical scope retries, then consumes its diagnostics through the ordinary history/rerouting path. All global iteration counts and final legality checks remain intact. The default remains disabled pending evidence. Primary references: OpenROAD detailed routing separates track assignment and search/repair (https://openroad.readthedocs.io/en/latest/main/src/drt/README.html); VPR documents negotiated-congestion routing (https://docs.verilogtorouting.org/en/latest/vpr/command_line_usage/). This experiment reuses Flux's existing mechanisms and copies no source code.
+
+Machine-readable hypothesis and ranking: `reports/benchmark_history/2026-09-08-tier-resolution/V55-experiment.json`.
+
+### V55 deferred and reverted
+The scheduling fixture did not preserve the assumed failing state; no scheduling improvement is claimed. During investigation, the repeated external opens exposed a prior canonical-geometry error. The ongoing 2-iteration/32-state control was intentionally stopped, with its exact command and reason retained. All V55 production/harness/test edits were restored from the pre-experiment snapshot; a focused patch is preserved for later work after geometry is corrected.
+
+## Experiment V56 — Normalize KiCad back-side footprint coordinates
+
+### Failure
+KiCad's independent 9.0.8 loader confirms that Flux mirrored all eight U1/U2 pad anchors a second time on Tier-1 bm_svf. Each anchor is displaced by 2.54 mm, swapping the apparent physical positions of different nets. This explains why previous Flux-zero-open previews still had missing pad connections in KiCad. The earliest failing representation is canonical import, before any route allocation. Exact pad UUIDs, positions and nets are preserved in `reports/benchmark_history/2026-09-08-tier-resolution/V56-pad-position-diagnosis.json`.
+
+### Hypothesis and research
+KiCad board syntax already stores reflected back-side local coordinates, whereas canonical Flux footprints apply a side reflection at placement. Undo the serialized reflection once on import; preserve canonical transform semantics. KiCad's parser also explicitly treats an omitted pad angle as zero in board coordinates: https://docs.kicad.org/doxygen/pcb__io__kicad__sexpr__parser_8cpp_source.html . Local KiCad loader outputs independently verify the positions and orientations.
+
+### Change and verification plan
+Normalize back-side pad anchors and local courtyard/circle/keepout geometry at import; transform direct footprint Edge.Cuts without a second reflection. Initialize omitted pad angles using the same absolute-to-local conversion as explicit angles. Test a synthetic front/back fixture at four orthogonal rotations, then compare all active ladder board pad positions/dimensions/angles with KiCad using a new read-only inspector. Preserve original input/project files, rerun Tier 0 and Tier 1, and keep failed previous routing outputs as evidence of the old representation.
+
+### V56 independent geometry result
+KiCad 9.0.8 and Flux now agree exactly on 1,163 pads across all five active tier boards, plus all 16 synthetic pad-frame cases. The old 615-track/49-via rejected preview now has 9 internal opens, matching KiCad's 9 unconnected items; the pre-fix executable reported zero on the identical file. This corrects false connectivity evidence, not the tracks themselves. Tier 0 qualifies again with original-project KiCad DRC and ordinary-angle export audit. The new full bounded Tier-1 run is in progress; its first straight scene has 707 reports and zero opens. The inspector explicitly rejects nonzero pad-offset cases rather than claiming parity for unsupported anchor semantics.
+
+## Experiment V57 — Preserve offset-pad hole and copper anchors
+
+The corrected omitted-angle semantics exposed an existing offset-drill test assumption. Independent KiCad geometry shows a second import error: the serialized drill offset moves copper relative to the hole anchor, while the canonical field describes the hole relative to the copper center. Copying the vector directly moves the wrong object. The V56 inspector mismatches all 16 offset-pad micro-cases.
+
+Rebase the imported copper-local position by the rotated serialized offset and negate the canonical drill offset before back-side normalization. This preserves KiCad's actual hole center and annulus center through the existing geometry interfaces. Extend the inspector to compare copper with KiCad ShapePos and drill centers with GetPosition; add plated/non-plated offset cases at four rotations on both sides. KiCad source reference: https://docs.kicad.org/doxygen/classPAD.html (ShapePos and GetPosition). Existing canonical manually constructed pad semantics remain unchanged. The active benchmark boards contain no nonzero offsets, so this correction does not change the geometry of the in-progress V56 Tier-1 run; differential pad output will verify that assertion.
+
+### V56/V57 verification
+Release core passes 50/50. Broader CLI tests remain 126/133 with the same seven baseline demo failures. Direct KiCad comparison passes all 1,163 active-tier pads and 32 synthetic frame/offset pads, including drill anchors. The active-board copper-pad geometry is byte-for-byte equivalent between V56 and V57 inspector payloads after excluding newly added drill diagnostic fields. Tier 0 qualifies again. The first V56 reconstructed scene reproduces 707 provisional reports and zero opens exactly; detailed preview has 397 internal reports, and original-project KiCad rejects it with 271 errors (139 clearance, 69 shorts, 58 crossings, 3 solder-mask bridges, 2 hole/hole), but zero unconnected items. All 1,005 tracks are ordinary angles, with zero arcs and 63 vias. This is an import/connectivity correctness improvement, not a tier promotion.
+
+## Experiment V58 — Whole-net single-layer diagnostic alternatives
+
+The known-connected KRT topology keeps V_IN and V_BF on F.Cu without vias, whereas the first reconstructed Flux scene uses six via sites on each. Use that as structural evidence, not track coordinates: for the five most implicated nets in the exact conflict groups, project every complete branch onto each existing copper layer, remove only duplicate same-position layer-transition vertices, and check the whole scene. This is diagnostic only and changes no production search.
+
+Eight non-identical alternatives were checked. Moving V_IN to F.Cu worsened raw reports 707→751 despite removing six vias; moving V_BF to F.Cu improved 707→689, zero opens, 63→57 vias. Other seemingly lower report counts introduced opens and were rejected. The best candidate receives separate detailed/KiCad/angle verification before judging value. The experiment demonstrates that via count alone is not a sufficient layer-assignment objective; geometric path changes are still needed. Artifacts: `reports/benchmark_history/2026-09-08-tier-resolution/V58-single-layer-probe.json`.
+
+### V58 external result and decision
+The best single-layer diagnostic reduced detailed internal reports 397→385 and KiCad errors 271→265, with 63→57 vias, zero unconnected items, and ordinary-angle copper throughout. Categories moved rather than disappearing: clearance 139→130, crossings 58→56, hole/hole 2→1, shorts unchanged at 69, solder-mask bridges 3→9. Keep the oracle evidence; do not activate an additional routing heuristic for this small incomplete result. Future layer alternatives need joint corridor changes and physical evaluation, not simply a lower via count.
+
+### Retention issue observed during V56
+The regional scope loop in `analyze_regional_conflicts` overwrites its prior result unconditionally. The first corrected allocation's scene sequence is 707→791→808 reports with zero opens, so the broader scene can replace a physically better earlier one. All remain rejected; no false acceptance results. This is a concrete next checkpoint-retention investigation, separate from the corrected import and the unchanged in-progress executable.
+
+The independent KiCad pad/drill comparator is now a CTest regression when the configured Python provides pcbnew; building core tests also builds its inspector. The registered external parity test passes (1/1), so future import changes are checked against KiCad itself as well as synthetic expected coordinates.
+
+### V56 completed benchmark
+The full 256-state/1,800-second-bound Tier-1 run completed in 1,591.087 seconds, unqualified. Nine assembled scenes received exact proofs, all with zero opens and nonzero copper errors (707, 791, 808, 729, 786, 798, 1245, 1472, 1439); one additional regional attempt did not assemble. The selected result is regionally evaluated but only 45/47 discrete windows complete, so its zero raw scene counters are unexamined values, not zero-error copper. The selected coarse allocation has 78 paths on 25 nets, zero unrouted nets/abstract overflow, and 613 exact provisional errors. Final copper is not accepted.
+
+The smallest unresolved region is window 25: two source-topology fragments on F.Cu, nets GND/V_MID, one retained template each. Partial access rejects their sole joint via/run-up combination before any spline/straight realization. Its exact JSON, bounds and candidates are preserved in the new frontier report. This is the next concrete micro-case for compatible joint access/corridor generation. The scope loop's unconditional checkpoint replacement and the plan comparator's preference for incomplete-assignment counts also merit separate physical-checkpoint retention work.
+
+The final two import tests were linked against a preserved pre-fix importer object to verify red/green behavior with the final assertions: the frame test fails on absolute pad orientation and the offset test fails on the physical hole anchor. Both pass with the corrected importer. No routing experiment remains running.
+
+## Experiment V59 — Screen legal-angle via approaches before access selection (2026-09-08)
+
+Failure: V56's selected bm_svf window 25 (ordinary context occurrence 7) retains
+four via choices per net for GND/V_MID, but all 16 pairs fail. The apparently
+remote blocker (choices 4/67) is real: the GND via is only 650 µm from the frozen
+V_MID B.Cu approach anchor, below the required 675 µm. Moving GND does not help
+its retained arbitrary-angle approach: choices 5/64 have 366.816 µm B.Cu track
+separation against a 450 µm requirement.
+
+Hypothesis: screen H/V/45 approach copper before mutual access selection, instead
+of screening arbitrary chords that the straight realizer later bends. KiCad's
+[trace posture selection](https://docs.kicad.org/doxygen/pns__line__placer_8cpp_source.html)
+provides the relevant alternative straight/diagonal-head concept. The experiment
+added four constant-size connector postures and retained existing static checks,
+ranking and budgets. Curved mode was unchanged.
+
+The isolated two-net replacement reduced exact static-board DRC from two track
+clearance errors to zero, with the same two vias. Its 78 board opens reflect
+intentionally absent unrelated routes; this was never a routed-board result.
+A mirrored synthetic geometry test and a production candidate-generation test
+passed. Tier 0 remained externally qualified; the initial core run passed 51/51
+and broader tests passed 127/134 with the same seven baseline demo failures.
+
+However, all 48 tested compatible local replacements made the frozen complete
+source allocation worse (613 errors before, best 624 afterward, zero opens in
+all cases). The complete Tier 1 experiment also reproduced unchanged first
+scenes (707, 791, 808) and worsened later scenes (729→757 and 786→823).
+This changes where collisions occur without coordinating neighboring routes.
+
+Decision: revert the candidate-generation experiment. Preserve its focused patch,
+micro-tests, exact pair replay and bounded frozen-scene sweep under
+`reports/benchmark_history/2026-09-08-tier-resolution/` and
+`build/tier-resolution-v59/`. The originally launched full benchmark continues
+on its recorded executable; its final outcome will be recorded separately.
+No failed candidate generator remains enabled merely because its local test passes.
+
+## Experiment V60 — Preserve exact via failures in regional conflict extraction (2026-09-08)
+
+A smaller synthetic case exposed an earlier feedback omission: the exact copper
+oracle reports `track_via_clearance` and `via_clearance` as
+`via_site_exhausted`, but regional extraction filters out that failure kind.
+It consequently reports no regional physical conflicts for this via-only case.
+
+Hypothesis: admit exact via failures through the existing bounded net/layer/region
+attribution. A failure must either create repair scope or remain explicitly
+unmapped. This follows the separate access/DRC repair responsibilities described
+by [OpenROAD's detailed router](https://openroad.readthedocs.io/en/latest/main/src/drt/README.html).
+No clearance, physical acceptance rule, or routing budget is relaxed.
+
+The synthetic case now counts both failures: one maps into joint scope, while
+one remains unmapped because the localized via-overlap box does not touch the
+relevant track centerline. This is an unresolved attribution limitation, not a
+successful repair. A nonexistent-layer variant must retain both unmapped failures.
+
+On the saved 613-error Tier 1 allocation, the V59+V60 diagnostic replay expands
+27 regions to 39. The control assembled an illegal 971-error scene; the expanded
+scope has incomplete assignments and produces no checked scene. Its zero raw
+scene counters mean unknown, not legal. Tier 0 passes with both changes. Separate
+V60-only tests and benchmark runs follow the V59 reversion so the final decision
+is not based on the abandoned candidate-generation experiment.
+
+V59 completed its full 256-state run in 1754.7 seconds without qualifying Tier 1.
+The targeted local assignment recovered (45→46 complete assignments of 47), but
+assembled scenes worsened 729→757, 786→823 and 798→821. Remaining scenes matched
+the control and the selected checkpoint still had no checked physical scene.
+Reversion is retained; this is a useful local mechanism for future coordinated
+routing, not a successful whole-board routing heuristic.
+
+V60 refinement preserves original attached planar source edges on generated vias.
+Track/via diagnoses use the track layer. Via/via diagnoses choose a common attached
+layer deterministically, independent of primitive/path enumeration order. The
+existing source-pair field identifies exact repair owners; it does not claim that
+the attached edges themselves collide. Stale or unavailable-layer provenance still
+fails closed. The synthetic via-only case now maps both diagnoses with zero
+unmapped pairs; the final test fails against the preserved old regional object.
+
+The V60-only 2-iteration/0-feedback/32-state Tier 1 comparison completed in
+422.3 seconds before versus 161.6 seconds afterward (overlapping other work, so
+not an isolated speed measurement). Both select the same 491-error, zero-open
+coarse copper. Unmapped regional pairs drop 100→0; complete assignments rise
+18/19→19/20. One 31-fragment, nine-net region exhausts the 32-state bound before
+physical assembly. The selected scene is unchecked, not zero-error copper.
+A 256-state follow-up is running and is recorded separately in the benchmark history.
+
+Verification: 51/51 Release core tests; 127/134 broader tests, with the same seven
+known baseline demo failures; Debug micro-test passes. Release and Debug Tier 0
+both qualify with 243 H/V/45 tracks, zero arcs, five vias and clean KiCad DRC.
+The rejected Tier 1 coarse diagnostic preview has 107 KiCad errors (64 crossings,
+20 shorts, 23 clearance errors), 66 warnings and zero unconnected items. It also
+retains three non-H/V/45 segments that the existing legality-gated converter could
+not replace, and therefore cannot satisfy the straight-angle qualification gate.
+This preview uses the unmodified source project rules and is explicitly rejected.
+
+Decision: keep the exact via failure/ownership feedback correction. The focused
+175-line patch is preserved separately because the surrounding working tree already
+contains extensive uncommitted implementation, including the previously untracked
+copper-oracle source; committing these whole files would conflate earlier experiments.
+
+The V60 256-state follow-up assembled two exact-checked scenes (817→812
+violations, zero opens) but timed out at 600 seconds during another regional
+portfolio. This is a partial run, not a completed selected checkpoint. The
+second scene was reconstructed from all 496 source fragments and reproduced
+812/0 exactly before diagnostic materialization and independent KiCad DRC.
+The rejected detailed preview has 745 tracks, 60 vias, zero arcs, 241 KiCad
+errors (65 crossings, 78 shorts, 95 clearance, 3 hole-to-hole), zero unconnected
+items and two non-H/V/45 segments. Rules are byte-identical to the source project.
+
+The highest-priority recorded physical pair is `Net-(U4A--)` / `Net-(R4-Pad1)`
+on F.Cu, with 19 coalesced diagnoses; the worst witness spans approximately
+(55.052499, 82.277499)–(55.827501, 83.502501) mm. This identifies a concrete
+physical region, not a proof that the frozen pair is unsatisfiable. Trace its
+selected lanes/templates/corridors upstream after evaluating the corrected
+ownership model with the default full-feedback configuration. Final benchmark
+history records the timeout, successful lower-tier checks and all intermediate
+scene proofs; no benchmark process remains running.
+
+## Experiment V61 — Retain physically assessed regional checkpoints
+
+### Failure
+The normal Tier 0 baseline qualifies: 50 paths, 243 ordinary-angle tracks,
+five vias, zero opens, clean internal copper and external KiCad DRC. All five
+ladder boards import successfully. Tier 1 remains the frontier. A frozen
+`bm_svf` coarse allocation materializes 78 paths with zero opens but 491 exact
+errors: 420 track clearance, 47 track/via clearance, 24 hole clearance. The
+largest recorded pair is nets 13/14 on F.Cu, 15 coalesced diagnoses and a
+675 um maximum deficit. This is a coarse scene, not assembled regional copper.
+
+Regional retries unconditionally replaced an earlier assessed scene. Historical
+scope scenes worsened 707→791→808 errors. Unknown/unassembled scenes reported
+raw zero counters and could outrank checked scenes through assignment counts.
+
+### Hypothesis and research
+Retain the best whole-scene checkpoint separately from the latest exploratory
+scope. MAPF-LNS2 incumbent acceptance/rollback provides a relevant search pattern:
+<https://ojs.aaai.org/index.php/AAAI/article/view/21266> and
+<https://raw.githubusercontent.com/Jiaoyang-Li/MAPF-LNS2/master/src/LNS.cpp>.
+Its discrete time agents differ from static copper; only acceptance semantics
+are adapted, with no copied code. OpenROAD's separate assignment, detailed
+routing and DRC repair phases support keeping physical assessment explicit:
+<https://openroad.readthedocs.io/en/latest/main/src/drt/README.html>.
+
+### Change
+Add scene evaluation/completeness flags; invalidate assessments when rebuilding
+geometry; compare fully assessed checkpoints before assignment counts; retain
+geometry and diagnoses atomically while continuing exploration from the newest
+scope. Report each attempt and distinguish selected retry from explored retry.
+Cancellation remains authoritative even if an older candidate was retained.
+Independent review identified stale flags and cancellation hiding; both were
+corrected before validation.
+
+### Before and after
+All 52 Release core tests pass, including checked-versus-unknown checkpoint
+ordering, physical completeness and aborted rebuild invalidation. Tier 0 still
+qualifies with the same 243 tracks/five vias and clean KiCad DRC. A matched
+2-iteration/0-feedback/32-state Tier 1 probe selects identical coarse copper
+(491 errors, zero opens, 19/20 complete assignments). It never assembles a
+regional scene; explicit flags now report that evidence as unknown. Before
+433.63 s was a Dev build, after 135.12 s was Release: no speedup claim.
+
+The normal 30-iteration baseline emitted coarse scenes 674→613→499→540 errors
+(all zero opens), then an assembled straight scene with 1159 errors and zero
+opens. Its process ended without harness/final export/DRC artifacts; exact exit
+status is unavailable. Preserve this partial run as unknown, not a completed
+benchmark or proof of legality. Last telemetry is at 1178.14 s.
+
+### Decision
+Keep this correctness change. The bounded board experiment cannot demonstrate
+retry improvement because its regional assignment remains incomplete. Preserve
+focused patch and experiment metadata under
+`reports/benchmark_history/2026-10-01-tier-resolution/` rather than committing
+whole files containing extensive prior uncommitted implementation.
+
+## Experiment V62 — Frozen coarse whole-net portfolio probe
+
+### Hypothesis and change
+Test conflict-directed replacement of complete whole-net coarse alternatives
+on the saved 78-path scene. Diagnostic script enumerates worst participating
+pairs, fixes outside nets, checks exact copper at 1 nm, and rejects missing
+paths, malformed geometry or increased opens. Bound: 150 probes, three rounds.
+No production heuristic is activated.
+
+### Result and interpretation
+75 checks in 42.74 s accepted two pair replacements: nets 13/14, 491→478
+errors; nets 22/8, 478→468. Final 1267 tracks, 32 vias, zero opens; categories
+424 track, 31 track/via, 13 hole clearance. Track errors increased from 420.
+Severe conflicts persist. No external KiCad, normal-angle, resource-capacity or
+regional native-scene qualification was performed. The replay binary was rebuilt
+during this diagnostic run; repeat with immutable binary identity for stronger
+comparison. A 4.7% error reduction does not solve the mechanism.
+
+### Decision
+Retain as diagnostic evidence only. Existing portfolios provide some improvement
+but insufficient diversity/legalisation; do not promote this into active routing
+based solely on violation count.
+
+## Experiment V63 — Direct fixed-obstacle conflicts to movable planar geometry
+
+### Failure and hypothesis
+The exact copper oracle classifies track/source-via and track/source-hole
+collisions as `via_site_exhausted/change_via_site`. Source board geometry is
+immutable, and these cases contain no generated via. Global history preparation
+skips all planar edges for that action, so the feedback cannot affect the
+movable trace. Reclassify only generated planar conflicts with no generated via
+to `quantization_clearance/change_corridor`; preserve physical DRC rejection.
+This is an isolated correctness hole, not an explanation for every Tier 1 error.
+
+### Research
+KiCad's shove implementation walks around immutable solid/hole obstacles:
+<https://docs.kicad.org/doxygen/pns__shove_8cpp_source.html>.
+Interactive shove and global autorouting differ, but the action must target
+movable geometry. Concept adaptation only, no copied source. The smallest
+experiment changes diagnosis action, using existing history rather than adding
+new search or broad penalties for all dynamic-via collisions.
+
+### Change and verification in progress
+A single-layer fixed-source-via microcase checks unchanged `track_via_clearance`
+rejection, corridor action and nonzero planar history. A true generated-via
+control retains `change_via_site`. Review identified that static obstacle bounds
+were missing, so the new planar action would penalize a whole trace. Localizing
+the fixed-object witness and adding drilled-hole coverage precede board testing.
+Matched V61/V63 feedback-enabled Tier 1 probes and normal Tier 0 are pending.
+No tier promotion is justified.
+
+V63 verification update: focused oracle and true-generated-via tests pass; all
+52 core tests pass. The synthetic feedback grid was initially invalid at 0.1 mm
+(minimum 0.45 mm), so it now explicitly checks valid input at 0.5 mm before
+asserting planar history. Static obstacle bounds are applied only to reclassified
+cases. Expand the localized overlap using the required clearance, since expanding
+by a tiny deficit can otherwise fall back to the full trace union. A near-threshold
+via test verifies that mild shortfalls remain local.
+
+Matched Release N2/R1/32-state Tier 1 probes are unchanged: 78 materialized
+paths, 1292 tracks, 46 vias, zero malformed paths/opens; 796 errors (570 track,
+162 track/via, 58 hole, six via). History has 8579 edges/3983 pressure in both.
+Runtime 309.67→308.62 s, not a meaningful speed change. Both regional assessments
+remain unknown due to one incomplete assignment. This proves no frontier benefit.
+The separate fixed-obstacle microcase proves the correction's general semantics;
+identify whether those diagnoses participate on the real board before attributing
+its failures to immutable obstacles. Normal full-feedback routing is pending.
+
+Rejected source hypotheses are preserved in `rejected-hypotheses.json`:
+(1) direct medial chords do not change endpoints in reconstruction; exact per-net
+A* admission checks transformed drills even though polygonal free space omits
+them; (2) capacious planar corridor exemption is type-guarded and cannot suppress
+via-node shadows. Neither justifies a new routing algorithm. Off-grid via candidate
+classification remains an audit question, not a measured current-board cause.
+
+## Experiment V64 — Reject regional vias against frozen foreign copper early
+
+### Failure
+The scene-2 exact proof contains 19 coalesced net13/net14 F.Cu diagnoses. Net13
+connection 2 has a retained vertical segment from (55.440,81.915) to
+(55.440,83.540) mm. The native net14 connection 2 via is at (55.590,82.890) mm,
+confirmed from the reconstructed path's coincident B.Cu/F.Cu transition. The
+attached runup's endpoint (55.490002,82.790002) mm is not the via site. Center
+separation is 150 um; the copper requirement is 675 um; deficit 525 um.
+`window-0.json` owns no net13 fragments, so that segment is immutable within
+this window and is inserted by `build_regional_frozen_copper_context`.
+
+Access selection checks via-via, terminal-via and attached runup interactions,
+but does not test candidate vias against arbitrary retained foreign segments.
+The selected alternative via is therefore committed before native DRC sees the
+frozen-track collision. This is a concrete early missing constraint; it does not
+require rejecting movable lane centrelines.
+
+### Hypothesis and research
+Move this exact immutable obstacle check into via access selection. A legal
+alternative site should remain selectable; otherwise preserve the blocking
+fragment so scope expansion can make the participating routes jointly movable.
+TritonRoute-WXL accounts for wide via enclosures when modelling wire pitch and
+uses incremental DRC to drive repair:
+<https://vlsicad.ucsd.edu/Publications/Journals/j136.pdf>.
+IC tracks/cuts differ from continuous PCB copper; use Flux's circular copper,
+drill and true source clearance rules. Concept only; no copied source. Existing
+native DRC remains the acceptance authority.
+
+### Change
+When frozen context is enabled, access selection checks foreign nonowned
+fragments sharing the via span. Required distance is the larger of copper
+(diameter plus actual track width, halves, plus pairwise clearance) and drill
+(drill plus track width, halves, plus hole clearance). Owned fragments remain
+available to packing. Integrate into DFS and forward checking so normal site
+alternatives are explored. Publish dedicated pruning/rejection counts and record
+`frozen_copper_context` in bundle contexts for reproducible replay.
+
+Independent review confirmed the geometric contract but identified evidence loss:
+early rejected candidates would never reach native DRC, which previously supplied
+scope-expansion witnesses. Preserve bounded, deduplicated frozen conflicts from
+partial and late leaves through assignment and native diagnostics. Every selected
+owned fragment incident to the via region is retained as a candidate owner;
+choosing one lexical owner could point expansion at the wrong source piece.
+
+### Verification pending
+The deterministic fixture covers frozen collision/525um deficit, alternate
+availability, disabled context, movable owned lane, nonoverlapping layer, exact
+clearance boundary, drill-dominant rule, and two incident owners. It also checks
+that scope expansion consumes early witnesses and rejects an owned blocker.
+Release build, core tests, frozen context before/after replay, Tier 0 and bounded
+Tier 1 are requested. The full V63 control continues independently using its
+immutable executable. No tier is promoted by this implementation or by replay.
+
+V64 verification update: 53/53 core tests and normal Tier 0 pass, including
+external KiCad DRC. After moving disposable renderer artifacts out of host `/tmp`,
+134/141 non-frontier CTests pass; the seven failures match existing demo failures.
+The checked frozen replay explicitly restores `frozen_copper_context=true` in both
+executables. Forward-checking variants reject 3–17 frozen-via states; some bounded
+domains become empty and others retain alternative choices. Whole replay runtime
+is 0.13→1.97 s; the initial report reversed these timings and was corrected.
+No replay constitutes legal copper or whole-board infeasibility evidence.
+
+The N2/R0/32-state board probe retains the same coarse 491 errors/zero opens
+(1258 tracks, 35 vias) as V61. New early witnesses trigger scope retries: five
+incomplete assignments initially, then two; selected scope retry 1. No complete
+native or straight scene is assessed. It prunes 164 frozen-via states and takes
+401.93 s versus the V61 Release control's 135.12 s. This is extra work without
+proved frontier improvement. A matched N2/R1 comparison and normal V64 run
+remain pending; do not compare the R0 run to V63's R1 metrics.
+
+Independent reviewer identified two corrections before retention: the early
+witness group can omit incident fragments when partial selection or the unrelated
+16-blocker limit truncates it; native-candidate witnesses must be cleared when
+promoting a different fallback while retaining separate access-search witnesses.
+Regression fixtures and corrections are in progress. Immutable benchmark binaries
+preserve the already-running control/comparison configurations.
+
+### Completed normal V63 control
+Normal Tier 1 finishes in 2502.44 s routing time (2513.75 s process elapsed),
+peak RSS 572412 KiB. The unlocked-board harness itself exits successfully, but
+`bm_svf.qualified=false`, `routing_plan_complete=false`, and `detailed=null`.
+Global topology has 78 paths, zero unrouted nets and zero resource overflow.
+Selected scope retry 1 has 764 straight-copper errors and zero opens; retry 0
+has 822 and later retry 2 has 974. V61 correctly retains the better checkpoint.
+Native assessment has 439 conflicts, 387 nonprovisional: that latter count does
+not mean 387 immutable-source violations; it also includes native/native copper.
+Straight categories: 542 track, 142 track/via, 62 hole, 4 via, 4 track/pad,
+3 hole/hole, 5 track/edge, 2 via/edge. No detailed export or external KiCad DRC
+qualification exists for Tier 1. The coarse oracle has 540 errors, demonstrating
+that complete zero-overflow graph allocation still fails physical realization.
+Machine-readable result: `normal-V63-summary.json`; physical diagnosis:
+`reports/diagnoses/2026-10-01-tier1-V63-normal.json`.
+
+## Experiment V65 — Restore selected checkpoint geometry in telemetry
+
+### Failure
+The completed V63 result reports a coarse oracle with 540 errors, 1291 tracks
+and 46 vias. Replaying the final active global-route snapshot instead gives
+647 errors, 1242 tracks and 47 vias at 1 nm. The replay is explicitly diagnostic
+and omits allocation metadata; all original neckdown counters are zero. Source
+inspection independently identifies the retained-checkpoint telemetry gap:
+`publish_feedback_selection` publishes counters but does not restore path
+geometry. Thus an older retained portfolio can have the reported best metrics
+while later explored routes remain active in telemetry. Do not use that replay
+as a matched physical scene or as evidence against V63 obstacle classification.
+
+### Hypothesis and change
+Republish the returned coarse checkpoint using canonical global-route IDs and
+remove previously published global paths absent from it. Preserve other route
+families and provisional/committed distinction. This is a representation and
+diagnosis correction, with no expected routing-quality change. Cover multi-epoch
+feedback by comparing the final route event view with returned coarse paths;
+require removals only for absent IDs, not for same-ID geometry replacements.
+Build/full-core and isolated pre-change red proof are pending.
+
+V65 validation: all 53 core tests pass. The isolated pre-change regional object
+links with unchanged headers and also passes the new crossing assertion; that
+fixture does not force a discarded/retained path divergence. Record this as
+positive protocol coverage, not a pre-change red proof. Do not attribute the
+entire 540/647 discrepancy to telemetry without a matched restored replay.
+
+## Experiment V66 — Memoize immutable frozen-via checks within access selection
+
+### Failure and hypothesis
+The checked V64 frozen replay costs 1.97 s versus 0.13 s without early geometric
+checks. Full-budget V64 continues running but spends a long interval without new
+regional telemetry. Source-level repetition is explicit: DFS and forward checks
+repeatedly call the same frozen-via predicate for each candidate. CPU profiling
+was unavailable (`perf_event_paranoid=4` and attach denied); no source-level hot
+function is claimed from sampling. Scope expansion also adds independent work.
+
+### Minimal experiment
+Cache both clear and conflicting predicate results by derived unique via ID for
+one `select_access_geometry` invocation. Fragments, window ownership, rules and
+site/span are unchanged within that invocation; clear the cache on return. Preserve
+the first blocker and exact copper/drill thresholds. Three alternating before/after
+replays must match every discrete field over all 18 variants, with timing excluded
+from equality. Full-core regression precedes any board comparison. Pending.
+
+V66 result: all 53 core tests pass. Three alternating paired frozen replays match
+all 18 non-timing records exactly. Process medians are 1.95→0.71 s (63.6% lower);
+BEFORE [1.95,1.95,1.95], AFTER [0.70,0.72,0.71]. Retain invocation-local reuse
+for its measured performance benefit; it does not reduce physical conflicts.
+
+## Experiment V67 — Match early frozen constraints to the actual transaction
+
+### Failure
+V64 early access rejection assumes every fragment foreign to window A remains
+fixed at its original coarse centerline. Source investigation shows that straight
+assembly replaces all windows' owned fragments before its whole-scene oracle.
+A fragment foreign to A may be owned and displaced by B; single-writer ownership
+allows this. The actual benchmark source has zero tracks/vias, so those generated
+coarse fragments are not immutable original-board copper. Per-window frozen
+context construction is used by independent curved native proof, not the straight
+assembler. The early gate therefore imposes a stronger boundary assumption than
+the assembled straight transaction requires. Header documentation already states
+that other windows may eventually move frozen copper.
+
+### Smallest corrective experiment
+Require spline realization for the early independent-window frozen-via constraint.
+Straight and discrete-only probes retain full existing assembled native/quantized
+DRC instead of rejecting against foreign coarse geometry. Prove the distinction
+with two owned windows: via in A conflicts with B's coarse segment, but B's legal
+ordinary-angle replacement moves away while retaining endpoints. Original geometry
+must fail represented copper; final assembled replacement must pass. Independent
+curved mode must continue rejecting its frozen boundary. Serialize both realization
+modes in contexts to make future replay contracts explicit. Pending fixture/build.
+
+### Local validation
+The concrete two-window fixture passes: the original coarse via/foreign segment
+scene has copper errors and zero opens; assembling both owned replacements has
+zero native/quantized conflicts and zero opens, with B's dogleg present in the
+manifest. Source tracks and vias remain empty. All 53 core tests pass and normal
+Tier 0 qualifies with external KiCad DRC. The first isolated pre-fix invocation
+accidentally selected an unrelated placement test, so it supplies no red proof;
+the correct frozen-copper fixture is being rerun. Matched Tier-1 control and
+independent review are pending. The original V64 normal experiment is being
+stopped because its straight-mode boundary contract was disproven, not being
+reported as a completed benchmark or a timeout.
+
+### Matched control and causal proof
+V67 N2/R1/32/600 completes in 299.966 seconds versus V63 308.621 seconds,
+with identical 78 paths, 1292 tracks, 46 vias, 796 copper errors and zero opens.
+No complete native/straight scene was assessed; the frontier remains unqualified.
+Final telemetry snapshot 5956 replays exactly those materialized counts at 1 nm,
+supporting V65's selected checkpoint publication on a real matched run. This does
+not restore allocation certificates or explain every prior discrepancy.
+
+The original V66-source snapshot raced the initial V67 edits and already contained
+the new gate. Its isolated PASS was not a valid pre-fix result. Using the actual
+pre-gate V65 source gives the intended failure at straight-mode admission; current
+source passes. A recoverable V66 baseline was reconstructed from V65 plus the
+saved cache hunk, with this provenance explicitly recorded.
+
+### Independent review
+Review found ambiguous schema-3 replay defaults and a fixture selected via larger
+than its board-rule materialization. Contexts now use schema 4 and require both
+mode flags; ambiguous older contexts fail closed. Fixture board/net rules now
+match its 700/300 um selected via and assert that equality. Rebuild and normal
+Tier-1 verification are pending. Original V64 normal run stopped after 46:32
+because its boundary contract was disproven; no completed metrics/qualification.
+
+### Reference oracle and next candidate
+Normalized bm_svf reference passes KiCad 9.0.8 error-level DRC with zero opens
+under a byte-identical source project: 389 segments, no arcs, 55 vias. Its 64
+warnings are library/silkscreen/text issues, not routing legality errors. A first
+regex topology inventory overcounted nested segment text and was rejected;
+KiCad-native item/net inspection corrected the counts. Frozen 812-error scene
+is not equivalent to reference topology, and the stale V63 final snapshot cannot
+identify its returned 540-error coarse allocation.
+
+FastRoute's primary source (`route.cpp:routeSegL/newrouteZ_edge`) explicitly scores
+alternative bend patterns using congestion before choosing them:
+https://raw.githubusercontent.com/The-OpenROAD-Project-Attic/FastRoute/master/third_party/fastroute/src/route.cpp
+The rectilinear resource model differs from Flux's octilinear physical copper, so
+only the candidate-diversity principle is being tested. Flux's straight builder
+uses deterministic diagonal-first elbows and currently assesses only the whole
+selected transaction and a source-topology fallback. A bounded diagnostic probes
+equal-length angle-legal alternative elbows against the whole frozen copper
+scene before any production heuristic is added. It will preserve endpoints,
+layers, and opens, with allocation/capacity and KiCad qualification explicitly
+outside this diagnostic's authority.
+
+## Experiment V68 — Physically compare retained straight bundle alternatives
+
+### Failure and ranked hypothesis
+The completed normal V63 run has 78 paths and zero resource overflow, but its
+selected assembled straight scene has 764 copper errors and zero opens. There
+are 33 windows and 264 active retained bundle candidates (384,513 generated),
+while straight realization physically compares only the chosen transaction and
+a source-topology fallback. Curved candidate evaluation is disabled in this
+straight-mode benchmark; its zero joint candidate checks are not a physics pass.
+The source-level gap is in `realize_regional_straight_candidate`.
+
+The equal-length elbow diagnostic completed 22 checks, improving the frozen
+812-error scene to 798 (zero opens; 78 paths/60 vias unchanged). It preserves 74
+pre-existing zero/off-angle segments and does not certify ordinary angles or
+allocation. This 1.7 percent reduction does not justify an active elbow heuristic.
+The KiCad-native reference comparison supplies structural layer/via differences
+on the now-exactly-replayed V67 coarse allocation, but length alone does not prove
+which topology is needed. These alternatives rank below testing existing unused
+physical portfolio diversity.
+
+### Research and smallest experiment
+MAPF-LNS2's retained neighborhood repair and rollback principle applies to
+small route-choice neighborhoods, while PCB copper has static widths/clearance
+and real via interactions absent from its time-expanded agent model. FastRoute
+explicitly compares alternative patterns before selecting them. No completeness
+guarantee or source code is transferred. References and assumptions are recorded
+in `V68-candidate-research.json`.
+
+Add an opt-in, bounded whole-scene comparison of existing retained one-window
+bundle alternatives. Every trial assembles all owned replacements and reruns
+native and quantized authority. Restore only original discrete readiness for
+rechecking a physically rejected candidate; never promote an incomplete bundle
+or claim legality without new proof. Preserve the best atomic checkpoint; reject
+unknown/materialization/open degradation; cancellation remains fail closed.
+Default zero checks preserves the matched control. The microcase must contain a
+chosen colliding B route and a retained dogleg that clears A when the entire
+transaction is checked. Production activation awaits actual board evidence.
+
+### Implementation and review
+V68 is opt-in with `--max-straight-portfolio-checks 0..4096` (default zero).
+Only the active shortlist is considered; preparation/deduplication is bounded
+by remaining checks, and legal acceptance stops search. Every accepted trial
+has complete native/quantized evidence and no open degradation. Budget/counters
+reset per invocation and all attempted probes contribute to telemetry. A first
+micro dogleg still crossed the long horizontal A track; it was corrected to go
+around A's endpoint with legal H/V/45 pieces. Initial core then passes 54/54.
+
+Independent review found lost scaffold counts in discarded trials. Counters now
+aggregate probe/rejection deltas separately from retained geometry; a two-rejected
+then legal fixture expects four total proofs and three rejections. A purported
+CLI zero-value issue was a false positive (`std::optional` bool checks presence,
+not its numeric value) and was explicitly retracted without a style-only change.
+Latest counter fixture rebuild is pending. Focused patches/source hashes preserve
+V68 and reviewed V67, plus separate V64 review corrections; the uncaptured
+pre-correction routability-knowledge file is explicitly listed as uncovered.
+
+### Control budget limitation
+V67 N2/R1/256 times out at 600 seconds in regional alternative generation before
+authoritative final metrics. No scene evaluation or physical feasibility follows
+from partial near-result zeros. The normal reviewed V67 control is still running
+and has already assessed its first whole scene. V68 will use the matching normal
+manifest settings plus 24 physical portfolio checks, after latest core and Tier-0
+checks, rather than repeatedly constraining a known incomplete regional search.
+
+### Artifact correction
+An initial P24 normal trial reused the pre-counter-fix immutable V68 executable
+(SHA `ce8c3131e112624770c36efa61760016d5a579e0deaec24dad4badb6946ad92c`)
+and was stopped during runner coordination. It is incomplete, not an independent
+completed benchmark. The counter-fixed full comparison uses a new reviewed
+immutable executable and separate artifact directory to prevent version ambiguity.
+
+
+## Experiment V69 — Joint physical selection of retained straight alternatives
+
+### Failure
+The completed V63/V67 Tier-1 runs find 78 paths with zero resource overflow but
+retain 764 assembled straight-copper errors and zero opens. V68 adds opt-in
+one-window physical comparison, but has no completed normal Tier-1 treatment
+result. Its greedy acceptance cannot reach a legal two-window combination when
+neither constituent move improves the incumbent. Its depth-first window order
+can also exhaust a small physical-check budget on a single discrete-ranked window.
+
+### Hypothesis and ranked approaches
+1. Compare existing conflict-linked two-window alternatives atomically. This
+   directly tests missing coordinated selection without generating more topology.
+2. Promote assembled copper feedback earlier in the global loop. Defer until a
+   matched physical-selection result isolates whether existing diversity suffices.
+3. Generate new layer/via/corridor choices only if retained diversity proves
+   inadequate. More candidates alone do not repair the current selection gap.
+
+### Research
+MAPF-LNS2 (https://ojs.aaai.org/index.php/AAAI/article/view/21266) replans subsets
+of colliding agents. Only conflict-directed neighborhood repair is transferred:
+PCB copper is static with finite width and multilayer vias, unlike temporal MAPF.
+Two-window enumeration costs a bounded number of whole-scene oracle calls and
+provides no completeness guarantee. No external source code is copied.
+
+### Change
+Rank windows by observed native/straight copper conflict participation, explore
+singles breadth first, and reserve half the existing shared exact-check budget
+for pairs linked by observed copper conflicts. Keep rejected single alternatives
+for atomic pair trials. Every trial rebuilds the full scene and retains the
+existing native, quantized, connectivity, and cancellation gates. Default zero
+checks stays unchanged until benchmark evidence supports activation.
+
+### Verification plan
+A deterministic two-net fixture must fail with either alternative alone and pass
+only with both. Assert budget, aggregate oracle counters, no opens, and zero
+native/represented conflicts. Run full core, Tier 0, and matched Tier 1 against
+the immutable reviewed V68 control. Record incomplete runs as unknown.
+
+### Before / After / Decision
+Pending. Structured history: reports/benchmark_history/2026-10-08-physical-selection.json.
+Existing uncommitted work is preserved; baseline source copies and library hashes
+are under build/physical-selection-20261008/source-before.
+
+### Review and additional correctness finding
+Paired and single trials can name the same assembled selection after an incumbent
+update. Whole-scene choice signatures now deduplicate those calls so repeated
+choices do not consume the shared budget. The resumable breadth-first cursor
+retains its position across the paired phase.
+
+The one-shot straight realizer copied incumbent `straight-scene:` diagnoses into
+each new trial and appended new failures without removing the old ones. Native
+scene assessment already removes its own old diagnoses. Apply the same lifetime
+to straight-scene evidence: clear it before realizing each transaction. A clean
+accepted alternative must have no leftover native/straight failure observations.
+This is a correctness fix independent of whether coupled selection improves Tier 1.
+The first 54/54 core run predates this final assertion and is not its validation.
+
+### Independent review
+No material correctness, ownership, or cancellation issue was found. The review
+confirmed shared budget validation, copied trial isolation, exact acceptance, and
+per-scene evidence refresh. The search remains incomplete: after an improving
+single move, an old incumbent is not automatically added to the pair dimensions.
+Active shortlist/diagnosis caps also bound which neighborhoods are proposed.
+These are search limits, never grounds for declaring a board infeasible.
+
+### Isolated causal proof and correction
+A current-ABI library with only the selector restored to its saved V68 body fails
+the new fixture: "paired retained moves must find legal copper when neither single
+move improves it". The current selector passes. This is a genuine quality red
+proof, not just a new-counter assertion.
+
+The supposed stale-diagnosis defect above was disproven. Removing only the extra
+erase block still passes; inspection confirms `build_regional_spline_candidate`
+already clears both `native-scene:` and `straight-scene:` observations before
+assembly. Remove the redundant cleanup. Retain the assertion as positive protocol
+coverage, and do not count this as an implementation improvement. The candidate
+benchmark with redundant cleanup is being superseded by an exact final-source run.
+
+### Final local validation
+Release rebuild passes. Final core suite: 54/54. Additional CTest coverage:
+12/12 channel occupancy, CLI configuration, and telemetry targets. Final
+Tier 0 with unchanged default zero checks: 50 paths and external KiCad DRC PASS.
+Both normal Tier-1 controls use the manifest budgets and 24 physical checks;
+final copper metrics are pending. The initial baseline run ended without a
+harness result and is preserved as incomplete. A candidate built with the
+redundant cleanup was explicitly superseded; neither is a quality measurement.
+
+The repository already contains extensive uncommitted router work. The focused
+experiment patch is reports/benchmark_history/2026-10-08-physical-selection.patch
+(relative to the saved working-tree baseline, not HEAD); source hashes are in the
+companion JSON. This avoids silently committing unrelated prior experiments.
+
+### Completed matched board result and decision
+V68 P24 control: 752 assembled errors, 432 native conflicts, zero opens, 72
+planned via transitions, 2601.714 s global duration. V69 P24: 751 assembled
+errors, 434 native conflicts, zero opens, 68 planned via transitions, 2568.130 s.
+Both examine 24 alternatives; V69 performs 12 joint checks. Both retain two
+measured improvements. Coarse oracle remains exactly 540 errors, 1291 tracks,
+46 vias, 78 paths, zero opens. Tier 0 qualifies; Tier 1 does not. Harness exit
+zero means the unlocked probe executed as expected, not a routing qualification.
+
+The best expanded-scope trial improves 948 to 861 errors, but still loses to the
+selected 751-error checkpoint. This is a search capability improvement, not a
+frontier solution. Retain it opt-in (default zero). Native/quantized tradeoffs and
+the one-error selected improvement do not justify default activation. The small
+wall-time difference is not a performance claim: runs overlapped on one host.
+
+Next hypothesis: straight assembled failures are first assessed in the final
+global-feedback epoch, so the unchanged 540-error coarse allocation cannot react
+to them. Test an initial assembled straight assessment before further negotiation,
+with ownership expansion deferred until later rather than multiplying full-scope
+search on every intermediate epoch.
+
+## Experiment V70 — Assess initial straight copper before global retries
+
+### Failure and hypothesis
+V69's measured 752→751 change leaves the exact coarse allocation unchanged at
+540 errors. All straight non-final epochs are currently classified intermediate,
+which disables assembled realization; oracle-pending coarse errors can also defer
+regional analysis entirely. The final assembled lane/via failures therefore arrive
+after the global retry budget. The existing `full_strength_first_pass` policy
+certifies curved seeds but does not do so for straight copper.
+
+### Change
+For a full-strength straight initial non-final epoch, inspect one fresh global
+checkpoint with straight realization enabled. Limit this first assessment to its
+initial ownership scope (zero expansion retries). Feed diagnoses through the
+existing knowledge/affected-net loop. Subsequent intermediate epochs remain cheap;
+the final epoch retains configured portfolios and scope expansion. No acceptance
+predicate, resource capacity, geometry rule, or penalty constant changes. Expose
+straight realization/evaluation/violation fields on feedback candidate telemetry.
+
+### Verification
+The crossing microcase must show an assessed initial straight scene before global
+retries, with the original global iteration bound preserved. In practice its
+two-net window is legally resolved on that first assessment, so the regression
+requires immediate assessed completion and no unnecessary feedback cone. The
+initial assertion demanding a failure on this fixture was incorrect. Use the
+real Tier-1 epoch evidence to verify unresolved-scene feedback instead.
+Run core tests, external-DRC Tier 0, and normal Tier 1 with P24 against V69's exact
+immutable control. Reject scheduling if overhead does not buy material frontier
+improvement. This tests earlier evidence in the existing conflict-directed repair
+architecture; it does not assume that stronger local optimization fixes topology.
+
+### Result
+Completed and scheduling reverted; see
+reports/benchmark_history/2026-10-08-early-physical-feedback.json.
+
+Local validation passes: release build, 54/54 core tests, 12/12 auxiliary CTests,
+and Tier 0 with default zero portfolio checks plus external KiCad DRC. Independent
+review found no material acceptance or scheduling defect. Existing diagnosis and
+history caps remain bounded-search limitations; V69 did not exhaust the reported
+history budget. Normal Tier 1 with P24 is running against the saved V69 control.
+
+### Independent geometry probe while V70 runs
+A public-API synthetic probe isolates another candidate mechanism without changing
+production code. Two nominal routes A=(20,20)→(30,26) and B=(21,20)→(31,26), each
+0.10 mm wide with 0.10 mm clearance, become overlapping terminal horizontal legs
+when independently converted diagonal-first. Native checks report 2 conflicts,
+quantized checks 4 track-clearance violations, and zero opens. Supplying B's
+axis-first octilinear centerline (21,20)→(25,20)→(31,26) while retaining A's
+orientation yields zero conflicts/violations/opens and an accepted scene.
+Artifacts: build/early-physical-feedback-20261008/dogleg-probe/. This proves a
+missing geometric choice in the deterministic converter; it does not establish
+how many frontier-board conflicts it causes. Do not promote an orientation
+heuristic without tracing the real scene and benchmarking it. A separate V69
+inventory shows 434 native reports over 53 net pairs (top five: 30.6%), so a
+single pair is not a sufficient explanation for the remaining board failure.
+
+The board trace does contain overlapping converter legs (nets 16/4, B.Cu), but
+it does not validate that simple remedy. Moving the observed vertical leg by
+0.152297 mm is below the 0.45 mm required centreline separation, and the alternate
+also intersects the neighboring diagonal. Native DRC objects lack an exact scene
+mapping to those telemetry paths, so the reported native diagnosis is spatial
+correlation only. Preserve this limitation in
+build/early-physical-feedback-20261008/dogleg-board-witness.json; do not count it as
+a fixed physical conflict or enable another heuristic on its basis.
+
+### V70 completed comparison and rollback
+The initial assessment produced 1015 violations/1 open and grew routing history
+from 342 coarse entries to 736; the next epoch consumed those 736 entries. Thus
+the intended upstream feedback occurred. Final selected topology nevertheless
+worsened to 1025 coarse-oracle violations (1528 tracks, 57 vias) versus V69's
+540 (1291 tracks, 46 vias). The selected regional scene was not evaluated at all:
+its zero scene counters are unavailable evidence, not legal copper. Other final
+scenes were assessed at 1346, 1617 and 1593 violations with zero opens. Tier 1
+remains unqualified; no external DRC acceptance exists. Duration was 2236.628 s.
+
+Reject the scheduling change. Restore the exact verified V69 routing algorithm
+and test configuration; retain only the three additive feedback telemetry fields.
+The V70 tested source, binary, proposed patch, and result remain recoverable. The
+microcase's early success does not override the frontier-board regression. Final
+release/core/Tier-0 checks passed after rollback (54 core, 12 auxiliary, external
+KiCad DRC). Restored test-source timestamps initially reused a stale V70 object;
+forcing its recompilation removed that build-artifact failure. Next work requires
+better conflict constraints or route generation, not simply earlier scalar
+penalties; the isolated dogleg observation is insufficient to justify a new
+production heuristic.
+
+## Experiment V71 — One physical assessment after global negotiation
+
+### Failure and hypothesis
+V70 assessed a one-iteration seed with 25 sampled overflows, one corridor overflow,
+and seven unaccepted lane transitions. Its physical failure was not a stable
+starting point for detailed feedback. V69's first complete negotiated checkpoint
+arrives later but still defers all assembled straight geometry until the final
+epoch. Test exactly one non-final assessment after all coarse topology/overflow
+gates pass, preferring the fresh checkpoint then an eligible retained checkpoint.
+Use zero scope expansions for this assessment and unchanged final exact gates.
+
+### Research and fit
+OpenROAD's global router separately controls whether congested routing guides may
+be produced (https://openroad.readthedocs.io/en/latest/main/src/grt/README.html).
+Its detailed router separates pin access, track assignment, initial routing and
+DRC-guided repair (https://openroad.readthedocs.io/en/latest/main/src/drt/README.html).
+CUGR evaluates global quality through detailed results and augments guide choices
+(https://github.com/cuhk-eda/cu-gr). These primary references motivate separating
+coarse readiness from detailed legality; they do not establish that this schedule
+will improve Flux. No external source code is copied. The bounded experiment
+changes only when Flux's existing physical feedback runs, with one extra initial
+scope rather than full detailed search every epoch.
+
+### Criteria
+An ineligible coarse seed must remain deferred. A later negotiated checkpoint may
+receive exactly one non-final physical assessment; no repeated full scans, rule
+relaxation, global budget increase, or loss of final scope expansion is allowed.
+Compare against the saved V69-derived verified checkpoint: 751 assembled errors,
+540 coarse errors, zero opens, Tier 0 DRC green. Revert if the final selected result
+regresses. Release build, 54 core tests, 12 auxiliary tests and Tier 0 external
+KiCad DRC pass. The normal Tier 1 comparison is running.
+
+## Experiment V72 — Separate search effort from physical history
+
+### Failure and hypothesis
+A source audit of V71's large pre-copper history increase found that
+`diagnose_regional_routability` uses `packing_rejected_states` as global history
+severity. That counter increments per rejected discrete candidate state. Budget
+exhaustion even generates a capacity diagnosis when no packing state failed.
+Partial access blockers similarly use repeated search observations and attribute
+them to every net and the first layer of the whole window, despite retaining
+choice IDs. Search enumeration effort is not a measurement of physical demand.
+
+### Smallest experiment
+Retain the existing search diagnostics and counters, but exclude these broad
+search-derived summaries from physical congestion history. Preserve localized
+exact/native/quantized conflict feedback. Defer geometric localization of access
+blockers to a separate experiment; do not invent a clearance deficit from counts.
+The regression must vary rejection/observation counts without changing physical
+history, and confirm genuine physical conflict evidence still enters history.
+
+### Validation and decision
+Implementation and validation pending. V71 runs from its immutable executable,
+so this source experiment cannot change that comparison. No tier is promoted
+from reduced history pressure or unevaluated scene counters.
+
+V72 local verification: release build, 54 core tests, 12 auxiliary tests, and
+Tier 0 external KiCad DRC pass. An isolated binary using the pre-fix routability
+object fails the new search-history regression as expected. The test includes
+zero and repeated rejection counts plus retained matching physical evidence.
+The first immutable copy was detected as stale before any Tier-1 launch; rebuilding
+all targets and checking SHA-256 corrected it. The normal Tier-1 P24 comparison
+is running from the corrected immutable binary.
+
+The V71 epoch-2 trace supplies a concrete witness: window 0 has 97 templates,
+100,000 bundle states, 11,513 via-pair access prunes, zero packing rejections,
+and no complete state. Its stop reason is state_budget_exhausted. The remaining
+32/33 assignments complete, but this one prevents assembling the whole copper
+scene. V72 directly targets the false pressure inferred from this search result;
+it does not claim to solve the bounded assignment itself. Witness JSON is saved
+in build/search-evidence-feedback-20261008/v71-search-failure-witness.json.
+
+### V71 completed frontier comparison
+Normal Tier-1 P24 completed in 2508.527 s: 710 assembled violations, zero opens,
+434 native conflicts, versus V69's 751/0/434. The selected coarse oracle has
+527 violations, 1318 tracks and 45 vias (V69: 540, 1291, 46). Selected physical
+scope progresses 794 → 776 → 710. Tier 1 remains unqualified. Both runs retain
+24 portfolio checks, including 12 joint checks; V71 accepts seven improvements.
+Do not interpret overlapping runtimes as a speedup.
+
+The early consultation did not assess copper: 32/33 bundle assignments complete,
+one budget-exhausted, straight_scene_evaluated=false. Exactly two broad regional
+diagnoses increased history entries 572→574 and pressure 5212→15803. Therefore
+the measured improvement supports earlier regional-feasibility feedback, but
+not the intended claim of early assembled-copper feedback. V72 tests removal of
+the unsupported search-derived pressure before a final retain decision.
+
+V72 research cross-check: OR-Tools distinguishes bounded-search UNKNOWN from
+proven INFEASIBLE (https://developers.google.com/optimization/cp/cp_solver).
+This supports separating search exhaustion from physical impossibility; it does
+not predict whether removing a heuristic penalty improves Flux's route choices.
+No solver dependency or external source code was introduced.
+
+## Experiment V73 — Corrected history without early scheduling
+
+Separate the V72 semantic correction from V71's optional early consultation.
+Build an isolated immutable control from the verified V69 planner plus the V72
+history fix. This resolves whether early scheduling earns its cost once search
+effort no longer masquerades as physical pressure. No geometry rules, search
+budgets or acceptance gates change. Compare full Tier-1 P24 and preserve Tier 0;
+source promotion waits for evidence. The working source remains V72 during the
+three-way comparison.
+
+V73 candidate has been copied into the working tree after source-hash checks.
+The normal release build produces exactly the control binary hash
+`af0a4ed8357e26e0b44899df72fa6945c0d84ca0eac2fd679c78c97215ac2a68`.
+The isolated matching 54 core tests, 12 auxiliary checks, and Tier 0 external DRC
+pass. Final Tier-1 result remains pending. V71/V72 binaries and sources remain
+preserved; this source preparation is not tier promotion.
+
+A read-only width-provenance audit rejected another tempting change: skipping
+lane displacement for non-terminal explicit widths is shared by the spline and
+straight realizers and protects source-bound resource width authority. The V69
+frontier result has zero fixed-resource-width fragments, so that branch cannot
+explain this measured failure. Do not remove it based on this board.
+
+### V72 completed comparison and V71 decision
+V72 completes the normal P24 run in 2768.837 s with 751 assembled violations,
+zero opens, 434 native conflicts, and the baseline coarse oracle (540 violations,
+1291 tracks, 46 vias). Scope trials are 793→751→861. Peak RSS is 599136 KiB.
+Tier 1 remains unqualified. The early regional call now leaves history unchanged
+at 572 entries / 5212 pressure, confirming the intended semantic correction.
+
+The V71 reduction to 710 disappears when search-derived pressure is removed.
+That is evidence for an accidental diversification effect, not validation of
+search effort as physical capacity. Retain V72's semantic boundary and reject the
+extra early scheduling: it produces no improvement against V69 under the corrected
+contract. An explicit future diversification mechanism should use distinct route
+choices or localized verified conflicts, not search-budget-dependent cost inflation.
+V73 verifies the smaller final combination without that extra early consultation.
+The runtime overlap prevents a controlled speedup claim.
+
+### Remaining mechanism and bounded next experiment
+The early clean checkpoint's one unresolved region exhausts bundle enumeration
+before finding a complete access assignment. The enumerator currently orders
+fragment domains by their initial sizes, then fragment index; no duplicate DFS
+branch was established. Capture that region and compare a conflict-aware variable
+order against the same state budget before changing global penalties again.
+A second independent problem remains after discrete assignment: assembled tracks
+and vias still collide. The synthetic dogleg example demonstrates missing
+geometric diversity, but the traced real pair does not admit that simple flip.
+Neither finding justifies a broad rewrite or a claim that Tier 1 is solved.
+
+The harness's final console summary now separates checks passing from actual
+qualification. Replaying its updated summary on the completed mixed run prints
+`2/2 selected corpus checks passed; 1/2 assessed boards qualified`. A real
+Tier-0 preflight prints `routing qualification not assessed`. Python compilation
+and both reporting checks pass. This changes no routing or JSON acceptance logic;
+the already-running V73 process loaded the old wording at startup.
+
+### V73 final result and retained implementation
+V73 completes in 2520.765 s. Tier 0 qualifies with external KiCad DRC; Tier 1
+remains unqualified at 751 assembled violations, zero opens and 434 native
+conflicts. All 78 connection paths exist and global overflow is zero. The coarse
+oracle remains 540 violations / 1291 tracks / 46 vias. Scope trials remain
+793→751→861; 24 exact portfolio checks include 12 joint checks and two accepted
+improvements. This matches the verified V69 geometry outcome. Runtime comparisons
+are affected by overlapping runs and are not promoted as performance gains.
+
+Retain coupled route-pair portfolio selection (budget remains opt-in, default 0),
+passive scene-evaluation telemetry, and the search-evidence history boundary.
+Remove early scheduling V70/V71; preserve their source and benchmark evidence.
+Keep the corrected benchmark summary. Final validation: release build matching
+immutable V73, 54 core tests, 12 auxiliary checks, Tier-0 external DRC, Python
+compilation, preflight reporting and mixed-result reporting all pass. No higher
+tier is promoted and no claim of complete board routing is made.
+
+Task-only changes are preserved in
+reports/benchmark_history/2026-10-08-routing-fixes-combined.patch; the final
+machine-readable result is 2026-10-08-corrected-history-control.json in that
+directory. Substantial pre-existing uncommitted work is preserved; no unrelated
+changes were staged or committed.
+
+
+## Tier-1 strategy review — 2026-10-08 (V73 evidence; proposals only)
+
+### Failure and evidence
+The selected bm_svf run has 78 connection paths, zero global overflow and zero
+opens, but 751 assembled straight-scene violations. Track clearance (536) and
+track-via clearance (138) comprise 674/751 reports. The 434 native diagnoses
+span 53 net pairs and one 20-net connected graph. These representations overlap;
+counts must not be added. The coarse oracle's 540 violations and the assembled
+751 concern different geometry, so their difference does not attribute causality.
+Scope expansion tries 793, 751, and 861 errors and retains the best. Twenty-four
+straight portfolio checks (12 joint) produce only two improvements. Runtime is
+2520.765 seconds. Tier 0 remains externally qualified; Tier 1 does not.
+
+### Earliest demonstrated pipeline problem
+V73 defers assembled regional assessment until the terminal feedback epoch.
+Coarse quantized-copper feedback already operates in earlier epochs. The final
+selected regional scene produces localized history and affected-net information,
+but retry_available is false: no subsequent global allocation can use it.
+The configured global budget was allocated as 1+8+7+7+7 iterations across the
+epochs; early global convergence means the actual reported cumulative count is
+11. The exhausted resource is the outer feedback-epoch schedule, not necessarily
+all 30 permitted inner iterations. Earlier V72 consultation
+without an assembled assessment is not a test of moving exact regional feedback
+upstream. Its lack of improvement must not be used to validate or reject that
+separate experiment. Carry only the physically selected checkpoint's evidence;
+rejected topology diagnoses must remain isolated.
+
+### Geometric contract and search limitations
+Adjacent-channel lane precedence and section packing already exist. Their proof
+covers section width/order, not the swept copper of independently generated
+inter-section doglegs, bends, and via runups. Those are checked downstream.
+A synthetic staggered two-route example is solved by another octilinear elbow;
+the previously traced real-board pair is not, so elbow flipping alone is not a
+board-level remedy. Alternate topology templates use their own centerlines,
+which require physical validation rather than assuming the selected topology's
+lane offsets certify them. Existing exact oracles, portfolio retention, scope
+expansion and best-scene comparison should be extended, not duplicated.
+Single/pair monotonic moves cannot generally resolve larger coordinated swaps.
+The connected 20-net conflict graph should seed bounded spatial neighbourhoods,
+not a board-wide exponential solver. Final unresolved-window labels include
+physical rejection; do not misclassify them as proved discrete infeasibility.
+Spline-named counters are not evidence that the straight run lacks exact checks.
+
+### Ranked experiments
+1. Export replayable physical witnesses with exact copper ownership, geometry,
+   scene/epoch identity, source choice, rules and frozen boundary. Reproduce a
+   small observed conflict before changing its geometry. Deduplicate physical
+   events and retain category-specific counts.
+2. Reserve an existing global epoch after a real penultimate assembled regional
+   assessment. Keep the total global iteration budget fixed and run the final
+   assembled proof again. A focused test must show the exact regional conflict
+   reaching a later global call; merely consulting the regional allocator is
+   insufficient. This tests the confirmed scheduling defect, not a guarantee
+   that the current candidate set can resolve every resulting conflict.
+3. Extend lane-chain candidates with bend/transition/via-runup alternatives and
+   lazy exact quantized compatibility checks. Keep existing precedence. Test
+   staggered parallel lanes, via blocking and frozen-neighbour interactions,
+   including rotated/mirrored and width/clearance variants.
+4. Select compatible physically realized candidates jointly in small conflict
+   neighbourhoods. Use lazy forbidden combinations, promote useful reserve
+   alternatives, and generate new homotopy/layer/via choices when the pool is
+   inadequate. Permit coordinated three-plus changes without requiring every
+   intermediate move to improve. Commit only a fully assessed scene, expanding
+   the neighbourhood only for witnessed boundary blockers.
+5. Separately improve bounded CSP ordering/propagation and candidate economics.
+   Compare dynamic remaining-domain and conflict-degree ordering on a captured
+   budget trap under identical budgets; never turn search effort into physical
+   congestion. Cache geometry and compatibility, and measure physical candidate
+   yield rather than raw enumeration. Budget exhaustion is unknown, not proof
+   of board or finite-candidate infeasibility.
+
+### Research and integration rationale
+CUGR (https://github.com/cuhk-eda/cu-gr) motivates evaluating global decisions
+through detailed routability. OpenROAD DRT
+(https://openroad.readthedocs.io/en/latest/main/src/drt/README.html) separates track
+assignment from detailed routing and repair. MAPF-LNS2
+(https://ojs.aaai.org/index.php/AAAI/article/view/21266) motivates conflict-focused
+subset replanning; persistent PCB copper, widths, and vias require a different
+compatibility model, with no inherited completeness guarantee. CP-SAT status
+semantics (https://developers.google.com/optimization/cp/cp_solver) illustrate
+why UNKNOWN and INFEASIBLE must remain distinct. These are conceptual integration
+points, not recommendations to port an IC or time-dependent MAPF router wholesale.
+
+### Verification and decision
+This review changes documentation only and reuses completed V73 evidence. The
+machine-readable diagnosis, source artifacts and ranked experiments are preserved
+in reports/benchmark_history/2026-10-08-tier1-strategy.json. Implementation should
+first pass deterministic physical microcases, then existing regression checks,
+then all Tier 0 and Tier 1 with unchanged rules/configuration. Record unique
+physical conflicts, opens, candidate-family coverage, checks per improvement,
+iterations, runtime, and external DRC categories. No tier promotion until all
+required connections and KiCad legality checks pass. Increasing budgets alone,
+removing width provenance, or restoring search-derived pressure is not supported.
+
+
+## V74 — Reserve allocation after assembled straight-copper evidence (completed; opt-in)
+
+### Failure / hypothesis
+V73 first supplied assembled regional diagnoses after the last global allocation.
+Reserve the penultimate straight-feedback epoch for one negotiated fresh topology,
+then consume its localized evidence in the final already-budgeted global epoch.
+No copper rules or global iteration budgets change.
+
+### Change
+The reserved epoch performs real straight realization instead of a cheap discrete
+probe, bypassing the coarse-oracle deferral only for a negotiated topology. Its
+checkpoint is paired with its own regional history and overrides ordinary
+stagnation diversification for the next retry. The final fresh replan receives
+physical assessment even if coarse beam ranking would prune it; the configured
+portfolio bound and the previous best physical incumbent remain preserved.
+Review caught and removed an earlier retained-topology selection which would have
+mixed fresh global diagnostics with an older assembled topology.
+
+### Verification so far
+The old crossing fixture always has sampled overflow and correctly does not reach
+this gate. A new parallel-terminal fixture has zero sampled/corridor overflow,
+four assembled physical violations, and two affected nets. It asserts an actual
+penultimate assessment, regional history transfer into the final epoch, subsequent
+physical assessment, unchanged three-iteration budget and the no-retry boundary.
+Focused and all 54 core tests pass. Tier 0 passes external KiCad DRC against the
+immutable V74 executable. An early test invocation raced compilation; only the
+subsequent sequential fixture/core runs are authoritative.
+Seven broad CTest failures reproduce V73. The candidate-bridge check passes on
+both binaries after its missing generated fixture is prepared; it is not a
+routing regression. Full Tier-1 assessment is still running.
+
+### Initial real-board evidence
+The penultimate bm_svf epoch completes an actual regional pass, leaving 1253
+history entries / 8896 pressure; the final global epoch starts with those 1253
+entries. Baseline V73 ended the equivalent epoch at 937 / 7117 without assembled
+assessment. This verifies a consumed physical feedback path, not yet improved
+final routing or Tier-1 qualification. Full artifacts are under
+build/assembled-feedback-20261008/; the final benchmark decision is pending.
+
+
+## V75 — Complementary octilinear elbow candidates (completed; Tier1 unqualified)
+
+### Failure / hypothesis
+The existing staggered two-route micro-board is topologically simple but its
+fixed diagonal-first elbows overlap (two native/four quantized reports). An
+axis-first followed by 45-degree elbow preserves the same endpoints and width
+while offering a physically distinct realization. This is a bounded geometric
+candidate experiment, not a replacement for global topology or joint repair.
+
+### Change
+Record owned fragments which actually need a non-octilinear chord converted.
+Intersect those with exact physical conflict participants, then try complementary
+elbows through the existing complete native and quantized scene checks. Preserve
+accepted elbow policies across subsequent retained-template trials. Geometry and
+bundle/pair candidates share the existing max_straight_portfolio_checks budget;
+when both families have candidates, reserve half for each, with unused geometry
+capacity left to bundle search. Reserve-only templates are not treated as active
+bundle candidates. Separate geometry-check/improvement counters expose usage.
+No default search budget or copper rules change.
+
+### Micro evidence / verification
+The synthetic conflict reaches zero native/quantized errors and zero opens after
+two geometry checks; the first variant is rejected, the second is accepted.
+Regression coverage includes four reflected/rotated geometries, width variation,
+noneligible and unimplicated fragments that sort before useful candidates,
+reserve-only availability, and a second conflict requiring a later template
+change without undoing the accepted elbow. Endpoints, layers, widths and integer
+octilinear segments remain asserted. All 55 core tests pass. Tier 0 passes
+external KiCad DRC using the immutable combined V75 binary. Independent review
+finds no remaining material defects. Tier-1 results remain pending.
+
+### Measurement
+V74 and V75 use separate immutable binaries and the same normal manifest with
+P24, 30 global iterations and four feedback retries. Their runs overlap, so raw
+runtime will be recorded but not promoted as a controlled performance result.
+Artifacts and source snapshots: build/dogleg-alternatives-20261008/.
+
+### V74 completed Tier-1 result
+The full normal-budget run remains unqualified: 78 paths, zero unrouted nets,
+zero sampled/corridor overflow and zero opens, but 751 assembled violations and
+434 native conflicts, identical to V73. Actual global iterations increase 11→13
+within the unchanged cap30. The newly feedback-informed topology is worse:
+its coarse oracle has856 violations (prior checkpoint540), and its assembled
+assessment has1514; retained physical incumbent selection preserves751. Thus
+feedback is consumed but does not by itself improve routing. Duration3413.54s
+versus2520.76s is observational because runs overlap. Do not promote this as a
+Tier-1 quality improvement. Final retention decision awaits V75. Structured
+report: reports/benchmark_history/2026-10-08-assembled-feedback.json.
+
+### V75 research note — posture alternatives
+Primary implementation reference revisited: KiCad LINE_PLACER::FlipPosture,
+https://docs.kicad.org/doxygen/pns__line__placer_8cpp_source.html . KiCad explicitly
+switches straight/diagonal trace-head posture. Flux applies the underlying idea
+as bounded endpoint-preserving candidates, without copying implementation.
+For k eligible fragments, at most the configured portfolio budget is tried;
+each trial still costs a full assembled scene validation. The local assumption
+is that changing elbow posture can remove an overlap without topology/layer
+changes. That holds for the regression fixture; it does not imply dense Tier-1
+conflicts can be solved by independent elbow flips. Joint topology-changing
+repair remains a separate hypothesis.
+
+### V74 retention decision
+Disable the additional reserved assessment by default. It remains reproducible
+with RoutingPlannerConfig::enable_assembled_straight_feedback or CLI
+--assembled-straight-feedback. The immutable V74/V75 benchmark executables
+precede this switch and correspond to enabled behavior. The default-control
+regression explicitly checks prior intermediate-probe scheduling.
+
+### V75 completed Tier-1 result and decision
+Full normal-budget result remains unqualified:78 paths,0 unrouted,0 overflow,
+0 opens,751 assembled violations. Native conflicts434→430, track violations
+536→534, hole clearance60→61 and hole-hole2→3; other categories unchanged.
+The same total hides changed conflicts, not completion. Geometry trials12,
+accepted5, combined portfolio checks24; selected scope retry2 (V74 retry1).
+Observed runtime2757.84s; concurrent workloads preclude a speedup claim.
+Keep the bounded candidate mechanism because it solves the independent physical
+microcases with exact native/quantized proof, but do not promote the existing
+portfolio budget above its default0 or mark any tier newly passed. The reserved
+assembled-feedback scheduling remains separately opt-in. Current default-off
+production passes55 core tests and Tier0 external KiCad; the completed V75
+Tier1 run used the prior immutable executable with reserved feedback enabled.
+There is no completed full Tier1 run of the final default-off executable.
+
+### Remaining mechanism and next experiment
+More legal elbow realizations and a working upstream feedback handoff do not
+remove the dense connected physical conflict set. The evidence now favors a
+bounded conflict-component topology/layer search with simultaneous changes,
+using exact scene validation and retaining the incumbent, over further penalty
+or retry tuning. Before another real-board search, construct a three-net
+ordering/layer trap that cannot improve via any single accepted move; measure
+whether joint candidate enumeration escapes it. Avoid claiming this algorithm
+has been implemented in this change.
+
+### Bounded feedback-count pilot
+Fixed global budget30, regional bundle-state limit1 and straight portfolio0;
+retries4 versus29, each capped600s. This is not a normal tier configuration.
+The4-retry arm timed out during final regional search; completed coarse epoch
+counts were674,613,499,540. The29-retry arm completed after585.9s, actual global
+iterations30; minimum coarse epoch554, last epoch1014, repeated late counts
+882–883. Selected retained topology oracle597,0 opens, but assembled straight
+scene was NOT evaluated.597 is not a final assembled or external KiCad DRC
+count and cannot be compared with the normal benchmark's751. Neither arm
+qualifies the board. No retry-budget/default change follows from this pilot.
+Artifacts: build/feedback-budget-pilot-20261008/.
+
+## Experiment V76 — Measured regional reuse and bounded coordinated topology
+
+### Failure and hypothesis
+The pipeline audit brackets most elapsed planning time inside bundle assignment,
+including nested geometry/domain/access work. Tier 1 remains physically illegal
+although its coarse topology is complete. At the user's request, implement five
+related pipeline changes together: timings, bounded domain reuse, fixed-copper
+incompatibility pruning, coordinated three/four-window changes, and certified
+copper handoff. This bundled experiment cannot attribute any board improvement
+to an individual change without subsequent ablations.
+
+### Change
+Added inclusive microsecond timers and invocation/cache/pruning counters. Public
+regional analysis aggregates discarded scope attempts; planning also aggregates
+all regional calls and exact promotions. Parent and child timings overlap and
+must not be summed. Reused immutable-board free-space products across regional
+scope retries using independent LRU budgets (sources 8, geometry 8, navigation
+32). Active navigation handles own their data independently of cache eviction.
+Pruning only proves incompatibility for fixed straight H/V/45-degree templates;
+unknown/deformable alternatives remain searchable. Joint portfolio search can
+change connected groups of three/four windows under the existing exact-scene
+budget, retaining the incumbent. Certified legal scenes carry immutable source,
+path and realization identity into detailed routing, which still performs final
+validation. Reuse is conservatively restricted to no-refinement straight scenes;
+other geometry policies fall back to materialization.
+
+### Verification in progress
+Task-only source snapshots: build/pipeline-single-pass-20261008/baseline/.
+Pre-pass Tier 0 passed external KiCad validation. An immutable pre-pass Tier 1
+control is running with straight geometry and portfolio budget 24. Focused
+regressions cover fixed crossings, a three-window trap, immutable copper reuse,
+stale source/path identity, requested geometry transformation, and final DRC.
+Independent review identified cache-reference lifetime and geometry-policy
+issues; both were corrected before final validation. Build/tests and matched
+Tier 1 experiment results are pending. No tier promotion or performance claim.
+
+### Focused and lower-tier result
+The final immutable experiment executable has SHA-256
+597df546808b79867f1c9587c8572d0707c2ce022076c88a23e0e5d111972054.
+Five focused tests pass, all 57 core tests pass, and Tier 0 qualifies with 50
+paths and external KiCad DRC. The pruning fixture was corrected to identify
+fixed alternatives explicitly and exclude an unused crossing alternative from
+the clearance-equality subcase. The production pruning rule was not weakened.
+Second independent review found no remaining material correctness issue;
+cache-eviction lifetime and cumulative promotion accounting lack dedicated
+regression fixtures. Matched Tier 1 control/experiment remain in progress.
+
+### Tier 1 completion result
+The matched control and experiment completed. Both assembled scenes had 751
+violations and 0 scene opens, so qualification remains false. The coarse plan contains 78 paths and no
+unrouted connections; the runner reports 78 opens for the unaccepted detailed
+output, while the assembled scene has 0 opens. Observed command metadata reports control 43:24.80 wall time and
+549740 kB RSS versus experiment 38:44.87 and 613008 kB. The experiment made 4
+multi-window checks with 0 improvements; cumulative alternative cache counts
+were 20482 evictions, 124867 navigation hits and 8692 misses (candidate cache:
+8309 evictions; source 2140/1359, navigation 49336/3499, geometry 0/3499
+hits/misses). The coordinated search did not improve the assembled scene;
+retain this as evidence and do not promote Tier 1.
+
+### V76 benefit/cost re-analysis
+Per-board planning duration decreased from 2591.771 s to 2312.487 s (10.8%
+observed), with unchanged selected copper: 751 violations, 0 scene opens,
+430 native conflicts. Bundled changes and concurrent workloads prevent causal
+attribution or a repeatable speedup claim. Reported experiment wrapper RSS is
+613008 kB versus control 549740 kB; the experiment raw time log was not retained,
+so preserve its provenance as the benchmark-agent report rather than an
+independently recovered artifact measurement.
+
+Cumulative inclusive timings: assignment 2179.939 s (94.27% of planning),
+alternative domains 697.461 s, access selection 651.623 s, bundle search
+381.728 s, channel construction 0.299 s. These overlap. Lane timing is biased
+by per-call microsecond truncation across 27,920,949 invocations; do not call
+lane work negligible from the reported 71,462 microseconds. Use nanoseconds or
+batch timing and exclusive attribution before a solver rewrite.
+
+Navigation cache hit rate is 93.49% (124867 hits / 8692 misses); caching is a
+promising performance contributor, not an isolated measured speedup. Geometry
+cache hits are zero in the selected analysis (3499 misses); investigate marginal
+reuse and retained bytes before enlarging it. Fixed-copper pruning did zero
+checks/rejections: its conservative fixed-template predicate does not cover this
+workload. Four >2-window probes made no improvement in the selected result;
+this supports keeping the capability bounded, not raising its budget. Certified
+scene handoff was unavailable because the scene was illegal, so it cannot explain
+a performance improvement on this frontier board.
+
+Highest-value performance experiment: prepared access checks, compatible domain
+reuse, and reduced repeated equivalent constraint evaluation, with full context
+keys and cached proven failures separated from budget exhaustion. Highest-value
+routing experiment: physically realized bend/escape/via candidates with lazy
+exact compatibility constraints in a small witnessed conflict neighbourhood;
+regenerate topology/layer/via alternatives when the candidate pool cannot solve
+it. Existing cross-section packing is not a proof of legal inter-section copper.
+Keep global negotiation and exact final DRC. Defer larger general search budgets,
+whole-board exact solving, and curved/GPU optimization for this straight case.
+OpenROAD's staged detailed-routing architecture supports separating track
+assignment from search/repair and DRC, not assuming one certifies the next:
+https://openroad.readthedocs.io/en/latest/main/src/drt/README.html .
+No new algorithm was implemented during this re-analysis.
+
+## Experiment V77 — Prepared access reuse and physical candidate scheduling
+
+### Failure and hypothesis
+V76 still selected 751 copper violations on bm_svf. Candidate generation and
+assignment consumed 94.3% of planning; access selection repeated more than five
+million times. Native and quantized copper are separate acceptance gates; native
+conflict counts are not a lower bound on the quantized objective. The user
+requested the four ranked improvements together, so this is a bundled experiment.
+
+### Implementation
+Performance samples accumulate nanoseconds before reporting microseconds. Bundle
+search exposes time excluding its nested access evaluator. A 4096-entry access
+cache and board-rule preparation span one immutable window/template enumeration
+and immediate downstream validation; exhausted searches are never cached. Entry
+peaks and shallow storage estimates are explicit (not total heap/RSS).
+
+Straight realization is split into native preparation and independent quantized
+finalization. Up to four prepared candidates are ordered by native compatibility;
+no native-count heuristic prunes a candidate. Bends, runups and via spans retain
+the existing materialization/DRC contracts. Each scheduled candidate remains
+eligible for full proof within the original shared budget. The original native
+and quantized acceptance gates, and open-connection non-regression, are preserved.
+
+A complete small fixed retained domain includes original selections and every
+retained alternative. Only untruncated domains within the configured window cap,
+complete exact coverage, comparable scenes and no provisional-context conflicts
+can report retained_fixed_pool_exhausted. This is not global unroutability. Other
+cases report budget_or_scope_unknown. Shortlist/reserve candidates are interleaved
+so reserves can supply different retained topology/via choices after rejection.
+
+Single/pair/multi families use deterministic improvement-per-native-primitive-work
+scheduling, warmup and periodic exploration. Wall time is observed but cannot
+change routing order. The initial geometry family relinquishes its bounded share
+after two fruitless probes when portfolio alternatives exist. Counters distinguish
+native previews from expensive full-scene checks, including discarded previews.
+
+### Baseline and verification
+The preserved baseline executable is identical to V76 SHA-256
+597df546808b79867f1c9587c8572d0707c2ce022076c88a23e0e5d111972054.
+Snapshots: build/pipeline-physical-pass-20261008/baseline/.
+Focused tests cover sub-microsecond accumulation, scheduler exploration, bounded
+cache capacity, reuse of access leaves, unknown exhausted access, physical
+preview ordering, reserve-only escape, coordinated moves and exhaustive fixed
+pool diagnosis. All 60 core tests and Tier 0 including external KiCad DRC passed.
+The immutable normal Tier 1 run remains in progress. An independent
+review of the new scheduling/certificate block found no material correctness
+issue before compilation; final verification remains required.
+
+### Parallel research — erosion and other experimental geometry
+The research artifact is reports/diagnoses/2026-10-08-novel-algorithms-analysis.json.
+Confined anisotropic erosion is a bounded physical-rejection retry, not a remedy
+for the initial assignment bottleneck. Its clearance/topology/exact-copper gates
+must remain authoritative. Evaluate it on a fixed conflict-cone replay with
+checks 0 versus 32; accepted-template counts alone do not demonstrate a solved
+board. Historical XPBD work reduced local conflicts at modest GPU solve time,
+but did not complete Tier 1. USPED remains opt-in without established whole-board
+benefit and can increase mesh cost. Skeleton-derived capacity is a plausible
+upstream infeasibility filter, subject to conservative geometric bounds and
+false-prune testing. No erosion/USPED/XPBD defaults were changed in this pass.
+
+### Side discussion — resumable routing controller (proposal, not implemented)
+The user proposed selecting small pipeline segments from routing/routability,
+conflict and DRC state until completion or timeout. Existing work-plan execution
+already commits validated board checkpoints transactionally; persistent routing
+sessions and plan_routes retain feedback/checkpoints and propagate cancellation.
+They do not provide a shared deadline or resumable per-kernel continuation.
+
+Recommended design: hierarchical lifecycle states (prepare, search, validate,
+complete, timed_out, cancelled) plus a deterministic evidence-based action policy.
+Each kernel accepts a work slice/deadline and returns candidate deltas, typed
+observations, work consumed, and an in-memory continuation. Preserve separate
+best search and last validated board checkpoints. Context versions identify
+board/rules/topology/geometry dependencies so stale evidence and caches cannot
+be consumed after changes. Exact copper and external KiCad gates alone authorize
+completion; a fixed-pool exhaustion certificate never means global unroutability.
+
+Start by expressing the existing execution order as one policy, with parity
+checks, then make access/bundle search and regional repair resumable. Adapt action
+choice from typed failure evidence and deterministic yield estimates, retaining
+exploration and cycle detection. Erosion is a possible bounded alternative-
+generation action after a witnessed physical rejection/pool failure; XPBD is a
+local deformation action where topology remains plausible. Their availability
+must depend on assumptions, not just elapsed time or generic stagnation. Evaluate
+time-to-valid-route and DRC-versus-time curves at fixed overall budgets. A layer
+that repeatedly restarts whole routing sessions would not provide the intended
+benefit. This note authorizes no new controller implementation in the current pass.
+
+## Experiment V78 — Resumable evidence-driven routing core
+
+### Request and hypothesis
+The user requested the complete state-machine design as the new implementation core in one pass,
+including erosion, XPBD and USPED. The existing pipeline can spend a long time inside a stage with
+no controller decision boundary. Preserving a live kernel continuation should make progress and
+cancellation observable without restarting prepared geometry or search frontiers. Typed physical
+feedback should select an appropriately scoped next action rather than replaying a fixed pipeline.
+
+### Implementation
+`RoutingEngine` now owns working and selected checkpoints, action budgets, a shared deadline,
+versioned external-validation handoff and deterministic action selection. Public `plan_routes`,
+persistent sessions, CLI routing and their existing optimizer/viewer callers enter the engine.
+`plan_routes_legacy` preserves the original interleaved planner for explicit comparison and existing
+specialized oracle-first/assembled policies.
+
+A `RoutingKernel` continuation parks its worker at search checkpoints. Local search stacks, frontier
+state and caches remain live across work/time slices. Only completed action transactions update
+controller state. Cancellation discards the in-flight transaction. The controller separates global
+allocation, quantized probing, regional realization, materialization, confined erosion, XPBD and
+USPED-informed replanning. Global feedback uses attributed affected nets and accumulated routing
+knowledge; global iteration allowances are shared across epochs. Algorithm ranking uses comparable
+within-stage quality changes and deterministic work counts, with warmup and exploration. Wall time
+is diagnostic. Geometry and typed regional evidence bind repeated-action detection to a state.
+
+XPBD and confined erosion actions are enabled only for the curved realization kernels that support
+them. Straight routing still uses hydraulic global topology candidates. The USPED action explicitly
+enables its NavMesh path: merely setting the USPED flag in a straight pipeline would be a no-op.
+All physical and external acceptance gates remain separate. A plan awaiting materialization is not
+completed copper, and an internally legal board waits for generation-matched external DRC.
+
+### Regression findings during integration
+The first integration failed Tier 0. It missed early certification of a usable global seed and the
+existing exact coarse-polyline fallback. Restoring both retained the original legality checks.
+A subsequent run exposed a second distinction: conservative global overflow is not proof that a
+connected seed cannot be physically legalized. The controller permits bounded physical certification
+of that connected seed, while missing connections still prevent regional routing. Neither correction
+relaxes widths, clearances or DRC.
+
+Independent review caught stale externally rejected checkpoints, rejection bypassing the repair
+policy, and deadline/cancellation classification. These were corrected. Historical tests asserting
+exact old epoch ordering now call the explicit legacy control; all their assertions remain intact.
+New tests exercise engine slice invariance, actual yields, deadline/cancellation, current-generation
+external acceptance/rejection, and dispatch/configuration of all supported physical families.
+
+### Verification and decision
+Builds and focused tests passed during integration. Earlier intermediate full runs were 60/62 and
+63/64, and Tier 0 failed as documented above. Final regression and Tier 0 verification is recorded in
+`reports/benchmark_history/2026-10-08-routing-engine.json` when complete. The frontier pilot has a
+120-second shared deadline and cannot promote Tier 1 without complete final KiCad validation.
+Full design and operating limits are documented in the Resumable routing engine section of design.md.
+
+The final integration run passed 64/64 core tests. Its remaining Tier 0 failure was traced to the
+CLI preview adapter, not the engine's copper: engine outcome was awaiting-external-validation and
+materialization had zero exact errors, but `--write-incomplete-preview` regenerated the still-
+overflowing coarse graph over the legal regional result. The preview branch now requires an
+incomplete detailed result and cannot replace an accepted or provisional zone-refill candidate.
+The external Tier 0 rerun is preserved separately from those failed intermediate artifacts.
+
+### V77 immutable Tier 1 validation — 2026-10-08
+
+The immutable V77 binary was run against Tier 1 with straight geometry and 24 straight portfolio
+checks. Both corpus checks completed: `pt2399_delay` qualified with exact copper and external KiCad
+DRC, while `bm_svf` remained unqualified (`unlocked`) with 78 open connections despite zero reported
+unrouted paths and zero global overflow. This matches the prior V76 single-pass baseline exactly in
+qualified boards (1/2), tracks (243), vias (5), and `bm_svf` open connections (78). The qualified
+board duration was 2.074951504 seconds versus 2.106970421 seconds in V76.
+
+The benchmark result and machine-readable comparison are preserved in
+`reports/benchmark_history/2026-10-08-v77-immutable-tier1.json`. Wrapper stderr was empty, so
+`/usr/bin/time -v` timing/RSS provenance is unavailable; per-board duration comes from the runner's
+result JSON.
+
+V77's completed normal Tier 1 result requires a qualification/geometry distinction: qualification
+remained 1/2, but bm_svf selected-scene DRC increased from 751 (V76) to 809 (V77), with zero scene
+opens in both. The unaccepted-output benchmark status still reports 78 opens. Planning was
+2260.710 s versus 2312.487 s; concurrent bundled runs do not establish a causal speedup. The cache
+avoided 264,327 access evaluations. Measurement/cache reuse is supported; the physical scheduling
+bundle needs isolated refinement and is not a demonstrated quality improvement. Detailed numbers
+are in reports/benchmark_history/2026-10-08-v77-immutable-tier1.json.
+
+### V78 final verification and decision — 2026-10-08
+
+The final immutable engine binary passed all 64 core tests and the continuation kernel tests.
+Independent review found no remaining material correctness defects. Tier 0 pt2399_delay passed
+external KiCad DRC with 254 tracks, three vias, zero opens and zero copper violations; detailed
+routing took 2.071 seconds. The earlier baseline used 243 tracks and five vias.
+
+The bm_svf frontier pilot exercised the engine's own 120000 ms deadline, separately from a harness
+process timeout. It returned `timed-out`, `routing_plan_complete: false`, exit 3 after 120.09 seconds
+(101.25 user seconds, 427180 KB maximum RSS), preserving 78 coarse paths with no coarse unrouted
+nets. Global `complete: true` describes topology only. Physical routing and Tier 1 remain unqualified.
+
+Decision: retain the new core as verified orchestration infrastructure, without claiming Tier 1
+quality improvement. Confined erosion and XPBD currently require curved realization; USPED enables
+its NavMesh integration explicitly. Continuations are in-memory and deadlines are cooperative.
+Next experiment: compare fixed-budget action traces and physical outcomes against legacy scheduling
+on the frontier, then target its earliest persistent conflict using the saved typed evidence.
+Final provenance is recorded in reports/benchmark_history/2026-10-08-routing-engine.json.
+
+### Curved routing default — 2026-10-08
+
+At user request, enabled curved realization by default in the planner, routing engine/session,
+integrated optimizer, CLI and corpus runner. Explicit straight mode remains available and disables
+arc refinement in the engine. The viewer already displays PH telemetry by default. Updated
+geometry-option validation so default curved mode does not invalidate unrelated bare commands.
+
+Release and development CLI builds passed; all 64 core tests passed. CLI smoke checks accepted
+default/explicit curved/explicit straight and rejected conflicting straight/arcs options. A curved
+Tier 0 corpus check exceeded its 180-second harness limit before final DRC qualification. This is
+not an engine-deadline result and not a tier pass; curved performance needs further investigation.
+The user's requested default is retained, with explicit straight comparison still available.
+Provenance: reports/benchmark_history/2026-10-08-curved-default.json.
+
+### Unravel boundary-assignment search assessment — 2026-10-09
+
+Failure context: extended curved Tier 2 produced 117 coarse paths and zero coarse unrouted nets but 381 overflow, exhausting after 9305.4 seconds without detailed copper. Repeated regional, XPBD and erosion actions failed to improve the selected state. Tier 0's six unrounded bends and external KiCad connectivity discrepancy are separate materialization defects; Unravel is not expected to fix them.
+
+Source: https://blog.autorouting.com/p/the-unravel-algorithm-untwisting and tscircuit/tscircuit-autorouter commit 9336cd949fb478669628d74620bfc4135c9ff087, lib/solvers/UnravelSolver. Local research copy/provenance: build/research-unravel-20261009/. Upstream repository is MIT licensed; attribution/license must be retained if code is reused.
+
+Mechanism: bounded search over shared region-boundary point positions and layer assignments, preserving connection ownership. The inspected implementation scores current estimated failure probability (f=g, h=0), caps the queue at 500 candidates and stops after 200 iterations without improvement or 50000 iterations. It is best-first state optimization rather than an optimal additive-cost A* guarantee. Only better proxy states are committed by the multi-section driver; this does not guarantee physical DRC improvement. Crossing checks use region chords and layer transitions, not full width/clearance-expanded copper.
+
+Existing Flux overlap: solve_lane_order_dynamic_program and solve_prepared_lane_packing already search clearance-aware channel permutations. RegionalRouteTemplate alternatives retain original boundary portals; adjacent_channel_lane_precedence_legal rejects inconsistent channel ordering. The incremental opportunity is coordinated interface reassignment across adjacent windows, with a valid connector topology, not another independent per-channel permutation solver.
+
+Hypothesis: a bounded coupled boundary-assignment search can remove order-induced crossings before expensive physical repair, reducing exact-oracle calls and time to a legal regional realization. Benefit is conditional on a witnessed order inversion/crossing; true capacity deficits and fixed terminal permutations may require another corridor or a legal layer transition.
+
+Integration: generate paired/multi-route alternatives before regional bundle enumeration, or expose a resumable boundary-reorder engine action before XPBD/erosion when ordering evidence exists. Preserve net/connection/run/fragment identity, fixed terminals, coupled-net constraints, clearance widths, legal via spans and frozen exterior interfaces. Regenerate affected topology certificates and canonical state keys; keep existing lane precedence and native/quantized copper checks. Validate affected neighbors as well as the changed region. Parallelize only regions with disjoint interfaces, or revalidate against a versioned snapshot before commit.
+
+Cost: naive pair mutation branching is quadratic in participating boundary ports; layered choices and mutation depth can make the state space exponential. Upstream issue checking compares route pairs inside each region. For Flux, use adjacent swaps, small joint scopes, incremental crossing deltas, canonical duplicate detection, a bounded frontier and explicit work/stagnation limits. The expensive cost is regenerating/validating coupled geometry, so send only a small diverse shortlist to that stage.
+
+Minimum experiment (proposed, not implemented): one two/three-net synthetic case where fixed outer terminals permit an internal boundary reassignment, plus an impossible same-layer case requiring a legal via. Then run a saved Tier 1 conflict component with fixed seeds and equal total work budgets. Measure remaining physical conflicts, accepted realizations, opens, vias, route length, exact-oracle calls, states and runtime. Final acceptance requires KiCad DRC; abstract crossing reduction alone is insufficient.
+
+Decision: promising targeted topology operator, medium integration cost, unmeasured Flux benefit. Reuse Flux's regional portfolio and oracle machinery; do not replace the core or port upstream heuristic probability constants. Next step is a bounded ablation against current regional search, not enabling it globally without evidence.
+
+### Extended curved tier capture outcomes — 2026-10-09
+
+Release runs used 10740-second engine / 10800-second outer per-stage limits, with concurrent execution. Tier0 exhausted after 6451.4 seconds detailed routing; its 142-arc candidate retained six unrounded bends and one external KiCad unconnected item. A one-global-iteration control finished in 688.98 seconds with byte-identical rendered copper. Tier2 exhausted after 9305.4 seconds planning: 117 coarse paths, zero coarse unrouted nets, 381 overflow, no detailed copper. Tier3 exhausted after 422.6 seconds with a 30-iteration budget: one path and 64 unrouted nets. Tier1 and Tier4 ended without final results after interruption; telemetry proves work in progress but does not establish timeout or OOM. Do not classify either as a completed benchmark. No tier qualified.
+
+Actual Tier0 copper and diagnostic images from every tier were viewed. Smooth local curves coexist with sharp corners, long detours and unfinished physical routing. Extended runtime alone did not establish smooth, logical, DRC-clean final copper. Artifacts, visual observations and precise limitations are in reports/benchmark_history/2026-10-08-curved-extended.json and reports/diagnoses/2026-10-08-curved-extended-visual.json. The source binary remained frozen; runner additions preserve extended timeouts and rejected-copper rendering.
+
+### KiCad 10 net-assigned cubic copper feasibility — 2026-10-09
+
+User direction: convert PH routing geometry to KiCad graphical Béziers on copper with net assignments, replacing line/arc decomposition. Official KiCad10 manual confirms electrical copper graphics: https://docs.kicad.org/10.0/en/pcbnew/pcbnew.html#graphical-shapes. Installed KiCad10.0.6 was tested independently; stale S-expression documentation must not be used to dismiss netted graphics.
+
+Capability results: cubic PCB_SHAPE/gr_curve preserves controls/net through save/reload, connects pads, connects through a via-only chain (missingcurve/missingvia negatives each expose one open), detects shorts between distinct-net curves, detects curve-to-curve and curve-to-pad clearance, and plots Gerber. A valid-outline close-gap test reports seven clearance violations, including a curve/curve pair; the otherwise equivalent safe-gap board has zero violations and opens. The early shared-endpoint crossing test was inconclusive and superseded by distinct terminal pairs.
+
+Confirmed rule gap: an explicit 0.25mm minimum track_width rule rejects a 0.1mm ordinary track but not a 0.1mm graphic curve. Flux must enforce width itself; do not count a graphics-only KiCad DRC pass as evidence of minimum track width.
+
+Conversion constraint: Flux PH spans already have six quintic Bezier controls. KiCad gr_curve is cubic (four controls), so generic PH cannot be exported exactly as a single cubic. Use adaptive degree reduction with a certified deviation bound after integer quantization, preserving endpoint contacts and tangent continuity. Reserve fit error in clearance or directly revalidate the fitted cubic envelope.
+
+Integration design: add a canonical netted cubic copper primitive, parser/serializer and strict round-trip coverage; extend connectivity, DRC, routing obstacles, widths/length/count metrics and source preservation. Then fit PH to cubic copper in regional/detailed materialization. Retain PH as optimization representation; publish emitted cubics separately in telemetry. Do not write decorative graphics invisible to internal board validation.
+
+Decision: KiCad capability validated, worth implementing as an electrical output backend. Production exporter unchanged by this feasibility experiment. Raw fixtures, DRC, Gerbers and summary: build/bezier-kicad10-probe/.
+
+## Experiment — KiCad 10 electrical cubic output (2026-10-09)
+
+### Failure and hypothesis
+
+The active PH realization reduced smooth quintics to straight segments and circular arcs.
+KiCad 10 can instead retain net-assigned cubic copper graphics, reducing dependence on the
+line/arc approximation. A quintic is not generically a cubic: the conversion must certify error
+and then revalidate the actual emitted copper, rather than merely relabeling PH controls.
+
+### Change
+
+Added canonical `TrackBezier`, adaptive Hermite cubic degree reduction with degree-elevated
+control error bounds after integer quantization, monotone span checks, join-angle checks,
+and bounded subdivision. Detailed/regional materialization, checkpoints, deltas, source copper
+obstacles, work-plan authority, telemetry, viewer, source-preserving KiCad IO and Python candidate
+application now carry the cubic controls. Curved routing remains the default.
+
+Outer adaptive envelopes govern collision checks; contracted inner envelopes plus exact endpoint
+caps govern connectivity. Curve widths receive explicit minimum-width checks. Differential skew
+uses subdivided chord/control-polygon length intervals, preventing approximate chord lengths from
+falsely certifying a pair. Conservative uncertainty can reject a marginal legal interior contact
+or skew threshold; no clearance or final DRC gate is relaxed.
+
+### Review and validation
+
+Independent review found mismatched fallback numbering for source graphics, which was corrected
+and covered by a silk-before-electrical/no-UUID regression. Added tests cover cubic fit error,
+subdivision limits, source-preserving IO, locked deletion rejection, width, dynamic collision
+identity, connectivity positive/negative controls, and curved length/skew bounds. Python bridge
+checks use the installed KiCad IPC Bézier property names. Final run outcomes are recorded in
+`reports/benchmark_history/2026-10-09-bezier-backend.json` after verification.
+
+### Decision
+
+Retain as the KiCad 10 curved output backend, subject to the recorded validation results. This
+change does not establish that any previously failing routing tier is solved. KiCad DRC of the
+exact exported board remains the qualification oracle.
+
+Final verification: release CLI and viewer build passed; final-source core tests 64/64, focused
+cubic tests 3/3, Python bridge tests 7/7. The bounded Tier 0 run emitted 174 Béziers and 56 straight
+tracks with three vias, zero internal opens/copper violations, and 16 unresolved bends. Exact
+exported preview passed KiCad 10.0.6 DRC with the original project rules (zero errors and opens).
+It remains incomplete and is not a tier promotion. Runtime 180.31s, peak RSS 598864KiB.
+The trial preceded final source-curve bookkeeping corrections; final regression tests used all
+corrections. Both exported fixture and Tier 0 cubic renders were viewed.
+
+## Experiment — LittlePlanets-style height-evolution discovery (2026-10-09)
+
+### Failure and hypothesis
+
+The bounded Tier 0 run reaches connected physical copper but can retain unsmoothed joins, with
+multiple geometry preparation/endpoint-binding failures. Existing hydraulic discovery follows a
+fixed destination potential and reinforces droplets. Hypothesis: evolving an inverse-clearance
+surface through repeated erosion/deposition supplies a useful alternative corridor prior. It is
+not assumed to repair invalid polygon offsets or terminal attachment automatically.
+
+### Research and change
+
+Inspected LittlePlanets' active Vulkan height-evolution chain in the local terrain project. Added
+an explicit CPU experiment: D8 drainage, topological contributing flow, USPED-style capacity,
+mask-aware flux divergence, bounded erosion/deposition, then positive-cost path extraction that
+can climb saddles. The immutable legal mask, exact chord certificates, corridor projection, and
+final copper checks remain authoritative. Defaults retain GPU droplets; `--terrain-height-evolution`
+selects the new backend. Dedicated metrics and field labels identify it. This is not a silent GPU
+fallback or a wholesale replacement of NavMesh.
+
+### Before
+
+One-iteration Tier 0 global baseline: 56.68s, peak RSS 428428KiB, 50 paths, zero unrouted nets,
+three clearance-shadow conflicts. Hydraulic proposals: 48 attempted, 45 accepted. Minimal fixture
+baseline completes in 0.22s but exercises no hydraulic proposals, so it is a CLI regression only.
+
+### Validation and decision
+
+See `reports/benchmark_history/2026-10-09-height-evolution.json` for measured results and decision.
+Synthetic tests distinguish real height changes, uphill basin escape, narrow-neck connectivity,
+obstacle preservation, and exact polygon-to-corridor projection from visual plausibility.
+
+Final measured result: 46/48 proposals accepted versus 45/48 with droplets, with the same three
+residual global clearance-shadow conflicts. The detail run recorded 48 requests, 46 actual solver
+invocations, 460 evolution iterations, 553963 changed cells summed across solves, and 39889 path
+expansions. At 180.17s it exported 178 Béziers with zero internal opens/copper violations but nine
+unsmoothed joints; the engine timed out and the preview remains incomplete. KiCad DRC with the
+original project rules passed with zero violations and unconnected items. The earlier Bézier run
+had 16 unsmoothed joints, but this comparison is not a controlled ablation.
+
+Release build, core 64/64, and focused terrain tests 2/2 passed. Independent review prompted
+cancellation propagation, failure-work accounting, actual-invocation counters, and limiting the
+flag to global discovery so confined anisotropic repair retains its directional solver. Final
+build/focused tests include cancellation diagnostic fixes. Retain the backend as opt-in: evidence
+supports usable corridor discovery, not improved tier completion or a speedup. Next experiment:
+compare zero-iteration clearance search against evolved heights under identical budgets, then
+consider cached layer fields only if evolution itself earns its cost.
+
+## Experiment — Default terrain discovery with live copper feedback (2026-10-09)
+
+### Failure and requested change
+
+Height evolution previously reconstructed terrain from static free space and accumulated failure
+history only. Copper laid or ripped up by a later engine action did not itself change the next
+terrain solve. The user requested height evolution as the default and current copper feedback
+between state-machine passes. This default change is user-directed, not a benchmark promotion.
+
+### Hypothesis and design
+
+A replaceable net/layer-scoped copper snapshot supplies occupancy pressure separately from
+persistent failure history. Rebuilding terrain from this snapshot lets removed copper release its
+pressure, while retained copper influences other nets. Changed occupancy must invalidate reusable
+hydraulic proposals. Provisional routing evidence remains advisory; it does not alter the immutable
+legal mask, canonical source board, exact materialization, or KiCad acceptance criteria.
+
+### Verification
+
+Results will be recorded in `reports/benchmark_history/2026-10-09-live-copper-terrain.json`.
+
+Final release validation: core 64/64, terrain targets 3/3, CLI selection targets 4/4 passed.
+Independent review fixes covered cycle detection by content rather than monotonic revision,
+conservative arc extents, via layer spans, numeric bounds, and resolved net-class clearance.
+Incremental tests verify that both adding and removing copper invalidate old proposals; engine
+tests verify that later global actions actually consume the replacement snapshot.
+
+The default-mode Tier 0 run (three global iterations allowed, 180s cooperative deadline) completed
+six actions before timing out at 195.61s, peak RSS 548664KiB. Input snapshots progressed from empty
+to 575 provisional features, 568 regional scaffold features, then 232 materialized copper features.
+The feedback-global action consumed revision 3 (the 232 exact candidate features), reduced global
+overflow from three to zero, and produced a new 541-feature provisional snapshot. Its subsequent
+quantized copper probe worsened from a score of 8 to 56. This demonstrates working feedback but
+also that a better global allocation score need not mean better copper.
+
+The retained earlier best preview contains 178 Béziers, 48 tracks, three vias, zero internal opens
+or copper violations, and nine unsmoothed joints. KiCad DRC with unchanged original project rules
+reported zero errors and unconnected items. Routing remains incomplete and no tier is promoted.
+The selected preview's configured terrain revision is 0 because it predates the exploratory
+feedback-global pass; attempt telemetry retains the later revision evidence independently.
+
+Decision: keep the user-requested default and feedback lifecycle. All changed snapshots currently
+invalidate global reuse conservatively; local invalidation is a future performance improvement.
+Next hypothesis: pressure-derived alternative topology needs physical feasibility ranking so
+reduced global overflow does not select a worse copper realization.
+
+Both development and release CLI builds passed after explicit aggregate-default initializer
+cleanup, and the three focused terrain targets passed again. The updated development executable
+is used by `run_tiers.sh`; the viewer build passed with no work required.
+
+## Sequence audit — short engine actions and speculative preparation (2026-10-09)
+
+Evidence is preserved in `reports/benchmark_history/2026-10-09-pipeline-sequence-analysis.json`.
+This is an analysis, not an implemented experiment or a tier promotion. The user confirmed that
+each action/sequence should be short and focused, returning control so the engine can select the
+next action.
+
+The earlier Bézier Tier 0 run spent 11.321s in global allocation, 0.109s probing quantized copper,
+45.267s in regional analysis, 70.897s materializing, then 47.177s in XPBD with unchanged reported
+quality. Its zero detailed violation score did not represent successful curved routing: 16
+unsmoothed joints remained. The terrain-feedback Tier 0 run similarly spent 46.216s regional and
+70.263s materializing. Its subsequent global feedback improved allocation score from three to
+zero, while the following physical probe worsened from eight to 56. Action-specific score gains
+cannot therefore serve as a common measure of end-to-end progress.
+
+In the sampled ongoing Tier 1 trace, global actions took 156.131s and 147.099s, followed by a
+0.725s probe. The regional action started at 303.964s and had not returned by telemetry time
+6311.627s. Twenty shove-deadlock observations appeared within it; observed diagnostics explicitly
+reported that XPBD was not attempted. Internal fallback/scope exploration can therefore occupy
+most of the deadline before the engine can choose a different algorithm. Cooperative kernel
+yields currently preserve and resume that same transaction; they are not algorithm-selection
+boundaries. Per-worker spline timings overlap and must not be subtracted from wall time as if
+they were exclusive serial phases.
+
+Code inspection found forced transitions from quantized probe to regional realization and, in
+materializing mode, from completed plan actions to materialization. Regional, XPBD, and confined
+erosion actions each call the full regional analyzer with different flags; domain caching is
+local to one analyzer invocation. The telemetry `accepted` flag is computed after working-state
+replacement and is not itself a rollback gate. Best checkpoints are retained separately. The
+existing content-based terrain cycle key should be preserved rather than replaced with an
+ever-increasing revision.
+
+Priority: split the regional analyzer into resumable bounded scene/conflict preparation,
+candidate generation, lane-search expansion, realization, targeted repair, and validation
+operations. Every operation should return its immutable input fingerprint, continuation,
+candidate/evidence delta, typed outcome, consumed budget, and readiness/dependency information.
+The engine must be free to resume it, change algorithm, widen scope, or replan topology. A yielded
+search frontier is useful evidence but is not validated copper. Validate final joins/quantization
+as early as the relevant primitives exist, and retain final exact/KiCad validation.
+
+Preemptive work should initially prepare immutable obstacle/domain data and bounded terrain,
+USPED, and corridor alternatives for likely next regions. Reuse preparation across engine actions
+when its complete dependency fingerprint matches. Changed copper should invalidate affected
+domains, not automatically every immutable source artifact. Competing XPBD/topology proposals
+may later run on isolated snapshots, with bounded resources and serialized validated commits.
+Shared mutable regional LRU caches and GPU command pools must not be reused concurrently without
+an explicit ownership/synchronization design. Spatial independence includes clearance halos,
+via spans, net connectivity, and shared corridor resources, not just disjoint rectangles.
+
+The earlier four-to-eight regional-worker experiment is negative evidence for simply increasing
+threads: active-phase time was 326.343s versus 327.324s, with one large window remaining critical.
+VPR's documented parallel connection search preserves net ordering, while its separate partitioned
+router processes non-overlapping nets; these are useful distinct models for Flux experiments:
+https://docs.verilogtorouting.org/en/latest/vpr/command_line_usage/ . OpenROAD likewise separates
+pin access, track assignment, initial routing, repair, and DRC:
+https://openroad.readthedocs.io/en/latest/main/src/drt/README.html . Neither source establishes a
+speedup for Flux.
+
+First experiment: hold algorithms and routing budgets fixed while exposing bounded regional
+decision points and reusable preparation. Measure time to first useful physical diagnosis,
+time spent after a repeated no-progress signature, repeated preparation, action duration
+distribution, useful/stale speculative results, peak memory, and final legality. Then separately
+enable one speculative worker. Compare Tier 0 and Tier 1 under identical configurations and
+CPU/GPU budgets; historical runs with different configurations are not causal speedup evidence.
+
+## 2026-10-09 — Bounded regional decisions and preparation reuse
+
+### Failure and hypothesis
+
+The interrupted Tier-1 terrain telemetry run spent more than 100 minutes inside a
+single regional action. Numerical kernel yields kept the viewer responsive but did
+not let the engine reconsider the algorithm. Earlier sequence analysis also found
+no gain from increasing spline worker count. Hypothesis: semantic regional
+boundaries, diagnosis-directed dispatch and reuse of immutable geometry can expose
+stalls earlier without turning every numerical yield into a new routing attempt.
+
+### Implementation
+
+Regional analysis publishes immutable checkpoints at preparation, conflict/window,
+template/spline and evaluated-scene boundaries, with lightweight progress boundaries
+inside bounded searches. A managed kernel parks even when its numerical slice is
+not exhausted. The engine retains the same frontier while continuing; after a
+bounded number of boundaries without improved physical evidence it records the
+interrupted attempt and selects a different eligible family. Cancellation joins
+that continuation before another action acquires the preparation cache. Unevaluated
+snapshots provide diagnoses, never accepted copper.
+
+Common lexicographic quality includes measured connectivity, physical conflicts,
+validation and unsmoothed bends; per-stage scalar counts remain diagnostics only.
+Typed diagnoses select local XPBD/erosion or upstream topology work. Exploration
+follows unsuccessful preferred actions rather than an unconditional expensive
+warm-up. Materialization readiness accepts evaluated legal scenes and conflict-free
+regional results; final copper validation and external KiCad DRC remain mandatory.
+
+A session-owned, exact-board-bound preparation context retains bounded source,
+geometry and navigation caches. One optional CPU worker prewarms at most eight
+net/layer source entries alongside initial global routing. Foreground routing only
+consumes completed preparation and never waits for speculative completion; a late
+job is cancelled and discarded. No speculative copper or congestion history is
+committed. Cancellation is cooperative between extraction operations, not a hard
+wall-clock bound. Managed regional work uses one spline worker so decision hooks
+run on the owning continuation.
+
+### Validation and interpretation
+
+Initial regression tests exposed over-restrictive materialization readiness for
+simple conflict-free boards; readiness was corrected before benchmarking. Added
+semantic-yield/frontier continuation, decision-budget, optional-worker equivalence,
+and evidence/curve-quality checks. Full test and tier results are recorded in the
+corresponding benchmark-history entry after the rebuilt run. The stopped old run
+is preserved at `build/tier1-terrain-telemetry-20261009T104445Z/` and is not a result
+for this implementation.
+
+### Tier-0 control and counter correction
+
+The first optimized control exhausted 192 semantic decisions across six regional
+families before a full physical scene was produced. Each action spent about 45 s;
+adjacent skipped portfolio entries consumed the same stagnation budget as actual
+search. This interrupted the retained frontier just before scene assembly. The
+control did verify one speculative preparation was consumed and five subsequent
+actions reused preparation. Its binary and telemetry are preserved in
+`build/bounded-engine-tiers-20261009T125118Z/`.
+
+Corrected the mechanism: only boundaries with intervening kernel search work count
+toward stagnation. All boundaries remain observable and the overall decision limit
+still applies. No budget constant was raised. The 64 core regression tests passed
+before this small correction; focused rechecks and a fresh optimized tier run follow.
+
+### Explicit search chunks replace numeric work as the stagnation clock
+
+The numeric-work correction recovered Tier-0 planning in 62.49 s, with one regional
+attempt and 38 decisions. A subsequent detailed-feedback regional search exposed
+why numeric kernel work is still an unsuitable semantic clock: 662 decision points
+contained only five numeric-work advances, despite expensive spline candidate work.
+
+The final budget therefore counts **completed spline candidates and bounded lane
+search batches** explicitly. Candidate starts and phase announcements have separate
+phase types and do not consume the stagnation budget. Removed an observer hook from
+a general telemetry publisher so diagnostic publication cannot change scheduling.
+The existing engine equivalence test now compares decision counts and copper with
+telemetry enabled/disabled, different numerical slices and speculative preparation
+enabled/disabled. Budget constants remain unchanged. The intermediate run at
+`build/bounded-engine-tiers-20261009T125909Z/` is retained as a numeric-counter control,
+not the final benchmark result.
+
+### Final validation and suite launch
+
+Debug and optimized builds passed. The 64-test core regression recheck passed;
+after the final typed-boundary correction, all four focused engine tests and the
+policy, kernel and preparation targets passed again. The telemetry/speculation/slice
+independence assertion passed. Final suite artifacts are in
+`build/bounded-engine-tiers-20261009T131008Z/`; its `suite-summary.json` is the live
+completion record. Tier 0 and Tier 1 route with 7200-second internal deadlines and
+7500-second harness deadlines. The still-locked Tiers 2–4 receive preflight checks.
+No tier promotion is claimed from planning success or from the suite merely starting.
+
+## Experiment — 2026-10-09: clearance-constrained PH tightening
+
+### Failure and hypothesis
+
+The viewer showed looping and oscillatory provisional curves. The PH exact-candidate comparator
+preferred greater worst clearance before its objective even for already legal routes. Regional
+legal-candidate selection preferred fewer control moves/sweeps before length. These mechanisms
+can reward bulging away from obstacles and preserve unnecessary interpolation detours. The
+baseline Tier-0 detailed run in `build/bounded-engine-tiers-20261009T131008Z` took 502.52 seconds,
+reported zero internal copper violations, but was incomplete with seven unsmoothed non-junction
+bends. This is not a passing tier or evidence that every provisional curve was legal.
+
+### Research and alternatives
+
+Farouki's [Introduction to PH curves](https://faculty.engineering.ucdavis.edu/farouki/wp-content/uploads/sites/41/2013/02/Introduction-to-PH-curves.pdf)
+explains polynomial speed and arc length; Flux already has the exact integral, so chord-sample
+length is unnecessary for ranking PH candidates. Elastic-band work by Quinlan and Khatib
+([Stanford publication index](https://www-cs-faculty.stanford.edu/group/manips/publications.html))
+provides the relevant fixed-topology shortening model. Neither technique solves an incorrect
+corridor allocation. Ranked interventions: (1) correct feasible candidate ranking, minimal cost;
+(2) bounded anchor deletion inside certified free space, targeted cost; (3) global homotopy search,
+more expensive and reserved for conflicts that cannot be removed locally. No external code copied.
+
+### Change and acceptance criteria
+
+All PH proposal families use clearance/shape feasibility before exact arc length; curvature
+regularity only breaks feasible length ties. Recovery of illegal inputs remains possible, but
+cannot replace a legal input with illegal or longer copper. Tightening removes only interpolation
+anchors, is bounded by candidate/removal limits, and obeys route constraints plus continuous
+clearance/corridor and shape certificates. Open-route first/last spans are now included in
+self-intersection checks. A dedicated engine action runs once per completed curved candidate
+before materialization; external KiCad validation remains mandatory.
+
+Success requires certified strict shortening in the synthetic detour, veto of blocked shortcuts,
+no growth from excess-clearance rewards, coherent native candidate reconstruction and no
+regression in engine sequencing or cancellation. The tier comparison is recorded separately in
+`reports/benchmark_history/2026-10-09-ph-tautening.json`; results pending during implementation.
+
+### Verification refinements and obstacle-support audit
+
+Initial full core verification exposed stalled inter-sample collision recovery. The recovery
+path needs bounded insertion of an extra interpolation degree of freedom even before that
+insertion improves the objective. Restored that behavior only for continuously infeasible inputs,
+without worsening shape violations, and retained worst-clearance tie-breaking only among illegal
+candidates. The legal-route objective remains exact length then curvature. The inter-sample
+rebound and committed-copper retry tests passed after this correction.
+
+Independent review found optional tightening could consume the last action reserved for copper
+materialization; scheduling now reserves that action. Cancellation during continuity promotion
+now works on a private route copy and retains the caller checkpoint. Focused tests exercise both.
+Regional tightening has accepted-shortening, protected-junction veto, and foreign-copper veto
+cases, including regenerated manifest/path ownership and a fresh native DRC/connectivity gate.
+
+The user's paired obstacle-support proposal was audited separately: PH recovery inserts one
+node at the worst continuous collision, then proposes normal displacements; generic corner
+construction has two trimmed guard points, but these are not coordinated entry/exit contacts
+around a clearance-expanded obstacle. XPBD subdivision and pairwise route shoves are also not
+obstacle contact pairs. Explicit paired-support generation and joint tangent/position optimisation
+remain a distinct follow-on experiment; this implementation does not claim to provide it.
+
+### Paired obstacle supports — implementation following the audit
+
+The subsequent user request to fix the missing mechanism is now implemented. A bounded
+proposal brackets an obstructed shortcut using signed clearance and the continuous certificate's
+collision witness. It inserts approach/departure interpolation points, lifts them together to
+clear the obstacle interior, and tries a small coupled contraction portfolio on both sides.
+The existing PH reconstruction supplies tangents; this is not a separate exact tangent-graph
+solver or a guarantee of a globally shortest route. Full shape, continuous clearance and caller
+corridor/topology certificates remain hard acceptance gates. A legal incumbent is replaced only
+by a strictly shorter exact PH curve. Failed proposals leave the incumbent intact.
+
+The feature is enabled by default in both infeasible PH recovery and bounded legal post-polish
+refinement, including detailed materialization. Regional tightening builds its signed-distance
+field from clearance-expanded retained copper, with trace radius, pairwise net rules and board
+edges included. Regenerated native copper must pass fresh DRC and actual-scene connectivity
+before adoption. Two support points are interpolation stations, not merely the two handles
+that every cubic Bézier already has.
+
+Candidate checks are shared with the optimizer's existing budget; selected support pairs are
+bounded and failed attempts are counted. Detailed JSON exposes paired attempts, inserted
+supports and infeasible-to-legal recoveries separately. Legal shortening is not counted as a
+collision recovery. Cancellation retains the last accepted route.
+
+Synthetic circle and box cases shortened from 263.5 µm to 230.2 µm (12.6%) and 217.7 µm
+(17.4%), respectively. Their sampled before/after curves were plotted and inspected: both
+are smooth single detours without loops. Conservative clearance slack remains. These are
+mechanism tests, not board qualification. Tests also cover disabling the mechanism, topology
+veto, candidate limits, collision recovery and retained foreign-copper clearance.
+
+The pre-paired length-only Tier-0 control finished in 478.2 s but remained incomplete with
+seven unrounded non-junction bends, zero internal copper violations and zero opens. It did
+not earn tier promotion. The engine tightening action examined no retained regional PH curves
+in this case; some curves are generated later in detailed materialization, which motivated the
+bounded legal post-polish integration. Final paired validation is recorded in the structured
+benchmark history alongside this control.
+
+### Regression follow-up
+
+The first paired implementation full core run passed 62/64. Fieldless post-polish deletion
+changed the interpolation station count and worsened the existing zigzag regularity check;
+restricting optimizer obstacle refinement to an actual clearance evaluator restored that test.
+The explicit regional tightening API still supports ordinary certified redundant-node deletion.
+
+The other failure was a G2-promotion regression. Disabling paired supports reproduced it
+unchanged (1680 versus 1686 candidate checks), so it was not caused by the new obstacle pair.
+The shorter optimized G1 station layout failed the bounded scalar-G2 solver. One retry from the
+pre-optimization checkpoint restored the G2 micro-test without relaxing curvature tolerance.
+That retry must pass the same continuous envelope, shape, topology and native copper transaction
+as the first candidate. A speculative vector-derivative solver recovery did not help and was
+reverted. A final post-polish callback also allows detailed materialization to veto station
+changes that cannot satisfy downstream G2 requirements; it runs only on the final proposal.
+
+### Final paired Tier-0 measurement
+
+The corrected release completed detailed routing in 489.264 s (length-only control: 478.227 s;
+runs were concurrent with Tier 1, so this is not an isolated performance comparison). It kept
+47 tracks, 3 vias and 199 cubic Béziers, with zero internal copper violations and zero opens.
+KiCad 10.0.6 reported zero configured DRC violations and zero unconnected items for the saved
+rejected candidate. The curved qualification still failed on the same seven unsmoothed joints.
+Paired telemetry recorded 30 attempts and zero inserted supports; engine tightening recorded
+one action and zero improvements. Thus the circle/box benefit has not translated to this board.
+
+Both saved copper layers were exported and inspected. They have generally smooth bends without
+visible oscillating loops, but retain broad detours and sharp joints. This is not proof of shortest
+paths or a passed tier. Preserve the bounded mechanism and focused tests, but investigate corridor
+restrictions and unsmoothed materialization failures before attributing any board improvement to
+paired supports. Final artifacts: `build/paired-final-tier0-20261009`; structured metrics remain in
+`reports/benchmark_history/2026-10-09-ph-tautening.json`.
+
+Tier 1 (`bm_svf`) finished its global stage in 907.216 s with 78 paths, zero unrouted nets
+and zero ordinary resource overflow, but 398 clearance-shadow conflicts. The engine timed out with `routing_plan_complete=false`, so the benchmark skipped detailed
+materialization. Shadows were advisory with zero shadow-history penalty, not a direct count
+threshold in the benchmark gate; the unlocked
+probe's successful harness exit does not mean the tier passed. Provisional imagery was inspected
+and remains predominantly unsmoothed routing geometry. No final Tier-1 copper/DRC claim is made.
+Maximum observed router RSS during the sampled interval was 863312 KiB for Tier 0 and 799740 KiB
+for Tier 1. Both benchmark processes finished; the normal release CLI was rebuilt successfully.
+
+## Experiment — Actual-geometry clearance shadows (2026-10-09)
+
+### Failure and hypothesis
+
+The Tier-1 run reported 398 tile-coalesced shadow witnesses from 724 observations. Source tracing
+found that crossing-safe capacity canonicalization was also used for geometric certificates.
+Rasterizing an unselected opposite diagonal could overwrite the selected diagonal's true
+clearance. In a 650 µm cell, a selected diagonal is 459.619 µm from a vertical owner, with a
+450 µm required centerline distance, yet the aliased shadow reports a 450 µm deficit.
+Separately, candidate qualification used nominal track width instead of selected neck-down width.
+These are representation errors, not evidence that fabrication clearance should be reduced.
+
+### Change
+
+Keep shared diagonal identities for capacity, but preserve actual chord identities for clearance
+rasterization, selected occupancy, search, conflict attribution, history and incremental rebuilds.
+Qualify shadows with selected segment widths; junctions use the widest incident track/via.
+Filter local planar escape pressure by the actual clearance threshold rather than counting every
+broad-phase certificate (which also covers wider via candidates). Label the viewer metric
+“Shadow witnesses” and explain that it is not a KiCad DRC count.
+
+### Verification
+
+Add one-cell diagonal and selected-width micro-tests with true-collision controls, plus frozen
+checkpoint rebuilds. Preserve exact copper and benchmark qualification gates. Compare
+Tier-0 and Tier-1 against the saved pre-change executable and structured baseline in
+`reports/benchmark_history/2026-10-09-clearance-shadow-accuracy.json`.
+
+Review also identified a preexisting false negative: multi-cell direct Voronoi chords looked up
+full-edge keys absent from the one-pitch raster. Retain exact owner segments and lazily cache
+exact same-layer segment distances for direct edges, with conservative bounding-box rejection.
+Adding or removing copper invalidates this cache. Four focused regression cases pass, including
+a retained two-point direct chord with a midpoint crossing and a legal offset control. Independent
+review found no further actionable issue. Full regression and tier comparison runs are pending.
+
+A viewer audit confirmed the former filled circle radius represented deficit magnitude clamped
+to 7–34 pixels, not a physical envelope. The overlay now uses fixed-size hollow diamond witness
+markers and explicitly labels their meaning. Telemetry does not carry enough geometry to draw
+exact physical shadows; the display no longer suggests otherwise.
+
+The full debug suite exposed a race missed by the initial review: static seed workers share
+const empty occupancy, but the lazy cache was mutable and unguarded. A debugger reproduced
+a double free in `build_static_hybrid_seed_plan` during
+`global_to_detailed_route_is_transactional_and_capacity_gated`. The first tier comparisons were
+interrupted and are not final evidence. Synchronize cache publication and preserve safe occupancy
+copy/move semantics; rerun the reproducer and full tests before restarting tier comparisons.
+
+The corrected cache uses value ownership with locked copy/move and locked construction/lookup;
+completed entries remain immutable between serial copper updates. Independent concurrency review
+found no remaining actionable issue. The previously crashing transactional test passes twice in
+Debug; focused shadow/kernel/engine-policy tests pass; the complete optimized core suite passes
+64/64. Release CLI and viewer build successfully. Corrected 900-second tier comparisons use
+`build/shadow-verified-tier0-20261010` and `build/shadow-verified-tier1-20261010`.
+
+Corrected Tier 0: global 65.059 s, detail 519.538 s (prior detail 489.264 s; concurrent
+runs prevent isolated timing attribution). The same seven non-junction joints remain unsmoothed,
+so curved qualification still fails. Output has 47 straight tracks, 199 added cubic Béziers and
+3 vias; internal copper violations, open connections and configured KiCad DRC violations remain
+zero. Both exported copper PNGs are byte-identical to the prior paired-support run and were
+inspected. Thus this accuracy fix preserves that baseline copper, including its unresolved
+sharp joints and detours; it does not promote Tier 0 under curved qualification.
+
+Corrected Tier 1 timed out at 900.209 s: 78 paths, zero unrouted nets and ordinary overflow,
+but `routing_plan_complete=false`. Shadow witnesses fell from 398 to 275 (raw observations
+724 to 497; coalesced observations 326 to 222). These remain advisory, with zero shadow history
+increment. The internal provisional quantized-copper oracle improved from 417 to 310 diagnoses
+and 1114 to 799 internal violations, with tracks 1429 to 1329 and vias 76 to 56, but remains
+infeasible. Detailed materialization was skipped; there is no final Tier-1 KiCad DRC result.
+Provisional imagery was inspected and still contains coarse unsmoothed geometry and crossings.
+
+Sampled peak RSS was 880476 KiB for Tier 0 and 936492 KiB for Tier 1. These runs overlapped;
+**do not use their durations as performance evidence**. Following the user instruction on
+2026-10-10, all future tier runs must be sequential with recorded telemetry; this is saved in
+AGENTS.md. Both current runs recorded diagnostic telemetry and have finished.
+
+Decision: keep the geometry/width accuracy fix and synchronized exact direct-edge cache.
+Regression evidence supports the intended mechanism, while Tier-1 physical feasibility remains
+unsolved. Investigate the remaining regional/oracle conflicts next; do not interpret the smaller
+planning witness count as final copper legality.
+
+## Experiment — Vulkan LittlePlanets height evolution (2026-10-10)
+
+### Hypothesis and scope
+
+The LittlePlanets-style terrain branch currently runs its entire height-evolution loop on the
+CPU, even when the rest of discovery uses Vulkan. Move downhill selection, contributing-area
+accumulation, capacity, conservative divergence and bounded height updates onto the GPU. Preserve
+CPU input validation, deterministic masked path extraction and downstream exact copper gates.
+Feedback fields and the walkable mask are uploaded for each solve so laid/ripped-up copper cannot
+reuse stale terrain. Retain the CPU implementation as an explicit numerical oracle, not a silent
+fallback. Measure field evolution separately from extraction and end-to-end solve time.
+
+### Design and research
+
+Each cell has at most one strictly lower downstream neighbour, forming a forest. Accumulate
+integer contributing area by pointer doubling. With downstream operator P, successive passes
+apply `(I + P)`, `(I + P^2)`, `(I + P^4)`, etc. to unit cell contributions. Their product includes
+every path distance once; integer atomic scatter preserves exact counts on branching forests.
+This avoids sorting heights on the CPU or dispatching once per downhill depth. A seeded mechanical
+check matched serial accumulation for 399 branching forests. Separate initialization/scatter
+passes prevent writes from racing with inputs. Gather divergence from the original eight adjacent
+upstream cells, preserving mask boundaries and conservative outgoing/incoming transport.
+
+Vulkan synchronization follows the Khronos compute-to-compute and compute-to-host examples:
+https://docs.vulkan.org/guide/latest/synchronization_examples.html
+Integer atomic operations follow the GLSL built-in definition:
+https://github.khronos.org/Vulkan-Site/glsl/latest/chapters/builtinfunctions.html
+Persistent, capacity-grown buffers and independent input/output state remain resident across
+iterations, with bounded iteration submissions for cancellation. CPU extraction still permits
+uphill/saddle crossings; terrain never changes legal free-space topology.
+
+### Verification plan
+
+Check numerical fields against the CPU oracle, exact integer flow on long/branching forests,
+no diagonal corner cutting, conservation, feedback replacement, mask replacement, cancellation,
+concurrent calls and buffer reuse. Measure representative raster sizes on the actual Vulkan
+device. Run core regressions, then Tier 0 followed by Tier 1, sequentially with diagnostic telemetry.
+
+### Implementation and measured cost
+
+Implemented Vulkan compute with device-local working fields, persistent capacity-grown staging
+buffers, and coherent cached readback where supported. An initial host-visible working-buffer
+layout was slower than the CPU on large fields and was replaced rather than retained. The
+production height-evolution branch now selects GPU execution by default; the CPU remains an
+explicit reference. Field evolution and CPU extraction have separate telemetry, alongside actual
+dispatch counts and buffer growth/reuse. Cancellation is checked between iterations and while
+waiting for the shared GPU context.
+
+Three sequential warm-cache measurements on an NVIDIA GeForce RTX 5080, using 16 iterations:
+
+| Raster | CPU total | GPU total | Total speedup | CPU evolution | GPU evolution |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 64² | 5.155 ms | 1.665 ms | 3.10× | 4.780 ms | 1.345 ms |
+| 128² | 22.328 ms | 3.237 ms | 6.90× | 20.896 ms | 1.813 ms |
+| 256² | 100.459 ms | 8.709 ms | 11.54× | 94.195 ms | 2.462 ms |
+| 512² | 484.481 ms | 34.478 ms | 14.05× | 456.745 ms | 4.927 ms |
+
+These are median terrain-solve timings, not whole-board routing speedups. At 512², unchanged CPU
+path extraction now dominates elapsed time. The four focused terrain suites and CLI terrain flag
+check pass. CPU/GPU field comparisons use FP32 tolerance; integer contributing areas remain exact.
+An accidentally broad parallel CTest invocation started overlapping corpus harnesses and was
+terminated. Its corpus outputs are excluded from validation and performance comparisons. Final
+core and sequential telemetry-enabled tier results are recorded below when completed.
+
+### Regression results
+
+All 64 core cases, four focused terrain suites, and CLI flag checks pass. The regular Release CLI
+and viewer builds succeed. Sequential Tier 0 (`build/terrain-gpu-tier0-20261010`) completed planning
+in 64.865 s and detail in 485.340 s. All 46 invoked height evolutions ran on GPU (15,180 dispatches;
+105,564 µs field time and 4,599 µs extraction in planning). Final copper retains 47 straight tracks,
+199 Béziers and 3 vias, zero opens, zero internal violations and zero configured KiCad DRC violations.
+Both copper layer PNGs are byte-identical to the prior shadow-accuracy baseline and were inspected.
+The same seven unsmoothed non-junction joints still prevent curved qualification; this is preserved
+baseline behavior, not a solved tier. Sampled peak detail RSS was 960,296 KiB. Previous baseline tier
+runs overlapped, so the duration difference cannot establish a whole-board speedup.
+
+### Follow-up: regional GPU/parallel opportunity
+
+User asked whether regional routing could also benefit from GPU/parallel execution. Existing
+`realize_bundle_splines()` already runs up to four independent window workers, and PH refinement
+uses a bounded exact-candidate pool. Tier 0 detail reports 382 GPU polish batches/15,876 candidates.
+The 135 detailed regional spline timing events sum to 52.058 task-seconds: trajectory polish 14.819,
+joint shove 13.648, interpolation 8.987, setup 6.131, native DRC 3.271, adaptive pair 3.051,
+quantization 1.326, post-polish 0.352 and XPBD 0.100. These sums are not wall-time fractions or a
+complete explanation of detail runtime.
+
+More decisive planning evidence: channel construction (`populate_channels`) consumed 44.309 s
+of the 64.865 s planning run. First partition that timing into extraction, preparation and geometry
+predicates; reuse/index prepared geometry before adding more compute. Then parallelize conservative
+intersection screening or batch it on GPU, with deterministic CPU merging and exact validation.
+A hypothetical 4x acceleration of that stage alone predicts about 31.633 s planning; this is an
+Amdahl estimate, not a measured result or a whole-board claim. Next consider bounded independent
+candidate evaluation within a single window, with immutable snapshots and ordered selection.
+Increasing window workers alone does little for one dominant window. Shared preparation leases,
+cache ownership, nested worker budgets and generation-bound commit checks need explicit handling.
+Do not move branching assignment search, history mutation or native copper publication wholesale
+to the GPU. No regional implementation changes were made for this analysis.
+
+Tier 1 GPU-only baseline (`build/terrain-gpu-tier1-20261010`) then ran alone with diagnostic
+telemetry and timed out at 900.597 s. It retains 78 paths, zero unrouted nets, 275 shadow witnesses,
+and the same infeasible internal copper oracle as the prior run: 310 diagnoses, 799 violations
+(70 hole-clearance, 544 track-clearance, 179 track/via-clearance, 6 via-clearance), 1329 tracks,
+56 vias. No final detailed output/KiCad DRC is available. All 45 invoked evolutions used GPU
+(15,750 dispatches, 178,755 µs field time, 9,778 µs extraction). Peak sampled RSS: 861,028 KiB.
+Decision: retain GPU evolution; numerical tests and both tiers preserve baseline behavior. This
+accelerates the terrain mechanism but does not solve Tier-1 physical feasibility. The tested binary
+was saved as `build/terrain-gpu-20261010/flux-cli-regional-baseline` before regional acceleration.
+
+## Experiment — Bounded regional acceleration (2026-10-10)
+
+### Failure and hypothesis
+
+User requested spatial/preparation reuse, bounded parallel regional alternatives, conservative
+GPU batches and one shared CPU worker budget in a single integration. Tier-0 GPU-only planning
+spent 44.309/64.865 seconds constructing channels. Inspection found pairwise channel overlap
+rebuilding the same PreparedPolygon BVHs for every pair. This is avoidable computation before
+routing search. A prepared-cell spatial index should remove most of that cost without changing
+first-match channel merging. Independent candidate realization can then use bounded private
+snapshots, leaving ordered selection, fallback promotion and exact scene publication on the CPU.
+
+### Change and verification plan
+
+Reuse prepared channel polygons behind a bounded spatial index; retain exact predicates and
+original channel order. Reuse board-bound source extraction/chord validation, with a source BVH
+for local obstacle extraction and stable source ordering. Existing bounded navigation caches
+remain invalidated by complete board equality, including copper changes. Bound GPU chord work
+per dispatch and yield between chunks outside the shared device lock. Share CPU leases across
+static seed, regional/window/candidate, exact PH and detailed materialization pools. Limit snapshot
+concurrency using an explicit estimated scratch budget. Candidate workers return raw realizations;
+the parent accounts actual work, discards excess speculation, performs stable reduction and
+publishes telemetry/decisions. Validate index parity, CPU budget exhaustion, conservative GPU
+chunks, serial/parallel equivalence and cancellation before sequential telemetry Tier 0/Tier 1.
+
+Indexed channel overlap survivors also use bounded CPU batches when at least eight channel
+candidates remain; workers only read prepared geometry and write private result slots. The parent
+chooses the first exact overlap in original channel order before mutating channel state. Small
+queries remain serial. All such workers share the same process-wide budget.
+
+### Local verification
+
+All 65 core cases and 11 focused suites pass. Candidate parity exercises real concurrent shortlist
+entries and checks identical selected geometry and physical outcome. Channel parity constructs eight
+eligible prior channels and a broad incoming corridor; batched evaluation performs additional exact
+checks but preserves channel topology and occupants. Tests also cover copper cache invalidation,
+worker-budget exhaustion, conservative multi-chunk GPU screening, and managed suspension/cancellation.
+Independent review found no remaining material issues. A serial single-worker overlap fallback now
+releases its unused worker lease. The initial candidate test used an invalid zero fallback-wave
+configuration; that fixture error was corrected before accepting the result.
+
+### Tier-0 result
+
+Sequential diagnostic-telemetry run: planning 23.794 s (baseline 64.865), channel construction
+0.141 s (44.309), detail 418.485 s (485.340). Planning plus detail is 442.279 s vs 550.205 s,
+19.6% less elapsed time in this single comparison. Preparation indexed 53,532 cells, performed
+567 queries and 577 exact channel comparisons. Planning exercised 4 candidate batches/8 tasks
+with 2 workers; one speculative candidate was discarded by the ordered legal-portfolio limit.
+Copper stays at 47 tracks, 199 Béziers, 3 vias, zero opens/internal violations/configured KiCad DRC
+violations. Both layer PNGs are byte-identical to baseline and visually inspected. The same seven
+unsmoothed non-junction joints prevent curved qualification; harness exit 1 is this existing failure,
+not a new physical regression. Peak process RSS was 1,169,872 KiB vs baseline sampled 960,296 KiB
+(about 22% higher). Retain the speed improvement but expose this memory cost; this is one sequential
+run per configuration, not an isolated attribution of every acceleration component.
+
+### Tier-1 result and decision
+
+Tier 1 ran only after Tier 0 finished, with diagnostic telemetry and the same 900-second engine
+budget. It timed out at 900.433 s with unchanged feasibility: 78 paths/25 nets, zero unrouted nets,
+275 shadow witnesses, and the internal quantized oracle still reports 799 violations (544 track
+clearance, 179 track/via clearance, 70 hole clearance, 6 via clearance), 310 diagnoses, 1329 tracks,
+56 vias and zero opens. No qualified detailed output or final KiCad DRC exists. Both provisional
+layer images were inspected and retain coarse crossings. Peak RSS 897,888 KiB is about 4.3% above
+the prior sampled 861,028 KiB. Parallel candidate completion is visible in telemetry; zero final
+regional counters reflect cancellation of an uncommitted action, not absence of parallel work.
+
+Retain the implementation: it preserves the tested physical outcomes, substantially removes channel
+preparation overhead, and reduces Tier-0 planning+detail elapsed time in this single comparison.
+It does not solve the Tier-1 physical frontier. Summed detail candidate phase durations rose from
+52.058 to 191.815 seconds; these per-worker phase durations include changed scheduling/speculation
+and are neither CPU-time measurements nor elapsed wall time. Avoid claiming isolated candidate/GPU
+speedups without ablation. Memory costs are explicit in the structured report:
+`reports/benchmark_history/2026-10-10-regional-acceleration.json`.
+
+## Research — tscircuit routing and full autorouter (2026-10-10)
+
+### Scope and evidence
+
+Inspected the user-linked `tscircuit/routing` at
+`bc7419513fe21e5501aae732de48dfb12b9a5f8d` (HEAD commit dated 2024-07-19), then the
+separate, more relevant `tscircuit/tscircuit-autorouter` at
+`a9982c678cc8f130b2d87c3f6e3f126c20386170`. Read source only; no external package scripts,
+services, benchmarks or code imports were run. This is a design review, not a measured improvement.
+
+The original library routes 2D points around axis-aligned rectangles. Its granular A* rounds
+obstacle occupancy, outputs a fixed width, and has no net/layer/via/physical-rule model. `findRoute`
+sorts terminals by distance from the origin and chains adjacent pairs; it is not an improvement on
+Flux's existing growing route trees. Mixed-granularity routing attempts pitch multipliers and
+repairs endpoint links, but the implementation immediately returns the multiple=1 result even on
+failure when that level is eligible. These routines must not replace Flux's exact legality gates.
+
+### Ranked adaptations
+
+1. **Progress-earned regional work allowances — high expected value, medium cost.**
+   Modern `applyPipeline9BoundedRegionalRepairs.ts` limits regions, candidate attempts and expanded
+   search nodes separately; accepted repairs unlock more work under a hard total ceiling.
+   `Pipeline9BoundedRegionalRepairSolver` maintains attempted regions and explicit validation phases.
+   Flux already has bounded kernels and no-improvement policy; the experiment is to put work credit
+   at individual region/candidate scope and count actual child work, not merely parent decisions.
+   Preserve connectivity, hard-rule categories and failure attribution; raw DRC-count reduction
+   alone is insufficient. Measure time to first accepted physical improvement, work per improvement,
+   retained conflict sets and timeout behavior on Tier 1, with Tier-0 copper as regression.
+
+2. **Guarded partial repair publication — high potential quality value, medium/high cost.**
+   Modern `selectIndependentClearanceRepairs.ts` validates simultaneous proposed moves, restores
+   blocked vertices, rebuilds the obstacle index and rechecks surviving moves. This matters because
+   restoring one neighbor can invalidate a previously safe move. Its removal phase is bounded by
+   moved-vertex count, but repeated scene rebuilding can be expensive. Flux already has exact
+   transactions; apply the concept inside one failed transaction to salvage an independent subset.
+   PH junction/tangent dependencies must form atomic groups; exact whole-scene DRC/connectivity and
+   unchanged-boundary checks remain mandatory. Minimum test: two mutually dependent bends plus a
+   third blocked proposal; retain the valid pair without accepting a new conflict after rollback.
+
+3. **Conflict-aware candidate scheduling and cheap infeasibility rejection — high potential
+   runtime value, medium cost.** Modern `PortfolioSingleIntraNodeSolver` accounts actual work,
+   discounts provisional routes with conflicts, expands route-order diversity only after initial
+   work, and can reject fixed unrelated terminals that overlap before trying more orderings.
+   Flux already scores physical quality; move comparable evidence into live candidate scheduling.
+   Use width+clearance/via envelopes rather than their simple equal-width point test. A rejection
+   must invalidate only the fixed terminal/layer assignment, not a region whose topology can change.
+   Keep exploration allowance so greedy progress does not starve a necessary temporary detour.
+
+4. **Exit-class shortlist generation — medium/high potential, medium cost.** The original
+   `findBestBorderTargetPaths.ts` groups reachable border samples and retains representatives;
+   `findTwoPointNearBiasRoute.ts` searches endpoint-to-exit and exit-to-exit pieces separately.
+   Flux already has terminal portals, adaptive NavMesh and route-class guards. Incremental value is
+   deduplicating expensive regional candidates before PH by certified reachable exit/corridor class,
+   retaining several representatives when capacity, width, layers or trace order differ. Their
+   contiguous-border heuristic is not a homotopy proof. Unbounded recursive Cartesian products
+   would reproduce Flux's portfolio cost. Use a lazy bounded pair shortlist and stable selection.
+
+5. **Local outcome caching and reproducible subproblem captures — medium potential, medium cost.**
+   Modern `CachedIntraNodeRouteSolver` caches successes and failures using geometry/rules/connection
+   metadata; original `logging/log-context.ts` and debug-grid serialization capture nested work.
+   Flux already reuses geometry and certificates. Candidate outcome reuse needs exact local copper
+   fingerprints, rules, protected junctions, algorithm version, search settings and failure kind.
+   Do not treat a budget timeout as proof of infeasibility or use their rounded-coordinate cache
+   identity as a Flux legality certificate. Stream bounded parent/child work events on interruption
+   so final zero counters no longer hide unfinished regional work.
+
+### Sources
+
+- Original exit grouping: https://github.com/tscircuit/routing/blob/bc7419513fe21e5501aae732de48dfb12b9a5f8d/src/lib/find-best-border-target-paths.ts
+- Original recursive search: https://github.com/tscircuit/routing/blob/bc7419513fe21e5501aae732de48dfb12b9a5f8d/src/lib/find-two-point-near-bias-route.ts
+- Original representation: https://github.com/tscircuit/routing/blob/bc7419513fe21e5501aae732de48dfb12b9a5f8d/src/lib/types.ts
+- Work allowances: https://github.com/tscircuit/tscircuit-autorouter/blob/a9982c678cc8f130b2d87c3f6e3f126c20386170/lib/autorouter-pipelines/AutoroutingPipeline9_PreloadedTraceGraph/applyPipeline9BoundedRegionalRepairs.ts
+- Partial repair selection: https://github.com/tscircuit/tscircuit-autorouter/blob/a9982c678cc8f130b2d87c3f6e3f126c20386170/lib/autorouter-pipelines/AutoroutingPipeline9_PreloadedTraceGraph/selectIndependentClearanceRepairs.ts
+- Candidate scheduling: https://github.com/tscircuit/tscircuit-autorouter/blob/a9982c678cc8f130b2d87c3f6e3f126c20386170/lib/solvers/HyperHighDensitySolver/PortfolioSingleIntraNodeSolver.ts
+- Outcome cache: https://github.com/tscircuit/tscircuit-autorouter/blob/a9982c678cc8f130b2d87c3f6e3f126c20386170/lib/solvers/HighDensitySolver/CachedIntraNodeRouteSolver.ts
+
+### Decision
+
+Prioritize a bounded experiment combining cheap fixed-assignment feasibility rejection with
+progress-earned candidate work; evaluate partial-repair salvage separately. Do not replace the
+router, weaken clearances, copy rectangular raster legality, or port origin-sorted net chaining.
+No routing implementation changed in this review. Original package metadata declares ISC but the
+inspected tree has no standalone license file; modern repository includes an MIT license. No source
+was copied. Dependency licensing and attribution would need review for any future literal port.
+
+## Experiment — Progress-earned regional search and guarded repair subsets (2026-10-10)
+
+### Failure and hypothesis
+
+Regional-acceleration baseline Tier 1 (`bm_svf`) spent 900.433 s and timed out despite
+78 provisional paths covering 25 nets. The retained quantized oracle still reported 799
+violations (544 track clearance, 179 track/via, 70 hole clearance, 6 via clearance).
+The interrupted action's zero aggregate counters were not evidence of zero work.
+Tier 0 had legal copper and zero opens/configured DRC, but still failed curved qualification
+with seven unsmoothed non-junction joints; planning/detail elapsed were 23.794/418.485 s.
+Baseline: `reports/benchmark_history/2026-10-10-regional-acceleration.json`.
+
+Hypothesis: spending more time on assignments without measured physical progress is less useful
+than returning control to the state engine; impossible fixed assignments should be rejected before
+PH fitting, and independent valid moves in a failed XPBD proposal should survive rollback.
+The user requested these mechanisms and conflict-aware candidate scheduling together. This is one
+integration pass, with separate focused mechanism tests and counters; benchmark causality cannot
+be assigned to an individual mechanism from this combined experiment alone.
+
+### Implementation
+
+- Session-wide regional child-work allowance with a hard ceiling; only strict improvements in
+  evaluated physical evidence earn additional credit. Kernel work, not telemetry announcements,
+  consumes allowance. Existing coherent decision points remain the cancellation boundaries.
+- Conservative fixed-assignment preflight and deterministic conflict-aware portfolio ordering.
+  Movable centreline crossings remain search problems rather than infeasibility certificates.
+- After a rejected XPBD proposal, preserve net-atomic interior-control moves in a hybrid scene.
+  Differential pairs/buses remain unchanged in this subset fallback. Failed reconstruction and
+  exact native-copper conflicts remove groups; every restoration forces reassessment of survivors.
+  At most eight subset assessments are allowed. Cached baseline/proposal fitted pieces are reused.
+  Strict adaptive improvement, non-regressing topology/continuous clearance, native violation and
+  fit-failure bounds, and legal changed routes are required. Final scene/connectivity/KiCad gates
+  remain unchanged. This local salvage does not publish an incomplete board as routed.
+- CLI and session output include earned/consumed/allowed work and subset assessment/retention counts.
+
+### Validation
+
+Integrated builds, focused regressions, independent review, and sequential telemetry runs
+of Tier 0 then Tier 1 are recorded below. Legality and curved qualification are reported separately.
+
+
+### User-requested extension — AVBD contact blocks
+
+The same implementation pass now also includes the requested AVBD cord/rigid-contact adaptation.
+References inspected locally: Fidgets `src/avbd_cord.cpp`, `docs/gpu-rigid-contacts.md`,
+`docs/gpu-surface-contact-reduction.md`, and `docs/gpu-mpm-contact-relaxation.md` in
+`/home/adam/qtbits/pipe_dreams/fidgets`. These are mathematical/design references, not imported code.
+PCB vias are disks, so their rigid block needs shared planar translation, not a six-DOF body pose.
+
+The bounded CPU experiment adds per-owner 2D local block solves, persistent within-solve dual
+multipliers, capped adaptive penalties, deterministic contact reduction, owner adjacency and
+color barriers. Contacts are reevaluated from current geometry. A common contact weight based
+on maximum movable-owner degree under-relaxes crowded contacts; fixed supports have degree zero.
+This borrows the simultaneous-response stabilization idea, not Fidgets' dynamic energy guarantee:
+a quasistatic routing solve has different objectives and still requires exact copper validation.
+
+AVBD remains a regional geometry proposal, behind the existing PH reconstruction, topology,
+quantization, connectivity and exact DRC checks. New via motion must keep all attached endpoint
+copies coherent; frozen/out-of-region/protected attachments prohibit motion. Failure or capacity
+exhaustion must preserve the input proposal, never silently drop contacts. GPU AVBD kernels are
+not part of this CPU block-solver experiment; existing GPU XPBD and terrain stages remain usable.
+
+The four original mechanisms passed 65 core cases and 15 focused suites before this extension.
+Final integrated validation and sequential tier evidence are recorded below.
+
+The first AVBD behavioral test exposed nonlinear overshoot: crowded-contact total residual
+started at 55 nm, improved to 48.286 nm at iteration five, then ended at 144.081 nm. The initial
+implementation therefore failed the improvement test despite producing finite geometry.
+Owner updates now use up to 12 augmented-energy backtracking steps, and the solver returns its
+best complete physical-residual iterate. This preserves progress across non-monotonic dual
+updates. Rigid endpoint gradients are summed before forming each block Hessian; fixed members
+pin their entire group, and a common step bound respects every member's corridor. Typed exact
+contact identities avoid hash-collision suppression, and all candidate visits have explicit caps.
+
+### Integrated validation and pilot Tier 0 result
+
+All 16 focused suites and all 65 core cases passed. Release and viewer builds passed, including
+the viewer configuration's warnings-as-errors build. Independent review found no remaining
+material blocker after the contact, via-span, and solver-stability corrections.
+
+Tier 0 ran first with diagnostic telemetry and the existing 900 s routing allowance. Planning
+took 23.757 s; detailed routing took 314.862 s, compared with the previous 418.485 s. Both final
+copper layer PNGs were inspected and are byte-identical to the baseline: 47 straight tracks,
+199 Beziers, three vias, zero opens, zero internal copper violations, and zero configured KiCad
+DRC violations/unconnected items. The same seven unsmoothed non-junction bends still fail strict
+curved qualification; the harness's generic regression wording describes this existing failure.
+Peak harness/child RSS was 728,840 KiB.
+
+The regional allowance exhausted once at a coherent boundary (1,343,897 work units consumed
+against 1,000,000 initially allowed, zero credit earned). A child can finish past its allowance
+before the next decision point. The 24.8% lower detail time is a combined-feature, single-run
+observation; it does not demonstrate AVBD-specific speedup or improved copper geometry.
+The subsequent Tier 1 pilot exposed a larger enforcement defect: alternative preparation
+consumed 28,170,662 work units against the initial 1,000,000 allowance while still awaiting a
+high-level regional decision. The run was interrupted without claiming a final routing result.
+Ordinary kernel yields already park every mutable child worker, so exhaustion now creates a
+decision at that safe checkpoint, discards the unfinished private transaction and retains the
+last evaluated scene. The next kernel slice is also capped to the remaining allowance. A focused
+engine regression requires every exhausted yielded step to expose a decision point. Fresh builds,
+validation and sequential Tier 0/Tier 1 runs follow this correction.
+
+Independent review of the parked-kernel correction found no production blocker: work is charged
+before the decision, all mutable child work is parked before inspection, and cancellation joins
+the kernel before destroying its callback targets. The regression also requires an interrupted
+regional attempt and exactly one budget-exhaustion event, rather than accepting natural task
+completion as evidence. A dedicated injected better-scene/worse-scene retention fixture remains
+a possible coverage improvement; the production restoration path retains the existing best-plan
+selection and exact acceptance gates.
+
+### Final validation after the parked-kernel correction
+
+The rebuilt 16 focused suites and all 65 core cases passed. Release CLI and viewer CLI/viewer
+builds passed. Tier 0 then ran with diagnostic telemetry, followed sequentially by Tier 1.
+Tier 0 planning took 23.967 s and detail took 309.873 s (26.0% below the previous 418.485 s
+baseline, one combined-feature observation). Final output remains 47 straight tracks, 199 Beziers
+and three vias; both inspected copper PNGs are byte-identical to baseline. There are zero opens,
+zero internal copper violations, zero configured KiCad DRC violations/unconnected items, and
+the same seven unsmoothed joints. Peak RSS was 705,544 KiB. Regional search stopped at exactly
+1,000,000 work units, with zero earned credit and one exhaustion. Strict curve qualification
+therefore remains failed without a new physical regression.
+
+The fresh Tier 1 telemetry likewise stopped the first regional action at exactly 1,000,000 work
+units and selected USPED then feedback-global; it did not repeat the pilot's 28-million-unit
+preparation overrun. Final outcome is recorded below.
+
+Tier 1 finished in 396.107 s, versus the previous 900.433 s timeout, at 759,088 KiB peak RSS.
+Its expected-failure harness probe returned zero, but explicitly qualified 0/1 boards. All 78
+abstract paths remain connected with zero unrouted nets; physical quality did not improve:
+275 clearance-shadow conflicts and 799 quantized-copper oracle violations (544 track clearance,
+179 track/via clearance, 70 hole clearance, six via clearance). The engine exhausted its action
+choices, with exactly 1,000,000 regional work consumed and zero credit. No detailed final copper
+or external KiCad DRC result was produced. The 799 count is the internal quantized oracle, not
+an external KiCad result. Both non-authoritative preview layers were inspected: angular coarse
+polylines and unresolved crossings remain, so there is no evidence of smooth legalized routing.
+All retained-plan AVBD counters are zero; the early preparation stop prevents this run from
+establishing a real-board AVBD benefit. Local AVBD behavior is covered by the focused tests.
+
+Decision: keep the requested bounded mechanisms and tested CPU AVBD proposal stage. Tier 0
+physical copper is unchanged; excess preparation is stopped and Tier 1 reaches a bounded result
+sooner, but neither strict Tier 0 curve qualification nor Tier 1 physical routing is solved.
+Next hypothesis: preparation consumes the seed allowance before a small physical scene can be
+evaluated. Incremental, reusable preparation that yields an evaluable small conflict region
+should be investigated before granting more budget or attributing benefit to geometry solvers.
+Evidence: `reports/benchmark_history/2026-10-10-progress-policy-avbd.json`.
+
+### Follow-up Tier 1 sequence analysis
+
+The 14 engine attempts used 89.642 s for the first global/feedback seed, 3.898 s for regional
+preparation, 301.395 s for later USPED/global retries, and 1.035 s for five quantized probes.
+Telemetry confirms regional preparation reached only 9/384 ordinary portfolio checks, with no
+evaluated regional scene and no AVBD invocation. The stronger budget guard is correct, but its
+fixed seed allowance is consumed before the pipeline can demonstrate local physical progress.
+Later physical probes measured 799, 1234, 906, 1092 and 1143 violations. None beat the initial
+physical incumbent, so no regional credit was earned. About 76% of total runtime went to the
+later global/USPED retries, which do not share that progress-earned allowance.
+
+Resource overflow zero did not imply physical capacity: clearance shadows were advisory and
+275 shadow conflicts remained. The retained result contains 310 quantization diagnoses, 215
+on B.Cu and 95 on F.Cu. One concrete two-net micro-case has V_BF and Net-(U4B--) sharing the
+B.Cu endpoint (47.64, 86.79) mm with a 0.45 mm clearance deficit. This is an overlapping global
+path pair before curve fitting, not evidence of a smoothing or AVBD failure. Diagnostic counts
+are overlapping evidence records, not independent collision counts.
+
+Recommended next experiment: make preparation resumable and reusable, prepare one bounded
+conflict region and evaluate it before enumerating the broad portfolio. Bound setup separately
+from improvement-earned repair and shrink the selected region if necessary. Apply physical
+progress budgeting to global/USPED retries as well. Compare XPBD and AVBD only after the same
+small physical scene reaches both solvers. Improve telemetry naming so recording an oracle
+result cannot be mistaken for accepting a better physical route.
+
+## Experiment — Incremental physical feedback and bounded preparation (2026-10-10)
+
+Failure: the bounded Tier-1 run spent 3.898 s on 9/384 portfolio checks, reached no regional
+scene or AVBD invocation, then spent 301.395 s on global/USPED retries whose physical probes
+all worsened the 799-violation incumbent. The preparation and repair budget were conflated.
+
+Hypothesis: small resumable preparation batches followed by exact physical evaluation allow
+local solvers to earn repair work, while separate finite preparation and global retry budgets
+prevent broad topology enumeration from consuming the remaining deadline without benefit.
+Changed physical inputs must re-enable relevant actions without resetting session budgets.
+
+Implementation: a finite 8M preparation reserve, separate 1M initial earned-repair
+budget (30M ceiling), and two initial global retry tokens after physical evidence exists, with
+one token per strict physical improvement up to eight. Source/context-sensitive action history
+is reconsidered after geometry/conflict/history changes. Worse probed candidates restore the
+physical incumbent while retaining transferable failure knowledge. Telemetry separates recording
+physical evidence from improving it. Every enabled curved regional action can use XPBD followed by AVBD, including the first
+bounded physical prefix and obstacle-only scenes. Exact PH reconstruction and whole-scene
+connectivity/DRC remain acceptance gates.
+
+Completed navigation requests (including completed negative results) are memoized with exact
+source, endpoint and configuration keys. Live kernels resume in place; interrupted transactions
+reuse completed requests but regenerate unfinished searches and cheap enumeration bookkeeping.
+The prefix uses at most eight alternative-template checks and eight interpolation nodes per route.
+The preparation reserve is never refilled. Two additional non-renewable changed-context retry
+opportunities permit relevant actions after genuinely changed physical evidence; A/B/A history
+cannot replay the same failed action/context.
+
+Review corrections cover cancellation before broad continuation, whole-native opens/conflicts
+in checkpoint ranking, native assessment of merged repairs, stricter plan-only acceptance, and
+retention of the best physical scene after interrupted regional work. Prefix limits clamp to
+existing user limits instead of rejecting smaller valid configurations.
+
+Memory limitation: the 512-entry/64 MiB bound is for completed route-result payloads. Prepared
+geometry/navigation remain bounded by existing entry and per-domain cell limits, not by a deep
+aggregate byte limit; shallow cache telemetry is not RSS. A deep ownership estimator and an
+aggregate domain-memory cap remain separate follow-up work.
+
+Validation in progress: all 65 core cases verified (63 in the final full run and two updated
+contract fixtures passed individually). The new prefix-order/cancellation/whole-scene regression
+passes. The attempted black-box completed-navigation cache-hit fixture was invalid: run-up
+rejection prevented any navigation request. Its cache-hit assertions were removed rather than
+claim coverage; direct request-cache hit/config-invalidation coverage remains a limitation.
+Existing prepared-geometry reuse/invalidation tests and independent key/lifetime review passed.
+Release/viewer builds and sequential telemetry tiers follow.
+
+
+### First benchmark and prefix-scope correction
+
+Tier 0 preserved byte-identical final copper (47 tracks, 199 Beziers, three vias), zero opens,
+zero internal/KiCad DRC violations and the same seven unsmoothed joints. Planning took 31.828 s
+and detail 370.264 s (baseline 23.967/309.873 s); peak RSS 769,232 KiB. The prefix reached a legal
+whole native scene at 151,398 preparation units and invoked both XPBD and AVBD eight times.
+
+Tier 1 finished in 284.442 s but still failed. Both global retry tokens were consumed without
+earning more; regional preparation exhausted at 8,109,218/8,000,000 units (atomic-operation
+overshoot), before any XPBD/AVBD or physical assessment. The eight-template prefix still
+prepared 11 windows with 100,000 bundle states and 2,048 access states per window. This is not
+a successful first-feedback experiment. A bounded-window and bounded-assignment prefix
+correction follows; results above remain retained as the failed first variant.
+
+The corrective prefix selects at most two eligible windows in deterministic overlap/clearance
+pressure order and clamps bundle/lane search to 1,024 states and access search to 128 states.
+Unselected global routes remain in native assembly and whole-board DRC/connectivity. Failed
+prefixes do not manufacture evaluated evidence; partial prefixes cannot use the early return.
+Independent review found no false-coverage or retention blocker. All 16 focused suites passed again.
+
+## Experiment — Deadline-driven repair experiments and GPU residency (2026-10-10)
+
+### Failure and evidence
+
+The final bounded-prefix Tier-1 run took 212.412236 s, peaked at 763,216 KiB RSS,
+and retained the 799-violation quantized oracle (zero opens). Both selected prefix windows
+proved access-assignment wipeouts without reaching a complete candidate; neither exhausted
+its access search allowance. The session then exhausted its 1,000,000 repair units after
+2,854,021 preparation units, without invoking XPBD/AVBD. A token policy cannot distinguish
+necessary setup from an unproductive strategy reliably. The user rejected further credit tuning.
+Tier 0 retained zero physical DRC/opens but seven pre-existing unrounded joints; it is not a
+strict curved qualification pass.
+
+### Hypothesis and ranking
+
+1. Replace credit permission with deadline-bounded, resumable experiments. Initially explore
+   eligible diagnosis strategies, then prioritize measured whole-scene gain per active time,
+   with aging to prevent starvation. Retire only an exhausted/stagnant strategy-input pair.
+2. Expose each completed regional window and proven access failure as a decision point, so
+   the coordinator can switch upstream before wasting continuous optimization on no candidate.
+3. Reuse GPU immutable inputs where exact identity is available; avoid repeating transfers.
+
+These are related scheduling/data-lifetime changes, not a replacement of routing algorithms.
+Physical copper acceptance and external KiCad validation remain unchanged.
+
+### Research and assumptions
+
+Streeter and Smith, [New Techniques for Algorithm Portfolio Design (UAI 2008)](https://mattstreeter.org/Research/mstreeter_uai_2008.pdf),
+separate portfolio scheduling from learning which solvers merit time. This motivates interleaving
+bounded strategies and measuring outcome per time. Flux's physical objectives and mutable scene
+are different from the paper's solver instances; this implementation claims no transferred
+optimality guarantee. Exact state keys delimit comparable trials. The small strategy portfolio
+permits deterministic selection; stored samples and parked continuations must remain bounded.
+
+The GPU audit found persistent input buffers already in XPBD and hydraulic Vulkan backends.
+Terrain evolution retained allocation capacity but re-uploaded its readonly walkability mask.
+A single exact mask entry (dimensions plus normalized contents) can remain in device memory
+across terrain dispatches. Height feedback must still upload on every invocation. Independent
+pipeline contexts have distinct descriptor/lock lifetimes, so sharing raw buffers across them
+without an ownership/synchronization interface is deferred.
+
+### Experiment and verification criteria
+
+Implement resumable experiment selection, per-window decisions and the resident mask. Verify
+fair exploration, state-specific retirement/reopening, zero legacy-credit starvation, cancellation,
+continuation lifetime, GPU repeated-hit parity, changed-mask invalidation, dimension changes and
+fresh height feedback with a resident mask. Run focused/core tests, then Tier 0 and Tier 1
+sequentially with diagnostic telemetry. Compare physical results and time; do not promote a tier
+from internal connectivity or an expected-failure harness exit code.
+
+### Result
+
+Focused validation passed 17/17 suites and core validation passed 65/65 tests. Release and
+viewer builds passed. The first diagnostic Tier-0 run exposed admission starvation: five
+eligible strategies could exceed the two-entry parked pool during initial exploration,
+evicting unfinished setup before any resume. The run was stopped and retained under
+`build/repair-experiments-tier0-20261010`; it is not a completed benchmark. Admission now
+restricts a full live pool to its existing continuations until a slot becomes available.
+A one-slot end-to-end test requires an actual resume with zero count evictions. Final
+validation and sequential tier results follow; no tier promotion is claimed yet.
+
+
+The corrected one-slot test passed; all 17 focused suites and 65 core cases passed again.
+Tier 0 completed global planning in 33.359 s and detailed routing in 529.299 s, versus
+31.661/369.819 s previously. Retained copper is byte-identical on both rendered layers:
+47 straight tracks, 199 Beziers, three vias, zero opens/internal violations/external KiCad
+DRC violations, and the same seven unrounded joints. There is no strict tier promotion.
+The live pool recorded 54 suspensions, 24 resumes, zero memory/count evictions, and 28
+state invalidations. Admission is repaired, but runtime regressed 43% with no physical gain.
+Exact context includes negotiation history: a rejected global retry can change that history
+and invalidate regional continuations despite retaining incumbent geometry. A future refinement
+must distinguish physical dependencies from global search-history dependencies, preserving
+current knowledge when a resumed private transaction commits. Simply dropping fields from
+the shared exact key would risk stale search state and is not justified by this result.
+The GPU mask cache recorded 17 reused transfers and 29 uploads during the global pass.
+Tier 1 subsequently timed out at 900.166 s with peak RSS 1,278,852 KiB. It retained the
+same 799 oracle violations (544 track-clearance, 179 track/via, 70 hole-clearance, six
+via-clearance), zero opens, 1,329 provisional segments and 56 vias. No final detailed
+copper or external KiCad validation was reached. The selected checkpoint has no evaluated
+regional scene and zero retained XPBD/AVBD windows; these selected-result counters must
+not be confused with a complete census of discarded/private attempts. Intermediate telemetry
+reached 305/384 portfolio checks and topology-valid but mutually illegal curve candidates.
+The engine recorded 221 suspensions, 168 resumes, 53 input invalidations and zero pool
+evictions. Terrain telemetry recorded 18 mask reuse hits and 27 uploads. Both provisional
+layer previews were inspected: they remain angular scaffold geometry with obvious conflicts,
+not a completed smooth route.
+
+### Interpretation and decision
+
+GPU residency works and avoids measured transfers; parity/invalidation checks pass. Keep it.
+Deadline experiments remove credit starvation and continuation admission now retains work,
+but this experiment does **not** improve the frontier tier. Keep the explicitly requested
+scheduler architecture as an unqualified implementation, with the runtime regression and
+failure recorded; do not promote tiers or claim algorithmic routing benefit. The next
+experiment should isolate physical preparation dependencies from history-only global changes,
+then give feasible regional geometry a physical assessment before another broad replan.
+Full metrics, source hashes and validation logs are indexed in
+`reports/benchmark_history/2026-10-10-repair-experiments.json`.
+
+## Experiment — Physical continuation validity and cross-pipeline GPU sharing (2026-10-10)
+
+### Failure
+
+The preceding deadline experiment retained unchanged Tier-0 copper at 529.299 s detailed
+runtime (43% slower), with 28 continuation invalidations. Tier 1 timed out at 900.166 s
+with the same 799 quantized violations and 53 invalidations. Rejected global proposals can
+increase negotiation pressure without changing incumbent geometry; full-history dependency
+keys nevertheless invalidate parked regional work. GPU contexts already share a Vulkan device
+and queue but maintain independent copies of compatible readonly mask inputs.
+
+### Hypothesis and scope
+
+Separate regional physical validity from the search-history snapshot used to prioritize a
+bounded experiment. Retain unchanged regional preparation through history-only updates and
+merge new knowledge at commit so a resumed private transaction cannot overwrite later feedback.
+Geometry changes must still invalidate dependent work. Global retries still depend on history.
+
+Share immutable normalized walkability masks between terrain and hydraulic compute pipelines
+through bounded runtime-owned device buffers and consumer leases. These algorithms are alternate
+routing methods, not a sequential terrain-to-hydraulic algorithm; do not introduce a new solver
+chain or change height/potential semantics merely to reuse storage. Mutable polygon rasterization
+must use private buffers, and fresh height/pressure feedback remains required.
+
+### Research and validation
+
+The Khronos [synchronization examples](https://docs.vulkan.org/guide/latest/synchronization_examples.html)
+and [synchronization specification](https://docs.vulkan.org/spec/latest/chapters/synchronization.html)
+distinguish execution ordering from memory visibility. Use transfer-to-compute visibility,
+fenced publication, and lifetime leases; a shared VkDevice alone does not make buffer reuse safe.
+Exact input identity, bounded allocation, concurrent consumers, changed inputs, polygon writes,
+CPU parity, and cancellation need regression coverage. Then run Tier 0 and Tier 1 sequentially
+with diagnostic telemetry against the recorded baseline. Implementation/results pending.
+
+Validation note: the first Tier-0 check exposed exhaustion of the 64 MiB canonical-key store after 23 regional decision points. Full corridor geometry had been duplicated in every diagnosis/history context. Physical geometry is now interned independently with exact string equality, and negotiation keys reference its stable local identifier. Physical and negotiation records share the existing byte bound. The failed check is preserved in `build/history-sharing-tier0-key-bound-20261010`; the corrected run advanced through global/regional planning normally. Focused validation passed 17/17 suites. Core validation passed 65/65 after updating the hydraulic reuse assertion to require 14 private buffers plus one shared mask (zero mask uploads on reuse).
+
+Final Tier-0 measurement for this experiment: global 33.842 s, detailed 507.719 s versus 529.299 s baseline. The selected copper remained 47 straight tracks, 199 Beziers and 3 vias, with zero internal/external DRC violations and zero opens. Both copper PNG hashes match the baseline exactly; both layers were visually inspected. The same seven unrounded non-junction joints still fail strict curve acceptance. Scheduler resumptions increased 24→57, invalidations decreased 28→19, and no pool eviction occurred. Mask uploads decreased 29→20 and reuses increased 17→26 in the selected-plan counters. Cross-consumer reuse is covered by GPU tests but was zero in this terrain-only benchmark configuration. This is a modest runtime improvement and stronger continuation reuse, not a tier promotion.
+
+The intermediate 250.535 s run is deliberately excluded from performance claims: further record-level interning was required to avoid duplicating unchanged corridor records as individual curves changed. Complete physical keys and their individual records are now interned separately under the shared metadata bound; metadata exhaustion has an explicit telemetry event. The interrupted initial Tier-1 attempt is also excluded from comparisons.
+
+Tier-1 final result: timed out after 900.199 s, retaining the same 799 oracle violations (544 track clearance, 179 track/via clearance, 70 hole clearance, 6 via clearance), zero abstract opens, 1,329 provisional tracks and 56 vias. No evaluated regional scene and no final copper/KiCad DRC result were produced. Invalidations fell 53→14 and experiments started fell 61→19; resumptions were 69 and suspensions 84. Peak RSS rose 1,278,852→1,428,236 KiB. Selected-plan mask uploads fell 27→23 and reuse rose 18→22. Both preview layers were inspected: they remain angular provisional scaffolds with visible crossings, not smooth legal copper.
+
+Interpretation: the targeted history/continuation mechanism improved and GPU reuse is covered by parity/lifetime tests, but Tier 1 did not improve physically. Retaining expensive regional preparation trades fewer restarts for more resident state. The next evidence-backed investigation is the expensive regional portfolio/preparation step before the first evaluated scene, and fair bounded scheduling of that retained frontier. Do not claim that cross-pipeline sharing or fewer invalidations solves Tier 1.
+
+Final validation: 17/17 focused suites and 65/65 core tests passed after the final metadata change. Release CLI and viewer-tree CLI/viewer targets built successfully. Complete results, source/binary hashes and limitations are in `reports/benchmark_history/2026-10-10-history-sharing.json`. Decision: keep the targeted continuation and shared-mask changes; continue investigating the pre-physical regional preparation bottleneck separately.
+
+## Tier-2 diagnostic check — 2026-10-10
+
+User-requested check after history-continuation and shared GPU mask changes; no algorithm edits. Ran `ft2232h_jtag` alone with diagnostic telemetry, curved routing, explicit locked-tier execution, 30 global/detail iterations and 900 s routing deadline (960 s harness deadlines). The preliminary manifest-default one-iteration probe was interrupted and excluded.
+
+Result: engine timed out after 900.166 s (904.19 s harness wall), peak RSS 1,120,852 KiB. Retained global checkpoint has 117 paths, zero unrouted nets, total overflow 381, 34 congested resources, five congested corridors and 340 clearance-shadow conflicts. Internal quantized-copper oracle: zero opens but 930 violations (842 track clearance, 45 track/via clearance, 43 hole clearance), 1,672 tracks and 21 vias. No retained evaluated regional scene or accepted final copper; external KiCad DRC was not run. Harness diagnostic exit zero does not qualify the board.
+
+Telemetry reached topology-legal PH candidates whose gate sequences were valid but mutual copper legality failed. Scheduler recorded 12 starts, 14 resumptions, six invalidations and no memory evictions. Selected-plan GPU masks: 10 uploads, 31 reuses, zero cross-consumer reuses. The provisional overview was visually inspected and remains predominantly angular scaffold geometry with overlaps. This check reinforces the distinction between complete abstract connectivity and physical legality; it does not promote Tier 2. Full configuration, metrics, artifact paths and binary hash: `reports/benchmark_history/2026-10-10-tier2-check.json`.
+
+## Clearance-shadow / erosion audit — 2026-10-10 (proposal, not implemented)
+
+Tier-2 evidence: 340 shadows were not truncated (`clearance_shadow_conflict_budget_exhausted=false`) and were not advisory-only. All had owner attribution, but owner-history passes were zero. The 930 quantized-copper violations use different geometry and aggregation; the difference is not a measured shadow false-negative count.
+
+Code findings: `hydraulic_path.cpp::rasterize_polygon_mask` computes point-to-polygon-boundary distance but stores integer cell units; its fallback clearance builder uses a four-neighbour wavefront. `terrain_evolution.cpp` initializes height from inverse clearance plus pressure/success and then evolves that height, so evolved height is not a physical clearance distance. Live copper enters hydraulic discovery via pressure deposits. `global_router.cpp::account_routing_occupancy` deliberately suppresses coincident centreline shadows when integer corridor capacity appears adequate, deferring actual lane legality to regional packing. Exact chord shadow queries scan owner segments, and shadow geometry precedes final curves and quantization.
+
+Ranked proposal: (1) common immutable, rule-aware physical clearance service with exact owner primitives and conservative distance bounds, separately consumed by shadows and erosion; (2) cheap packing certificates before suppressing same-corridor conflicts, plus conflict-combination feedback upstream; (3) integrate dynamic copper updates into hard clearance as well as soft terrain pressure, with actual copper hard and provisional alternatives negotiable; (4) add a spatial index to exact owner-segment queries and use actual selected widths; (5) keep bounded GPU distance/owner tiles resident across consumers. Benchmark shadow-versus-oracle coverage on the same geometry and classify deferred packing separately before assuming missed detections.
+
+Research: Felzenszwalb/Huttenlocher exact sampled Euclidean distance transform (https://cs.brown.edu/people/pfelzens/papers/dt.pdf) and GPU Parallel Banding Algorithm (https://www.comp.nus.edu.sg/~tants/pba.html). Both concern sampled fields, not exact continuous copper legality. Jump flooding (https://www.comp.nus.edu.sg/~tants/jfa.html) is approximate, suitable for guidance/candidate discovery unless supplemented with conservative bounds and exact checks. GPU EDT integration is higher cost than immediate indexed primitive-query reuse; validate benefit before replacing existing geometry machinery.
+
+## Experiment — Indexed physical pixels beneath terrain discovery (2026-10-10)
+
+Hypothesis: preserve exact polygon geometry behind a reusable 0.05 mm pixel index, rather than recomputing every distance by scanning every polygon boundary on each terrain solve. Separate geometry from erosion/history so valid physical records survive preference changes. This is a representation/reuse experiment; it does not claim to resolve corridor packing or Tier-1/Tier-2 legality by itself.
+
+Implementation: integer pixel-to-record array, pooled exact boundary primitives and overlap references, BVH nearest/parity/overlap queries, conservative whole-cell clearance bounds, sparse record materialization and bounded immutable geometry cache. The default terrain wrapper consumes cached physical walkability/clearance while retaining adaptive erosion resolution and final exact geometry gates. Prepared-domain ring ownership is retained; original KiCad item identity and raw per-net primitive filtering are outside this integration. Physical geometry changes rebuild; pressure-only changes reuse. Bounds fall back explicitly to the exhaustive polygon raster, not to assumed free space. GPU height evolution and shared GPU mask leases remain active.
+
+Validation pending: synthetic geometry/multi-boundary/conservative/cap/cancellation tests; production indexed-vs-exhaustive raster/terrain parity; history reuse and changed-geometry invalidation; existing CPU/GPU regression suites; sequential tier checks with telemetry. Baselines are the recorded history-sharing Tier-0/Tier-1 runs and the separate Tier-2 diagnostic check.
+
+Review/validation update: 8/8 focused suites and 65/65 core tests passed. Integration review found no remaining material defect after single-builder synchronization, boundary parity and cancellation fixes. Additional tests cover endpoint/success-history reuse, multiple owners in a pixel, unsampled-cell identity, overflow/byte/reference limits and BVH-versus-exhaustive queries. The non-polygon fallback wavefront and GPU dispatch retain their existing in-flight cancellation latency.
+
+Scope correction: the user correctly identified that this implementation does not integrate the indexed map into clearance-shadow checks. This pass was scoped too narrowly to terrain preparation. Dynamic shadows retain net/layer/selected-radius owner segments in `RoutingOccupancy`; polygon-parity `exact_query` cannot safely replace those checks. A shared candidate-query API must preserve owner identity, layer, width/rules and occupancy invalidation, while retaining exact segment distance. Broad-phase reuse alone would accelerate checks without fixing deferred same-corridor packing. Do not claim this experiment implements the complete shared physical clearance service proposed above.
+
+Terrain-only result observed before the requested follow-up: Tier 0 global 27.298 s, detail 422.361 s, 0 opens and 0 internal copper violations; 47 straight tracks, 199 Beziers, 3 vias, and the same 7 unrounded non-junction joints. Physical-map counters: 20 builds, 26 reuses, 0 fallbacks. Both copper layer images were inspected. Build-directory artifacts subsequently became unavailable for an undetermined reason, so hashes, RSS and external DRC were not recovered. The observations and this preservation limitation are recorded in `reports/benchmark_history/2026-10-10-indexed-clearance.json`; do not promote Tier 0 from this run.
+
+## Follow-up experiment — Explicit packing obligations and indexed owner shadows
+
+User requested closing the missing clearance-shadow integration and accepted explicit packing-unresolved state. Same-corridor integer-capacity compatibility previously suppressed overlaps before selected-width qualification. Hypothesis: preserve bounded attributed obligations and require physical evidence before treating the corridor as clear, while accelerating direct-edge owner enumeration without changing exact clearance rules.
+
+Change: same-corridor overlaps become bounded, deduplicated obligations only after exact selected-width/rule qualification. They carry normalized owner/net/layer geometry, remain separate from violation/overflow counts, and do not charge generic congestion history. Regional work consumes distinct obligation evidence and cannot claim completion from a no-conflicts/discrete label without a complete legal physical scene. Engine diagnosis selects bounded regional proof; measured capacity failures still select upstream replanning. CLI and viewer report pending obligations and truncation explicitly.
+
+Direct-edge shadow checks use an immutable open-segment BVH built through IndexedClearanceMap, with owner references, net/layer tags and selected copper radii. Conservative envelope enumeration retains exact segment-distance and pairwise rule tests; same-net handling and via-layer attribution remain in the authoritative owner records. Snapshot invalidation follows occupancy insertion/removal, with exhaustive fallback when bounded index preparation fails. Sampled shadow construction retains its existing spatial raster. Rich physical records remain CPU-side; this does not claim a new GPU geometry index.
+
+Independent review found no material issue after bounding the obligation dedup set. Root also corrected partial packing metrics so they cannot zero unrelated viewer metrics. Final build/tests and sequential telemetry tier checks pending. Source diagrams: `docs/diagrams/flux-system-flow.mmd`, `flux-engine-decisions.mmd`, and `flux-clearance-and-compute.mmd`.
+
+Combined validation after the packing fixture correction: 12/12 focused suites passed; the core suite passed 65/65. Release targets relinked and the viewer-tree CLI/viewer build completed. The synthetic corridor fixture now carries sampled occupancy evidence, matching the incremental corridor reconstruction contract; neighboring cross-corridor shadows remain ordinary conflicts. Independent source review also checked the system diagrams for conditional CPU/GPU and repair paths. Sequential Tier-0/Tier-1 telemetry checks follow.
+
+Combined Tier-0 result: global 26.983 s, detailed 421.233 s; zero internal and external KiCad DRC violations and zero opens, with the same 47 straight tracks, 199 Beziers, three vias and seven unrounded non-junction joints. Both copper PNGs were viewed and their hashes exactly match the history-sharing baseline. The selected plan has zero source packing obligations, so this board does not exercise that mechanism. Indexed physical preparation recorded 20 builds, 26 reuses and zero fallbacks. This preserves physical correctness but still fails strict curve acceptance; it is not a tier promotion. Artifacts are now preserved under reports/validation/indexed-shadow-20261010/tier0.
+
+Combined Tier-1 result: 900.185 s timeout, 78 abstract paths, zero unrouted nets and zero abstract overflow, but the same 799 quantized-copper oracle violations (544 track clearance, 179 track/via, 70 hole clearance, six via clearance). No retained evaluated regional scene or final external KiCad DRC. Three unresolved packing obligations remain, with no truncation. Indexed preparation: 23 builds, 22 reuses, zero fallbacks. Scheduler: 19 starts, 74 resumptions, 14 invalidations, 89 suspensions; peak RSS 1,341,448 KiB. Both provisional copper layer previews were inspected; they remain angular, overlapping planning geometry. This improves explicitness and preserves correctness, but does not establish physical routing progress.
+
+Concurrent-source limitation: additional legal-scaffold source changes appeared while these benchmarks ran. The binary hash remained fixed. The recorded builds/tests/results validate the binary and source hashes in reports/benchmark_history/2026-10-10-indexed-shadow-packing.json, not the later scaffold edits. They were preserved untouched. The system diagrams mark that additional working-tree path as unbenchmarked in this run.
+
+## Source comparison — FreeRouting physical connection loop (2026-10-10)
+
+Inspected FreeRouting revision `2d2e7423adc65a3f953a186a58207fa04993dba9` using primary source, without running FreeRouting on the Flux corpus. This establishes architectural differences, not comparative pass rates. Source license is GPL-3.0; this analysis transfers concepts and contains no imported implementation.
+
+Evidence: the frozen Flux Tier-1 run retained 78 paths, zero abstract overflow and zero abstract opens but 799 quantized-copper violations after 900.185 s. Three corridor packing obligations remained and no evaluated regional scene was retained. Scheduler suspension/resumption worked (89/74), but that did not produce a better retained physical result. Tier 0 instead already has electrically connected, DRC-clean copper and fails its separate seven-joint curve-completion gate. These are different failure mechanisms.
+
+FreeRouting sources:
+- [AutorouteConnectionRouter](https://github.com/freerouting/freerouting/blob/2d2e7423adc65a3f953a186a58207fa04993dba9/src/main/java/app/freerouting/autoroute/pipeline/AutorouteConnectionRouter.java): connected/unconnected same-net item sets, per-connection routing, local changed-area pull-tight, pass-scaled rip-up costs. Strict post-insertion DRC applies when explicitly configured or from pass three; full-board rollback snapshots are conditional. Do not assert that every intermediate FreeRouting board is always DRC-clean.
+- [MazeSearchEngine](https://github.com/freerouting/freerouting/blob/2d2e7423adc65a3f953a186a58207fa04993dba9/src/main/java/app/freerouting/autoroute/maze/MazeSearchEngine.java): clearance-compensated widths constrain rooms and doors; shoving, rip-up, and drill transitions participate in search. This is geometric room/door search, not a finer terrain raster.
+- [AutorouteEngine](https://github.com/freerouting/freerouting/blob/2d2e7423adc65a3f953a186a58207fa04993dba9/src/main/java/app/freerouting/autoroute/maze/AutorouteEngine.java): locate and insert each physical connection, with explicitly selected ripped connections. Fresh expansion databases are the production default; retained state is optional, so wholesale cache retention is not the defining advantage.
+- [AutoroutePassRunner](https://github.com/freerouting/freerouting/blob/2d2e7423adc65a3f953a186a58207fa04993dba9/src/main/java/app/freerouting/autoroute/pipeline/AutoroutePassRunner.java) and [AutorouteBatchLoop](https://github.com/freerouting/freerouting/blob/2d2e7423adc65a3f953a186a58207fa04993dba9/src/main/java/app/freerouting/autoroute/pipeline/AutorouteBatchLoop.java): persistent incomplete-net ordering, deterministic seeded diversification after stagnation, pass-local and global stagnation tracking, best-board recovery.
+- [BatchOptimizer](https://github.com/freerouting/freerouting/blob/2d2e7423adc65a3f953a186a58207fa04993dba9/src/main/java/app/freerouting/autoroute/pipeline/BatchOptimizer.java): normal preflight guards bypass whole-board optimization while connections remain incomplete; candidate acceptance protects connectivity and clearance and evaluates score. Local pull-tight still runs during routing.
+
+Ranked interpretation and experiments:
+1. Highest confidence: the normal unit of progress should be a physically checked connection or small conflict-component transaction. Flux's tested pipeline can yield repeatedly while retaining a large preparation frontier rather than improving actual copper. Retain a legal partial-board checkpoint and publish completed transactions with their exact blockers; measure time to first legal insertion and legal connected-component growth. Existing short engine actions and indexed queries can support this; a new scheduler is unnecessary for the experiment.
+2. High confidence: physical feasibility must constrain the route choices before expensive whole-region fitting. Explicit packing obligations now expose missing proof but do not themselves pack a channel. Keep the new exact owner queries, and use them for constructive search and small blocker repairs. Do not interpret zero abstract overflow versus 799 oracle reports as a measured shadow false-negative rate: their representations and aggregation differ.
+3. Source-supported opportunity: route between current connected copper components and their legal access sets. Flux supports same-net branching elsewhere, but the new scaffold search still uses each supplied request's first/last point as its grid search endpoints. Generalize these targets to existing same-net copper, pad access and permitted layers; test a legal branch connection that avoids an unnecessary endpoint detour or via.
+4. Source-supported recovery cost: the current scaffold now attributes victims to conflicting copper, but an exchange still rebuilds survivors by searching them again. Preserve unchanged legal survivors and transact only a small causal blocker component. Measure revalidated versus rerouted survivors and time per committed repair. Larger coherent exchanges should be introduced only with a reproducing narrow-channel case.
+5. Keep connectivity/DRC completion distinct from curve refinement. Preserve the DRC-clean Tier-0 board while targeting its seven unfinished joints; do not use those joints as evidence that global connectivity search failed. Whole-board curve quality work should not repeatedly replace proven electrical topology.
+
+Concurrent source addition: `construct_copper_scaffold` now runs ahead of ordinary regional realization when enabled/eligible, retains legal subsets, uses exact dynamic checks and only promotes a complete result after the quantized oracle passes. This addresses the principal architectural gap in direction, but was not in the benchmark binary. Remaining source risks observed in `search_route`: fixed snapped endpoint states; rejecting the first assembled goal returns failure rather than generating a different legal attachment/path; bounded lattice/expansion exhaustion is not an infeasibility proof. A robust fix needs legal source/target states and rejection-aware alternatives, not merely replacing `return` with `continue` under the same single-predecessor A* state.
+
+Decision: keep the validated index/obligation integration, with no claim of Tier-1 completion. Prioritize measuring and validating the constructive physical transaction path before adding more preparation portfolios. Next oracle experiment: run FreeRouting on the same board/rules and time budget, then compare connected copper, DRC and bottleneck topology rather than its reported route count alone. Diagram sources include `docs/diagrams/flux-vs-freerouting.mmd`; the legal-scaffold branch is explicitly marked as unbenchmarked in this run.
+
+## Experiment — Component attachment search and retained physical transactions (2026-10-10)
+
+Failure: the constructive scaffold's first assembled goal could fail its whole-path copper check and terminate the connection search. Fixed endpoint access omitted useful same-net component branches. Causal victim repair reconstructed unaffected survivor copper, and checkpoint quality counted stored paths instead of satisfied requests. The earlier 799-violation Tier-1 benchmark predates this scaffold implementation and is not a direct baseline for these changes.
+
+Hypothesis: bounded physical attachment alternatives and source/arrival search labels preserve useful recovery options; component queries let branches terminate on existing copper. Preserve exact-checked connection transactions and exchange only attributed victim geometry so search effort produces retained physical progress.
+
+Change: batched canonical-connectivity component membership, endpoint-layer and component attachment sites (including track-interior projections), bounded attachment rings, source/arrival/via-history labels, fairly bounded rejected-goal attempts, and exact immutable-scene edge reuse. Every assembled path still passes dynamic copper DRC and request connectivity. Causal exchange copies the retained scene, removes explicitly owned victim copper, preserves survivor object IDs/geometry and shared vias, and verifies all prior satisfied requests before committing. Checkpoints and CLI report request/satisfied/missing counts independently of route count; the engine recognizes growth in checked satisfied requests without relaxing full-board acceptance.
+
+Limits: search remains a bounded lattice heuristic, not a completeness proof. Labels preserve drilled-via history; planar histories with the same source, arrival and via history may still coalesce. Search remains limited by the existing expansion allowance. Zone interiors are not sampled; existing component contacts remain available. Curves are refined after constructive topology and remain subject to the existing oracle and curve-quality gates. No FreeRouting code was copied.
+
+Verification: pending focused regressions, core suite, independent review and sequential telemetry tier checks. Mechanism cases include disconnected padded components, layer isolation, already-connected no-op requests, interior branches, stale retained attachments, a rejected two-via drill-spacing assembly, cancellation, and survivor identity preservation.
+
+Review refinements: canonical bounded via-history tries preserve different drilled-site sets without distinguishing their insertion order; failed insertion rolls back newly interned nodes so rejected candidates cannot consume later search capacity. Endpoint membership distinguishes coincident SMT pads on separate layers. The physical scaffold scene must preserve materialization-source obstacles and apply exactly the detailed router's replacement policy, including locked-copper protection and implicit routed-net scope. Regression fixtures cover both source-only obstacles and authorized replacement; final validation follows below.
+
+Final validation: six focused suites passed and the core suite passed 66/66. Viewer and Release CLI builds passed; the viewer's warnings-as-errors caught a signed bit-width conversion, corrected with an explicit bounded conversion. Three scaffold suites passed again after that correction. Independent review found no remaining material correctness issue. No source or frozen-binary drift occurred during benchmarks. Full evidence: `reports/benchmark_history/2026-10-10-component-scaffold.json` and `reports/validation/component-scaffold-20261010/`.
+
+Sequential telemetry Tier 0 (`pt2399_delay`): planning 125.928 s, detail 327.951 s, zero opens, zero internal and external KiCad DRC violations; 47 straight tracks, 199 Beziers, three vias, and the same seven unrounded non-junction joints. Both final copper images were viewed and are byte-identical to the prior indexed-shadow baseline. The planning scaffold retained 49/50 requests, with two attempted but no accepted victim exchanges. Strict curve acceptance still fails. Combined planning+detail time is 453.879 s versus the earlier 448.216 s; this is not an isolated performance comparison because the earlier binary predates the scaffold. Peak RSS 1,470,288 KiB.
+
+Sequential telemetry Tier 1 (`bm_svf`): engine exhausted its action allowance after 843.536 s (900 s deadline), with 78 abstract paths but only 60/78 checked scaffold requests satisfied. One request was satisfied by existing component connectivity, so there are 59 stored paths; retained copper reports 499 tracks and 22 vias. One of 51 victim exchanges succeeded while preserving 438 survivor tracks and 22 vias. Search expanded 6,632,018 states, reported no assembled-goal rejection on this board, and used at most 153,035 via-history nodes without exhausting the node allowance. The synthetic regression, rather than this board, demonstrates rejected-goal recovery. Eighteen requests remain; there is no final whole-board oracle certificate or external KiCad DRC. Peak RSS 928,480 KiB. Both provisional layer images were viewed; they are angular coarse-planning previews, not the checked partial scaffold or final curves. The corpus runner's expected-incomplete probe passes, but the board is unqualified and must not be called routed.
+
+Interpretation and decision: retain the implementation. Focused tests establish endpoint/component and rejected-goal correctness, and the real Tier-1 exchange confirms survivor reuse is exercised. Tier 0 preserves the exact baseline copper; Tier 1 now retains explicit physical progress but remains incomplete. No claim is made that 60 checked requests are directly comparable to the old 799 whole-board oracle reports. Next experiment should diagnose the 18 unresolved requests and why 50 causal exchanges failed, then test a bounded coupled repair or better escape alternatives against a minimal reproducer. Increasing the action limit alone is not evidence of a solution. Rendering/exporting the retained partial scaffold separately from coarse previews remains a visibility limitation.
+
+## Experiment — Physical scaffold feedback and bounded coupled repair (2026-10-11)
+
+Failure: Tier 1 retained 60/78 checked demands, but regional/global feedback still operated on coarse plan geometry. One of 51 single-victim exchanges succeeded. The engine stopped after 16 actions at 843.536 s, before its 900 s deadline. Aggregate telemetry did not explain termination of each missing demand.
+
+Hypothesis: retain a stable physical demand domain across replans, analyze only missing demands against the checked copper scene, and escalate causal repairs to bounded victim pairs. New global paths remain proposals; they do not replace the original connectivity obligations. Carry attributed failed-search evidence into repair selection without treating bounded exhaustion as a measured capacity deficit.
+
+Change: stable original requests, endpoint-scoped proposal admission, regional frozen checked scene, exact reconstruction of all demands before whole-board certification, and physical terrain feedback from retained copper. Shared regional preparation from the coarse scene is excluded. Coupled exchanges preserve unrelated copper and commit only after every prior satisfied request reconnects; eight pair attempts share a 200k expansion allowance. Per-request termination and bounded rollback/owner evidence are exported. Default action safety ceiling is 256 with a separate 16-action physical-stagnation stop; explicit action overrides and the shared deadline remain hard bounds.
+
+Validation pending: synthetic pair-only repair, partial physical-scene handoff, prior unit/regression suites, independent review, and sequential telemetry Tier 0 then Tier 1.
+
+Review refinements: dynamic vias are attributed to their current same-net path consumers after each committed exchange, and identical zero-search reconstruction retains the previous causal failure evidence. Frozen missing-demand repair is limited to the regional-realization action; XPBD and confined erosion retain whole-plan alternatives so a bad retained topology cannot exclude coordinated recovery. Their continuation identities include the actual proposal scene. Explicit saved-zone-refill workflows retain their provisional regional/materialization path and final external refill gate. Materialization-ready candidates keep priority over partial-scaffold repair.
+
+Validation: six focused suites and all 66 core tests pass. The existing WorkPlan zone-refill regression caught incompatible fixed-fill blocker feedback; explicitly deferred refill now bypasses scaffold construction and retains its original external refill boundary. Release CLI and warnings-as-errors CLI/viewer builds pass. Independent review reports no remaining material finding; the complex successive shared-via selection fixture is deferred, while existing shared-transition/exchange cases and the consumer-map implementation were checked. Frozen source/binary identities and sequential telemetry runs are under `reports/validation/physical-repair-20261011/`.
+
+Sequential Tier 0 telemetry check: `pt2399_delay` planning 110.914 s, detail 313.399 s (424.313 s combined versus 453.879 s before), peak RSS 1,382,832 KiB. Checked scaffold reports 50/50 requests rather than 49/50; this does not itself establish the full-board oracle. Final materialized copper remains byte-identical on both viewed layers to the component-scaffold baseline: zero opens, zero internal DRC, zero KiCad violations/unconnected items, 47 straight tracks, 199 Beziers, three vias, and the same seven unrounded non-junction joints. Strict curve acceptance remains failed. No lower-tier connectivity, DRC, or curve-quality regression observed; proceed to Tier 1 sequentially.
+
+### Assessment of six-phase navmesh/erosion proposal (2026-10-11)
+
+The suggested geometry → corridor → density → search → curve → repair sequence matches much of existing Flux. Its main missing bridge is multi-net corridor packing and coupled topology/layer/via assignment before smoothing. Single-route free-space validity is not a certificate that several routed demands fit simultaneously.
+
+Terminology: morphological erosion of free space (equivalently obstacle Minkowski dilation) is a hard geometric operation; LittlePlanets height evolution and USPED are soft guidance. Flux's AVBD-style local block/contact solver belongs to physical relaxation, not Voronoi decomposition. The source paper calls AVBD Augmented Vertex Block Descent: https://graphics.cs.utah.edu/research/projects/avbd/ .
+
+Phase 1: reuse existing offset/prepared geometry and indexed ownership metadata. A valid free-space certificate must specify layer, trace width, pairwise clearance/rule profile, board-edge margin, copper revision, and conservative approximation error. Do not obstruct an entire component body unless its actual rule/keepout requires that restriction. Via copper and drills need separate multilayer legality. Reference: https://doc.cgal.org/Manual/latest/doc_html/cgal_manual/Minkowski_sum_2/Chapter_main.html . Recast itself voxelizes before polygon generation; importing a game navmesh does not automatically provide exact PCB clearance: https://recastnav.com/ .
+
+Phase 2: retain generalized medial/Voronoi routes as clearance-aware alternatives, not mandatory centre lanes. All nets choosing the same centre causes congestion; maximum obstacle clearance also does not prove electrical signal integrity. Generalized visibility/Voronoi tradeoffs are relevant: https://www.cgl.cs.tau.ac.il/projects/the-visibility-voronoi-complex/ .
+
+Phase 3: current USPED is explicitly geometry-only, dimensionless refinement, with unit rainfall unrelated to net demand (include/flux/core/usped.hpp). A useful new experiment would feed actual route demand, available cross-section, and measured physical conflicts into congestion guidance, while retaining the immutable blocked mask and legal terminal access. Raw pin-density repulsion can penalize exactly the escape region a net must use. USPED's original sediment transport/divergence semantics do not themselves establish congestion feasibility: https://ncsu-osgeorel.github.io/erosion-modeling-tutorial/erdep_theory.html .
+
+Phase 4: prepared navmesh/portal search and funneling already exist. Retain endpoint/arrival/layer alternatives and via footprints. Fewer graph nodes may help, but mesh preparation and multi-net allocation remain significant; no near-instant runtime guarantee follows. Add or strengthen explicit lane order/cross-section/transition packing before expensive curve work. A 1.2 mm raw channel with 0.2 mm traces and 0.2 mm trace/sidewall clearances can fit two ideal straight traces, not three, although each independently has a valid route.
+
+Phase 5: funnel/string-pull the selected portals, then constrain curve pieces within certified convex safe regions; do not interpolate portal midpoints. Source: https://digestingduck.blogspot.com/2010/03/simple-stupid-funnel-algorithm.html . Bézier control points being individually in a nonconvex free region does not imply that the curve stays there; a convex-hull containment certificate is sufficient for position, but curvature still needs its own bound: https://web.mit.edu/hyperbook/Patrikalakis-Maekawa-Cho/node12.html . Ordinary cubic Bézier offsets are generally not exact cubic Béziers; PH has rational-offset advantages, with bounded conversion/error checks still needed for native output: https://web.mit.edu/hyperbook/Patrikalakis-Maekawa-Cho/node232.html . Flux currently exports net-assigned gr_curve copper in src/kicad_export.cpp; the older PH ADR wording about only segments/arcs is stale.
+
+Phase 6: use exact checks throughout, not only after fitting. XPBD/AVBD contact relaxation generates candidates under bounded work; atomic connectivity/DRC commit remains authoritative. When local geometry stagnates, change lane order, homotopy, layer or via choice and feed the physical witness upstream. Keep safe repair subsets and explicit rollback reasons.
+
+Benefit/cost ranking for incremental experiments: (1) physical failure attribution and early packing rejection, high expected benefit/moderate integration cost; (2) reusable rule-aware clearance certificates and local invalidation, high expected runtime benefit/moderate correctness complexity; (3) demand-aware field guidance, medium potential benefit/medium cost and experimental risk; (4) stronger smoothing, mostly geometry-quality benefit and lower expected effect on unresolved Tier-1 topology. Avoid replacing the existing navmesh or adding another unconstrained smoothing stage.
+
+### Final Tier 1 result and decision (2026-10-11)
+
+Sequential telemetry run of `bm_svf` exhausted after 836.222 s and 18 completed actions: 78 abstract paths, zero abstract overflow, but only 62/78 checked requests (61 stored paths plus one already-connected request), versus 60/78 before. No checked coverage gain followed the first scaffold construction. Sixteen requests remain: twelve report expansion-budget exhaustion and four attachment exhaustion. Neither category proves geometric infeasibility. No final whole-board oracle or KiCad DRC certificate exists.
+
+The retained scaffold pass reports 7,262,443 expansions, 740 tracks, 24 vias, 64 single-victim attempts with zero accepted, and 22 coupled attempts with zero accepted; seven coupled expansion-budget exhaustions occurred. These are latest retained-pass counters, not cumulative run totals. The bounded rollback journal contains 30 incoming-unroutable and two victim-unroutable records. Nine frozen regional dispatches produced no retained coverage improvement. Peak RSS rose from 928,480 to 1,685,768 KiB (about 82%). The two-connection gain is not evidence that pair exchange improved this board; its benefit is established only by the focused synthetic regression.
+
+Both Tier-1 layer previews were viewed, but they depict coarse global paths, not checked retained scaffold copper or final curves. Full-scaffold oracle failures currently discard their diagnostic result, and frozen regional local diagnostics are not installed in legacy full-plan scope counters. These gaps prevent a sound claim about the precise physical reason each regional candidate failed. Source and frozen-binary hashes remained unchanged during both tier runs. Structured results: `reports/benchmark_history/2026-10-11-physical-repair.json`.
+
+Decision: retain the verified stable-demand, retained-scene and bounded transactional repair mechanisms, with no claim of Tier-1 completion or strict Tier-0 curve qualification. Do not increase coupled search budgets based on this result. Next experiment should retain oracle/frozen-regional failure witnesses, distinguish access exhaustion from packing/topology conflict, and reject impossible assignments before expensive searches. Improve causal selection and preparation reuse before adding more concurrent work or larger search allowances.
+
+## Experiment — Physical conflict components and scoped assignment evidence (2026-10-11)
+
+Failure: previous Tier 1 had 78 abstract paths, zero abstract overflow and 62/78 checked physical requests after 836.222 s. The retained pass had 22 coupled attempts with zero accepted; peak RSS was 1,685,768 KiB. Frozen regional work discarded its local diagnostics and preparation, while pair-only exchanges could not rearrange larger blocker components. This run is the immediate baseline; Tier 0 retained zero opens/DRC but seven unrounded joints.
+
+Hypothesis: bounded causal joint jobs, reusable physical preparation and correct failure provenance improve useful repair work without replacing the global architecture. Unfinished curve optimisation must not blacklist a potentially feasible discrete assignment.
+
+Research: conflict-based search separates conflict constraints from low-level paths (Sharon et al., https://ojs.aaai.org/index.php/AAAI/article/view/8140). Adapt the decomposition only: PCB permanent occupancy, rule widths and multilayer vias do not meet discrete time-expanded MAPF assumptions. Existing conservative offsets and physical lane packing remain necessary (https://doc.cgal.org/Manual/latest/doc_html/cgal_manual/Minkowski_sum_2/Chapter_main.html).
+
+Change: bounded fair causal demand batches; dedicated exact-scene regional preparation reuse; one shared-budget speculative preparation worker against immutable retained copper; retained per-region and scaffold-oracle diagnostics; bounded deterministic multi-victim copper transactions; safer assignment no-good provenance. Existing regional joint topology/packing, XPBD/AVBD, GPU screening and exact commit checks are reused. Detailed design: `docs/adr/0170-physical-conflict-components.md`.
+
+Validation and sequential Tier 0/Tier 1 telemetry benchmarks pending. Success requires more checked connectivity without lower-tier DRC/curve regression; report runtime/RSS and accepted repair mechanisms rather than attributing any gain to the entire bundle without evidence.
+
+Regression findings during validation: the first fair-budget implementation reserved for configured attempt slots even when a two-victim frontier had no larger component, starving the previously passing pair repair. Allocation now reserves only for actual larger component cardinalities and reclaims unused demand shares within the same hard total bound. The WorkPlan selected-net regression also exposed a scope error in newly retained oracle feedback: unrelated whole-board opens entered a selected-net action's repair instructions. Active oracle feedback is now filtered to intersect the explicitly selected net scope, while the complete oracle report and whole-board acceptance gate remain unchanged. Neither failure was accepted as a benchmark result; reruns follow.
+
+The feasible three-victim U-detour micro-board exposed an additional discovery gap: initial source/target search attributed the outer blockers, but the middle retained route was hidden behind them. The first generic component implementation therefore attempted only pairs (four total victim participations) and could never exercise its three-victim transaction. Failed repair searches must contribute newly exposed retained-object owners to the bounded causal frontier; merely increasing maximum component cardinality is insufficient. The full core suite still passed after the selected-net fix.
+
+The discovery fix maps newly exposed exact collision objects back to retained request owners, keeps a six-owner frontier bound, and updates later component enumeration. The corrected micro-board now passes: the two-victim bound remains incomplete, while the three-victim transaction reconnects all demands and preserves the unrelated locked copper under internal DRC. Independent review found no material issue in the discovery, bounded scheduling, or transaction changes. Final rebuilt CLI/regressions and tier checks follow.
+
+Final implementation validation: Release CLI build passed; ten focused suites passed; the full core suite passed; warnings-as-errors CLI/viewer build passed. Independent review found no remaining material issue. The frozen binary and 203 implementation-input hashes are recorded in `reports/validation/joint-physical-20261011/source-build.json`; Tier 0 then Tier 1 run sequentially with diagnostic telemetry and a 900 s routing deadline.
+
+The first Tier-0 check was interrupted after revealing a representation-scope regression: retained failed scaffold-oracle diagnoses vetoed the independently produced regional no-conflicts handoff, extending planning well beyond the 110.914 s baseline. That attempt is archived under `reports/validation/joint-physical-20261011/interrupted-oracle-scope/` with its frozen binary, hashes and telemetry; it is not a completed benchmark. Repair guidance now leaves an independently ready materialization candidate to its own evidence and downstream exact checks. The full failed scaffold oracle remains recorded. A new engine integration fixture adds a source-only open terminal on the same net, retains the exact scaffold-oracle rejection, verifies that the separately planned regional candidate still reaches detailed source validation, and verifies that no detailed copper is thereby certified.
+
+A second interrupted Tier-0 check showed that guarding only an already-ready candidate was insufficient: raw scaffold-oracle witnesses had entered earlier independent global history. Final provenance is stricter: only current-scene frozen-region evidence guides incomplete-scaffold repair. Complete-scaffold oracle failures remain fully recorded for diagnostics and certification, with no raw injection into another candidate's history. The integration regression now checks every engine step for such leakage, not just final handoff. The second interrupted binary/telemetry is archived under `interrupted-early-oracle-history/`.
+
+Independent review found the remaining Tier-0 scheduling defect: retaining an oracle or frozen-region journal set `pending.evidence_recorded`, a flag whose existing semantics authorize rollback/comparison of the working plan. These diagnostic records need not publish any working plan. Both new flag assignments were removed; actual evaluated plan/probe checkpoints keep the flag. The integration test now also asserts that failed scaffold certification cannot mark an unrelated plan evaluated. The third interrupted run is archived under `interrupted-diagnostic-rollback/`; earlier evidence-scope fixes were valid but did not account for this separate rollback path.
+
+Viewer follow-up: live retained scaffold checkpoints previously emitted scalar progress only, while generated-copper snapshots filtered out `track_bezier`. The engine now publishes throttled replaceable copper scenes at safe checkpoints, with forced final/cancel publication; telemetry preserves native Beziers. Publication stays non-authoritative and cannot change routing if an observer fails. The latest generated scene replaces the previous scene rather than accumulating by revision.
+
+Follow-up experiment in implementation: initial bounded board/layer map → erosion → connection-demand pressure. Inspection established that terrain field evolution itself is endpoint-independent; only path extraction requires source and target. CPU/GPU field-only APIs now expose that reusable stage. The initial shared-guidance integration retains per-net exact legal masks and reads GPU fields back for immutable host-side sampling; GPU-resident cross-pipeline field sharing is not claimed. Build/reuse cost, pressure work and physical invalidation must be measured before claiming a benefit.
+
+The user also proposed layer bands with power/ground planes at greater algorithmic depth. ADR 0174 records a proposed sparse cross-layer pressure graph while preserving canonical physical stackup order and layer-local clearance. KiCad signal/power layer roles are currently collapsed on import, so automatic plane-role penalties require metadata preservation or explicit policy. A per-layer constant elevation alone does not alter lateral gradients; travel/transition costs must express the preference. Cross-layer coupling is not implemented by the current per-layer guidance work.
+
+
+## Experiment — Cached terrain reachability before pressure search (2026-10-11)
+
+Failure mechanism: the new shared terrain pressure preparation repeats Dijkstra for endpoints on
+an unchanged disconnected raster, consuming the global pressure allowance before later reachable
+demands. This is a concrete preparation/search inefficiency, not proof of the Tier-1 copper cause.
+
+Research and alternatives: reviewed CBS/MAPF, time-expanded/SIPP planning and roadmap reachability.
+The bounded regional exact-assignment no-good loop already implements static conflict learning;
+new temporal collision states would not resolve permanent copper overlaps. Voronoi corridor
+capacity and terminal escape preservation already exist. The missing cheap mechanism is cached
+shared-map connectivity. Sources, repository symbols, costs and limits are recorded in ADR 0175.
+
+Hypothesis: layer-local component labels can reject impossible *advisory pressure searches* in
+constant time and preserve the pressure allowance for reachable demands. Linear label storage and
+build work are bounded by the existing map cell cap. Component area is diagnostic only; it is not
+physical channel capacity, and sampled disconnection does not reject a real routing connection.
+
+Change in progress: immutable no-corner-cut component labels and cell counts, pressure precheck,
+disconnected-pair telemetry and regression coverage. Before/after tier conclusions remain pending.
+
+HC-CBS follow-up: the authors' hierarchy retains subproblem paths/constraints/costs and composes
+constraint-tree alternatives. Source inspection found Flux's closest mechanisms in
+`select_physical_repair_requests`, `merge_residual_cone_checkpoint`, the regional no-good master
+and survivor-preserving scaffold transactions. The missing mechanism is a bounded, scene-scoped
+hierarchy of retained alternatives across calls. A static adaptation needs no time axis. Retaining
+only one child winner risks losing a needed parent solution; retaining all combinations risks
+memory explosion. ADR 0175 records the lazy bounded composition micro-test. Following explicit implementation
+authorization, a static HC-inspired finite child-assignment composer now seeds the regional
+master, with equality-guarded retained proposals and adaptive stale revalidation/rebuilding.
+It is not equivalent to temporal HC-CBS and makes no optimality claim. Existing exact gates
+remain authoritative; measured tier validation follows.
+
+
+Shared-guidance validation finding: the real-pad integration test caught a production integration
+error that field-only tests could not. All-owner terrain extraction passed an empty routed net,
+but the extraction API unconditionally required a declared net. Consequently every board-wide
+raster was unavailable (enabled=true, cells=0, pressure_demands=1, pressure_cells=0 in the
+synthetic fixture), even though global corridor allocation succeeded. The API now requires a
+declared net only when omitting same-net copper; all-owner maps retain every pad/copper owner.
+The regression asserts both all-owner extraction and continued rejection of unknown nets in
+net-specific mode. Before this fix, the consolidated suite passed 16/17 tests; rerun pending.
+
+## Experiment — Explicit multilayer cell and via graph (2026-10-11)
+
+Failure: inspection confirms that prepared NavMesh domains and their portals are planar.
+Global routing changes layers on a separate sampled grid; regional alternative generation
+enumerates via pairs outside planar search. This can separate useful corridor choice from
+legal transition placement. It is a representation gap, not yet a measured sole Tier-1 cause.
+
+Hypothesis: a bounded graph referencing immutable cells on every copper layer in a regional
+window can choose planar portals and certified via transitions together. Preserve physical
+stackup and complete barrel occupancy, including intermediate layers. The initial consumer
+retains existing template and physical admission checks. See ADR 0176 for sources, invariants,
+verification and the distinction between layered connectivity and unrestricted substrate travel.
+
+Implementation and benchmark verification are in progress. No routing-completeness or runtime
+improvement is claimed until the synthetic mechanism and sequential telemetry tiers are checked.
+
+Multilayer implementation: one graph per ordinary regional fragment includes all copper-layer
+islands in the window, with exact full-span certified directed via samples. Search requires two
+transitions; the chosen target-layer cell corridor is materialized by closing all outside cells
+in the existing funnel. Its via pair and layer receive first consideration in the unchanged
+physical template pipeline. The graph API supports general transition counts; the initial
+consumer remains limited to two-via overpasses. Ordinary alternatives and local bypass waves
+remain available. Added default-enabled ablations and graph/HC counters to CLI JSON.
+
+Independent agent review caught a stale-cache index remapping error and unchecked child-cost
+addition in HC; both were corrected and stale-cache mapping received a regression fixture.
+Memory review also replaced broad multilayer defaults with 65,536 graph nodes and explicit
+262,144-state/frontier bounds. A new core fixture requires the regional pipeline to consume
+a graph-selected corridor, complementing the module's isolated connectivity tests. Consolidated
+release/strict validation and sequential tier measurements remain pending.
+
+### 2026-10-11 — Multilayer/HC integration verification corrections
+
+Initial focused validation passed 17/19 executables. Layered path costs omitted lateral travel
+to via sites, and the production fixture prepared/searched graphs but consumed zero selected
+corridors (1,760 nodes, 1,614 expansions). Corrections charge complete via-site travel, preserve
+open incident endpoint cells during constrained flood fill, and certify via samples before
+retained-site limits. A boundary-binding micro-test also rejects escape from a closed cell.
+
+HC integration exposed an independent admission defect: pairwise compatibility did not prove
+aggregate channel capacity. HC seed admission now uses the existing exact aggregate via/channel
+check before coupled/access checks. The historical forward-checking ablation explicitly turns
+HC off; the aggregate-capacity fixture retains HC enabled. The public enumeration API continues
+to honor configuration. Consolidated verification and tier benefit remain pending.
+
+The corrected production crossing regression now passes, including an assertion that a
+certified multilayer corridor is consumed by template construction. The shared-boundary
+binding and closed-cell rejection checks pass in the same fixture. Full focused-suite and
+tier validation are still pending; no completion or speedup claim follows from this fixture.
+
+Focused consolidated validation: 19/19 CTest executables passed in 105.56 seconds, including
+all 67 core cases, layered navmesh, HC composition, GPU terrain evolution, physical scaffold,
+engine policy/preparation, and telemetry viewer/live-client tests. Log:
+`reports/validation/joint-physical-20261011/layered-hc-final-tests-v4.log`.
+The only subsequent source change replaced two const-value LayerId loop variables with
+const references to satisfy warnings-as-errors; strict CLI/viewer verification follows.
+
+### Sequential telemetry benchmark — Tier 0
+
+`pt2399_delay`: planning 111.348 s (baseline 110.914 s), detailed routing 317.100 s
+(baseline 313.399 s), peak RSS 1,406,712 KiB (baseline 1,382,832 KiB). Checked scaffold
+50/50 connections; 0 opens, 0 internal copper violations. The rejected diagnostic board's
+KiCad DRC reports 0 violations and 0 unconnected items. Strict curved qualification remains
+failed on the same 7 unrounded non-junction bends; this is not a promoted tier.
+
+Both final F.Cu/B.Cu PNGs are byte-identical to the baseline. Visual inspection found no new
+looping or oscillatory curves; straight runs, obstacle detours, and the existing abrupt joints
+remain. The saved intermediate spline close-up contains only a straight candidate, so it does
+not demonstrate multilayer search quality.
+
+The board terrain producer is now active: 7,668 cells on 2 layers, GPU evolution used,
+cache reused, 100 pressure paths, 23,116 pressure-search expansions, no pressure budget
+exhaustion. Final regional HC/layered counters are zero but describe the retained checkpoint,
+not cumulative work. A read-only audit found cumulative layered stats already collected but
+not emitted, while HC lacks a cumulative plan field. A proposed observability patch was deferred after audit: existing cumulative candidate
+metrics follow selected-checkpoint ancestry and also omit discarded sibling attempts.
+An execution-owned accumulator is required for reliable whole-run totals. No benefit is
+attributed from those zero fields; the benchmark source remains unchanged.
+
+Tier 1 follows sequentially as a diagnostic comparison because Tier 0's strict curve failure
+and final copper are unchanged from the recorded baseline.
+
+### Remaining Tier-0 mechanism
+
+Failure details identify five generated PH chains, not inherited source copper (the input has
+zero tracks/vias): net 3/F.Cu bases 13 and 14; net 17/F.Cu base 32 and B.Cu base 33;
+net 2/F.Cu base 59. Four fail NavMesh endpoint/free-space admission on the initial pass;
+one fails trajectory. Retry failures include exact offset validation. The two passes withhold
+nine corners each, while final junction-aware qualification counts seven sharp joins.
+The net-17 endpoint `(34.8, 65.4)` mm is exactly its own via site. The net-2 chain is a closed
+three-edge loop. Neither observation alone proves the required fix; next isolate terminal
+access-domain handling and whether that cycle carries any mandatory attachment. Do not relax
+clearance or the strict curved qualification threshold.
+
+### Sequential telemetry benchmark — Tier 1 and interpretation
+
+`bm_svf`: global 851.584 s versus baseline 836.222 s; runner wall 14:14.72;
+peak RSS 1,445,416 KiB versus 1,685,768 KiB (14.3% lower). Abstract routing completes,
+but the engine exhausts with only 62/78 checked scaffold connections, 16 missing,
+740 published tracks and 24 vias: unchanged physical connectivity. Detailed copper
+and a final KiCad DRC certificate were not produced. Runner global success is not tier success.
+
+The retained scaffold reports 8,749,598 expansions, 189 victim exchanges and 128 coupled
+exchanges, with no accepted exchange. Selected repair records repeatedly say
+“selected global paths contain no regional physical conflicts”, despite missing scaffold
+connections. This identifies an integration limit: conflict-triggered regional alternatives
+cannot necessarily address a failed physical attachment/search with conflict-free abstract
+paths. Next experiment should construct regional requests from failed physical connections
+and their actual blocking owners, rather than rely solely on conflicts in selected global paths.
+
+The layered graph is retained as a tested bounded implementation (including a production
+corridor-consumption fixture); these benchmarks do not establish a routing benefit.
+No tier is promoted. Final regional counters are checkpoint-scoped and cannot establish
+whole-run invocation totals. The broader engine-owned telemetry accumulator is deferred.
+
+Release CLI and strict CLI/viewer builds passed. The frozen binary/source manifest verified
+without drift after both sequential runs. Machine-readable comparison:
+`reports/benchmark_history/2026-10-11-joint-physical.json`.
+
+### Experiment — Failed physical demands as regional repair inputs
+
+Failure: Tier-1 retained scaffold satisfies 62/78 requests; 12 failures exhaust expansion
+bounds and four exhaust attachments. Every missing request has 6–32 attributed blocking
+objects. Yet physical regional attempts report no conflicts in the selected global paths.
+Hypothesis: regional admission depends on intersections of coarse paths, so a physical
+connection failure with different blocking geometry never reaches alternative generation.
+Construct bounded requests from missing physical demands and their current owner evidence,
+retain immutable unrelated copper, and preserve exact admission/connectivity gates.
+
+User-provided KRT oracle: 25/25 nets, 78/78 pairs, 7.30 s, 699,298 expansions, 615 segments,
+73 through-vias, 925.353 mm copper, no rule escalation; internal represented DRC zero and
+two permitted same-net crossings. This is useful topology evidence, not an independently
+rerun KiCad DRC certificate. Structured reference: `reports/benchmark_history/2026-10-11-krt-user-reference.json`.
+
+Primary source inspected: KiCadRoutingTools commit
+`0db4b103f95a63995e8e2c2b2c8c0e3077a2388a`, `rust_router/src/router.rs` via expansion.
+It explores layer transitions and treats existing same-net holes as zero additional via cost.
+Flux already considers transitions at every expanded scaffold cell with a modest four-step
+via cost. Fewer final vias alone therefore do not establish excessive via pricing: incomplete
+connectivity and bounded search state growth also matter. Evaluate constraints and opportunity
+generation before changing a cost constant. No external source code is copied.
+
+Via audit: retained Tier-1 JSON reports 60 planned via transitions but only 24 published
+scaffold vias; the regional selected checkpoint reports zero planned via transitions. This
+locates an important loss after global allocation. Scaffold considers every layer at every
+expanded cell (no sparse via lattice); new-via cost is four orthogonal grid steps. Its exact
+via-history identity multiplies search labels while prospective drill-pair spacing is only
+checked on assembled goals. A future bounded history range query could reject illegal
+new-drill pairs earlier without removing legal alternate histories.
+
+Existing same-net transition reuse currently still pays the new-via cost in scaffold search.
+KRT discounts it, but changing Flux to zero also requires correcting the heuristic's layer
+transition lower bound. Defer that separate experiment: first measure whether admitting
+physical-failure regional requests exposes the already implemented layer alternatives.
+
+### Updated KRT oracle — preserved run
+
+Pinned KRT revision `0db4b103f95a63995e8e2c2b2c8c0e3077a2388a`, native source build,
+explicit 0.2 mm tracks/clearance, 0.7 mm vias, 0.3 mm drills, escalation off and strict sizes.
+Routed 25/25 nets and 78/78 pad pairs in 4.19 s wall, 724,415 reported search iterations,
+70 vias, 352 actual track segments (excluding four copper graphics), 848.751 mm planar
+segment length. Peak RSS 312,064 KiB. KRT internal checker: no violations, one permitted
+same-net crossing. These costs are not an isolated algorithm ablation against Flux.
+
+KRT wrote copper-to-hole clearance 0.20 mm rather than the original 0.25 mm, despite no
+reported escalation. Preserve both projects. A second KiCad DRC using the untouched original
+project found zero opens and zero copper/hole-clearance violations. Its 67 other reports
+are footprint-library (34), text-height (22), and silk-over-copper (11). Thus the produced
+copper passes the original copper rules even though KRT's search configuration was not
+strictly identical. Do not conflate this with a completely clean full-board DRC report.
+
+Both copper-layer previews were inspected. KRT uses short opposite-layer bridges and
+frequent vias near terminal escapes, rather than requiring long same-layer detours.
+Nets with missing Flux requests use 45 of KRT's 70 vias (per-net geometry summary retained);
+this is evidence for exposing physical layer-change alternatives, not a target via count.
+All output, commands, hashes, DRC, renderings, and per-net copper are preserved under
+`reports/validation/krt-tier1-20261011/`.
+
+Frozen Flux CLI also imports the KRT board with original project minima applied, strict/non-lossy
+import, zero core validation errors and zero open connections (`flux-inspection.json`).
+This rules out a basic format/connectivity-model mismatch as the explanation for this gap.
+
+Implementation: dedicated `RegionalPhysicalRepairRequest` carries current net/connection
+identity and owner IDs. Regional windows include the failed demand's actual fragments and
+conservative bounds of resolved blocking copper; owners remain immutable board geometry.
+No synthetic owner paths, all-net-pair conflicts, or exact-conflict claims are introduced.
+Source and resolved owner counts distinguish stale references. All proposed replacements
+still pass existing exact scaffold connectivity/DRC admission. Source freeze for focused
+regression and build validation; benchmark benefit remains unverified.
+
+Validation correction: release compilation passed. The strengthened engine fixture initially
+failed attribution because its zero-expansion scaffold configuration intentionally skipped all
+collision probes. The fixture now places the blocker near the source and permits 128 expansions,
+so it must collect real owner evidence while remaining unable to finish the 60 mm request.
+This changes the test mechanism, not production routing rules or acceptance criteria.
+
+The first positive-budget fixture attempt still missed its obstacle because the global
+planner oriented the request from the opposite endpoint. Diagnostics showed 80→20 mm and
+128 expansions with no frontier contact. Symmetric endpoint-near blockers now make evidence
+collection independent of demand orientation; production attribution is unchanged.
+
+Read-only follow-up: four attachment-exhausted Tier-1 request endpoints are not pads. Their
+nearest canonical pad distances are 5.293 mm (net22), 2.719 mm (net16), 2.376 mm and
+1.956 mm (net1). `scaffold_requests` copies abstract global paths, including branch endpoints.
+`scaffold_access` keeps an endpoint absent from copper as a free-space anchor, or substitutes
+anchors from its component when it touches existing copper. `attachment_exhausted` means an
+empty legal raster-attachment set before A*, and current data does not distinguish those
+cases. Next isolated diagnosis: report endpoint component membership plus source/goal anchor
+counts in a relocated-Steiner-branch micro-case. Do not assert this is already the proven
+cause of all four failures. Source unchanged during benchmark validation.
+
+
+### Follow-up — physical-demand scheduler and attachment access
+
+The first dedicated-demand build passed 19 focused tests and strict CLI/viewer builds.
+Tier 0 retained 50/50 checked scaffold requests, zero diagnostic copper violations and
+zero KiCad opens, but still failed strict curved qualification with the same seven
+unrounded non-junction bends as the preceding baseline. It is not a tier pass.
+Evidence: `reports/benchmark_history/2026-10-11-physical-demand.json`.
+
+A scheduler audit found two independent liveness gaps: physical regional repair required
+at least one accepted scaffold path, and newly attributed blockers did not change the
+physical retry dependency. The next experiment admits valid missing demands even with
+zero accepted paths, and includes canonical missing-request/blocker identity in its retry
+key. Blocker ordering, duplicate IDs and search termination alone do not reset attempts;
+termination was explicitly excluded after review identified an A/B retry-cycle risk.
+Regression coverage checks empty-scaffold dispatch and causal key stability.
+
+Validation and sequential telemetry benchmarks for this follow-up are recorded separately
+under `reports/validation/physical-demand-v2-20261011/`; prior binary snapshots remain intact.
+
+
+Attachment experiment: disconnected same-net objects previously consumed the candidate
+cap before exact component membership filtering. Candidate generation now streams fixed-size
+membership batches, includes the endpoint in each oracle call (component IDs are call-local),
+and caps accepted same-component anchors. Original object ordering and exact admission remain.
+A micro-test places more disconnected pads and tracks than the access cap before a useful
+track projection. Per-request primary-search membership/anchor/attachment diagnostics expose
+whether remaining Tier-1 failures originate at physical components or abstract branch points.
+This does not claim to relocate or solve all orphan branch endpoints.
+
+Independent scheduler review also caught global attempt resets on evidence-only updates.
+The follow-up preserves attempts for unrelated requests and reopens only changed demands;
+actual retained geometry/domain changes still reset all. This prevents a higher-index changed
+demand losing the remaining bounded budget to unrelated lower-index requests.
+
+
+Read-only Tier-0 follow-up during v2 validation: the previous diagnostic has zero copper
+violations/opens/validation errors but seven unrounded non-junction bends. The audit in
+`detailed_router.cpp` deliberately rejects these; disabling it would hide qualification
+failure. Existing exact fillet fitting is gated off when the normal PH candidate budget is
+positive, even when residual raw bends remain. A future isolated experiment should report
+bend coordinates/source runs and attempt bounded residual-only exact fillets, preserving
+DRC/connectivity and retaining failure if a bend cannot be rounded. This is not enabled in
+v2, and the aggregate old telemetry does not prove all seven are repairable this way.
+
+
+V2 validation: targeted scaffold/engine tests passed, then 19/19 regression CTests passed
+in 105.51 s; strict CLI/viewer and release builds passed. The first zero-path fixture stopped
+on a preparation checkpoint before admission; its wait condition was corrected to observe
+actual request admission (no production change). Tier 0: global 110.29 s, detail 311.73 s,
+50/50 scaffold requests, 3 vias, 47 tracks + 199 Beziers, zero internal copper violations,
+zero KiCad diagnostic violations/opens, same seven residual bends. Every captured PNG is
+byte-identical to the previous physical-demand run. Qualification remains failed, unchanged.
+Tier 1 is running sequentially with diagnostic telemetry and the same frozen binary.
+
+
+V2 Tier 1 completed in 287.73 s (preceding joint-physical run 851.58 s), peak RSS 583,664 KiB
+(previously 1,445,416), but retained the same 62/78 checked requests. There are 741 tracks
+and 22 vias. This is faster failed routing, not a completed board or demonstrated throughput
+improvement. Stored repair records admit batches of 6, 6 and 4 missing demands with 18, 18
+and 14 bundle invocations respectively; none yields an accepted candidate. Records coalesce
+repeated identical keys, so these counts must not be summed as whole-run totals.
+
+The new access evidence confirms requests 30, 35, 66 and 73 terminate before A*: source is
+on physical copper, target is absent from copper, and target legal attachments equal zero.
+The remaining twelve failures exhaust expansions; all have nonempty attachment sets.
+This disproves anchor-cap starvation as the direct cause of those four failures while still
+retaining the independently reproduced cap fix. `failure-analysis.json` preserves per-demand
+evidence. Final Tier-1 copper/DRC certification is unavailable because routing is incomplete.
+The saved provisional regional image was inspected; it is not legal final copper.
+
+### Next isolated experiment — physical terminal demands
+
+Hypothesis: treating an unmaterialized global branch point as a mandatory physical terminal
+creates impossible attachment requests. Regional curve repair cannot fix a blocked required
+endpoint. Make physical completion refer to real terminal components and keep coarse branches
+as routing proposals, with exact connectivity and DRC admission still authoritative.
+
+Candidate ranking: (1) canonical physical terminal/component demand binding; (2) reconstruct
+coarse tree chains to real terminals while preserving route geometry; (3) enlarge raster
+attachment rings; (4) lower via cost. The last two cannot fix a required point inside forbidden
+copper, and nearest-pad substitution alone could silently omit connectivity. Preserve useful
+coarse geometry and passing Tier-0 coverage when testing the first option.
+
+Research: KRT's pinned `docs/routing-architecture.md` describes MST demands between real pads
+and subsequent taps from existing connected segments to the target pad (Phase 3). Reference:
+https://github.com/drandyhaas/KiCadRoutingTools/blob/0db4b103f95a63995e8e2c2b2c8c0e3077a2388a/docs/routing-architecture.md
+This is a concept reference; no external source is copied. KiCad similarly finishes routing on
+same-net pads/tracks/vias: https://github.com/KiCad/kicad-doc/blob/master/src/pcbnew/pcbnew_interactive_router.adoc.
+
+
+Physical-terminal implementation is intentionally net-scoped: only nets with selected
+endpoints outside actual same-net pad copper (position/layer membership) or failed global
+connections receive rebuilt deterministic pad-spanning demands. Unaffected coarse paths are
+kept unchanged. A net with fewer than two usable pads keeps its original demands, avoiding
+silent omission of imported/copper-only obligations. Affected-net global geometry is not
+reused without exact endpoint association. Tests cover a mixed three-pad tree with one orphan
+branch and preservation of a no-pad request. The CLI now separately reports physical opens
+and unrouted nets from the retained copper connectivity oracle; canonical request counts are
+not directly comparable to the prior abstract-branch demand domain.
+
+Source frozen for independent review, focused validation and sequential telemetry benchmarks
+under `reports/validation/physical-terminals-20261011/`.
+
+
+Physical-terminal result: targeted tests and 19/19 regressions passed (105.94 s), strict builds
+passed, but Tier 0 regressed from 50/50 to 46/50 checked requests, with four actual opens across
+three nets. Global run took 76.24 s; all four failures exhausted search allowance. Whole-net
+canonicalization discarded useful selected geometry and changed route ordering despite fixing
+the request semantics. Tier 1 started before the regression stop signal and was interrupted;
+it is not a valid benchmark result. Decision: revert the canonicalization implementation and
+its experiment-only test; retain v2 scheduler/component-access fixes and diagnostic reporting.
+Preserve rejected source and artifacts to avoid repeating this experiment blindly.
+
+Next hypothesis requires explicit correspondence between physical terminal obligations and
+retained branch geometry (including producer/dependency ordering), rather than replacing the
+entire successful subtree with a fresh MST. The confirmed orphan endpoints remain unresolved.
+This follow-up was not promoted or hidden behind relaxed DRC or reduced connectivity scope.
+
+
+Final retained state: all restored engine/header/test files exactly match the v2 benchmark
+source hashes. The only source difference is CLI read-only physical connectivity reporting;
+removing those added reporting lines reproduces the v2 CLI source hash. Final rebuild,
+19/19 regressions (106.04 s), strict CLI/viewer build and release relink passed. Final binary
+SHA-256: b38846f2bc61b4e4efd73195e9000546b926703ca2bcff4961cb6e3047400d85.
+No extra tier runs were claimed: sequential v2 runs are the retained routing implementation's
+benchmark evidence, with provenance in `reports/validation/physical-demand-final-20261011/`.
+Neither tier is promoted: Tier 0 still fails strict curve qualification and Tier 1 remains
+physically incomplete. The whole-net terminal rewrite was rejected and is absent from active code.
+
+
+## Experiment — residual corner repair and narrow branch binding (2026-10-11)
+
+### Failure and hypothesis
+
+The retained physical-demand-v2 baseline leaves Tier 0 physically connected and clean
+under diagnostic KiCad DRC, but rejects seven non-junction bends. Independent endpoint
+inspection of its exported rejected board identifies all seven as straight/straight
+corners, not Bezier tangent mismatches. Preserve the strict curve audit and test a
+bounded exact circular-fillet postpass after PH realization. Each accepted edit must
+preserve connectivity and pass changed-copper clearance checks. Classification and
+attempt/accept/reject counters distinguish repaired corners from unsupported tangencies.
+
+Tier 1 remains 62/78 checked requests. Four zero-attachment targets are noncopper coarse
+branch points. Exact layer-aware segment containment in canonical request geometry
+identifies producer connections: net-22 connection 0 -> connection 2; net-16 connection
+2 -> connection 0; net-1 connection 3 -> connection 0; net-1 connection 10 -> connection 2.
+Two producers are satisfied despite their selected branch points being absent from
+physical copper; two producers also failed. Deferral alone cannot solve this.
+
+The branch experiment will bind only a failed demand to a real pad reached through its
+selected same-net coarse tree, excluding the failed branch itself. No nearest-pad
+substitution or whole-net MST reconstruction is permitted. Preserve peer requests and
+require exact physical connectivity for admission. This refines the existing KRT/KiCad
+terminal-component research above rather than introducing a new routing family.
+
+### Baseline and acceptance
+
+Baseline: Tier 0 50/50 checked requests, zero physical opens, seven residual bends;
+Tier 1 62/78, 16 missing requests, 287.73 s global runtime. Sources and independent
+bend evidence are preserved under reports/validation/residual-repair-20261011.
+Run Tier 0 then Tier 1 sequentially with diagnostic telemetry, preserving all rules.
+Reject any lower-tier physical regression. Neither tier is promoted without final
+curve qualification and KiCad validation. Implementation and verification pending.
+
+### Implemented scope and review
+
+The branch experiment is deliberately narrower than a general coarse-tree graph walk:
+only an exact direct producer with a real-pad endpoint qualifies. This covers the four
+observed orphan endpoints. Existing source-component membership excludes redundant loop
+attachments. Rebound requests clear stale corridor, medial, width and neck-down metadata;
+unchanged requests remain byte-identical. A proof is consumed before kernel dispatch
+(one attempt per exact canonical producer proof and immutable physical context). A shared
+checkpoint predicate prevents changed-domain updates from dropping any checked peer.
+Adopted bindings and attempted proofs are reported separately. The existing geometry-only physical dependency key re-enables a proof after copper or
+request geometry changes, while history and diagnostic counter changes do not.
+
+Independent review caught and corrected scaffold topology-lock over-exclusion, source
+copper under-protection, and missing quantized arc/segment tangent checking. Residual
+fillets now target only audited straight nonjunction corners; preserved/locked copper
+and closed loops remain untouched. Each transaction validates changed copper and
+per-net connectivity under consistent zone-fill treatment. Closed loops and mixed
+curve tangencies remain subject to the unchanged final rejection audit.
+
+Focused tests cover legal oblique fillets with actual tangent checks, blocked fillets,
+preserved source copper, unavailable/bypassing producers, no proof, consumed proof,
+cleared neck-down metadata, source-component loop exclusion, and checked-peer retention.
+Sources frozen for compilation and sequential telemetry benchmarks.
+
+Validation exposed an existing source-preservation bug before benchmarking: the PH chain
+collector used only native-curve protection and could collect preserved tracks on an
+unrouted net. After committing the unintended curve, dimensions.at(net) threw because
+that net had no routing dimensions. A debugger confirmed the materialize_impl call path.
+The shared full protected-ID set now feeds branch splitting, primary PH collection and
+residual repair. Generated scaffold copper stays eligible. The corrected preservation
+fixture routes another net and checks all original source segments remain unchanged.
+Independent review approved this narrow correction.
+
+### First frozen benchmark result
+
+Authoritative freshly relinked regressions: 19/19 pass (106.08 s); strict CLI/viewer
+and release builds pass. Frozen binary SHA-256:
+541e505f84f19d6e01a551b27675d028df2e57d28a9d3ffea44d6383f706ff47.
+Tier 0: 50/50 checked requests, global 112.04 s, detail 330.27 s, 0 physical opens,
+0 represented copper violations, external diagnostic KiCad DRC 0 violations/0 opens.
+Residual repair attempted and accepted six corners; remaining bends fell 7 -> 1.
+Output has 47 tracks, 199 Beziers, 6 arcs, 3 vias; peak RSS 1,416,664 KiB.
+Not promoted: one strict straight-corner audit failure remains.
+
+Independent inspection locates the remaining corner at (24,29.4) on F.Cu, net
+Net-(U2-LPF1-IN). Its three generated segments form a return-to-pad triangle:
+(23.5,28.58) -> (24,28.58) -> (24,29.4) -> (23.5,28.58), all width 0.7 mm.
+The blanket closed-run exclusion skips the entire pad-anchored chain. A narrow next
+experiment is to distinguish an anchored return chain (seam is a physical junction)
+from an unsupported closed degree-two loop (seam is itself an audited bend).
+Inspecting the exported F.Cu image confirms mostly smooth paths with permitted junctions;
+this image is diagnostic rejected copper, not an accepted final artifact.
+Tier 1 runs sequentially on the same frozen source before any further edits.
+
+Tier 1 first frozen result: 64/78 checked requests (baseline 62/78), 14 missing,
+384.27 s global runtime (baseline 287.73 s), 9,178,226 expansions, 6,654,415 candidate
+rejections, 754 published tracks, 22 vias, peak RSS 590,976 KiB. Four proof-backed
+endpoint bindings were attempted/adopted. All four zero-attachment failures disappeared;
+all remaining failures exhaust expansion budgets. Retained physical connectivity reports
+24 opens across 10 nets, distinct from the 14 missing abstract requests. No detailed
+output/final KiCad DRC exists because the board is incomplete. Regional candidate
+selection still produces no accepted repair.
+
+Interpretation: direct terminal rebinding solves the measured impossible-endpoint
+mechanism and gains two checked demands, at ~34% higher runtime. Keep as a bounded
+experiment; it does not solve the remaining search/packing problem or certify Tier 1.
+The next narrow change targets Tier 0's anchored return-chain guard and is isolated
+under reports/validation/anchored-residual-20261011.
+
+### Follow-up — anchored closed-chain eligibility
+
+Only two source files changed from the first frozen run: detailed_router.cpp and the
+scaffold-curve tests. Closed runs now remain excluded when their chosen seam is itself
+an audited straight nonjunction bend. An audit-exempt physical attachment at the seam
+allows the interior corners through the existing exact transaction. Added an anchored
+triangle and a floating triangle fixture; source snapshots precede the edit. No audit
+tolerance, clearance rule, or connectivity qualification was relaxed. Validation pending.
+
+Anchored follow-up validation: focused mechanism tests and all 19 freshly relinked
+regressions pass (107.21 s); strict CLI/viewer and release builds pass. Frozen binary
+SHA-256 d22f974845649e531502874537683613dcd0053701accde49f9b605fc08439a4.
+Tier 0 retains 50/50 checked requests. Global took 114.08 s; detail 321.39 s.
+Seven residual repairs were attempted and accepted, leaving zero straight-corner or
+curve-tangent audit failures, zero physical opens and zero represented copper violations.
+The diagnostic exported board also has zero KiCad error violations and zero unconnected
+items under the corpus rule configuration. Both exported copper layers were visually
+inspected; no new looping or clearance artifact was observed. This is still diagnostic
+copper: the CLI retains incomplete_global_route because materialization was reached only
+through the review-preview fallback. The physical repair hypothesis is supported, but
+Tier 0 is not promoted. The remaining certification/scheduling gate is a separate issue;
+it must be fixed through exact engine admission rather than by relabeling a preview.
+Tier 1 is being rerun sequentially against this same frozen binary.
+
+Follow-up diagnosis corrects the initial handoff suspicion: route-kicad and detail-kicad
+are independent runs. In Tier 0, the exact scaffold oracle itself rejects regenerated
+scaffold paths with one open, matching retained copper connectivity. The isolated pad is
+R1.2, net kicad-net-16 / Net-(J1-Pin_1), at (22.5,75.74) mm; canonical request 1 instead
+starts at (22.5,55.42) mm and ends at Q1.2. Satisfying that declared endpoint graph does
+not connect the actual R1.2 pad. The earliest problem is canonical terminal coverage,
+not merely preview labeling. Next experiment should add or regenerate only missing
+physical terminal demands while preserving satisfied peers, and require the existing
+whole-board oracle. Do not revive the rejected whole-net MST replacement experiment.
+
+Final Tier 1 rerun confirms the first frozen result: 64/78 checked requests, 14 missing
+(all expansion_budget_exhausted), four proof-backed rebindings adopted, 24 physical opens
+across 10 nets, 754 tracks, 22 vias. Runtime 385.42 s, peak RSS 589,460 KiB; 9,178,226
+expansions and 6,654,415 candidate rejections. All 166 victim exchanges and all regional
+repairs still fail to produce an accepted repair. No detailed/final DRC artifact exists.
+Source freeze verification reports no drift. Final history:
+reports/benchmark_history/2026-10-11-anchored-residual.json.
+Decision: retain verified corner/source-protection and narrow terminal-rebinding fixes.
+Tier 1 remains unsolved. Main remaining cost is unsuccessful physical search/repair;
+next mechanism to address is exact physical-terminal obligation coverage, followed by
+conflict/via-aware alternatives for the remaining bounded-search failures.
+
+## Experiment — bounded route-and-displace (2026-10-11)
+
+### Failure and hypothesis
+
+The retained Tier 1 baseline has 64/78 checked requests, 14 expansion-budget failures,
+9,178,226 expansions, 166 victim-exchange attempts and zero accepted exchanges. Search
+rejects every currently colliding edge. The failed-demand regional path freezes blocker
+copper, so existing XPBD/pair-shove machinery cannot move those owners. A passage that
+could become legal after a small deformation is therefore invisible except through
+complete victim rerouting.
+
+Hypothesis: bounded speculative passage generation followed by an atomic geometric
+shove can recover some connections without rebuilding a victim route. Keep this separate
+from the real-terminal coverage defect identified on Tier 0.
+
+### Research and design
+
+KiCad distinguishes walk-around from shove routing, where traces/vias may move and pads
+remain obstacles: https://github.com/KiCad/kicad-doc/blob/master/src/pcbnew/pcbnew_interactive_router.adoc .
+Flux already has pns_push_and_shove with bounded recursive contact propagation, fixed
+source endpoints, source protection, validation, connectivity checks and exact DRC.
+Reuse that implementation as the initial backend rather than introducing another solver.
+Regional XPBD/AVBD remains available elsewhere; direct XPBD conversion is not part of
+this first adapter.
+
+Generate a small number of speculative passages with attributed generated blockers
+omitted only from the search snapshot. Restore all original copper before invoking PNS.
+Keep source/locked copper protected, retain satisfied request connectivity, rebuild
+moved path representations, and commit the incoming plus displaced copper together
+only after exact validation. Failure, budget exhaustion or cancellation leaves the
+published checkpoint untouched. Track attempts, rejection causes, work and accepted
+moves. Baseline saved in reports/validation/route-displace-20261011/baseline-source.
+Validation and sequential diagnostic Tier 0 / Tier 1 comparison pending.
+
+Implementation scope: one attributed generated planar owner per proposal; up to four
+owner proposals and 20,000 aggregate proposal-search expansions per failed request.
+PNS bounds are 16 candidate checks, depth four and 2 mm displacement per proposal.
+Source copper, vias and other owners remain protected. Multi-segment nominal-width
+planar paths are reconstructed from unchanged segments and PNS doglegs; source-ID
+ownership is retained for both. The existing victim-exchange fallback remains available.
+The first implementation deliberately does not add an XPBD adapter or move native curves.
+Independent review identified and corrected lost ownership of unchanged segments; a
+final cancellation guard and extended rotated/multi-segment coverage are pending after
+the initial focused build. Initial tests cover positive shove, source preservation,
+disabled recovery and retained path reconstruction.
+
+Focused validation initially rejected the shove fixture. Inspection showed a useful
+mechanism: seeding displacement from 0.2 mm grid steps makes PNS try 0.2/0.4/0.8/1.6 mm,
+which skips the narrow legal movement around 0.9 mm. The adapter now seeds displacement
+from the colliding pair's projected copper/clearance envelope rather than the grid.
+The test retains its original grid and now covers both orientations with a multi-segment
+nominal-width owner, an unchanged segment and retained-path reconstruction. Added a final
+stop-token check after all expensive validation and immediately before transaction mutation.
+
+Success criteria: the shove-required synthetic passage completes with exact legal copper
+and survives retained reconstruction in both orientations; protected copper stays byte
+identical; disabled or failed repair leaves prior copper untouched. Benchmark criteria:
+record displacement attempts/acceptance/rejection stages and compare checked requests,
+physical opens, runtime and expansions with the frozen baseline. No tier promotion is
+allowed from per-request completion alone. User explicitly requested this machinery as a
+general capability; if Tier 1 does not benefit, report that outcome rather than claiming
+performance improvement. Independent v2 review found no remaining material issues.
+
+Validation: revised focused scaffold tests pass (2.21 s); all 19 freshly rebuilt
+regression targets pass (106.52 s). Strict release CLI and viewer builds both pass with
+warnings treated as errors. Independent review reports no remaining material issues.
+Sources remain frozen for sequential Tier 0 then Tier 1 diagnostic telemetry runs.
+
+Tier 0 frozen result: global 112.38 s (baseline114.08), 50/50 checked requests and
+one physical scaffold open, zero displacement attempts. Detailed 324.39 s (baseline
+321.39), zero opens, zero unrounded bends and zero internal copper violations. Exported
+diagnostic KiCad DRC again reports zero errors and zero unconnected items. Qualification
+still fails with incomplete_global_route, matching the immediate anchored-residual
+baseline. The runner correctly flags this against the older qualified corpus expectation;
+it is not a new regression introduced by this patch. Tier 1 continues sequentially.
+
+### Final benchmark and decision
+
+Tier 1: 64/78 checked requests, 14 missing, 24 physical opens across 10 nets, 754 tracks,
+22 vias; unchanged connectivity from baseline. Runtime 372.91 s versus 385.42 s and peak
+RSS590,856 KiB; do not infer a speedup from this single run, since regional scheduling
+and runtime vary. The retained checkpoint records 14 displacement proposals, 13 proposal
+search failures exhausting the allowance, one rejected PNS shove, zero accepted shoves,
+zero validation/reconstruction rejections and 260,000 extra proposal-search expansions.
+Total checkpoint expansions9,438,226 versus9,178,226 baseline. Counters belong to the
+retained scaffold checkpoint, not an aggregate over every discarded engine attempt.
+All remaining requests terminate with expansion_budget_exhausted. No Tier 1 final copper
+or external final DRC exists. Source-freeze verification reports no drift.
+
+Decision: retain the bounded PNS adapter as the user-requested general capability; its
+positive, rotated and retained-reconstruction micro-tests pass, but Tier 1 benefit is not
+demonstrated. Preserve the unchanged exact acceptance gates. Next evidence-backed extension
+is better passage generation or a small coupled-owner neighbourhood: thirteen searches
+still cannot produce a candidate with only one owner omitted. Native-curve/multilayer
+movement and direct XPBD/AVBD displacement adapters remain outside this first backend.
+
+Authoritative structured comparison: reports/benchmark_history/2026-10-11-route-displace.json.
+
+## 2026-10-11 — Retained blocked passages and coupled displacement
+
+### Failure and hypothesis
+The frozen single-owner displacement experiment retained 64/78 Tier-1 scaffold connections,
+with 14 missing and no accepted displacement transaction. Thirteen of fourteen retained
+attempts exhausted proposal search; removing one owner still leaves coupled passages blocked.
+Hypothesis: retain paths through a bounded pool of generated copper, attribute their actual
+contacts, and legalize the incoming path and connected owner group together.
+
+### Research and experiment
+XPBD's compliant constraint formulation supplies coordinated positional proposals
+(https://matthias-research.github.io/pages/publications/XPBD.pdf). KiCad's shove machinery
+explicitly assembles obstacle clusters and processes interacting lines
+(https://docs.kicad.org/doxygen/classPNS_1_1SHOVE.html). These support bounded coupled
+contact handling, but neither approximate residuals nor a local shove certifies a board.
+Flux reuses its existing XPBD, AVBD and PNS implementations; it does not port external code.
+
+Candidates are ranked by unmet clearance after estimated displacement space, movement cost,
+and deterministic identity. Static/source copper remains hard. A bounded planar generated-owner
+bundle is sampled, relaxed with XPBD then AVBD, and offered to local PNS contact handling.
+All changes must pass the whole-transaction exact copper and connectivity gate before publication.
+The controlled micro-test disables legacy exchange and single-owner repair and requires both
+blocking owners to change. Frontier comparison is against `route-displace-20261011`, with
+sequential telemetry Tier 0 then Tier 1; inherited qualification failures remain failures.
+
+### Results
+Validation and benchmark results follow below.
+
+### Mechanism result before tier evaluation
+The first coupled XPBD/AVBD proposal reached the exact gate but failed the two-owner
+crossing fixture. Segment-local separation did not choose the distinct escape sides around
+the incoming route endpoints. The refinement adds a deterministic owner-normal escape seed,
+localized by the incoming tangent interval and a tapered run-up. Both solvers still run;
+the lowest clearance-residual seed/XPBD/AVBD proposal is retained for exact validation.
+Board-edge constraints account for the actual copper-to-edge rule rather than applying
+net clearance a second time. The focused tests now pass (2 targets, 2.97 seconds), including
+both owners changing, exact DRC, retained replay, source protection, caps, cancellation,
+and nonfatal AVBD refinement failure. This establishes the mechanism, not tier completion.
+
+### Final validation and sequential benchmark comparison
+
+All 20 selected regression targets passed (107.29 s). Strict release CLI and viewer
+builds passed. Independent review found no remaining material correctness, ownership,
+or budget defects. The production source snapshot and executable were frozen before
+running Tier 0 followed by Tier 1, both with telemetry.
+
+Tier 0 matches the immediate baseline: 50/50 scaffold requests, one scaffold physical
+open, then zero final opens, zero internal copper violations and zero unrounded joints.
+Diagnostic KiCad DRC reports zero errors and zero unconnected items. It remains
+unqualified with `incomplete_global_route`; physical cleanliness does not override this
+inherited qualification failure. Global/detail runtimes were 113.47/328.40 s.
+
+Tier 1 remains 64/78 requests, 14 missing, 24 physical opens across 10 nets, 754 tracks
+and 22 vias. Runtime was 385.82 s versus 372.91 s baseline; peak RSS was 591400 KiB.
+Retained-checkpoint expansions increased by 280000 to 9718226. Two blocked candidates
+were retained and two groups attempted, but neither reached XPBD under the configured
+obstacle-work allowance. Both groups contained three movable owners. No transaction
+was accepted. The 16 budget events comprise 14 search caps and two adapter caps.
+These counters describe the retained checkpoint, not every discarded engine attempt.
+There is no qualified Tier-1 final copper or final KiCad DRC result.
+
+### Bounded diagnostic budget experiment
+
+Replayed the supplied incoming paths for requests 67 and 69 against generated copper
+from the retained 64-request telemetry checkpoint, using their attributed owner groups.
+This isolates adapter preparation; it is not a full engine rerun or a replay of every
+soft-search alternative. The groups contain 201 and 164 particles, below the particle
+cap. At 16384 contact/work allowance, both stop at the XPBD obstacle-work guard.
+At 32768, 65536 and 131072, preparation admits 687/750 obstacle segments and XPBD runs
+32 iterations; AVBD also runs, discovering 117/241 contacts. Request 67 exceeds the allowed deformation envelope; request 69 returns
+an approximate proposal whose materialized copper has 27 exact-check violations.
+Each larger-cap invocation processes both requests in approximately 0.44 seconds.
+The diagnostic does not execute the parent PNS transaction fallback, so it does not
+prove that fallback cannot rescue a proposal. It does show that more relaxation budget
+alone has not established legal copper. Zero reported violations when no proposal was
+returned must not be interpreted as success.
+
+Decision: retain the requested bounded coupled-transaction capability and its positive
+regression; retain current safety caps. Tier-1 improvement is not demonstrated. Next
+experiment should localize movable owner spans and their obstacle neighborhoods, then
+measure whether coordinated motion plus residual PNS produces an exact legal transaction.
+Avoid treating whole long owners as uniformly movable or raising caps without physical
+progress. Vias, source copper and non-planar owners remain fixed in this implementation.
+
+Structured comparison: `reports/benchmark_history/2026-10-11-joint-passages.json`.
+Validation, frozen sources, telemetry and diagnostic sweep:
+`reports/validation/joint-passages-20261011/`.
+

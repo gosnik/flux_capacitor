@@ -1,0 +1,262 @@
+--- a/src/regional_router.cpp
++++ b/src/regional_router.cpp
+@@ -2036,7 +2036,10 @@
+   // still receive lane packing and continuous displacement, so their coarse centerlines cannot
+   // reject an otherwise legal selected-via assignment here.
+   std::vector<const RegionalRouteFragment*> frozen_fragments;
+-  if (regional.configured.frozen_copper_context) {
++  // Frozen foreign centerlines are only a valid obstacle contract while each window receives an
++  // independent native spline proof. Straight realization assembles every window's replacement
++  // into one scene, where another window may legitimately move this coarse fragment.
++  if (regional.configured.frozen_copper_context && regional.configured.enable_spline_realization) {
+     frozen_fragments.reserve(regional.fragments.size());
+     for (const auto& fragment : regional.fragments) {
+       if (!std::binary_search(window.owned_fragments.begin(), window.owned_fragments.end(),
+@@ -6431,11 +6434,13 @@
+   const auto optional_index = [](const auto& value) -> json::value {
+     return value ? json::value(*value) : json::value(nullptr);
+   };
+-  json::object context{{"schema", 3}, {"source_revision", board.source_revision},
++  json::object context{{"schema", 4}, {"source_revision", board.source_revision},
+                        {"local_channel_occupancy", regional.configured.local_channel_occupancy},
+                        {"shared_channel_copper", regional.configured.shared_channel_copper},
+                        {"centerline_channel_cuts", regional.configured.centerline_channel_cuts},
+                        {"frozen_copper_context", regional.configured.frozen_copper_context},
++                       {"enable_spline_realization", regional.configured.enable_spline_realization},
++                       {"enable_straight_realization", regional.configured.enable_straight_realization},
+                        {"phase", json::string(phase)}, {"window", window.id},
+                        {"max_states", regional.configured.max_bundle_search_states},
+                        {"max_access_states", regional.configured.max_access_assignment_states},
+--- a/tests/unit/core_tests.cpp
++++ b/tests/unit/core_tests.cpp
+@@ -4341,6 +4341,154 @@
+                   "frozen-via-copper-clearance",
+           "a frozen-via rejection must preserve its owned candidate, exact foreign blocker, "
+           "layer, deficit and clearance authority");
++  regional.configured.enable_spline_realization = false;
++  regional.configured.enable_straight_realization = true;
++  require(select().choices.size() == 1U,
++          "straight whole-scene realization must not reject a via against a foreign coarse "
++          "fragment that another window may replace");
++  regional.configured.enable_spline_realization = true;
++  regional.configured.enable_straight_realization = false;
++
++  // A foreign coarse centreline can cross A's selected via, yet be replaced by B's legal
++  // dogleg in the assembled straight transaction. The source has no copper to retain.
++  Board transaction_board;
++  transaction_board.outline = rectangle(0, 0, 40, 40);
++  transaction_board.layers = {{LayerId{"F.Cu"}, "F.Cu", LayerKind::copper, 0},
++                              {LayerId{"B.Cu"}, "B.Cu", LayerKind::copper, 1}};
++  const NetId transaction_a{"transaction-a"};
++  const NetId transaction_b{"transaction-b"};
++  transaction_board.nets = {{transaction_a, "A", 0}, {transaction_b, "B", 0}};
++  transaction_board.rules.default_via_diameter = Nanometres::from_mm(0.7);
++  transaction_board.rules.default_via_drill = Nanometres::from_mm(0.3);
++  const auto transaction_rules = flux::resolve_net_routing_rules(transaction_board, transaction_a);
++  require(transaction_rules.via_diameter == Nanometres::from_mm(0.7) &&
++              transaction_rules.via_drill == Nanometres::from_mm(0.3),
++          "the transaction fixture must resolve the selected via's actual source rule");
++  const auto terminal = [](std::string id, const NetId& net, Point position,
++                           std::vector<LayerId> layers) {
++    Footprint footprint;
++    footprint.id = ObjectId{id};
++    footprint.reference = id;
++    footprint.position = position;
++    footprint.courtyard = local_rectangle(1.0, 1.0);
++    footprint.pads = {{ObjectId{id + "-pad"}, net, Point{}, std::move(layers)}};
++    return footprint;
++  };
++  transaction_board.footprints = {
++      terminal("a-front", transaction_a, mm(5, 10), {LayerId{"F.Cu"}}),
++      terminal("a-back", transaction_a, mm(5, 9), {LayerId{"B.Cu"}}),
++      terminal("b-start", transaction_b, mm(10, 5), {LayerId{"F.Cu"}}),
++      terminal("b-end", transaction_b, mm(10, 15), {LayerId{"F.Cu"}})};
++  flux::GlobalRouteResult transaction_global;
++  transaction_global.paths = {
++      {transaction_a, 0U, {{mm(5, 10), LayerId{"F.Cu"}}, {mm(10.15, 10), LayerId{"F.Cu"}},
++                           {mm(10.15, 10), LayerId{"B.Cu"}}, {mm(9.15, 9), LayerId{"B.Cu"}},
++                           {mm(5, 9), LayerId{"B.Cu"}}}},
++      {transaction_b, 0U, {{mm(10, 5), LayerId{"F.Cu"}}, {mm(10, 15), LayerId{"F.Cu"}}}}};
++  const auto coarse_transaction_oracle =
++      flux::probe_quantized_copper_feasibility(transaction_board, transaction_global);
++  require(transaction_board.tracks.empty() && transaction_board.vias.empty() &&
++              coarse_transaction_oracle.drc_violations > 0U &&
++              coarse_transaction_oracle.open_connections == 0U,
++          "the original foreign coarse centreline and selected via must be illegal without "
++          "being retained as source copper");
++  flux::RegionalRouteResult transaction_regional;
++  transaction_regional.configured.frozen_copper_context = true;
++  transaction_regional.configured.enable_spline_realization = false;
++  transaction_regional.configured.enable_straight_realization = true;
++  const auto make_fragment = [](flux::RegionalRouteFragmentId id, LayerId layer, Point start, Point end,
++                                std::size_t first_segment) {
++    flux::RegionalRouteFragment fragment;
++    fragment.id = std::move(id);
++    fragment.layer = std::move(layer);
++    fragment.start = start;
++    fragment.end = end;
++    fragment.width = Nanometres::from_mm(0.25);
++    fragment.clearance = Nanometres::from_mm(0.2);
++    fragment.first_source_segment = first_segment;
++    fragment.last_source_segment = first_segment;
++    return fragment;
++  };
++  const auto a_front = make_fragment({transaction_a, 0U, 0U, 0U}, LayerId{"F.Cu"},
++                                     mm(5, 10), mm(10.15, 10), 0U);
++  const auto a_back = make_fragment({transaction_a, 0U, 0U, 1U}, LayerId{"B.Cu"},
++                                    mm(10.15, 10), mm(5, 9), 2U);
++  const auto b_original = make_fragment({transaction_b, 0U, 0U, 0U}, LayerId{"F.Cu"},
++                                        mm(10, 5), mm(10, 15), 0U);
++  transaction_regional.fragments = {a_front, a_back, b_original};
++  flux::RegionalViaChoice transaction_via;
++  transaction_via.id = 0U;
++  transaction_via.region_id = 0U;
++  transaction_via.net = transaction_a;
++  transaction_via.site = mm(10.15, 10);
++  transaction_via.span = {LayerId{"F.Cu"}, LayerId{"B.Cu"}};
++  transaction_via.diameter = Nanometres::from_mm(0.7);
++  transaction_via.drill = Nanometres::from_mm(0.3);
++  transaction_via.selected_global_site = true;
++  transaction_regional.via_choices = {transaction_via};
++  flux::RegionalRoutingWindow transaction_window_a;
++  transaction_window_a.id = 0U;
++  transaction_window_a.fragments = {a_front.id, a_back.id};
++  transaction_window_a.owned_fragments = transaction_window_a.fragments;
++  flux::RegionalRoutingWindow transaction_window_b;
++  transaction_window_b.id = 1U;
++  transaction_window_b.fragments = {b_original.id};
++  transaction_window_b.owned_fragments = transaction_window_b.fragments;
++  transaction_regional.windows = {transaction_window_a, transaction_window_b};
++  flux::RegionalRouteTemplate a_front_template;
++  a_front_template.id = 0U;
++  a_front_template.fragment = a_front.id;
++  a_front_template.routing_layer = LayerId{"F.Cu"};
++  a_front_template.selected_global_topology = true;
++  a_front_template.exit_via_choice = 0U;
++  flux::RegionalRouteTemplate a_back_template;
++  a_back_template.id = 1U;
++  a_back_template.fragment = a_back.id;
++  a_back_template.routing_layer = LayerId{"B.Cu"};
++  a_back_template.selected_global_topology = false;
++  a_back_template.entry_via_choice = 0U;
++  a_back_template.topology_centerline = {mm(10.15, 10), mm(9.15, 9), mm(5, 9)};
++  flux::RegionalBundleAssignment transaction_assignment_a;
++  transaction_assignment_a.window_id = transaction_window_a.id;
++  transaction_assignment_a.templates = {a_front_template, a_back_template};
++  transaction_assignment_a.selected_templates = {0U, 1U};
++  transaction_assignment_a.selected_via_choices = {0U};
++  transaction_assignment_a.stop_reason = flux::RegionalBundleStopReason::complete;
++  flux::RegionalRouteTemplate b_template;
++  b_template.id = 0U;
++  b_template.fragment = b_original.id;
++  b_template.routing_layer = LayerId{"F.Cu"};
++  b_template.selected_global_topology = false;
++  b_template.topology_centerline = {mm(10, 5), mm(10, 8), mm(11, 9),
++                                    mm(11, 11), mm(10, 12), mm(10, 15)};
++  flux::RegionalBundleAssignment transaction_assignment_b;
++  transaction_assignment_b.window_id = transaction_window_b.id;
++  transaction_assignment_b.templates = {b_template};
++  transaction_assignment_b.selected_templates = {0U};
++  transaction_assignment_b.stop_reason = flux::RegionalBundleStopReason::complete;
++  transaction_regional.bundle_assignments = {transaction_assignment_a, transaction_assignment_b};
++  flux::realize_regional_straight_candidate(transaction_board, transaction_global,
++                                             transaction_regional);
++  require(transaction_regional.spline_candidate_available &&
++              transaction_regional.native_scene_evaluated && transaction_regional.native_scene_complete &&
++              transaction_regional.native_scene_conflicts == 0U &&
++              transaction_regional.straight_scene_open_connections == 0U &&
++              transaction_regional.straight_scene_drc_violations == 0U &&
++              transaction_regional.native_realization_manifest.size() == 3U &&
++              std::any_of(transaction_regional.native_realization_manifest.begin(),
++                          transaction_regional.native_realization_manifest.end(), [&](const auto& route) {
++                            return route.fragment == b_original.id && route.centerline ==
++                                b_template.topology_centerline;
++                          }),
++          "the assembled straight transaction must replace B's colliding coarse line with its "
++          "dogleg and certify the resulting copper scene");
++  auto finalized_transaction = transaction_global;
++  finalized_transaction.paths = transaction_regional.spline_candidate_paths;
++  const auto finalized_transaction_oracle =
++      flux::probe_quantized_copper_feasibility(transaction_board, finalized_transaction);
++  require(finalized_transaction_oracle.drc_violations == 0U &&
++              finalized_transaction_oracle.open_connections == 0U,
++          "the whole-scene quantized oracle must certify the assembled dogleg transaction");
+   regional.windows = {window};
+   flux::RegionalBundleAssignment failed_assignment;
+   failed_assignment.window_id = window.id;
+@@ -4883,6 +5031,24 @@
+   CollectingTelemetrySink regional_candidate_telemetry;
+   const auto regional = flux::analyze_regional_conflicts(crossing, crossed, terminal_portal_config,
+                                                          {}, &regional_candidate_telemetry);
++  const auto has_context_modes = [](const auto& events, bool spline, bool straight) {
++    return std::any_of(events.begin(), events.end(), [&](const auto& event) {
++      if (event.kind != flux::RouterTelemetryEventKind::search_summary ||
++          !event.stable_id.starts_with("regional-bundle-context:"))
++        return false;
++      return event.detail.find("\"schema\":4") != std::string::npos &&
++             event.detail.find(std::string{"\"enable_spline_realization\":"} +
++                               (spline ? "true" : "false")) != std::string::npos &&
++             event.detail.find(std::string{"\"enable_straight_realization\":"} +
++                               (straight ? "true" : "false")) != std::string::npos;
++    });
++  };
++  auto straight_context_config = terminal_portal_config;
++  straight_context_config.enable_spline_realization = false;
++  straight_context_config.enable_straight_realization = true;
++  CollectingTelemetrySink straight_context_telemetry;
++  static_cast<void>(flux::analyze_regional_conflicts(crossing, crossed, straight_context_config,
++                                                     {}, &straight_context_telemetry));
+   const auto repeated_regional =
+       flux::analyze_regional_conflicts(crossing, crossed, terminal_portal_config);
+   flux::RouterTelemetryConfig regional_telemetry_config;
+@@ -4919,6 +5085,8 @@
+           regional_telemetry_state.total_groups == regional.components.size() &&
+           regional_telemetry_state.regional_conflicts == regional.conflict_edges.size() &&
+           !regional_telemetry_state.observed_routes.empty() &&
++          has_context_modes(regional_candidate_telemetry.events, true, false) &&
++          has_context_modes(straight_context_telemetry.events, false, true) &&
+           first_candidate_spline != regional_candidate_telemetry.events.end() &&
+           spline_phase_completed != regional_candidate_telemetry.events.end() &&
+           first_candidate_spline < spline_phase_completed &&
+--- a/tools/replay_regional_bundle.cpp
++++ b/tools/replay_regional_bundle.cpp
+@@ -169,9 +169,9 @@
+         throw std::runtime_error("requested context occurrence not found");
+     }
+     const auto schema = index(context.at("schema"));
+-    if (schema != 2U && schema != 3U)
+-      throw std::runtime_error("bundle context lacks explicit routing-rule provenance; "
+-                               "use its frozen pre-project-audit replay executable for schema 1");
++    if (schema != 4U)
++      throw std::runtime_error("bundle context requires schema 4 realization-mode provenance; "
++                               "use the matching historical replay executable for older captures");
+     const auto& board = *imported.board;
+     if (string(context.at("source_revision")) != board.source_revision)
+       throw std::runtime_error("bundle context belongs to a different source revision");
+@@ -198,8 +198,15 @@
+     flux::RegionalRouteResult regional;
+     regional.configured.max_access_assignment_states = index(context.at("max_access_states"));
+     regional.configured.max_access_blockers_per_window = index(context.at("max_access_blockers"));
+-    if (const auto* frozen = context.as_object().if_contains("frozen_copper_context"))
+-      regional.configured.frozen_copper_context = frozen->as_bool();
++    const auto required_mode = [&](const char* name) {
++      const auto* value = context.as_object().if_contains(name);
++      if (value == nullptr || !value->is_bool())
++        throw std::runtime_error("schema 4 bundle context requires boolean " + std::string(name));
++      return value->as_bool();
++    };
++    regional.configured.frozen_copper_context = required_mode("frozen_copper_context");
++    regional.configured.enable_spline_realization = required_mode("enable_spline_realization");
++    regional.configured.enable_straight_realization = required_mode("enable_straight_realization");
+     flux::RegionalRoutingWindow window;
+     window.id = index(context.at("window"));
+     for (const auto& x : context.at("nets").as_array())
+@@ -348,6 +355,8 @@
+                 {"replay_max_states", maximum_states.value_or(index(context.at("max_states")))},
+                 {"window", window.id},
+                 {"frozen_copper_context", regional.configured.frozen_copper_context},
++                {"enable_spline_realization", regional.configured.enable_spline_realization},
++                {"enable_straight_realization", regional.configured.enable_straight_realization},
+                 {"forward_checking", forward},
+                 {"resource_forward_checking", resources},
+                 {"local_channel_occupancy", local},

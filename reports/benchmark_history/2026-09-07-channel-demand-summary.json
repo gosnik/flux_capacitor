@@ -1,0 +1,296 @@
+{
+  "schema": 1,
+  "date": "2026-09-07",
+  "experiments": [
+    "V34",
+    "V35",
+    "V36"
+  ],
+  "revision_before": "e9cebf0",
+  "kernel_commit": "94aa691",
+  "default_policy": {
+    "local_channel_occupancy": false,
+    "shared_channel_copper": false,
+    "centerline_channel_cuts": false,
+    "max_bundle_search_states": 100000
+  },
+  "tier0": [
+    {
+      "label": "control",
+      "history_file": "reports/benchmark_history/2026-09-07-shared-demand-baseline-tier0-raw.json",
+      "run": "build/tier0-shared-demand-baseline-v34-20260907",
+      "created_utc": "2026-09-06T19:05:16.077791+00:00",
+      "executable": {
+        "path": "/home/adam/qtbits/flux_capacitor/build/shared-demand-v34-control-tSq8UJ/flux-cli",
+        "sha256": "29acafec46b1568259790c6523eeed9867b7d9c705deadf2bbfbf365d0a1dbfc"
+      },
+      "qualified": true,
+      "global_seconds": 60.86547180300113,
+      "detail_seconds": 130.77139779701247,
+      "paths": 50,
+      "routed_nets": 20,
+      "unrouted_nets": 0,
+      "sampled_overflow": 0,
+      "corridor_overflow": 0,
+      "clearance_shadow_overflow": 0,
+      "detail": {
+        "complete": true,
+        "open_connections": 0,
+        "added_tracks": 82,
+        "added_track_arcs": 152,
+        "added_vias": 4,
+        "unrounded_non_junction_bends": 0
+      }
+    },
+    {
+      "label": "shared",
+      "history_file": "reports/benchmark_history/2026-09-07-shared-demand-tier0-raw.json",
+      "run": "build/tier0-shared-demand-v34-20260907",
+      "created_utc": "2026-09-06T19:16:30.677344+00:00",
+      "executable": {
+        "path": "/home/adam/qtbits/flux_capacitor/build/release/flux-cli",
+        "sha256": "83abd09910d8afbeafc526c34de96a8df29cd5462237ec098d06c4daca480d2c"
+      },
+      "qualified": true,
+      "global_seconds": 60.90909370398731,
+      "detail_seconds": 134.35510271901148,
+      "paths": 50,
+      "routed_nets": 20,
+      "unrouted_nets": 0,
+      "sampled_overflow": 0,
+      "corridor_overflow": 0,
+      "clearance_shadow_overflow": 0,
+      "detail": {
+        "complete": true,
+        "open_connections": 0,
+        "added_tracks": 82,
+        "added_track_arcs": 152,
+        "added_vias": 4,
+        "unrounded_non_junction_bends": 0
+      }
+    },
+    {
+      "label": "cuts",
+      "history_file": "reports/benchmark_history/2026-09-07-cut-demand-tier0-raw.json",
+      "run": "build/tier0-cut-demand-v35-20260907",
+      "created_utc": "2026-09-06T19:26:18.293830+00:00",
+      "executable": {
+        "path": "/home/adam/qtbits/flux_capacitor/build/release/flux-cli",
+        "sha256": "ddc0efd0f59675427b3a695d87219a11f21a37e32cb8107b9a68a432a880415f"
+      },
+      "qualified": true,
+      "global_seconds": 62.4098055800132,
+      "detail_seconds": 133.55888691198197,
+      "paths": 50,
+      "routed_nets": 20,
+      "unrouted_nets": 0,
+      "sampled_overflow": 0,
+      "corridor_overflow": 0,
+      "clearance_shadow_overflow": 0,
+      "detail": {
+        "complete": true,
+        "open_connections": 0,
+        "added_tracks": 82,
+        "added_track_arcs": 152,
+        "added_vias": 4,
+        "unrounded_non_junction_bends": 0
+      }
+    },
+    {
+      "label": "default_recheck",
+      "history_file": "reports/benchmark_history/2026-09-07-cut-demand-default-tier0-raw.json",
+      "run": "build/tier0-cut-demand-default-v35-20260907",
+      "created_utc": "2026-09-06T19:35:58.072747+00:00",
+      "executable": {
+        "path": "/home/adam/qtbits/flux_capacitor/build/release/flux-cli",
+        "sha256": "ddc0efd0f59675427b3a695d87219a11f21a37e32cb8107b9a68a432a880415f"
+      },
+      "qualified": true,
+      "global_seconds": 71.81148806298734,
+      "detail_seconds": 133.10752218900598,
+      "paths": 50,
+      "routed_nets": 20,
+      "unrouted_nets": 0,
+      "sampled_overflow": 0,
+      "corridor_overflow": 0,
+      "clearance_shadow_overflow": 0,
+      "detail": {
+        "complete": true,
+        "open_connections": 0,
+        "added_tracks": 82,
+        "added_track_arcs": 152,
+        "added_vias": 4,
+        "unrounded_non_junction_bends": 0
+      }
+    },
+    {
+      "label": "bounded_cuts",
+      "history_file": "reports/benchmark_history/2026-09-07-bundle-budget-tier0-raw.json",
+      "run": "build/tier0-bundle-budget-v36-20260907",
+      "created_utc": "2026-09-06T19:40:28.235067+00:00",
+      "executable": {
+        "path": "/home/adam/qtbits/flux_capacitor/build/bundle-budget-v36-bin-HlQyvX/flux-cli",
+        "sha256": "b065bfcfcb6914bd9f66fed3a35b6e85012380b2d68f8b7e14a41c9092e7f996"
+      },
+      "qualified": true,
+      "global_seconds": 61.311602304980624,
+      "detail_seconds": 143.21719339099946,
+      "paths": 50,
+      "routed_nets": 20,
+      "unrouted_nets": 0,
+      "sampled_overflow": 0,
+      "corridor_overflow": 0,
+      "clearance_shadow_overflow": 0,
+      "detail": {
+        "complete": true,
+        "open_connections": 0,
+        "added_tracks": 82,
+        "added_track_arcs": 152,
+        "added_vias": 4,
+        "unrounded_non_junction_bends": 0
+      }
+    }
+  ],
+  "tier0_copper": {
+    "sha256": "2e0197607f1b02982a4e66fe58527c86b87f8b8f600ade47041d8bfb09e51cf7",
+    "source_project_sha256": "ddbcc3d30ca8a4e88f38be0bb5a12f4f29f67048bd503d3e77b2e615196bab8a",
+    "external_kicad_drc_violations": 0,
+    "route_length_mm": 407.95254076405774,
+    "route_length_provenance": "V30 native-arc measurement; identical accepted PCB hash"
+  },
+  "tier1": {
+    "status": "unresolved",
+    "v34": {
+      "timeout_s": 600,
+      "first_window": {
+        "active_group": "regional-window-portfolio:0",
+        "monotonic_time_us": 333748316,
+        "message": "regional window portfolio: templates=164, alternatives=111, topology_classes=110, terminal_templates=16, via_templates=113, complete_states=0, active=0, reserve=0, bundle_states=8, bundle_search_us=41539, generated_choices=0, forward_capacity_rejected=0, forward_via_identity_rejected=0, access_pruned=0, access_exhaustions=0, forward_wipeouts=0, run_layer_pruned=0, coupled_pruned=0, late_access_rejected=0, late_coupled_rejected=0, packing_rejected=0, phase=ordinary, stop=2"
+      },
+      "history": "reports/benchmark_history/2026-09-07-shared-demand-tier1-raw.json"
+    },
+    "v35": {
+      "timeout_s": 600,
+      "first_window": {
+        "active_group": "regional-window-portfolio:0",
+        "monotonic_time_us": 508502163,
+        "message": "regional window portfolio: templates=164, alternatives=111, topology_classes=110, terminal_templates=16, via_templates=113, complete_states=584, active=8, reserve=512, bundle_states=100000, bundle_search_us=26306690, generated_choices=91114, forward_capacity_rejected=0, forward_via_identity_rejected=0, access_pruned=1, access_exhaustions=0, forward_wipeouts=0, run_layer_pruned=0, coupled_pruned=0, late_access_rejected=0, late_coupled_rejected=0, packing_rejected=0, phase=ordinary, stop=0"
+      },
+      "history": "reports/benchmark_history/2026-09-07-cut-demand-tier1-raw.json",
+      "native_replay": "reports/benchmark_history/2026-09-07-cut-demand-native-replay.json",
+      "first_window_total_selection_seconds": 131.273897,
+      "ordinary_portfolios_complete_seconds": 579.791844,
+      "windows_reaching_continuous_routing": 4
+    },
+    "v36": {
+      "status": "timeout_without_final_copper",
+      "timeout_s": 600,
+      "bundle_states": 4096,
+      "first_window": {
+        "monotonic_time_us": 370281293,
+        "group": "regional-window-portfolio:0",
+        "metrics": {
+          "templates": 164,
+          "alternatives": 111,
+          "topology_classes": 110,
+          "terminal_templates": 16,
+          "via_templates": 113,
+          "complete_states": 584,
+          "active": 8,
+          "reserve": 512,
+          "bundle_states": 4096,
+          "bundle_search_us": 1065157,
+          "generated_choices": 3686,
+          "forward_capacity_rejected": 0,
+          "forward_via_identity_rejected": 0,
+          "access_pruned": 1,
+          "access_exhaustions": 0,
+          "forward_wipeouts": 0,
+          "run_layer_pruned": 0,
+          "coupled_pruned": 0,
+          "late_access_rejected": 0,
+          "late_coupled_rejected": 0,
+          "packing_rejected": 0,
+          "phase": "ordinary",
+          "stop": 0
+        }
+      },
+      "history": "reports/benchmark_history/2026-09-07-bundle-budget-tier1-raw.json",
+      "frozen_cli": "build/bundle-budget-v36-bin-HlQyvX/flux-cli",
+      "cli_sha256": "b065bfcfcb6914bd9f66fed3a35b6e85012380b2d68f8b7e14a41c9092e7f996",
+      "first_window_total_selection_seconds": 5.288682,
+      "ordinary_portfolios_complete_seconds": 373.168714,
+      "windows_reaching_continuous_routing": 22,
+      "first_window_completed_candidate_seconds": [
+        58.254969,
+        53.136944,
+        50.68093,
+        45.577413
+      ],
+      "individual_native_legal_routes": [
+        2,
+        2,
+        1,
+        2
+      ],
+      "reported_native_route_entries": [
+        27,
+        29,
+        26,
+        27
+      ],
+      "qualification": false,
+      "external_kicad_drc": null
+    }
+  },
+  "verification": {
+    "core_tests": "43/43",
+    "isolated_kernel": "passed, including independent staged HEAD snapshot",
+    "v35_ctest": {
+      "passed": 126,
+      "total": 133,
+      "seconds": 37.68,
+      "known_failures": [
+        "flux_cli_direct_medial_route_demo",
+        "flux_cli_incremental_route_demo",
+        "flux_cli_strict_medial_detail_demo",
+        "flux_cli_incremental_detail_demo",
+        "flux_cli_optimize_demo",
+        "flux_cli_optimize_demo_pareto",
+        "flux_cli_group_optimize_demo"
+      ],
+      "excluded": "Known constrained_refine_kicad_export timeout and dependent constrained_exported_drc; corpus and core run separately."
+    },
+    "project_rule_tests": "7/7",
+    "history_tests": "4/4",
+    "v36_ctest": {
+      "passed": 129,
+      "total": 136,
+      "seconds": 37.87,
+      "known_failures": [
+        "flux_cli_direct_medial_route_demo",
+        "flux_cli_incremental_route_demo",
+        "flux_cli_strict_medial_detail_demo",
+        "flux_cli_incremental_detail_demo",
+        "flux_cli_optimize_demo",
+        "flux_cli_optimize_demo_pareto",
+        "flux_cli_group_optimize_demo"
+      ],
+      "excluded": "Known constrained_refine_kicad_export timeout and dependent constrained_exported_drc; corpus and core run separately."
+    },
+    "final_demand_and_cli_checks": "10/10"
+  },
+  "limitations": [
+    "No final Tier-1 copper export or KiCad DRC acceptance.",
+    "Tier-1 routing/repair DRC counts are diagnostic, not qualification.",
+    "No higher tier promoted.",
+    "Peak RSS is not captured by the existing runner; occasional process RSS is not treated as peak memory."
+  ],
+  "decisions": {
+    "V34": "Keep opt-in exact identity; insufficient alone.",
+    "V35": "Keep opt-in cut model; fixes measured false rejection but full-budget enumeration is too costly.",
+    "V36": "Keep explicit existing-budget override; greatly earlier physical repair, no final Tier-1 completion yet.",
+    "defaults": "Unchanged; no promotion of experimental configuration.",
+    "next": "Trace first-window candidate geometry, corridor/boundary constraints and source-relative lane-order preservation before more tuning."
+  }
+}

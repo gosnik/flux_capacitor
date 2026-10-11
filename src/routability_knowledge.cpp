@@ -1,3 +1,4 @@
+#include "flux/core/bezier_copper.hpp"
 #include "flux/core/routability_knowledge.hpp"
 
 #include "flux/core/detailed_router.hpp"
@@ -191,6 +192,8 @@ std::string_view to_string(RoutabilityFailureKind kind) {
   switch (kind) {
   case RoutabilityFailureKind::packing_capacity_exceeded:
     return "packing_capacity_exceeded";
+  case RoutabilityFailureKind::packing_unresolved:
+    return "packing_unresolved";
   case RoutabilityFailureKind::terminal_escape_ordering:
     return "terminal_escape_ordering";
   case RoutabilityFailureKind::via_site_exhausted:
@@ -266,7 +269,8 @@ std::vector<RoutabilityDiagnosis> probe_global_routability(const GlobalRouteResu
             "", conflict.first.layer, bounds, {conflict.first_net, conflict.second_net}},
         clearance_severity(conflict.clearance_deficit, config), conflict.clearance_deficit, 2U, 1U,
         RoutabilityRelaxation::change_corridor,
-        "selected copper envelopes overlap despite sampled-resource compatibility", false});
+        "selected copper envelopes overlap despite sampled-resource compatibility", false,
+        config.clearance_shadows_contribute_to_history});
   }
   for (const auto& resource : global.resource_usage) {
     if (!resource.congested()) {
@@ -398,6 +402,22 @@ std::vector<RoutabilityDiagnosis> probe_global_routability(const GlobalRouteResu
                          : "global connection search exhausted its legal topology",
         false});
   }
+  for (const auto& obligation : global.unresolved_corridor_packing) {
+    const auto& witness = obligation.witness;
+    auto bounds = segment_bounds(witness.first.position, witness.second.position);
+    if (witness.shadow_owner_first)
+      bounds = union_bounds(bounds, point_bounds(witness.shadow_owner_first->position));
+    if (witness.shadow_owner_second)
+      bounds = union_bounds(bounds, point_bounds(witness.shadow_owner_second->position));
+    builder.add(RoutabilityDiagnosis{
+        RoutabilityFailureKind::packing_unresolved, RoutabilityFailureStage::global_probe,
+        RoutabilityResourceReference{
+            "packing-unresolved:" + std::to_string(obligation.neck_down) + ":" +
+                std::to_string(obligation.corridor_id), witness.first.layer, bounds,
+            {witness.first_net, witness.second_net}},
+        1U, {}, {}, {}, RoutabilityRelaxation::change_lane_order,
+        "shared corridor capacity has no physical packing proof", false, false});
+  }
   return builder.finish();
 }
 
@@ -439,18 +459,37 @@ diagnose_regional_routability(const RegionalRouteResult& regional,
     if (window == nullptr) {
       continue;
     }
+    // A frozen blocker is deliberately outside window ownership. Window-wide summaries
+    // alone therefore omit precisely the net that a failed shove needs to rip up next.
+    // Carry retained exact pairs upstream even when local scope retries are deferred.
+    for (const auto& conflict : assignment.frozen_copper_conflicts) {
+      auto diagnosis = regional_diagnosis(
+          *window, RoutabilityFailureKind::shove_deadlock,
+          RoutabilityFailureStage::local_pns, RoutabilityRelaxation::change_corridor,
+          clearance_severity(conflict.clearance_deficit, config),
+          "native regional repair blocked by outside copper: " + conflict.code);
+      diagnosis.resource.layer = conflict.layer;
+      diagnosis.resource.nets = {conflict.candidate.net, conflict.blocker.net};
+      diagnosis.clearance_deficit = conflict.clearance_deficit;
+      builder.add(std::move(diagnosis));
+    }
     for (const auto& blocker : assignment.partial_access_blockers) {
       const auto via = blocker.kind == RegionalAccessBlockerKind::via_pair;
-      builder.add(
-          regional_diagnosis(*window,
-                             via ? RoutabilityFailureKind::via_site_exhausted
-                                 : RoutabilityFailureKind::layer_transition_conflict,
-                             RoutabilityFailureStage::regional_discrete,
-                             via ? RoutabilityRelaxation::change_via_site
-                                 : RoutabilityRelaxation::change_layer_sequence,
-                             blocker.observations,
-                             via ? "joint access assignment exhausted compatible via pairs"
-                                 : "terminal and via run-up choices are mutually incompatible"));
+      auto diagnosis = regional_diagnosis(
+          *window,
+          via ? RoutabilityFailureKind::via_site_exhausted
+              : RoutabilityFailureKind::layer_transition_conflict,
+          RoutabilityFailureStage::regional_discrete,
+          via ? RoutabilityRelaxation::change_via_site
+              : RoutabilityRelaxation::change_layer_sequence,
+          blocker.observations,
+          via ? "joint access assignment exhausted compatible via pairs"
+              : "terminal and via run-up choices are mutually incompatible");
+      // These are aggregate CSP observations, not localized copper/via conflicts. Keep their
+      // diagnostics for telemetry and affected-cone selection, but do not turn search breadth
+      // into a physical cost field.
+      diagnosis.contributes_to_history = false;
+      builder.add(std::move(diagnosis));
     }
     switch (assignment.stop_reason) {
     case RegionalBundleStopReason::complete:
@@ -461,12 +500,21 @@ diagnose_regional_routability(const RegionalRouteResult& regional,
                                      RoutabilityRelaxation::change_corridor, 1U,
                                      "no complete corridor topology exists for the window"));
       break;
-    case RegionalBundleStopReason::no_fitting_lane_order:
-      builder.add(regional_diagnosis(
+    case RegionalBundleStopReason::no_fitting_lane_order: {
+      auto diagnosis = regional_diagnosis(
           *window, RoutabilityFailureKind::packing_capacity_exceeded,
           RoutabilityFailureStage::regional_discrete, RoutabilityRelaxation::change_lane_order,
           std::max<std::uint64_t>(1U, assignment.packing_rejected_states),
-          "no retained lane ordering fits every selected cross section"));
+          "no retained lane ordering fits every selected cross section");
+      diagnosis.contributes_to_history = false;
+      builder.add(std::move(diagnosis));
+      break;
+    }
+    case RegionalBundleStopReason::candidate_preflight_infeasible:
+      builder.add(regional_diagnosis(*window, RoutabilityFailureKind::packing_capacity_exceeded,
+                                     RoutabilityFailureStage::regional_discrete,
+                                     RoutabilityRelaxation::change_corridor, 1U,
+                                     "immutable regional candidate preflight certificate failed"));
       break;
     case RegionalBundleStopReason::window_ineligible:
       builder.add(regional_diagnosis(*window, RoutabilityFailureKind::topological_trap,
@@ -474,14 +522,24 @@ diagnose_regional_routability(const RegionalRouteResult& regional,
                                      RoutabilityRelaxation::replan_global_topology, 1U,
                                      "regional window violates its bounded decomposition policy"));
       break;
-    case RegionalBundleStopReason::state_budget_exhausted:
-      builder.add(regional_diagnosis(
+    case RegionalBundleStopReason::state_budget_exhausted: {
+      auto diagnosis = regional_diagnosis(
           *window, RoutabilityFailureKind::packing_capacity_exceeded,
           RoutabilityFailureStage::regional_discrete, RoutabilityRelaxation::change_corridor,
           std::max<std::uint64_t>(1U, assignment.packing_rejected_states),
-          "bounded joint bundle/lane search exhausted before finding a complete state"));
+          "bounded joint bundle/lane search exhausted before finding a complete state");
+      diagnosis.contributes_to_history = false;
+      builder.add(std::move(diagnosis));
       break;
+    }
     case RegionalBundleStopReason::spline_realization_failed: {
+      // Straight transactions deliberately have no PH topology/shape/PNS certificates. Their
+      // exact scene and connectivity witnesses were added above; interpreting absent PH flags
+      // as failed spline optimization would invent unrelated traps and poison routing history.
+      if ((regional.configured.enable_straight_realization &&
+           !regional.configured.enable_spline_realization) ||
+          std::any_of(assignment.spline_realizations.begin(), assignment.spline_realizations.end(),
+                      [](const auto& route) { return route.straight_realization; })) break;
       const auto topology = static_cast<std::uint64_t>(std::count_if(
           assignment.spline_realizations.begin(), assignment.spline_realizations.end(),
           [](const auto& realization) { return !realization.topology_legal; }));
@@ -570,6 +628,12 @@ diagnose_detailed_routability(const DetailedRouteResult& detailed,
           add(arc.start, arc.layer, arc.net);
           add(arc.middle, arc.layer, arc.net);
           add(arc.end, arc.layer, arc.net);
+        }
+      }
+      for (const auto& curve : detailed.candidate->track_beziers) {
+        if (selected(curve.id, curve.net)) {
+          for (const auto p : {curve.start, curve.control1, curve.control2, curve.end})
+            add(p, curve.layer, curve.net);
         }
       }
       for (const auto& via : detailed.candidate->vias) {
@@ -795,6 +859,12 @@ void accumulate_clean_copper_knowledge(RoutabilityKnowledge& knowledge,
       continue;
     add(arc.layer, arc.net, arc.start, arc.middle);
     add(arc.layer, arc.net, arc.middle, arc.end);
+  }
+  for (const auto& curve : detailed.candidate->track_beziers) {
+    if (rejected_objects.contains(curve.id.value())) continue;
+    const auto flat = tessellate_track_bezier(curve);
+    if (!flat.certified) continue;
+    for (const auto& piece : flat.segments) add(curve.layer, curve.net, piece.start, piece.end);
   }
   std::sort(knowledge.success_history.begin(), knowledge.success_history.end(),
             [](const auto& lhs, const auto& rhs) {

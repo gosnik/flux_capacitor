@@ -1,0 +1,137 @@
+#version 450
+
+// Terrain field passes.  Flow uses uint atomics: with a strict downhill D8 graph each cell's
+// contributing area is <= cell count, so pointer doubling is exact and needs no float atomics.
+layout(local_size_x = 128) in;
+layout(std430, binding = 0) readonly buffer Walkable { uint walkable[]; };
+layout(std430, binding = 1) buffer HeightA { float height_a[]; };
+layout(std430, binding = 2) buffer HeightB { float height_b[]; };
+layout(std430, binding = 3) buffer Downstream { uint downstream[]; };
+layout(std430, binding = 4) buffer FlowA { uint flow_a[]; };
+layout(std430, binding = 5) buffer FlowB { uint flow_b[]; };
+layout(std430, binding = 6) buffer JumpA { uint jump_a[]; };
+layout(std430, binding = 7) buffer JumpB { uint jump_b[]; };
+layout(std430, binding = 8) buffer Slope { float slope[]; };
+layout(std430, binding = 9) buffer Capacity { float capacity[]; };
+layout(std430, binding = 10) buffer Divergence { float divergence[]; };
+layout(push_constant) uniform Push {
+  uint width, height, mode, height_a, flow_a, jump_a;
+  float capacity_scale, erosion_rate, deposition_rate, maximum_height_change;
+}
+push;
+
+const uint invalid = 0xffffffffu;
+const float epsilon = 1e-12;
+float read_height(uint i) { return push.height_a != 0u ? height_a[i] : height_b[i]; }
+uint read_flow(uint i) { return push.flow_a != 0u ? flow_a[i] : flow_b[i]; }
+uint read_jump(uint i) { return push.jump_a != 0u ? jump_a[i] : jump_b[i]; }
+bool legal_diag(uint x, uint y, int nx, int ny) {
+  if (int(x) == nx || int(y) == ny)
+    return true;
+  return walkable[y * push.width + uint(nx)] != 0u && walkable[uint(ny) * push.width + x] != 0u;
+}
+void main() {
+  uint i = gl_GlobalInvocationID.x, count = push.width * push.height;
+  if (i >= count)
+    return;
+  if (push.mode == 0u) { // downstream and slope
+    if (walkable[i] == 0u) {
+      downstream[i] = invalid;
+      slope[i] = 0.0;
+      return;
+    }
+    uint x = i % push.width, y = i / push.width, best_i = invalid;
+    float best = 0.0, h = read_height(i);
+    for (int dy = -1; dy <= 1; ++dy)
+      for (int dx = -1; dx <= 1; ++dx) {
+        if (dx == 0 && dy == 0)
+          continue;
+        int nx = int(x) + dx, ny = int(y) + dy;
+        if (nx < 0 || ny < 0 || nx >= int(push.width) || ny >= int(push.height) ||
+            !legal_diag(x, y, nx, ny))
+          continue;
+        uint n = uint(ny) * push.width + uint(nx);
+        if (walkable[n] == 0u)
+          continue;
+        float gradient = (h - read_height(n)) / ((dx != 0 && dy != 0) ? 1.41421356237 : 1.0);
+        if (gradient > best + epsilon ||
+            (abs(gradient - best) <= epsilon && gradient > epsilon && n < best_i)) {
+          best = gradient;
+          best_i = n;
+        }
+      }
+    downstream[i] = best_i;
+    slope[i] = best;
+  } else if (push.mode == 1u) { // immutable-source output initialization
+    uint f = walkable[i] == 0u ? 0u : read_flow(i);
+    if (push.flow_a != 0u)
+      flow_b[i] = f;
+    else
+      flow_a[i] = f;
+  } else if (push.mode == 2u) { // scatter ancestor partial sums and double the jump pointer
+    uint j = read_jump(i);
+    if (j != invalid) {
+      if (push.flow_a != 0u)
+        atomicAdd(flow_b[j], read_flow(i));
+      else
+        atomicAdd(flow_a[j], read_flow(i));
+    }
+    uint next = j == invalid ? invalid : read_jump(j);
+    if (push.jump_a != 0u)
+      jump_b[i] = next;
+    else
+      jump_a[i] = next;
+  } else if (push.mode == 4u) {
+    if (walkable[i] == 0u) {
+      capacity[i] = 0.0;
+      return;
+    }
+    float s = slope[i], sin_s = s / sqrt(1.0 + s * s);
+    capacity[i] =
+        push.capacity_scale * pow(max(1.0, float(read_flow(i))), 1.6) * pow(max(0.0, sin_s), 1.3);
+  } else if (push.mode == 5u) { // exact gather avoids floating atomics
+    if (walkable[i] == 0u) {
+      divergence[i] = 0.0;
+      return;
+    }
+    uint x = i % push.width, y = i / push.width;
+    float value = downstream[i] == invalid ? 0.0 : capacity[i];
+    for (int dy = -1; dy <= 1; ++dy)
+      for (int dx = -1; dx <= 1; ++dx) {
+        if (dx == 0 && dy == 0)
+          continue;
+        int nx = int(x) + dx, ny = int(y) + dy;
+        if (nx < 0 || ny < 0 || nx >= int(push.width) || ny >= int(push.height))
+          continue;
+        uint n = uint(ny) * push.width + uint(nx);
+        if (downstream[n] == i)
+          value -= capacity[n];
+      }
+    divergence[i] = value;
+  } else if (push.mode == 6u) {
+    if (walkable[i] == 0u) {
+      if (push.height_a != 0u)
+        height_b[i] = height_a[i];
+      else
+        height_a[i] = height_b[i];
+      return;
+    }
+    float d = divergence[i], delta = d > 0.0 ? -d * push.erosion_rate : -d * push.deposition_rate;
+    float next = max(0.0, read_height(i) + clamp(delta, -push.maximum_height_change,
+                                                 push.maximum_height_change));
+    if (push.height_a != 0u)
+      height_b[i] = next;
+    else
+      height_a[i] = next;
+  } else if (push.mode == 7u) { // F0=1 and J0=downstream, entirely device resident
+    uint f = walkable[i] == 0u ? 0u : 1u;
+    if (push.flow_a != 0u)
+      flow_a[i] = f;
+    else
+      flow_b[i] = f;
+    if (push.jump_a != 0u)
+      jump_a[i] = downstream[i];
+    else
+      jump_b[i] = downstream[i];
+  }
+}

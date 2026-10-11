@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "status": "verified checkpoint",
+  "algorithm": "Verified V69 bounded coupled physical portfolio selection; default exact-check budget remains0. Rejected V70 scheduling reverted.",
+  "baseline": "build/physical-selection-20261008/source-before",
+  "patch": "reports/benchmark_history/2026-10-08-retained-routing-fixes.patch",
+  "algorithm_benchmark": "reports/benchmark_history/2026-10-08-physical-selection.json",
+  "rejected_experiment": "reports/benchmark_history/2026-10-08-early-physical-feedback.json",
+  "source_hashes": {
+    "src/regional_router.cpp": "d899931132d8f69c8a15fcdc7dc4d225c96c284194429aff3d9b2923159f7a8f",
+    "include/flux/core/regional_router.hpp": "98d3f630d436f7d5afc6af7de98daae4aec680068835232d6e7811ab43e35df0",
+    "apps/flux-cli/main.cpp": "dc162ea5c2d31f9716aeb64c47363614150c5300b8d1bdb9f5336bedd429b524",
+    "tests/unit/core_tests.cpp": "aaf1781c659b8c81af0128d61ba061e6dfdd44ab30d21e4f62d14252656f96ee"
+  },
+  "validation": {
+    "release_build": "PASS",
+    "core": "54/54 PASS; restored test source explicitly rebuilt",
+    "auxiliary_ctest": "12/12 PASS",
+    "tier0": "50 paths; external KiCad DRC PASS"
+  },
+  "binary_sha256": "59e5a41e23fb26ebe94dfc5fef7d17122a37e512759a476a852bcf8cabcda319",
+  "verified_source_snapshot": "build/final-routing-fixes-20261008/verified-source"
+}

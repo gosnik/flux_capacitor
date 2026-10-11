@@ -1,0 +1,60 @@
+{
+  "schema": 1,
+  "experiment": "in-batch-frozen-scope-escalation",
+  "decision": "revert",
+  "runs": [
+    {
+      "binary_sha256": "888fc4c9ec12aa82bc2e7a19b0d73202f32fe5ed0fbbb7a5a3123e1358298995",
+      "board": "pt2399_delay",
+      "tier": 0,
+      "status": "failed",
+      "artifact": "build/tier0-in-batch-scope-v6-20260906",
+      "opens": 0,
+      "unrounded_non_junction_bends": 30,
+      "kicad_drc": "not_evaluated"
+    },
+    {
+      "binary_sha256": "c66f2ba805331ff99e3ae4b465f855942b3fb8ffc057daf724268d06e7243dc1",
+      "board": "pt2399_delay",
+      "tier": 0,
+      "status": "failed",
+      "artifact": "build/tier0-in-batch-scope-v7-20260906",
+      "opens": 0,
+      "unrounded_non_junction_bends": 30,
+      "kicad_drc": "not_evaluated"
+    },
+    {
+      "binary_sha256": "8a9fe2a85287c313e07a52155073e49ca019ea6130d71231c4bdd8ed14a84f01",
+      "board": "pt2399_delay",
+      "tier": 0,
+      "status": "passed",
+      "artifact": "build/tier0-in-batch-scope-v8-20260906",
+      "tracks": 75,
+      "arcs": 299,
+      "vias": 5,
+      "opens": 0,
+      "internal_violations": 0,
+      "kicad_drc_violations": 0,
+      "output_sha256": "459bffc8258348a89eafcc275a35decdfc59e8afb1278b0731a58e0fd9df35ac"
+    },
+    {
+      "binary_sha256": "8a9fe2a85287c313e07a52155073e49ca019ea6130d71231c4bdd8ed14a84f01",
+      "board": "bm_svf",
+      "tier": 1,
+      "status": "interrupted_diagnostic",
+      "artifact": "build/tier1-in-batch-scope-v8-20260906",
+      "elapsed_seconds": 980,
+      "reason": "Known no-op after transient witnesses were discarded by ordinary reduction."
+    },
+    {
+      "binary_sha256": "001991b9460d4b17024003811958dde687a698b9ac9817233fbdbcda3f80c383",
+      "board": "bm_svf",
+      "tier": 1,
+      "status": "diagnostic_timeout",
+      "artifact": "build/tier1-in-batch-scope-v9-20260906",
+      "timeout_seconds": 1200,
+      "scope_escalations": 0,
+      "final_kicad_drc": "not_evaluated"
+    }
+  ]
+}

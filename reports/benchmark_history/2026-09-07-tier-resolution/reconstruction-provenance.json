@@ -1,0 +1,11 @@
+{
+  "authoritative": false,
+  "source_fragment_match": 490,
+  "source_fragment_count": 490,
+  "source_snapshot_sequence": 1112,
+  "assembly": "emitted complete multilayer plans; source-fragment splices for remaining single-layer paths",
+  "must_reproduce": {
+    "drc_violations": 796,
+    "opens": 2
+  }
+}

@@ -1,0 +1,48 @@
+{
+  "kind": "viewer_observability_validation",
+  "date_utc": "2026-10-09T11:21:17.049431+00:00",
+  "git_revision": "94aa691ad89576d1c0ac07a5346020da21fc9d06",
+  "working_tree_dirty": true,
+  "changes": [
+    "active regional window overlay with explicit lifecycle and replay",
+    "phase heartbeat and bounded provisional geometry",
+    "structured metrics and bounded logged numeric diagnostics",
+    "bounded live history, current state, queues, replay loading, and heatmap drawing"
+  ],
+  "validation": {
+    "dev_cli_build": "passed",
+    "viewer_build": "passed",
+    "core_tests": {
+      "passed": 64,
+      "total": 64
+    },
+    "telemetry_viewer_tests": "passed",
+    "telemetry_live_client_tests": "passed",
+    "routing_kernel_tests": "passed",
+    "diff_check": "passed"
+  },
+  "retention_budgets": {
+    "history_event_count": 4096,
+    "history_event_payload_bytes": 67108864,
+    "geometry_bytes_per_reduced_state": 134217728,
+    "viewer_pending_event_bytes": 33554432,
+    "wire_message_bytes": 8388608,
+    "replay_retained_event_bytes": 134217728,
+    "hydraulic_draw_cells_total": 65536
+  },
+  "limitations": [
+    "Budgets are conservative payload estimates, not one aggregate process RSS limit.",
+    "Oversized replay inputs are rejected while full on-disk recordings remain available.",
+    "Region and new phase telemetry require a newly started router process."
+  ],
+  "live_run": {
+    "router_pid": 2972708,
+    "router_restarted": false,
+    "artifacts": "build/tier1-terrain-telemetry-20261009T104445Z",
+    "replacement_viewer_pid": 3030362,
+    "websocket_connected": true,
+    "previous_viewer_rss_kib": 3990960,
+    "replacement_viewer_initial_rss_kib": 132648,
+    "rss_note": "Startup comparison, not a long-duration memory measurement."
+  }
+}

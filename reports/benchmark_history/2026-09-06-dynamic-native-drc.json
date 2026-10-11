@@ -1,0 +1,89 @@
+{
+  "schema": 1,
+  "experiment": "exact-dynamic-regional-native-drc",
+  "hypothesis": "Selecting only generated regional tracks, arcs and vias for exact DRC should preserve proposal legality while avoiding immutable source-only checks.",
+  "binary": {
+    "path": "build/dynamic-via-drc-v13-bin/flux-cli",
+    "sha256": "d7cac3c319c9f4fc654228b791aae6fdda181b15ac74d7dc6c36d7c8350e15df"
+  },
+  "runs": [
+    {
+      "board": "pt2399_delay",
+      "tier": 0,
+      "artifact": "build/tier0-dynamic-via-drc-v13-20260906",
+      "status": "passed",
+      "paths": 50,
+      "tracks": 75,
+      "arcs": 299,
+      "vias": 5,
+      "opens": 0,
+      "internal_copper_violations": 0,
+      "external_kicad_drc_violations": 0,
+      "output_sha256": "459bffc8258348a89eafcc275a35decdfc59e8afb1278b0731a58e0fd9df35ac",
+      "output_matches_v5_v8_v10_v11": true,
+      "native_windows_checked": 5,
+      "native_pieces_checked": 299,
+      "native_copper_violations": 29,
+      "native_legal_windows": 3,
+      "global_duration_seconds": 298.8197924650012,
+      "detailed_duration_seconds": 400.0666721180023,
+      "failed_native_contexts_global": 46,
+      "bounded_drc_total_seconds_global": 1.620,
+      "bounded_drc_median_milliseconds_global": 35.672,
+      "bounded_drc_max_milliseconds_global": 41.861,
+      "failed_native_contexts_detailed": 46,
+      "bounded_drc_total_seconds_detailed": 1.485,
+      "bounded_drc_median_milliseconds_detailed": 33.163,
+      "bounded_drc_max_milliseconds_detailed": 37.210
+    },
+    {
+      "board": "bm_svf",
+      "tier": 1,
+      "policy": "prioritized_frozen_scope_expansion",
+      "artifact": "build/tier1-dynamic-via-drc-v13-20260906",
+      "status": "diagnostic_timeout",
+      "timeout_seconds": 1200,
+      "pre_native_checkpoints": [
+        {"epoch": 1, "violations": 764, "opens": 0},
+        {"epoch": 2, "violations": 1297, "opens": 0},
+        {"epoch": 3, "violations": 2216, "opens": 0},
+        {"epoch": 4, "windows": 25, "owned_fragments": 226, "corridors": 89, "alternatives": 649, "portfolio_ready_seconds": 698.526341}
+      ],
+      "active_tier_barrier_seconds": 1025.571425,
+      "active_tier_duration_seconds": 327.045084,
+      "fallback_windows_queued": 15,
+      "fallback_windows_promoted_before_timeout": 11,
+      "failed_native_contexts": 209,
+      "bounded_drc_total_seconds": 14.335043,
+      "bounded_drc_median_milliseconds": 33.885,
+      "bounded_drc_max_milliseconds": 319.782,
+      "final_kicad_drc": "not_evaluated"
+    }
+  ],
+  "correctness": {
+    "selected_via_bug_fixed": "check_dynamic_copper_rules now checks selected vias against non-selected tracks and arcs, symmetric with selected-track/arc versus static-via checks.",
+    "unit_fixture": "Dynamic DRC's proposal-relevant subset equals canonical whole-board DRC for both selected-track and selected-via/static-track cases while excluding unrelated static-static failures.",
+    "tier0_exact_output_preserved": true
+  },
+  "comparison": {
+    "v10_active_tier_duration_seconds": 326.343069,
+    "v11_active_tier_duration_seconds": 327.323634,
+    "v13_active_tier_duration_seconds": 327.045084
+  },
+  "interpretation": {
+    "hypothesis_result": "correctness_supported_performance_disproven",
+    "decision": "keep_selected_via_symmetry_and_bounded_proposal_drc",
+    "reason": "The exact selected-object formulation restored byte-identical Tier-0 output after fixing a real asymmetric-via API bug, but Tier-1's active realization tier remained 327 seconds. Bounded native DRC consumed only 14.3 seconds across 209 rejected candidates and about 25-36 ms on the critical candidates; it is not the 30-40 second per-candidate bottleneck.",
+    "next_experiment": "Measure candidate-local PH interpolation, XPBD, elastic/PNS shoves, trajectory polish, adaptive pair repair, quantization feedback, native fitting and DRC as separate phases on the first slow Tier-1 window."
+  },
+  "research_basis": [
+    {
+      "source": "https://vlsicad.ucsd.edu/Publications/Journals/j133.pdf",
+      "application": "TritonRoute workers query spatially bounded fixed context, modify only objects in their standard box, perform DRC in private worker state, and commit only clean results."
+    },
+    {
+      "source": "https://github.com/The-OpenROAD-Project/OpenROAD/blob/master/src/drt/README.md",
+      "application": "OpenROAD detailed routing provides the maintained integration context for the worker-local search-and-commit architecture."
+    }
+  ]
+}

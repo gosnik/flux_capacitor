@@ -1,4 +1,5 @@
 #include "flux/core/routing_compute.hpp"
+#include "flux/core/routing_kernel.hpp"
 #include "vulkan_runtime.hpp"
 
 #include <vulkan/vulkan.h>
@@ -486,49 +487,93 @@ RoutingComputeChordBatchResult
 classify_routing_chords_gpu(const std::vector<RoutingComputeSegment>& chords,
                             const std::vector<RoutingComputeSegment>& boundary_segments,
                             std::int64_t required, std::int64_t guard) {
+  // Bound both upload buffers and shader loop work. The shader evaluates one chord against all
+  // resident boundaries, so the chord count must also be constrained by the work budget.
+  constexpr std::size_t maximum_chords_per_batch = 1'024U;
+  constexpr std::size_t maximum_boundaries_per_batch = 1'024U;
+  constexpr std::size_t maximum_pair_checks_per_batch = 262'144U;
   RoutingComputeChordBatchResult result;
   if (required < 0 || guard < 0 || required > std::numeric_limits<std::uint32_t>::max() ||
       guard > std::numeric_limits<std::uint32_t>::max()) {
     result.diagnostic = "routing chord classification bounds exceed GPU range";
     return result;
   }
-  auto combined = chords;
-  combined.insert(combined.end(), boundary_segments.begin(), boundary_segments.end());
-  const auto packed = pack_geometry({}, combined);
-  if (!packed.diagnostic.empty()) {
-    result.diagnostic = packed.diagnostic;
-    return result;
-  }
-  const auto chord_words = chords.size() * 7U;
-  const auto chord_end = packed.segments.begin() + static_cast<std::ptrdiff_t>(chord_words);
-  std::vector<std::uint32_t> packed_chords(packed.segments.begin(), chord_end);
-  std::vector<std::uint32_t> packed_boundaries(chord_end, packed.segments.end());
-  Push push;
-  push.mode = 6U;
-  push.count_a = static_cast<std::uint32_t>(chords.size());
-  push.count_b = static_cast<std::uint32_t>(boundary_segments.size());
-  std::vector<std::uint32_t> raw;
-  bool final_state = false;
-  std::lock_guard lock(context_mutex());
-  if (!context().dispatch(packed_chords, packed_boundaries, {}, chords.size() * 3U, push,
-                          chords.size(), 1U, raw, final_state, result.diagnostic))
-    return result;
   result.chords.resize(chords.size());
+  std::vector<float> best_clearance(chords.size(), std::numeric_limits<float>::infinity());
+  std::vector<bool> all_chunks_clear(chords.size(), true);
+  std::vector<bool> any_intersection(chords.size(), false);
+  for (std::size_t boundary_begin = 0U; boundary_begin < boundary_segments.size();) {
+    const auto boundary_count = std::min(maximum_boundaries_per_batch,
+                                         boundary_segments.size() - boundary_begin);
+    const auto chord_count = std::min(
+        {maximum_chords_per_batch, maximum_pair_checks_per_batch / boundary_count, chords.size()});
+    for (std::size_t chord_begin = 0U; chord_begin < chords.size(); chord_begin += chord_count) {
+      const auto this_chord_count = std::min(chord_count, chords.size() - chord_begin);
+      std::vector<RoutingComputeSegment> chunk;
+      chunk.reserve(this_chord_count + boundary_count);
+      chunk.insert(chunk.end(), chords.begin() + static_cast<std::ptrdiff_t>(chord_begin),
+                   chords.begin() + static_cast<std::ptrdiff_t>(chord_begin + this_chord_count));
+      chunk.insert(chunk.end(),
+                   boundary_segments.begin() + static_cast<std::ptrdiff_t>(boundary_begin),
+                   boundary_segments.begin() + static_cast<std::ptrdiff_t>(boundary_begin + boundary_count));
+      const auto packed = pack_geometry({}, chunk);
+      if (!packed.diagnostic.empty()) {
+        result.diagnostic = packed.diagnostic;
+        return result;
+      }
+      const auto chord_words = this_chord_count * 7U;
+      const auto chord_end = packed.segments.begin() + static_cast<std::ptrdiff_t>(chord_words);
+      std::vector<std::uint32_t> packed_chords(packed.segments.begin(), chord_end);
+      std::vector<std::uint32_t> packed_boundaries(chord_end, packed.segments.end());
+      Push push;
+      push.mode = 6U;
+      push.count_a = static_cast<std::uint32_t>(this_chord_count);
+      push.count_b = static_cast<std::uint32_t>(boundary_count);
+      std::vector<std::uint32_t> raw;
+      bool final_state = false;
+      bool dispatched = false;
+      {
+        std::lock_guard lock(context_mutex());
+        dispatched = context().dispatch(packed_chords, packed_boundaries, {}, this_chord_count * 3U,
+                                        push, this_chord_count, 1U, raw, final_state,
+                                        result.diagnostic);
+      }
+      if (!dispatched)
+        return result;
+      ++result.gpu_batch_count;
+      result.gpu_work_items += this_chord_count * boundary_count;
+      for (std::size_t local_chord = 0U; local_chord < this_chord_count; ++local_chord) {
+        float clearance = 0.0F;
+        std::memcpy(&clearance, &raw[local_chord * 3U], sizeof(clearance));
+        const auto chord = chord_begin + local_chord;
+        if (clearance < best_clearance[chord]) {
+          best_clearance[chord] = clearance;
+          result.chords[chord].closest_boundary =
+              boundary_begin + raw[local_chord * 3U + 1U];
+        }
+        any_intersection[chord] = any_intersection[chord] || raw[local_chord * 3U + 2U] != 0U;
+        all_chunks_clear[chord] = all_chunks_clear[chord] && std::isfinite(clearance) &&
+                                  clearance >= static_cast<float>(required + guard);
+      }
+      const auto more_chord_batches = chord_begin + this_chord_count < chords.size();
+      const auto more_boundary_batches =
+          boundary_begin + boundary_count < boundary_segments.size();
+      if (more_chord_batches || more_boundary_batches)
+        routing_kernel_checkpoint();
+    }
+    boundary_begin += boundary_count;
+  }
   for (std::size_t chord = 0U; chord < chords.size(); ++chord) {
-    float clearance = 0.0F;
-    std::memcpy(&clearance, &raw[chord * 3U], sizeof(clearance));
     auto& assessment = result.chords[chord];
-    assessment.closest_boundary = raw[chord * 3U + 1U];
     assessment.conservative_clearance_nm =
-        std::isfinite(clearance)
-            ? static_cast<std::int64_t>(std::floor(clearance - static_cast<float>(guard)))
+        std::isfinite(best_clearance[chord])
+            ? static_cast<std::int64_t>(std::floor(best_clearance[chord] - static_cast<float>(guard)))
             : 0;
-    // Float intersection is deliberately ambiguous. Only a clearance exceeding both the caller's
-    // threshold and numeric guard can skip exact CPU boundary traversal.
-    assessment.classification =
-        raw[chord * 3U + 2U] == 0U && clearance >= static_cast<float>(required + guard)
-            ? RoutingComputeChordClass::definitely_clear
-            : RoutingComputeChordClass::ambiguous;
+    // A chunk can certify only its own resident boundaries. A chord is clear only when every
+    // chunk certifies it; any uncertain/intersecting chunk remains an exact-CPU survivor.
+    assessment.classification = !any_intersection[chord] && all_chunks_clear[chord]
+                                ? RoutingComputeChordClass::definitely_clear
+                                : RoutingComputeChordClass::ambiguous;
   }
   result.used_gpu = true;
   return result;

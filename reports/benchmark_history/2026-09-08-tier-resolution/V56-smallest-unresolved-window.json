@@ -1,0 +1,150 @@
+{
+  "access_assignment_states": 0,
+  "access_rejected": 0,
+  "bundle_states": 1,
+  "conflict_details": [
+    {
+      "deficit_nm": 250000,
+      "first_net": "kicad-net-1",
+      "id": 38,
+      "layer": "F.Cu",
+      "maximum_x_nm": 76240000,
+      "maximum_y_nm": 90040000,
+      "minimum_x_nm": 75590000,
+      "minimum_y_nm": 89390000,
+      "overlap_length_nm": 2,
+      "second_net": "kicad-net-16"
+    }
+  ],
+  "conflicts": 1,
+  "coupled_rejected": 0,
+  "failure": "none",
+  "fragment_details": [
+    {
+      "clearance_nm": 200000,
+      "connection": 7,
+      "coupled": false,
+      "end_x_nm": 75590000,
+      "end_y_nm": 91375000,
+      "explicit_width": false,
+      "fragment": 0,
+      "layer": "F.Cu",
+      "net": "kicad-net-1",
+      "owned": true,
+      "run": 2,
+      "start_x_nm": 75590000,
+      "start_y_nm": 90040000,
+      "template_count": 1,
+      "width_nm": 250000
+    },
+    {
+      "clearance_nm": 200000,
+      "connection": 0,
+      "coupled": false,
+      "end_x_nm": 76240000,
+      "end_y_nm": 90040000,
+      "explicit_width": false,
+      "fragment": 1,
+      "layer": "F.Cu",
+      "net": "kicad-net-16",
+      "owned": true,
+      "run": 0,
+      "start_x_nm": 76240000,
+      "start_y_nm": 86425000,
+      "template_count": 1,
+      "width_nm": 250000
+    }
+  ],
+  "fragments": 2,
+  "frozen_copper_conflicts": [],
+  "id": 25,
+  "joint_spline_candidate": false,
+  "nets": [
+    "kicad-net-1",
+    "kicad-net-16"
+  ],
+  "packing_rejected": 0,
+  "partial_access_assignment_states": 4,
+  "partial_access_blockers": [
+    {
+      "first_via": {
+        "choice": 4,
+        "net": "kicad-net-1",
+        "region": 4,
+        "selected_global": true,
+        "x_nm": 75590000,
+        "y_nm": 90040000
+      },
+      "kind": "via_pair",
+      "observations": 1,
+      "second_via": {
+        "choice": 67,
+        "net": "kicad-net-16",
+        "region": 64,
+        "selected_global": false,
+        "x_nm": 76490000,
+        "y_nm": 93040000
+      },
+      "terminal_choice": null
+    }
+  ],
+  "partial_access_pruned": 1,
+  "partial_terminal_via_pruned": 0,
+  "partial_via_pair_pruned": 1,
+  "selected_alternative_templates": 0,
+  "selected_residual_conflicts": 0,
+  "selected_template_conflicts": 0,
+  "spline_candidate_min_mutual_clearance_rejections": 0,
+  "spline_candidate_min_quantized_clearance_rejections": 0,
+  "spline_candidate_min_shape_rejections": 0,
+  "spline_candidate_min_topology_rejections": 0,
+  "spline_candidate_rank": 0,
+  "spline_candidate_summaries": [],
+  "spline_candidates_evaluated": 0,
+  "spline_candidates_legal": 0,
+  "spline_details": [],
+  "spline_mutual_rejected": 0,
+  "spline_quantized_rejected": 0,
+  "spline_realizations": 0,
+  "spline_shape_rejected": 0,
+  "spline_topology_rejected": 0,
+  "template_details": [
+    {
+      "avoided_conflicts": 0,
+      "channels": 1,
+      "connection": 7,
+      "exact_static_checked": false,
+      "fragment": 0,
+      "id": 0,
+      "lower_bound_length_nm": 1335000,
+      "net": "kicad-net-1",
+      "routing_layer": "F.Cu",
+      "run": 2,
+      "selected": false,
+      "selected_global_topology": true,
+      "topology_gates": 0,
+      "topology_points": 2,
+      "vias": 1
+    },
+    {
+      "avoided_conflicts": 0,
+      "channels": 1,
+      "connection": 0,
+      "exact_static_checked": false,
+      "fragment": 1,
+      "id": 1,
+      "lower_bound_length_nm": 3615000,
+      "net": "kicad-net-16",
+      "routing_layer": "F.Cu",
+      "run": 0,
+      "selected": false,
+      "selected_global_topology": true,
+      "topology_gates": 0,
+      "topology_points": 2,
+      "vias": 1
+    }
+  ],
+  "terminal_pair_rejected": 0,
+  "terminal_via_rejected": 0,
+  "via_pair_rejected": 0
+}

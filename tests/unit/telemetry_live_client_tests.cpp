@@ -106,6 +106,11 @@ int main() {
   const std::uint64_t first_generation = client.status().connection_generation;
   require(first_generation == 1U, "the initial connection must establish one live generation");
 
+  service->publish_generated_copper(second_source_board,
+                                    "Copper generated: live-client fixture");
+  require(service->state().source_boards.size() == 3U,
+          "resulting copper must be retained as a separate viewer scene");
+
   flux::RouterTelemetryEvent started;
   started.kind = flux::RouterTelemetryEventKind::routing_started;
   started.total_nets = 3;
@@ -120,12 +125,18 @@ int main() {
   iteration.unrouted_nets = 1;
   iteration.corridor_overflow = 4;
   require(service->try_emit(iteration), "the producer must accept the iteration milestone");
+  flux::RouterTelemetryEvent routing_completed;
+  routing_completed.kind = flux::RouterTelemetryEventKind::routing_completed;
+  routing_completed.detail = "Routing completed: live-client fixture";
+  require(service->try_emit(routing_completed),
+          "the producer must accept an explicit successful routing outcome");
 
   std::vector<flux::telemetry::Event> events;
   const auto event_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
   const auto received_source = [&]() {
     return std::any_of(events.begin(), events.end(), [](const auto& event) {
-      return event.type == flux::telemetry::EventType::snapshot && !event.source_boards.empty();
+      return event.type == flux::telemetry::EventType::snapshot &&
+             event.source_boards.size() == 3U;
     });
   };
   const auto received_started = [&]() {
@@ -138,7 +149,18 @@ int main() {
       return event.type == flux::telemetry::EventType::pathfinder_iteration_completed;
     });
   };
-  while (!(received_source() && received_started() && received_iteration()) &&
+  const auto received_copper = [&]() {
+    return std::any_of(events.begin(), events.end(), [](const auto& event) {
+      return event.type == flux::telemetry::EventType::copper_generated;
+    });
+  };
+  const auto received_completed = [&]() {
+    return std::any_of(events.begin(), events.end(), [](const auto& event) {
+      return event.type == flux::telemetry::EventType::routing_completed;
+    });
+  };
+  while (!(received_source() && received_started() && received_iteration() && received_copper() &&
+           received_completed()) &&
          std::chrono::steady_clock::now() < event_deadline) {
     auto received = client.drain();
     events.insert(events.end(), std::make_move_iterator(received.begin()),
@@ -147,12 +169,24 @@ int main() {
   }
 
   const auto source_snapshot = std::find_if(events.begin(), events.end(), [](const auto& event) {
-    return event.type == flux::telemetry::EventType::snapshot && !event.source_boards.empty();
+    return event.type == flux::telemetry::EventType::snapshot && event.source_boards.size() == 3U;
   });
-  require(source_snapshot != events.end() && source_snapshot->source_boards.size() == 2U &&
+  require(source_snapshot != events.end() && source_snapshot->source_boards.size() == 3U &&
               source_snapshot->source_boards.front()->path == "/tmp/live-source.kicad_pcb" &&
-              source_snapshot->source_boards.back()->path == "/tmp/live-second-source.kicad_pcb",
-          "a new live viewer must receive every immutable KiCad source scene");
+              source_snapshot->source_boards[1]->path == "/tmp/live-second-source.kicad_pcb",
+          "a new live viewer must receive every immutable KiCad source and resulting-copper "
+          "scene");
+  const auto generated_scene = std::find_if(
+      source_snapshot->source_boards.begin(), source_snapshot->source_boards.end(),
+      [](const auto& board) { return board && board->id.starts_with("generated-copper:"); });
+  require(generated_scene != source_snapshot->source_boards.end() &&
+              !(*generated_scene)->primitives.empty() &&
+              std::all_of((*generated_scene)->primitives.begin(),
+                          (*generated_scene)->primitives.end(), [](const auto& primitive) {
+                            return primitive.kind == "track" || primitive.kind == "track_arc" ||
+                                   primitive.kind == "via";
+                          }),
+          "the resulting-copper overlay must contain only exact generated tracks, arcs, and vias");
   const auto& scene = *source_snapshot->source_boards.front();
   const auto has_source_kind = [&](std::string_view kind) {
     return std::any_of(scene.primitives.begin(), scene.primitives.end(),
@@ -170,6 +204,36 @@ int main() {
   require(completed != events.end() && completed->metrics &&
               completed->metrics->corridor_overflow == 4U,
           "the live viewer must receive authoritative iteration metrics");
+  require(received_copper() && received_completed(),
+          "the viewer must receive distinct copper-generated and routing-completed milestones");
+
+  const auto drops_before = service->statistics().websocket_dropped;
+  flux::RouterTelemetryEvent oversized;
+  oversized.kind = flux::RouterTelemetryEventKind::search_summary;
+  oversized.detail.assign(flux::viewer::LiveClient::maximum_message_bytes + 1U, 'x');
+  require(service->try_emit(std::move(oversized)), "oversized transport fixture must enqueue");
+  const auto drop_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  while (service->statistics().websocket_dropped == drops_before &&
+         std::chrono::steady_clock::now() < drop_deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  require(service->statistics().websocket_dropped > drops_before,
+          "producer must count oversized payload drops before the viewer reconnects");
+  flux::RouterTelemetryEvent after_limit;
+  after_limit.kind = flux::RouterTelemetryEventKind::search_summary;
+  after_limit.detail = "after-oversized-payload";
+  require(service->try_emit(after_limit), "valid telemetry must enqueue after an oversized record");
+  bool recovered = false;
+  const auto recovery_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  while (!recovered && std::chrono::steady_clock::now() < recovery_deadline) {
+    const auto received = client.drain();
+    recovered = std::any_of(received.begin(), received.end(), [](const auto& event) {
+      return event.message == "after-oversized-payload";
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  require(recovered && client.status().connection_generation == first_generation,
+          "valid telemetry must continue on the same connection after an oversized record");
 
   service->stop();
   service.reset();

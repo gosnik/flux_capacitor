@@ -1,0 +1,141 @@
+{
+  "schema": 1,
+  "date": "2026-09-07",
+  "board": "bm_svf",
+  "tier": 1,
+  "artifact": "build/tier1-native-probe-v30-20260907",
+  "context": "regional-bundle-context:ordinary:0",
+  "occurrence": 1,
+  "stage": "regional channel capacity before spline realization",
+  "channel": 0,
+  "maximum_channel_width_nm": 1940000,
+  "forced_fragment_count": 15,
+  "aggregate_required_width_nm": 6950000,
+  "minimal_aggregate_counterexample": {
+    "fragments": [
+      {
+        "fragment": [
+          "kicad-net-1",
+          2,
+          0,
+          1
+        ],
+        "start": [
+          54790000,
+          92202000
+        ],
+        "end": [
+          54790000,
+          91990000
+        ]
+      },
+      {
+        "fragment": [
+          "kicad-net-12",
+          2,
+          0,
+          0
+        ],
+        "start": [
+          53721000,
+          91375000
+        ],
+        "end": [
+          55440000,
+          91375000
+        ]
+      },
+      {
+        "fragment": [
+          "kicad-net-13",
+          0,
+          0,
+          0
+        ],
+        "start": [
+          52451000,
+          86425000
+        ],
+        "end": [
+          52451000,
+          84840000
+        ]
+      },
+      {
+        "fragment": [
+          "kicad-net-9",
+          1,
+          0,
+          14
+        ],
+        "start": [
+          58040000,
+          82890000
+        ],
+        "end": [
+          55440000,
+          82890000
+        ]
+      }
+    ],
+    "trace_width_nm": 250000,
+    "clearance_nm": 200000,
+    "aggregate_required_nm": 2000000,
+    "pairwise_centerline_distances": [
+      {
+        "first": 0,
+        "second": 1,
+        "distance_nm": 615000
+      },
+      {
+        "first": 0,
+        "second": 2,
+        "distance_nm": 6036567.40209202
+      },
+      {
+        "first": 0,
+        "second": 3,
+        "distance_nm": 9123184.75095183
+      },
+      {
+        "first": 1,
+        "second": 2,
+        "distance_nm": 5110322.886080683
+      },
+      {
+        "first": 1,
+        "second": 3,
+        "distance_nm": 8485000
+      },
+      {
+        "first": 2,
+        "second": 3,
+        "distance_nm": 3568840.2878246037
+      }
+    ],
+    "note": "These four source spans are disjoint; minimum segment distance is 615000 nm, exceeding required 450000 nm. Aggregate model rejects four but fits any three. This is a minimal subset for its inequality, not a board unsatisfiability core or a complete packing certificate."
+  },
+  "replay": {
+    "control": {
+      "states": 13,
+      "choices": 0,
+      "exhausted": false,
+      "lane_capacity_pruned": 1
+    },
+    "access_forward": {
+      "states": 13,
+      "choices": 0,
+      "exhausted": false,
+      "lane_capacity_pruned": 1
+    },
+    "resource_forward": {
+      "states": 10,
+      "choices": 0,
+      "exhausted": false,
+      "forward_capacity_rejections": 1
+    }
+  },
+  "hypothesis": "A merged channel spanning multiple longitudinal regions counts every sequential/remote fragment as a simultaneous parallel lane. This can make the discrete bundle impossible before PH. Exact copper conflicts remain elsewhere.",
+  "next": "Construct a disjoint longitudinal occupancy micro-test; represent local cross-section demand before changing aggregate pruning. The downstream lane solver currently repeats the same all-occupants assumption, so disabling only the DFS gate would move the failure, not fix it.",
+  "tier_pass": false
+}

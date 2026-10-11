@@ -1,0 +1,58 @@
+{
+  "schema": 1,
+  "board": "bm_svf",
+  "checked_at": "2026-10-01T15:03:10+08:00",
+  "git_revision": "94aa691ad89576d1c0ac07a5346020da21fc9d06",
+  "kicad": {
+    "version": "9.0.8",
+    "command": "kicad-cli pcb drc --format json --severity-all --output build/tier-resolution-20261001-reference-oracle/bm_svf.drc.json build/tier-resolution-20261001-reference-oracle/bm_svf.kicad_pcb",
+    "exit_code": 0,
+    "report": "build/tier-resolution-20261001-reference-oracle/bm_svf.drc.json"
+  },
+  "inputs": {
+    "normalized_reference_pcb": {
+      "path": "tests/fixtures/routing-corpus/reference/bm_svf.kicad_pcb",
+      "sha256": "52317a66f7442b3b260f07ff1b7c16dd94f99c088c61533b81698cbda6d4d77b"
+    },
+    "original_fixture_pcb": {
+      "path": "tests/fixtures/routing-corpus/bm_svf.kicad_pcb",
+      "sha256": "308ce5513cb6b2b33820648a0062a54f548f6b3c13d856cdcd9b7c3ac8a20d2a"
+    },
+    "original_fixture_project": {
+      "path": "tests/fixtures/routing-corpus/bm_svf.kicad_pro",
+      "sha256": "04856904fe9070f7decd33b676d3f58e44676b6c930e65fa8a16f0ddd65d54db"
+    },
+    "drc_input_copy": "build/tier-resolution-20261001-reference-oracle/bm_svf.kicad_pcb",
+    "project_copy": "build/tier-resolution-20261001-reference-oracle/bm_svf.kicad_pro",
+    "project_copy_byte_identical": true
+  },
+  "inventory": {
+    "segments": 389,
+    "arcs": 0,
+    "vias": 55,
+    "copper_primitives": 444
+  },
+  "drc": {
+    "violations": 64,
+    "unconnected_items": 0,
+    "by_type": {
+      "lib_footprint_issues": 7,
+      "lib_footprint_mismatch": 27,
+      "silk_over_copper": 8,
+      "text_height": 22
+    },
+    "by_severity": {
+      "error": 0,
+      "warning": 64,
+      "exclusion": 0
+    },
+    "routing_legality_errors": 0,
+    "routing_legality_warnings": 0
+  },
+  "oracle_assessment": {
+    "error_level_drc_pass": true,
+    "zero_unconnected": true,
+    "genuinely_legal_under_benchmark_routing_rules": true,
+    "caveat": "KiCad reports 64 warnings, all library, silkscreen, or text metadata categories; no copper, clearance, hole, via, crossing, or connectivity errors were reported."
+  }
+}

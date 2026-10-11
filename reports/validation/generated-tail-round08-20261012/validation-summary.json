@@ -1,0 +1,21 @@
+{
+  "strict_build": "pass build-bounded.log",
+  "focused_tests": {
+    "routing_engine_experiment": "pass",
+    "copper_scaffold": "pass",
+    "scaffold_collision": "pass",
+    "scaffold_curve": "pass direct/test.exit after fixture correction"
+  },
+  "test_correction": "New fixture footprints had default explicit courtyard with missing geometry; marked envelope absent. Router code unchanged. Initial structural-validation failure retained in logs.",
+  "review": "No material problems found after via-membership, cancellation, zero allowance and atomic split-output budget fixes",
+  "invariants": [
+    "pad partition retained by identity",
+    "per-layer pad/via probe component membership retained",
+    "source/native/coupled/zone/curved/locked nets excluded",
+    "padless geometry retained",
+    "interior split only exactly representable",
+    "candidate and split-output budgets checked",
+    "zero and exhausted split budgets retain original geometry"
+  ],
+  "source_frozen": true
+}

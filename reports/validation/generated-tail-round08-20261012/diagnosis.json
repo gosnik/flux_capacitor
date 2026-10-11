@@ -1,0 +1,44 @@
+{
+  "round": 8,
+  "baseline_commit": "9490886",
+  "failure": "DRC-clean Tier1 output retains bare generated leaf tails and spends curve fitting on them",
+  "evidence": {
+    "board": "bm_svf",
+    "layer": "F.Cu",
+    "bare_tips_mm": {
+      "V_CV": [
+        [
+          55.44,
+          55.59
+        ]
+      ],
+      "V_SUPPLY": [
+        [
+          58.04,
+          52.99
+        ],
+        [
+          59.99,
+          51.69
+        ]
+      ],
+      "Net-(U5B-+)": [
+        [
+          66.49,
+          56.89
+        ]
+      ]
+    },
+    "contact_audit": "No pads, vias or zones at the tips; required contacts occur elsewhere"
+  },
+  "hypothesis": "Certified route endpoint preservation retains stale branch anchors; no generated physical graph leaf cleanup precedes curve fitting",
+  "experiment": "Bounded exact same-net contact splitting and generated leaf-chain pruning with physical terminal/component guards before curve fitting",
+  "research": [
+    {
+      "source": "https://docs.kicad.org/8.0/en/pcbnew/pcbnew.html",
+      "relevance": "KiCad separates dangling-track cleanup and pad-exit optimization from DRC; use concept, no source copied"
+    }
+  ],
+  "validation": "Synthetic leaf/T/contact/protected cases, then sequential curved Tier0/Tier1 diagnostic telemetry and external DRC; inspect highlighted regions",
+  "tier2": "Round07 frontier result preserved; this post-materialization change cannot affect its pre-materialization timeout"
+}

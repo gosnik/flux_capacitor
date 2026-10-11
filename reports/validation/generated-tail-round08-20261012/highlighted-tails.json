@@ -1,0 +1,174 @@
+{
+  "baseline": {
+    "exists": true,
+    "net_labels": {
+      "0": "",
+      "1": "GND",
+      "2": "Net-(C1-Pad2)",
+      "3": "Net-(U3A--)",
+      "4": "Net-(U4B--)",
+      "5": "Net-(C2-Pad2)",
+      "6": "Net-(INPUT1-Pin_3)",
+      "7": "V_IN",
+      "8": "V_CV",
+      "9": "V_HF",
+      "10": "V_LF",
+      "11": "V_BF",
+      "12": "V_SUPPLY",
+      "13": "Net-(U4A--)",
+      "14": "Net-(R4-Pad1)",
+      "15": "Net-(R12-Pad1)",
+      "16": "V_MID",
+      "17": "Net-(R11-Pad2)",
+      "18": "Net-(U3B--)",
+      "19": "Net-(U5A--)",
+      "20": "Net-(R14-Pad1)",
+      "21": "Net-(U5B-+)",
+      "22": "VACTROL_NEG",
+      "23": "unconnected-(RV1-Pad3)",
+      "24": "Net-(U5A-+)",
+      "25": "VACTROL_POS",
+      "26": "Net-(R17-Pad2)",
+      "27": "unconnected-(RV3-Pad3)"
+    },
+    "path": "reports/validation/pad-access-round07-20261012/tier1/tier-1-bm_svf/bm_svf.kicad_pcb",
+    "precision": "exact endpoints; straight-segment containment only; arcs/gr_curve interiors are not geometrically evaluated",
+    "primitive_counts": {
+      "arc": 131,
+      "gr_curve": 360,
+      "segment": 526
+    },
+    "tips": [
+      {
+        "exact_endpoint_kinds": [
+          "gr_curve"
+        ],
+        "label": "V_CV",
+        "layer": "F.Cu",
+        "net": 8,
+        "on_segment": false,
+        "x": 55.44,
+        "y": 55.59
+      },
+      {
+        "exact_endpoint_kinds": [
+          "gr_curve"
+        ],
+        "label": "V_SUPPLY",
+        "layer": "F.Cu",
+        "net": 12,
+        "on_segment": false,
+        "x": 58.04,
+        "y": 52.99
+      },
+      {
+        "exact_endpoint_kinds": [
+          "segment"
+        ],
+        "label": "V_SUPPLY",
+        "layer": "F.Cu",
+        "net": 12,
+        "on_segment": true,
+        "x": 59.99,
+        "y": 51.69
+      },
+      {
+        "exact_endpoint_kinds": [
+          "segment",
+          "gr_curve",
+          "gr_curve"
+        ],
+        "label": "Net-(U5B-+)",
+        "layer": "F.Cu",
+        "net": 21,
+        "on_segment": true,
+        "x": 66.49,
+        "y": 56.89
+      }
+    ],
+    "total_primitives": 1017
+  },
+  "new": {
+    "exists": true,
+    "net_labels": {
+      "0": "",
+      "1": "GND",
+      "2": "Net-(C1-Pad2)",
+      "3": "Net-(U3A--)",
+      "4": "Net-(U4B--)",
+      "5": "Net-(C2-Pad2)",
+      "6": "Net-(INPUT1-Pin_3)",
+      "7": "V_IN",
+      "8": "V_CV",
+      "9": "V_HF",
+      "10": "V_LF",
+      "11": "V_BF",
+      "12": "V_SUPPLY",
+      "13": "Net-(U4A--)",
+      "14": "Net-(R4-Pad1)",
+      "15": "Net-(R12-Pad1)",
+      "16": "V_MID",
+      "17": "Net-(R11-Pad2)",
+      "18": "Net-(U3B--)",
+      "19": "Net-(U5A--)",
+      "20": "Net-(R14-Pad1)",
+      "21": "Net-(U5B-+)",
+      "22": "VACTROL_NEG",
+      "23": "unconnected-(RV1-Pad3)",
+      "24": "Net-(U5A-+)",
+      "25": "VACTROL_POS",
+      "26": "Net-(R17-Pad2)",
+      "27": "unconnected-(RV3-Pad3)"
+    },
+    "path": "reports/validation/generated-tail-round08-20261012/tier1/tier-1-bm_svf/bm_svf.kicad_pcb",
+    "precision": "exact endpoints; straight-segment containment only; arcs/gr_curve interiors are not geometrically evaluated",
+    "primitive_counts": {
+      "arc": 104,
+      "gr_curve": 413,
+      "segment": 440
+    },
+    "tips": [
+      {
+        "exact_endpoint_kinds": [],
+        "label": "V_CV",
+        "layer": "F.Cu",
+        "net": 8,
+        "on_segment": false,
+        "x": 55.44,
+        "y": 55.59
+      },
+      {
+        "exact_endpoint_kinds": [],
+        "label": "V_SUPPLY",
+        "layer": "F.Cu",
+        "net": 12,
+        "on_segment": false,
+        "x": 58.04,
+        "y": 52.99
+      },
+      {
+        "exact_endpoint_kinds": [],
+        "label": "V_SUPPLY",
+        "layer": "F.Cu",
+        "net": 12,
+        "on_segment": false,
+        "x": 59.99,
+        "y": 51.69
+      },
+      {
+        "exact_endpoint_kinds": [
+          "gr_curve",
+          "gr_curve",
+          "gr_curve"
+        ],
+        "label": "Net-(U5B-+)",
+        "layer": "F.Cu",
+        "net": 21,
+        "on_segment": false,
+        "x": 66.49,
+        "y": 56.89
+      }
+    ],
+    "total_primitives": 957
+  }
+}

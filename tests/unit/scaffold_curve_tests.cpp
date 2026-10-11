@@ -19,6 +19,23 @@ void require(bool value, const char* message) { if (!value) throw std::runtime_e
   result.rules.default_clearance = Nanometres::from_mm(0.2);
   return result;
 }
+void add_pad(Board& value, std::string id, Point position) {
+  Footprint footprint;
+  footprint.placement_envelope_source = PlacementEnvelopeSource::absent;
+  footprint.id = ObjectId{"footprint-" + id};
+  footprint.reference = id;
+  footprint.position = position;
+  footprint.side = BoardSide::front;
+  Pad pad;
+  pad.id = ObjectId{"pad-" + id};
+  pad.net = NetId{"scaffold"};
+  pad.layers = {LayerId{"F.Cu"}};
+  pad.shape = PadShape::circle;
+  pad.width = Nanometres::from_mm(1.0);
+  pad.height = Nanometres::from_mm(1.0);
+  footprint.pads.push_back(std::move(pad));
+  value.footprints.push_back(std::move(footprint));
+}
 void materializes_complete_scaffold_without_regional_plan() {
   auto source = board();
   GlobalRoutePath path;
@@ -356,5 +373,177 @@ void residual_bend_repair_skips_floating_closed_chain() {
               detailed.candidate->track_arcs.empty() && detailed.unrounded_non_junction_bends > 0U,
           "a floating closed chain must keep its ambiguous audited seam untouched");
 }
+void generated_tail_cleanup_prunes_pad_rooted_interior_spur() {
+  auto source = board();
+  add_pad(source, "left", mm(2, 8));
+  add_pad(source, "right", mm(12, 8));
+  GlobalRoutePath trunk;
+  trunk.net = NetId{"scaffold"}; trunk.legal_scaffold = true;
+  trunk.points = {{mm(2, 8), LayerId{"F.Cu"}}, {mm(7, 8), LayerId{"F.Cu"}},
+                  {mm(12, 8), LayerId{"F.Cu"}}};
+  GlobalRoutePath spur;
+  spur.net = NetId{"scaffold"}; spur.legal_scaffold = true;
+  spur.points = {{mm(7, 8), LayerId{"F.Cu"}}, {mm(7, 12), LayerId{"F.Cu"}}};
+  RoutingPlanResult plan;
+  plan.legal_scaffold_complete = true; plan.paths = {trunk, spur};
+  plan.coarse_global.stop_reason = GlobalRouterStopReason::complete;
+  DetailedRouterConfig config;
+  config.circular_arc_refinement = false;
+  config.residual_bend_repair = false;
+  config.enable_generated_tail_cleanup = false;
+  const auto before = materialize_detailed_route(source, plan, config);
+  require(before.complete() && before.candidate && before.candidate->tracks.size() == 3U,
+          "disabled cleanup must retain generated T spur");
+  config.enable_generated_tail_cleanup = true;
+  const auto after = materialize_detailed_route(source, plan, config);
+  require(after.complete() && after.candidate && after.candidate->tracks.size() == 2U &&
+              after.generated_tail_cleanup_removed_chains == 1U &&
+              after.generated_tail_cleanup_removed_tracks == 1U,
+          "cleanup must remove only the pad-rooted bare interior spur");
+  require(analyze_connectivity(*after.candidate).open_connections == 0U,
+          "cleanup must retain required pad connectivity");
+}
+void generated_tail_cleanup_preserves_padless_component() {
+  const auto source = board();
+  GlobalRoutePath path;
+  path.net = NetId{"scaffold"}; path.legal_scaffold = true;
+  path.points = {{mm(3, 3), LayerId{"F.Cu"}}, {mm(8, 3), LayerId{"F.Cu"}}};
+  RoutingPlanResult plan;
+  plan.legal_scaffold_complete = true; plan.paths = {path};
+  plan.coarse_global.stop_reason = GlobalRouterStopReason::complete;
+  DetailedRouterConfig config;
+  config.circular_arc_refinement = false;
+  config.residual_bend_repair = false;
+  const auto detailed = materialize_detailed_route(source, plan, config);
+  require(detailed.complete() && detailed.candidate && detailed.candidate->tracks.size() == 1U &&
+              detailed.generated_tail_cleanup_removed_tracks == 0U,
+          "padless generated copper must fail closed rather than be pruned");
+}
+
+[[nodiscard]] Board tail_fixture() {
+  auto source = board();
+  Footprint footprint;
+  footprint.placement_envelope_source = PlacementEnvelopeSource::absent;
+  footprint.id = ObjectId{"tail-pads"}; footprint.reference = "J-tail";
+  std::size_t index = 0U;
+  for (const auto position : {mm(2, 10), mm(10, 10), mm(6, 6)}) {
+    Pad pad;
+    pad.id = ObjectId{"tail-pad-" + std::to_string(index++)};
+    pad.net = NetId{"scaffold"}; pad.layers = {LayerId{"F.Cu"}};
+    pad.local_position = position;
+    pad.width = Nanometres::from_mm(1); pad.height = Nanometres::from_mm(1);
+    footprint.pads.push_back(pad);
+  }
+  source.footprints.push_back(footprint);
+  return source;
+}
+[[nodiscard]] RoutingPlanResult tail_plan(bool via = false) {
+  GlobalRoutePath trunk;
+  trunk.net = NetId{"scaffold"}; trunk.legal_scaffold = true;
+  trunk.points = {{mm(2, 10), LayerId{"F.Cu"}}, {mm(10, 10), LayerId{"F.Cu"}}};
+  auto branch = trunk; branch.connection_index = 1U;
+  branch.points = {{mm(6, 6), LayerId{"F.Cu"}}, {mm(6, 14), LayerId{"F.Cu"}}};
+  auto floating = trunk; floating.connection_index = 2U;
+  floating.points = {{mm(6, 14), LayerId{"B.Cu"}}, {mm(8, 14), LayerId{"B.Cu"}}};
+  if (via) {
+    branch.points.push_back({mm(6, 14), LayerId{"B.Cu"}});
+    branch.points.push_back({mm(8, 14), LayerId{"B.Cu"}});
+  }
+  RoutingPlanResult plan;
+  plan.legal_scaffold_complete = true;
+  plan.paths = via ? std::vector<GlobalRoutePath>{trunk, branch}
+                   : std::vector<GlobalRoutePath>{trunk, branch, floating};
+  plan.coarse_global.stop_reason = GlobalRouterStopReason::complete;
+  return plan;
+}
+[[nodiscard]] bool has_tail_tip(const Board& candidate) {
+  return std::any_of(candidate.tracks.begin(), candidate.tracks.end(), [](const auto& track) {
+    return track.layer == LayerId{"F.Cu"} &&
+           (track.start == mm(6, 14) || track.end == mm(6, 14));
+  });
+}
+void generated_tail_cleanup_retains_required_interior_t_and_other_layer() {
+  const auto source = tail_fixture();
+  const auto plan = tail_plan();
+  DetailedRouterConfig config;
+  config.circular_arc_refinement = false;
+  config.enable_generated_tail_cleanup = false;
+  const auto before = materialize_detailed_route(source, plan, config);
+  require(before.complete() && before.candidate && has_tail_tip(*before.candidate),
+          "disabled cleanup must reproduce the bare generated tail");
+  config.enable_generated_tail_cleanup = true;
+  const auto after = materialize_detailed_route(source, plan, config);
+  require(after.complete() && after.candidate && after.copper_drc.ok() &&
+              analyze_connectivity(*after.candidate).open_connections == 0U &&
+              !has_tail_tip(*after.candidate) && after.generated_tail_cleanup_removed_chains == 1U,
+          "cleanup must split interior T contact and remove only its spare tail");
+  require(std::any_of(after.candidate->tracks.begin(), after.candidate->tracks.end(), [](const auto& track) {
+            return track.layer == LayerId{"B.Cu"} && track.start == mm(6,14) && track.end == mm(8,14);
+          }), "coincident opposite-layer padless copper must remain untouched");
+}
+void generated_tail_cleanup_preserves_via_attachment_and_budget() {
+  const auto source = tail_fixture();
+  DetailedRouterConfig config;
+  config.circular_arc_refinement = false;
+  const auto result = materialize_detailed_route(source, tail_plan(true), config);
+  require(result.complete() && result.candidate && !result.candidate->vias.empty() &&
+              copper_probes_share_component(*result.candidate, NetId{"scaffold"},
+                  {mm(2,10), {LayerId{"F.Cu"}}}, {mm(6,14), {LayerId{"B.Cu"}}}),
+          "cleanup must preserve the entire pad-to-via attachment, not merely the via-contact edge");
+  config.enable_generated_tail_cleanup = false;
+  const auto disabled = materialize_detailed_route(source, tail_plan(), config);
+  config.enable_generated_tail_cleanup = true;
+  config.max_generated_tail_cleanup_candidates = 0U;
+  const auto bounded = materialize_detailed_route(source, tail_plan(), config);
+  require(bounded.complete() && bounded.candidate && has_tail_tip(*bounded.candidate) &&
+              bounded.generated_tail_cleanup_removed_tracks == 0U && disabled.candidate &&
+              bounded.candidate->tracks == disabled.candidate->tracks,
+          "zero cleanup allowance must leave generated topology intact");
+  config.max_generated_tail_cleanup_candidates = 256U;
+  config.max_generated_tail_cleanup_split_tracks = 3U;
+  const auto split_bounded = materialize_detailed_route(source, tail_plan(), config);
+  require(split_bounded.complete() && split_bounded.candidate && disabled.candidate &&
+              split_bounded.generated_tail_cleanup_budget_exhausted &&
+              split_bounded.generated_tail_cleanup_removed_tracks == 0U &&
+              split_bounded.candidate->tracks == disabled.candidate->tracks,
+          "exhausted split-output budget must retain original tracks atomically");
+}
+void generated_tail_cleanup_preserves_finite_width_via_contact() {
+  auto source = tail_fixture();
+  source.footprints.front().pads.resize(1U);
+  auto plan = tail_plan();
+  plan.paths.resize(2U);
+  plan.paths[0].points = {{mm(2,10), LayerId{"F.Cu"}}, {mm(8,10), LayerId{"F.Cu"}}};
+  // Copper overlaps by 0.05mm, but the two centerlines never intersect.  Pad-only
+  // connectivity would miss the orphaned via if the apparent bare horizontal tail vanished.
+  plan.paths[1].points = {{mm(6,10.15), LayerId{"F.Cu"}}, {mm(6,14), LayerId{"F.Cu"}},
+                         {mm(6,14), LayerId{"B.Cu"}}};
+  DetailedRouterConfig config;
+  config.circular_arc_refinement = false;
+  const auto result = materialize_detailed_route(source, plan, config);
+  require(result.complete() && result.candidate && result.copper_drc.ok() &&
+              copper_probes_share_component(*result.candidate, NetId{"scaffold"},
+                  {mm(2,10), {LayerId{"F.Cu"}}}, {mm(6,14), {LayerId{"B.Cu"}}}),
+          ("finite-width interior contact must retain pad-to-via component membership; complete=" +
+           std::to_string(result.complete()) + "; candidate=" + std::to_string(result.candidate.has_value()) +
+           "; drc=" + std::to_string(result.copper_drc.ok()) +
+           "; removed=" + std::to_string(result.generated_tail_cleanup_removed_tracks) +
+           "; diagnostic=" + result.diagnostic).c_str());
+}
+void generated_tail_cleanup_preserves_source_curve_net() {
+  auto source = tail_fixture();
+  source.track_arcs.push_back({ObjectId{"source-arc"}, NetId{"scaffold"}, LayerId{"F.Cu"},
+                              mm(20,20), mm(21,21), mm(20,22), Nanometres::from_mm(0.2), false});
+  DetailedRouterConfig config;
+  config.circular_arc_refinement = false;
+  config.existing_routing = ExistingRoutingPolicy::preserve;
+  const auto result = materialize_detailed_route(source, tail_plan(), config);
+  require(result.complete() && result.candidate && has_tail_tip(*result.candidate) &&
+              result.generated_tail_cleanup_removed_tracks == 0U &&
+              std::find(result.candidate->track_arcs.begin(), result.candidate->track_arcs.end(),
+                        source.track_arcs.front()) != result.candidate->track_arcs.end(),
+          "source curved copper must exclude ambiguous cleanup on its net");
+}
+
 } // namespace
-int main() { materializes_complete_scaffold_without_regional_plan(); explicit_nominal_widths_match_implicit_certified_scaffold(); malformed_certified_width_metadata_is_rejected(); unbacked_neck_down_metadata_is_rejected(); invalid_certified_layer_transition_is_rejected(); failed_curve_fit_retains_scaffold_and_unrelated_copper(); residual_bend_repair_uses_exact_fillet_after_ph_rejection(); residual_bend_batches_resume_without_charging_collinear_points(); residual_bend_batches_resume_across_chains(); residual_bend_repair_rejects_blocked_corner_without_mutating_copper(); residual_bend_repair_preserves_existing_routing(); residual_bend_repair_handles_pad_anchored_closed_chain(); residual_bend_repair_skips_floating_closed_chain(); return EXIT_SUCCESS; }
+int main() { generated_tail_cleanup_preserves_finite_width_via_contact(); generated_tail_cleanup_retains_required_interior_t_and_other_layer(); generated_tail_cleanup_preserves_via_attachment_and_budget(); generated_tail_cleanup_preserves_source_curve_net(); materializes_complete_scaffold_without_regional_plan(); explicit_nominal_widths_match_implicit_certified_scaffold(); malformed_certified_width_metadata_is_rejected(); unbacked_neck_down_metadata_is_rejected(); invalid_certified_layer_transition_is_rejected(); failed_curve_fit_retains_scaffold_and_unrelated_copper(); residual_bend_repair_uses_exact_fillet_after_ph_rejection(); residual_bend_batches_resume_without_charging_collinear_points(); residual_bend_batches_resume_across_chains(); residual_bend_repair_rejects_blocked_corner_without_mutating_copper(); residual_bend_repair_preserves_existing_routing(); residual_bend_repair_handles_pad_anchored_closed_chain(); residual_bend_repair_skips_floating_closed_chain(); generated_tail_cleanup_prunes_pad_rooted_interior_spur(); generated_tail_cleanup_preserves_padless_component(); return EXIT_SUCCESS; }

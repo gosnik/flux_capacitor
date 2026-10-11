@@ -11,6 +11,7 @@
 #include "flux/core/routing_compute.hpp"
 #include "flux/core/routing_rules.hpp"
 #include "flux/core/spline_route.hpp"
+#include "scaffold_connectivity_guard.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1929,12 +1930,27 @@ struct PendingSplineRun {
 
 [[nodiscard]] std::size_t split_tracks_at_exact_same_net_branches(Board& board,
                                                                   std::set<std::string>& used_ids,
-                                                                  const std::set<std::string>& protected_ids) {
+                                                                  const std::set<std::string>& protected_ids,
+                                                                  std::stop_token stop_token = {},
+                                                                  bool split_crossings = false,
+                                                                  std::size_t max_output_tracks = std::numeric_limits<std::size_t>::max(),
+                                                                  bool* exhausted = nullptr) {
+  if (exhausted != nullptr) *exhausted = false;
   const auto source_tracks = board.tracks;
+  if (source_tracks.size() > max_output_tracks) {
+    if (exhausted != nullptr) *exhausted = true;
+    return 0U;
+  }
   std::vector<TrackSegment> split_tracks;
   split_tracks.reserve(source_tracks.size());
   std::size_t inserted_pieces = 0U;
   for (const auto& carrier : source_tracks) {
+    if (split_tracks.size() >= max_output_tracks) {
+      if (exhausted != nullptr) *exhausted = true;
+      return 0U;
+    }
+    routing_kernel_checkpoint();
+    if (stop_token.stop_requested()) return 0U;
     if (carrier.locked || protected_ids.contains(carrier.id.value()) || carrier.start == carrier.end) {
       split_tracks.push_back(carrier);
       continue;
@@ -1960,7 +1976,12 @@ struct PendingSplineRun {
         contacts.emplace_back(parameter, projected);
       }
     };
+    std::size_t inspected_branches = 0U;
     for (const auto& branch : source_tracks) {
+      if ((inspected_branches++ % 64U) == 0U) {
+        routing_kernel_checkpoint();
+        if (stop_token.stop_requested()) return 0U;
+      }
       if (branch.id == carrier.id || branch.net != carrier.net || branch.layer != carrier.layer ||
           branch.start == branch.end) {
         continue;
@@ -1970,6 +1991,28 @@ struct PendingSplineRun {
         // same-net copper proximity. Wider overlap remains governed by connectivity and exact
         // transaction checks; promoting it to a junction here would fragment nearby routes.
         append_exact_contact(endpoint);
+      }
+      // Imported and generated centreline trees occasionally meet in the interior of two
+      // straight tracks.  Split only an exactly representable intersection: rounded or
+      // finite-width-only contacts deliberately remain untouched and are guarded by the exact
+      // copper transaction below.
+      if (!split_crossings ||
+          !geometry::segments_intersect(carrier.start, carrier.end, branch.start, branch.end))
+        continue;
+      const auto bx = static_cast<long double>(branch.end.x.value() - branch.start.x.value());
+      const auto by = static_cast<long double>(branch.end.y.value() - branch.start.y.value());
+      const auto denominator = dx * by - dy * bx;
+      if (std::abs(denominator) <= 0.0L)
+        continue;
+      const auto offset_x = static_cast<long double>(branch.start.x.value() - carrier.start.x.value());
+      const auto offset_y = static_cast<long double>(branch.start.y.value() - carrier.start.y.value());
+      const auto parameter = (offset_x * by - offset_y * bx) / denominator;
+      const auto intersection = Point{
+          Nanometres{static_cast<std::int64_t>(std::llround(carrier.start.x.value() + parameter * dx))},
+          Nanometres{static_cast<std::int64_t>(std::llround(carrier.start.y.value() + parameter * dy))}};
+      if (geometry::point_on_segment(intersection, carrier.start, carrier.end) &&
+          geometry::point_on_segment(intersection, branch.start, branch.end)) {
+        append_exact_contact(intersection);
       }
     }
     // A pad/via centre lying in the interior of a route is also a topological attachment, even
@@ -2011,6 +2054,10 @@ struct PendingSplineRun {
         points.push_back(point);
     }
     points.push_back(carrier.end);
+    if (points.size() - 1U > max_output_tracks - split_tracks.size()) {
+      if (exhausted != nullptr) *exhausted = true;
+      return 0U;
+    }
     for (std::size_t piece = 1U; piece < points.size(); ++piece) {
       auto split = carrier;
       split.id = unique_id(carrier.id.value() + "-branch-" + std::to_string(piece - 1U), used_ids);
@@ -2022,6 +2069,195 @@ struct PendingSplineRun {
   }
   board.tracks = std::move(split_tracks);
   return inserted_pieces;
+}
+
+// Keep curve fitting from spending its bounded budget on generated, electrically useless straight
+// stubs.  This intentionally reasons only about exact centreline vertices after the branch split:
+// finite-width near contacts are ambiguous, so they fail closed.  Native/source/coupled routing is
+// excluded by net, and each whole leaf chain is accepted only by the ordinary exact board gates.
+void cleanup_generated_straight_dead_tails(
+    Board& board, const std::set<std::string>& protected_ids,
+    const std::set<NetId>& protected_routing_nets, const std::set<NetId>& coupled_nets,
+    const DetailedRouterConfig& config, DetailedRouteResult& result, std::stop_token stop_token) {
+  if (!config.enable_generated_tail_cleanup || config.max_generated_tail_cleanup_candidates == 0U)
+    return;
+  std::set<NetId> excluded_nets = protected_routing_nets;
+  excluded_nets.insert(coupled_nets.begin(), coupled_nets.end());
+  // Filled zones and native curved copper have no safe straight-centreline contact model here.
+  for (const auto& zone : board.zones) excluded_nets.insert(zone.net);
+  for (const auto& arc : board.track_arcs) excluded_nets.insert(arc.net);
+  for (const auto& curve : board.track_beziers) excluded_nets.insert(curve.net);
+  for (const auto& track : board.tracks)
+    if (track.locked) excluded_nets.insert(track.net);
+  for (const auto& track : board.tracks) {
+    if (track.locked || protected_ids.contains(track.id.value()) || excluded_nets.contains(track.net))
+      ++result.generated_tail_cleanup_skipped_protected;
+  }
+  const auto pads = copper_pad_shapes(board);
+  const auto has_pad = [&](const TrackSegment& track, Point point) {
+    return std::any_of(pads.begin(), pads.end(), [&](const auto& pad) {
+      return pad.net == track.net &&
+             std::find(pad.layers.begin(), pad.layers.end(), track.layer) != pad.layers.end() &&
+             point_to_pad_copper_distance_nm(point, pad) <= 0.0L;
+    });
+  };
+  const auto has_via = [&](const TrackSegment& track, Point point) {
+    return std::any_of(board.vias.begin(), board.vias.end(), [&](const auto& via) {
+      return via.net == track.net &&
+             std::find(via.layers.begin(), via.layers.end(), track.layer) != via.layers.end() &&
+             geometry::point_distance_nm(point, via.position) <=
+                 static_cast<long double>(via.diameter.value()) / 2.0L;
+    });
+  };
+  const auto before_connectivity = analyze_connectivity(board);
+  struct TerminalMembership {
+    std::vector<CopperConnectivityProbe> probes;
+    std::vector<CopperProbeComponentMembership> memberships;
+  };
+  std::map<NetId, TerminalMembership> terminal_memberships;
+  std::set<LayerId> copper_layers;
+  for (const auto& layer : board.layers)
+    if (layer.kind == LayerKind::copper) copper_layers.insert(layer.id);
+  const auto shares_component = [](const CopperProbeComponentMembership& lhs,
+                                   const CopperProbeComponentMembership& rhs) {
+    return std::any_of(lhs.components.begin(), lhs.components.end(), [&](const auto component) {
+      return std::find(rhs.components.begin(), rhs.components.end(), component) != rhs.components.end();
+    });
+  };
+  const auto terminals_preserved = [&](const Board& after, const NetId& net) {
+    auto found = terminal_memberships.find(net);
+    if (found == terminal_memberships.end()) {
+      TerminalMembership membership;
+      for (const auto& pad : pads) {
+        if (pad.net != net) continue;
+        for (const auto& layer : pad.layers) {
+          if (copper_layers.contains(layer)) membership.probes.push_back({pad.position, {layer}});
+        }
+      }
+      for (const auto& via : board.vias) {
+        if (via.net != net) continue;
+        for (const auto& layer : via.layers) {
+          if (copper_layers.contains(layer)) membership.probes.push_back({via.position, {layer}});
+        }
+      }
+      // A bounded cleanup must not turn an unusually large terminal set into an unbounded
+      // quadratic equivalence check.  Such a net simply remains untouched in this pass.
+      if (membership.probes.size() > 4096U) return false;
+      membership.memberships = copper_probe_component_memberships(board, net, membership.probes);
+      found = terminal_memberships.emplace(net, std::move(membership)).first;
+    }
+    const auto after_memberships =
+        copper_probe_component_memberships(after, net, found->second.probes);
+    if (after_memberships.size() != found->second.memberships.size()) return false;
+    for (std::size_t first = 0U; first < found->second.memberships.size(); ++first) {
+      if (found->second.memberships[first].contained_by_copper &&
+          !after_memberships[first].contained_by_copper) return false;
+      for (std::size_t second = first + 1U; second < found->second.memberships.size(); ++second) {
+        if (shares_component(found->second.memberships[first], found->second.memberships[second]) &&
+            !shares_component(after_memberships[first], after_memberships[second])) return false;
+      }
+    }
+    return true;
+  };
+  for (;;) {
+    routing_kernel_checkpoint();
+    if (stop_token.stop_requested()) return;
+    struct EndpointEdge { std::size_t track; Point other; };
+    using CopperNode = std::tuple<NetId, LayerId, Point>;
+    std::map<CopperNode, std::vector<EndpointEdge>> incident;
+    std::vector<bool> eligible(board.tracks.size(), false);
+    for (std::size_t index = 0U; index < board.tracks.size(); ++index) {
+      const auto& track = board.tracks[index];
+      if (track.start == track.end) continue;
+      // Every straight track participates in incidence, including protected copper.  It then
+      // becomes a boundary rather than disappearing and turning its adjacent generated segment
+      // into a false leaf.
+      incident[{track.net, track.layer, track.start}].push_back({index, track.end});
+      incident[{track.net, track.layer, track.end}].push_back({index, track.start});
+      if (track.locked || protected_ids.contains(track.id.value()) || excluded_nets.contains(track.net) ||
+          std::any_of(board.vias.begin(), board.vias.end(), [&](const auto& via) {
+            return via.net == track.net &&
+                   std::find(via.layers.begin(), via.layers.end(), track.layer) != via.layers.end() &&
+                   geometry::point_segment_distance_nm(via.position, track.start, track.end) <=
+                       static_cast<long double>(via.diameter.value() + track.width.value()) / 2.0L;
+          })) continue;
+      eligible[index] = true;
+    }
+    std::optional<std::vector<std::size_t>> removal;
+    for (std::size_t seed = 0U; seed < board.tracks.size() && !removal; ++seed) {
+      if (!eligible[seed]) continue;
+      for (const auto leaf : {board.tracks[seed].start, board.tracks[seed].end}) {
+        const auto found = incident.find({board.tracks[seed].net, board.tracks[seed].layer, leaf});
+        if (found == incident.end() || found->second.size() != 1U || has_pad(board.tracks[seed], leaf) ||
+            has_via(board.tracks[seed], leaf)) continue;
+        if (result.generated_tail_cleanup_candidates >= config.max_generated_tail_cleanup_candidates) {
+          result.generated_tail_cleanup_budget_exhausted = true;
+          return;
+        }
+        ++result.generated_tail_cleanup_candidates;
+        // A padless floating component can be deliberate construction copper.  Find its complete
+        // exact-centreline component first and require a physical pad attachment somewhere in it.
+        std::set<Point> visited_points{leaf};
+        std::vector<Point> pending{leaf};
+        bool component_has_pad = false;
+        while (!pending.empty() && visited_points.size() <= 4096U) {
+          routing_kernel_checkpoint();
+          if (stop_token.stop_requested()) return;
+          const auto point = pending.back(); pending.pop_back();
+          for (const auto& edge : incident.at({board.tracks[seed].net, board.tracks[seed].layer, point})) {
+            const auto& track = board.tracks[edge.track];
+            component_has_pad = component_has_pad || has_pad(track, point) || has_pad(track, edge.other);
+            if (visited_points.insert(edge.other).second) pending.push_back(edge.other);
+          }
+        }
+        if (visited_points.size() > 4096U || !component_has_pad) continue;
+        std::vector<std::size_t> chain;
+        Point current = leaf;
+        std::optional<std::size_t> prior;
+        for (;;) {
+          routing_kernel_checkpoint();
+          if (stop_token.stop_requested()) return;
+          if (chain.size() >= 4096U) { chain.clear(); break; }
+          const auto& edges = incident.at({board.tracks[seed].net, board.tracks[seed].layer, current});
+          const auto next = std::find_if(edges.begin(), edges.end(), [&](const auto& edge) {
+            return (!prior || edge.track != *prior) && eligible[edge.track];
+          });
+          if (next == edges.end()) break;
+          chain.push_back(next->track);
+          prior = next->track;
+          current = next->other;
+          const auto& current_edges = incident.at({board.tracks[seed].net, board.tracks[seed].layer, current});
+          if (has_pad(board.tracks[*prior], current) || has_via(board.tracks[*prior], current) ||
+              current_edges.size() != 2U) break;
+        }
+        if (!chain.empty()) removal = std::move(chain);
+        break;
+      }
+    }
+    if (!removal) return;
+    std::set<ObjectId> removed;
+    for (const auto index : *removal) removed.insert(board.tracks[index].id);
+    Board transaction = board;
+    std::erase_if(transaction.tracks, [&removed](const auto& track) { return removed.contains(track.id); });
+    // Keep all decisions at chain granularity: no partial leaf surgery survives a failed exact
+    // check.
+    const auto validation = validate_board(transaction);
+    const auto copper = check_copper_rules(transaction);
+    const auto after_connectivity = analyze_connectivity(transaction);
+    if (!validation.ok() || !copper.ok() ||
+        !preserves_existing_pad_components(before_connectivity, after_connectivity) ||
+        !terminals_preserved(transaction, board.tracks[removal->front()].net) ||
+        after_connectivity.open_connections > before_connectivity.open_connections) {
+      // It is unsafe to try a shorter suffix after a rejected chain: an unsplit finite-width
+      // contact may be the real attachment.  Mark all of its edges ineligible by protecting them.
+      for (const auto index : *removal) excluded_nets.insert(board.tracks[index].net);
+      continue;
+    }
+    result.generated_tail_cleanup_removed_tracks += removal->size();
+    ++result.generated_tail_cleanup_removed_chains;
+    result.added_tracks -= std::min(result.added_tracks, removal->size());
+    board = std::move(transaction);
+  }
 }
 
 // A board-complete source polyline has already passed exact copper DRC. If the coarse cell graph
@@ -5743,7 +5979,7 @@ void constrain_straight_track_angles(Board& board, const std::set<ObjectId>& pro
   for (const auto& track : board.tracks) {
     if (ordinary_track_angle(track.start, track.end)) protected_strings.insert(track.id.value());
   }
-  result.added_tracks += split_tracks_at_exact_same_net_branches(board, used_ids, protected_strings);
+  result.added_tracks += split_tracks_at_exact_same_net_branches(board, used_ids, protected_strings, stop_token);
   const auto count = board.tracks.size();
   for (std::size_t index = 0U; index < count; ++index) {
     if (stop_token.stop_requested()) return;
@@ -6713,6 +6949,50 @@ materialize_impl(const Board& source, const GlobalRouteResult& global,
     }
   }
 
+  // Curve fitting operates on a stable, exact-cleaned straight scaffold.  Source and reused
+  // routing remains protected above; generated certified scaffold copper is eligible only when
+  // its physical pad partition survives the transactional cleanup.
+  std::set<std::string> cleanup_protected_track_ids;
+  for (const auto& id : protected_track_ids) cleanup_protected_track_ids.insert(id.value());
+  cleanup_protected_track_ids.insert(protected_native_track_ids.begin(),
+                                     protected_native_track_ids.end());
+  std::set<NetId> coupled_nets;
+  for (const auto& group : coupled_groups)
+    coupled_nets.insert(group.members.begin(), group.members.end());
+  // Bound the quadratic discovery pass independently of the candidate transaction budget.
+  // Larger boards retain their original topology; ordinary curved realization remains available.
+  const bool cleanup_requested = config.enable_generated_tail_cleanup &&
+                                 config.max_generated_tail_cleanup_candidates > 0U;
+  const auto cleanup_split_limit = std::min<std::size_t>(4096U,
+      config.max_generated_tail_cleanup_split_tracks);
+  const bool run_generated_tail_cleanup = cleanup_requested &&
+                                           candidate.tracks.size() <= cleanup_split_limit;
+  if (cleanup_requested && !run_generated_tail_cleanup)
+    result.generated_tail_cleanup_budget_exhausted = true;
+  if (run_generated_tail_cleanup) {
+    bool split_exhausted = false;
+    auto split_used_ids = used_ids;
+    const auto inserted = split_tracks_at_exact_same_net_branches(
+        candidate, split_used_ids, cleanup_protected_track_ids, stop_token, true, cleanup_split_limit,
+        &split_exhausted);
+    if (split_exhausted) {
+      result.generated_tail_cleanup_budget_exhausted = true;
+    } else {
+      used_ids = std::move(split_used_ids);
+      result.added_tracks += inserted;
+      cleanup_generated_straight_dead_tails(candidate, cleanup_protected_track_ids,
+                                            protected_routing_nets, coupled_nets, config, result,
+                                            stop_token);
+    }
+    routing_kernel_checkpoint();
+    if (stop_token.stop_requested()) {
+      result.candidate = std::move(candidate);
+      result.stop_reason = DetailedRouterStopReason::cancelled;
+      result.diagnostic = "detailed routing cancelled during generated-tail cleanup";
+      return result;
+    }
+  }
+
   // Realize complete degree-two routes against one immutable, board-complete copper snapshot.
   // NavMesh preparation, PH optimization, recursive certificates, arc fitting and bounded PNS are
   // independent at this boundary. Workers publish compact copper deltas into stable task slots;
@@ -6720,8 +7000,8 @@ materialize_impl(const Board& source, const GlobalRouteResult& global,
   for (const auto& id : protected_native_track_ids) protected_track_ids.insert(ObjectId{id});
   std::set<std::string> curve_protected_track_ids;
   for (const auto& id : protected_track_ids) curve_protected_track_ids.insert(id.value());
-  if (use_circular_arc_refinement) {
-    result.added_tracks += split_tracks_at_exact_same_net_branches(candidate, used_ids, curve_protected_track_ids);
+  if (use_circular_arc_refinement && !run_generated_tail_cleanup) {
+    result.added_tracks += split_tracks_at_exact_same_net_branches(candidate, used_ids, curve_protected_track_ids, stop_token);
   }
   const auto realization_passes = config.retry_failed_spline_routes_after_commits ? 2U : 1U;
   for (std::size_t realization_pass = 0U;

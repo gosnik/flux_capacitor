@@ -1,0 +1,222 @@
+{
+  "binary_sha256": "0a2497cef5ee3e6f4c187e8bb55fa147138b75253d942a82f1f64402e7d1819a",
+  "configuration": {
+    "curved": true,
+    "lower_tier_iterations": "manifest/default",
+    "routing_timeout_seconds": 900,
+    "sequential": true,
+    "telemetry": "diagnostic"
+  },
+  "diagnosis": {
+    "baseline_commit": "9490886",
+    "evidence": {
+      "bare_tips_mm": {
+        "Net-(U5B-+)": [
+          [
+            66.49,
+            56.89
+          ]
+        ],
+        "V_CV": [
+          [
+            55.44,
+            55.59
+          ]
+        ],
+        "V_SUPPLY": [
+          [
+            58.04,
+            52.99
+          ],
+          [
+            59.99,
+            51.69
+          ]
+        ]
+      },
+      "board": "bm_svf",
+      "contact_audit": "No pads, vias or zones at the tips; required contacts occur elsewhere",
+      "layer": "F.Cu"
+    },
+    "experiment": "Bounded exact same-net contact splitting and generated leaf-chain pruning with physical terminal/component guards before curve fitting",
+    "failure": "DRC-clean Tier1 output retains bare generated leaf tails and spends curve fitting on them",
+    "hypothesis": "Certified route endpoint preservation retains stale branch anchors; no generated physical graph leaf cleanup precedes curve fitting",
+    "research": [
+      {
+        "relevance": "KiCad separates dangling-track cleanup and pad-exit optimization from DRC; use concept, no source copied",
+        "source": "https://docs.kicad.org/8.0/en/pcbnew/pcbnew.html"
+      }
+    ],
+    "round": 8,
+    "tier2": "Round07 frontier result preserved; this post-materialization change cannot affect its pre-materialization timeout",
+    "validation": "Synthetic leaf/T/contact/protected cases, then sequential curved Tier0/Tier1 diagnostic telemetry and external DRC; inspect highlighted regions"
+  },
+  "experiment": "generated-tail-cleanup",
+  "frozen_source_manifest_sha256": "36d54bb75c5ac715da53bf73ab7fc84b0b70503be6259464d21e97b4a5f433ba",
+  "git_revision": "9490886750c34b612eaf40fefa36ff75713c8c4e",
+  "round": 8,
+  "tiers": {
+    "tier0": {
+      "available": true,
+      "boards": [
+        {
+          "board": "pt2399_delay",
+          "complete": true,
+          "final_counts": {
+            "added_differential_pair_skew_tuning_length_nm": 0,
+            "added_track_arcs": 22,
+            "added_track_beziers": 402,
+            "added_tracks": 157,
+            "added_vias": 3,
+            "unrounded_curve_tangent_bends": 0,
+            "unrounded_non_junction_bends": 0,
+            "unrounded_straight_track_bends": 0
+          },
+          "final_curves": {
+            "added_track_arcs": 22,
+            "added_track_beziers": 402,
+            "attempted_circular_arc_candidates": 80,
+            "attempted_circular_arc_corners": 523
+          },
+          "global_runtime_seconds": 19.01238574500894,
+          "internal_violations": 0,
+          "kicad_drc": {
+            "categories": {},
+            "path": "/home/adam/qtbits/flux_capacitor/reports/validation/generated-tail-round08-20261012/tier0/tier-0-pt2399_delay/kicad-drc.json",
+            "unconnected_items": 0,
+            "violations": 0
+          },
+          "level": 0,
+          "missing_termination_counts": {},
+          "open_connections": 0,
+          "peak_rss_kib": 624136,
+          "qualified": true,
+          "runtime_seconds": 65.35127763601486,
+          "scaffold": {
+            "compact_search_attempts": 1,
+            "compact_search_expansions": 24,
+            "compact_search_fallbacks": 0,
+            "compact_search_successes": 1,
+            "complete": true,
+            "coupled_victim_exchanges_accepted": 0,
+            "coupled_victim_exchanges_attempted": 0,
+            "displacement_accepted": 0,
+            "displacement_attempts": 0,
+            "exchange_rollbacks": 0,
+            "expansions": 24,
+            "goal_rejections": 0,
+            "joint_group_accepted": 0,
+            "joint_group_attempts": 0,
+            "missing_connections": 0,
+            "missing_indices": [],
+            "physical_open_connections": 0,
+            "physical_unrouted_nets": 0,
+            "request_count": 51,
+            "retained_paths": 51,
+            "routed_connections": 51,
+            "satisfied_connections": 51,
+            "searched_connections": 1,
+            "source_attachments": 128,
+            "target_attachments": 128,
+            "victim_exchanges_accepted": 0,
+            "victim_exchanges_attempted": 0
+          },
+          "status": "qualified",
+          "stop_reason": "complete",
+          "tail_cleanup": {
+            "configured_generated_tail_cleanup": true,
+            "configured_max_generated_tail_cleanup_candidates": 256,
+            "configured_max_generated_tail_cleanup_split_tracks": 4096,
+            "generated_tail_cleanup_budget_exhausted": false,
+            "generated_tail_cleanup_candidates": 0,
+            "generated_tail_cleanup_removed_chains": 0,
+            "generated_tail_cleanup_removed_tracks": 0,
+            "generated_tail_cleanup_skipped_protected": 0
+          }
+        }
+      ],
+      "runner_exit": "0"
+    },
+    "tier1": {
+      "available": true,
+      "boards": [
+        {
+          "board": "bm_svf",
+          "complete": true,
+          "final_counts": {
+            "added_differential_pair_skew_tuning_length_nm": 0,
+            "added_track_arcs": 104,
+            "added_track_beziers": 413,
+            "added_tracks": 440,
+            "added_vias": 57,
+            "unrounded_curve_tangent_bends": 0,
+            "unrounded_non_junction_bends": 0,
+            "unrounded_straight_track_bends": 0
+          },
+          "final_curves": {
+            "added_track_arcs": 104,
+            "added_track_beziers": 413,
+            "attempted_circular_arc_candidates": 283,
+            "attempted_circular_arc_corners": 780
+          },
+          "global_runtime_seconds": 98.00023246696219,
+          "internal_violations": 0,
+          "kicad_drc": {
+            "categories": {},
+            "path": "/home/adam/qtbits/flux_capacitor/reports/validation/generated-tail-round08-20261012/tier1/tier-1-bm_svf/kicad-drc.json",
+            "unconnected_items": 0,
+            "violations": 0
+          },
+          "level": 1,
+          "missing_termination_counts": {},
+          "open_connections": 0,
+          "peak_rss_kib": 682780,
+          "qualified": true,
+          "runtime_seconds": 351.6687107910402,
+          "scaffold": {
+            "compact_search_attempts": 9,
+            "compact_search_expansions": 32664,
+            "compact_search_fallbacks": 0,
+            "compact_search_successes": 9,
+            "complete": true,
+            "coupled_victim_exchanges_accepted": 0,
+            "coupled_victim_exchanges_attempted": 0,
+            "displacement_accepted": 0,
+            "displacement_attempts": 0,
+            "exchange_rollbacks": 0,
+            "expansions": 32664,
+            "goal_rejections": 0,
+            "joint_group_accepted": 0,
+            "joint_group_attempts": 0,
+            "missing_connections": 0,
+            "missing_indices": [],
+            "physical_open_connections": 0,
+            "physical_unrouted_nets": 0,
+            "request_count": 90,
+            "retained_paths": 90,
+            "routed_connections": 90,
+            "satisfied_connections": 90,
+            "searched_connections": 12,
+            "source_attachments": 1152,
+            "target_attachments": 1152,
+            "victim_exchanges_accepted": 0,
+            "victim_exchanges_attempted": 0
+          },
+          "status": "qualified",
+          "stop_reason": "complete",
+          "tail_cleanup": {
+            "configured_generated_tail_cleanup": true,
+            "configured_max_generated_tail_cleanup_candidates": 256,
+            "configured_max_generated_tail_cleanup_split_tracks": 4096,
+            "generated_tail_cleanup_budget_exhausted": false,
+            "generated_tail_cleanup_candidates": 12,
+            "generated_tail_cleanup_removed_chains": 11,
+            "generated_tail_cleanup_removed_tracks": 30,
+            "generated_tail_cleanup_skipped_protected": 0
+          }
+        }
+      ],
+      "runner_exit": "0"
+    }
+  }
+}

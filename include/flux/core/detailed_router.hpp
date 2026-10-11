@@ -39,6 +39,12 @@ struct DetailedRouterConfig {
   bool continuous_refinement{true};
   bool topology_locked_medial_materialization{false};
   bool circular_arc_refinement{false};
+  // Remove bounded, generated straight-copper leaf chains that terminate at no physical
+  // pad/via/source attachment before curve fitting.  Exact validation and connectivity guards
+  // own every deletion; protected, coupled, locked and source routing is excluded.
+  bool enable_generated_tail_cleanup{true};
+  std::size_t max_generated_tail_cleanup_candidates{256};
+  std::size_t max_generated_tail_cleanup_split_tracks{4096};
   // After the PH/PNS realization has committed, make one serial, residual-only pass over
   // remaining eligible straight-track bends using the same exact fillet transaction. This never
   // changes the final bend audit or touches locked/protected copper.
@@ -194,6 +200,11 @@ struct DetailedRouteResult {
   std::size_t residual_bend_repair_run_budget_exhaustions{0};
   std::size_t residual_bend_repair_corner_budget_exhaustions{0};
   bool residual_bend_repair_budget_exhausted{false};
+  std::size_t generated_tail_cleanup_candidates{0};
+  std::size_t generated_tail_cleanup_removed_chains{0};
+  std::size_t generated_tail_cleanup_removed_tracks{0};
+  std::size_t generated_tail_cleanup_skipped_protected{0};
+  bool generated_tail_cleanup_budget_exhausted{false};
   std::size_t spline_committed_context_retry_tasks{0};
   std::size_t spline_committed_context_retry_commits{0};
   std::size_t added_vias{0};

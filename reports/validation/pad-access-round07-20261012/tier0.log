@@ -1,0 +1,5 @@
+ANALYSIS pt2399_delay: rendered 1 non-authoritative near results to /home/adam/qtbits/flux_capacitor/reports/validation/pad-access-round07-20261012/tier0/failed-route-png/pt2399_delay/global
+ANALYSIS pt2399_delay: rendered 1 non-authoritative near results to /home/adam/qtbits/flux_capacitor/reports/validation/pad-access-round07-20261012/tier0/failed-route-png/pt2399_delay/detail
+RENDER pt2399_delay: final copper PNGs in /home/adam/qtbits/flux_capacitor/reports/validation/pad-access-round07-20261012/tier0/tier-0-pt2399_delay/copper
+PASS pt2399_delay: 51 paths, exact copper and external KiCad DRC
+1/1 selected corpus checks passed; 1/1 assessed boards qualified

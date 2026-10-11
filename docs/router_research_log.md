@@ -9654,3 +9654,26 @@ Ran ft2232h_jtag alone on commit 43012e9 with curved routing, diagnostic telemet
 Of the missing retained requests, 15 have attachment_exhausted evidence and 14 are marked not_attempted; the initial failing requests have zero legal target attachments. All 32 victim exchanges rolled back as incoming_unroutable. Coupled exchanges (18), displacement attempts (14) and joint groups (8) accepted none; four joint actions exhausted their budget and eight had exact rejections. Eight blocked passages report no available displacement space. Primary hypothesis: dense terminal access/escape topology is blocking physical search, and repeated repair consumes the deadline before a complete scaffold. This is not a curve-fitting failure. These checkpoint counters are not necessarily cumulative run totals.
 
 The diagnostic front-copper preview was inspected; it is an incomplete angular preview, not final legal copper. The earlier 930-violation quantized-global oracle is a different representation from this partial scaffold, so no direct DRC improvement is claimed. Preserve the baseline; Tier 2 remains unlocked and unqualified. Machine-readable evidence: reports/benchmark_history/2026-10-12-tier2-baseline-round06.json.
+
+## Round 07 — Geometry-aware terminal access and preparation reuse
+
+### Failure and hypothesis
+Round 06 timed out in scaffold repair with 15 attachment-exhausted missing requests and 32 incoming-unroutable victim exchange rollbacks. Failed terminal evidence shows copper-contained targets with one component anchor but no legal grid attachments. Current access offers pad centers only, then searches a 0.2 mm grid neighborhood. Fine-pitch elongated pads can have a legal outward escape beyond that neighborhood even when nearby grid connections clip neighboring pads. This is a candidate-completeness hypothesis, not proof that all 15 terminals have a legal solution.
+
+### Ranked experiment
+Add bounded near-edge principal-axis pad anchors, checked against exact pad containment and physical component membership, after the existing anchor prefix. Reuse the transformed pad-shape array within the access call. Prefer this over a globally finer grid or increasing repair retries: it adds the missing terminal states and avoids repeated geometry preparation without changing clearances. [KiCad PCB Editor documentation](https://docs.kicad.org/8.0/en/pcbnew/pcbnew.html) treats optimized pad exits as a distinct routing concern; no implementation is copied.
+
+### Verification plan
+A synthetic rotated/off-grid fine-pitch escape must fail center-only attachment but route with the new anchors under exact DRC. Opposite-side coincident pad components remain separate. Preserve existing branch ordering and run Tier 0, Tier 1, then Tier 2 sequentially with telemetry and the same deadlines.
+
+### Round 07 focused and lower-tier verification
+The strengthened rotated/off-grid fine-pitch regression confirms all 25 center-neighborhood attachments are blocked, fails against the pre-change library for absent pad-edge anchors, then passes with an exact-DRC-clean searched route. Strict build, four focused suites, and independent review pass. New edge scanning checks cancellation per pad, prefilters by accepted component/layer pad centers, and retains exact membership validation.
+
+Sequential diagnostic-telemetry regressions both pass final curved-output and external KiCad DRC gates. Tier0: global18.683s, detailed65.415s, zero opens/violations/unrounded bends. Tier1: global96.904s, detailed264.433s versus314.896s previously (~16% faster), zero opens/violations/unrounded bends;526straight tracks,131arcs,360Béziers,57vias versus67vias previously. Physical scaffold90/90 includes residual component demands, compared with88/88 before; both certify zero physical opens. These are single-run performance comparisons, not isolated pad-preparation microbenchmarks.
+
+Both Tier1 copper layers were inspected: rounded main routes, with some redundant same-net branches and small detours remaining. Tier2 validation is running against the unchanged900s deadline. No board-specific rules or clearance relaxation were introduced.
+
+### Round 07 frontier result and decision
+Tier 2 timed out after 900.182 s with 85/117 satisfied requests and 46 physical opens, compared with 88/117 and 43 opens previously. Peak RSS was 651,452 KiB. No final curves or external DRC were reached. The retained scaffold records one searched connection, 128 source attachments and 4 target attachments; repair/exchange counters remain zero. New legal access states allow search, but its cost now consumes the deadline before repair. This is a Tier-2 performance regression, not a solved frontier.
+
+Keep the locally proven terminal-access fix and Tier-1 improvement as a recoverable checkpoint; the frontier requires bounded search/preparation work and better attachment ranking. Do not increase the deadline to hide the regression. The user also identified visually poor Tier-1 output despite legal DRC: object-level checks confirm generated bare tails at (55.44,55.59), (58.04,52.99), (59.99,51.69), and (66.49,56.89), none attached to a pad, via or zone. The next separate round will remove unnecessary generated topology before curve fitting, preserving real physical terminal connectivity.

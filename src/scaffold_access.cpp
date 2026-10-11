@@ -21,10 +21,11 @@ void append_layer(std::vector<LayerId>& layers, const LayerId& layer) {
   if (!contains(layers, layer)) layers.push_back(layer);
 }
 
-[[nodiscard]] std::vector<LayerId> accessible_layers(const Board& board, const NetId& net,
-                                                       const GlobalRoutePoint& endpoint) {
+[[nodiscard]] std::vector<LayerId> accessible_layers(const NetId& net,
+                                                       const GlobalRoutePoint& endpoint,
+                                                       const std::vector<CopperPadShape>& pads) {
   std::vector<std::vector<LayerId>> contacts;
-  for (const auto& pad : copper_pad_shapes(board)) {
+  for (const auto& pad : pads) {
     if (pad.net == net && point_to_pad_copper_distance_nm(endpoint.position, pad) <= 0.0L)
       contacts.push_back(pad.layers);
   }
@@ -47,9 +48,10 @@ void append_layer(std::vector<LayerId>& layers, const LayerId& layer) {
   return result;
 }
 
-[[nodiscard]] CopperConnectivityProbe probe_for(const Board& board, const NetId& net,
-                                                  const GlobalRoutePoint& endpoint) {
-  return {endpoint.position, accessible_layers(board, net, endpoint)};
+[[nodiscard]] CopperConnectivityProbe probe_for(const NetId& net,
+                                                  const GlobalRoutePoint& endpoint,
+                                                  const std::vector<CopperPadShape>& pads) {
+  return {endpoint.position, accessible_layers(net, endpoint, pads)};
 }
 
 void append_unique(std::vector<GlobalRoutePoint>& points, GlobalRoutePoint point,
@@ -74,7 +76,9 @@ void append_unique(std::vector<GlobalRoutePoint>& points, GlobalRoutePoint point
 template <typename Visitor>
 [[nodiscard]] bool visit_component_anchor_candidates(const Board& board,
                                                       const GlobalRoutePath& request,
-                                                      Point opposite, Visitor&& visit) {
+                                                      Point opposite,
+                                                      const std::vector<CopperPadShape>& pads,
+                                                      Visitor&& visit) {
   const auto visit_layers = [&](Point point, const std::vector<LayerId>& layers) {
     for (const auto& layer : layers)
       if (!visit(GlobalRoutePoint{point, layer})) return false;
@@ -82,7 +86,7 @@ template <typename Visitor>
   };
   // The visitor applies the output cap only after exact component membership filtering. Board
   // order therefore cannot let disconnected same-net copper consume every usable anchor.
-  for (const auto& pad : copper_pad_shapes(board)) {
+  for (const auto& pad : pads) {
     routing_kernel_checkpoint();
     if (pad.net == request.net && !visit_layers(pad.position, pad.layers)) return false;
   }
@@ -110,6 +114,38 @@ template <typename Visitor>
   return true;
 }
 
+template <typename Visitor>
+[[nodiscard]] bool visit_component_pad_edge_candidates(const std::vector<CopperPadShape>& pads,
+                                                        const GlobalRoutePath& request,
+                                                        const std::vector<GlobalRoutePoint>& accepted_anchors,
+                                                        Visitor&& visit) {
+  for (const auto& pad : pads) {
+    routing_kernel_checkpoint();
+    if (pad.net != request.net) continue;
+    std::vector<LayerId> member_layers;
+    for (const auto& layer : pad.layers)
+      if (std::find(accepted_anchors.begin(), accepted_anchors.end(),
+                    GlobalRoutePoint{pad.position, layer}) != accepted_anchors.end())
+        member_layers.push_back(layer);
+    if (member_layers.empty()) continue;
+    const auto radians = static_cast<long double>(pad.rotation.value()) * std::acos(-1.0L) / 180'000'000.0L;
+    const auto point = [&](long double x, long double y) {
+      return Point{Nanometres{static_cast<std::int64_t>(std::llround(static_cast<long double>(pad.position.x.value()) + x * std::cos(radians) - y * std::sin(radians)))},
+                   Nanometres{static_cast<std::int64_t>(std::llround(static_cast<long double>(pad.position.y.value()) + x * std::sin(radians) + y * std::cos(radians)))}};
+    };
+    const auto inset = static_cast<long double>(std::min(pad.width.value(), pad.height.value())) / 4.0L;
+    const auto x = std::max(0.0L, static_cast<long double>(pad.width.value()) / 2.0L - inset);
+    const auto y = std::max(0.0L, static_cast<long double>(pad.height.value()) / 2.0L - inset);
+    for (const auto [dx, dy] : {std::pair{x, 0.0L}, std::pair{-x, 0.0L}, std::pair{0.0L, y}, std::pair{0.0L, -y}}) {
+      const auto candidate = point(dx, dy);
+      if (point_to_pad_copper_distance_nm(candidate, pad) > 0.0L) continue;
+      for (const auto& layer : member_layers)
+        if (!visit({candidate, layer})) return false;
+    }
+  }
+  return true;
+}
+
 [[nodiscard]] bool shares_component(const CopperProbeComponentMembership& first,
                                     const CopperProbeComponentMembership& second) {
   if (!first.contained_by_copper || !second.contained_by_copper) return false;
@@ -126,8 +162,9 @@ template <typename Visitor>
 
 bool scaffold_request_connected(const Board& board, const GlobalRoutePath& request) {
   if (!valid_request(request)) return false;
-  const auto source = probe_for(board, request.net, request.points.front());
-  const auto target = probe_for(board, request.net, request.points.back());
+  const auto pads = copper_pad_shapes(board);
+  const auto source = probe_for(request.net, request.points.front(), pads);
+  const auto target = probe_for(request.net, request.points.back(), pads);
   return copper_probes_share_component(board, request.net, source, target);
 }
 
@@ -136,10 +173,11 @@ ScaffoldConnectionAccess scaffold_connection_access(const Board& board,
                                                     std::size_t maximum_points) {
   ScaffoldConnectionAccess result;
   if (!valid_request(request) || maximum_points == 0U) return result;
+  const auto pads = copper_pad_shapes(board);
   const auto& first = request.points.front();
   const auto& last = request.points.back();
-  const auto source = probe_for(board, request.net, first);
-  const auto target = probe_for(board, request.net, last);
+  const auto source = probe_for(request.net, first, pads);
+  const auto target = probe_for(request.net, last, pads);
   const auto endpoint_memberships =
       copper_probe_component_memberships(board, request.net, {source, target});
   if (endpoint_memberships.size() != 2U) return result;
@@ -184,7 +222,11 @@ ScaffoldConnectionAccess scaffold_connection_access(const Board& board,
     // the batch oracle rather than assumed from a coarse net/layer label.
     for (const auto& layer : probe.layers)
       if (!enqueue({endpoint.position, layer})) return;
-    static_cast<void>(visit_component_anchor_candidates(board, request, opposite, enqueue));
+    static_cast<void>(visit_component_anchor_candidates(board, request, opposite, pads, enqueue));
+    flush();
+    // Preserve all pre-existing candidates as a stable prefix; pad-edge escapes only add
+    // alternatives after tracks, vias, and curve endpoints have been considered.
+    static_cast<void>(visit_component_pad_edge_candidates(pads, request, output, enqueue));
     flush();
   };
   collect(first, source, endpoint_memberships[0].contained_by_copper, last.position, result.starts);

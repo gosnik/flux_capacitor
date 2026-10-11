@@ -3,6 +3,7 @@
 #include "flux/core/routing_kernel.hpp"
 #include "../../src/scaffold_via_history.hpp"
 #include "../../src/scaffold_access.hpp"
+#include "../../src/scaffold_collision.hpp"
 
 #include <algorithm>
 #include <stdexcept>
@@ -609,6 +610,48 @@ void same_net_on_separate_layers_does_not_prove_connectivity() {
   require(result.complete && !result.paths.empty() && !result.copper.vias.empty(),
           "coincident same-net copper on different layers needs a physical transition");
 }
+void fine_pitch_rotated_pad_edge_access_reaches_the_scaffold_grid() {
+  auto board = fixture();
+  board.layers.resize(1U);
+  board.rules.default_track_width = Nanometres::from_mm(0.25);
+  Footprint footprint;
+  footprint.id = ObjectId{"fine-pitch-footprint"};
+  footprint.position = mm(5.05, 5.05);
+  Pad pad;
+  pad.id = ObjectId{"fine-pitch-pad"}; pad.net = NetId{"a"}; pad.layers = {LayerId{"F.Cu"}};
+  pad.shape = PadShape::rectangle; pad.width = Nanometres::from_mm(0.3);
+  pad.height = Nanometres::from_mm(1.5); pad.rotation = Microdegrees{90'000'000};
+  footprint.pads.push_back(pad);
+  for (const auto offset : {-0.5, 0.5}) {
+    auto neighbor = pad;
+    neighbor.id = ObjectId{offset < 0 ? "lower-pad" : "upper-pad"};
+    neighbor.net = NetId{"b"}; neighbor.local_position = mm(0, offset);
+    footprint.pads.push_back(neighbor);
+  }
+  board.footprints.push_back(footprint);
+  const auto demand = request(NetId{"a"}, mm(8.05, 8.05), LayerId{"F.Cu"}, mm(5.05, 5.05), LayerId{"F.Cu"});
+  const auto center_only = scaffold_connection_access(board, demand, 1U);
+  require(center_only.goals == std::vector<GlobalRoutePoint>{{mm(5.05, 5.05), LayerId{"F.Cu"}}},
+          "existing exact center must remain the first bounded attachment anchor");
+  const ScaffoldCollisionIndex collision(board);
+  for (int x = 48; x <= 52; ++x) for (int y = 48; y <= 52; ++y) {
+    TrackSegment probe{ObjectId{"probe"}, NetId{"a"}, LayerId{"F.Cu"}, mm(5.05, 5.05),
+                       mm(static_cast<double>(x) / 10.0, static_cast<double>(y) / 10.0),
+                       board.rules.default_track_width, false};
+    require(!collision.check_track(probe).ok(),
+            "every center-only grid attachment must be blocked by the fine-pitch neighbors");
+  }
+  const auto access = scaffold_connection_access(board, demand, 8U);
+  require(access.goals.size() > 1U, "rotated pad edge escapes must supplement the existing center");
+  CopperScaffoldConfig config;
+  config.grid_pitch = Nanometres::from_mm(0.1); config.attachment_radius_cells = 2U;
+  config.maximum_expansions_per_connection = 5'000U;
+  const auto result = construct_copper_scaffold(board, {demand}, config);
+  require(result.complete && check_copper_rules(result.copper).ok() &&
+              result.counters.searched_connections > 0U,
+          "blocked center access must recover through an exact DRC-clean searched pad-edge escape");
+}
+
 } // namespace
 int main() {
   via_histories_are_canonical_immutable_and_bounded();
@@ -623,6 +666,7 @@ int main() {
   existing_component_is_a_completed_transaction_without_new_copper();
   retained_branch_can_attach_to_component_interior();
   same_net_on_separate_layers_does_not_prove_connectivity();
+  fine_pitch_rotated_pad_edge_access_reaches_the_scaffold_grid();
   accepts_legal_supplied_topology();
   finds_a_legal_detour_when_the_supplied_line_is_blocked();
   supplies_a_legal_via_transition();

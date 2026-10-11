@@ -1,0 +1,27 @@
+{
+  "round": 7,
+  "baseline_commit": "ed71839",
+  "frontier": "ft2232h_jtag",
+  "failure_stage": "scaffold terminal attachment before graph expansion",
+  "evidence": {
+    "attachment_exhausted_requests": 15,
+    "missing_requests": 29,
+    "physical_opens": 43,
+    "victim_rollbacks_incoming_unroutable": 32
+  },
+  "hypothesis": "Pad center-only anchors plus0.2mm grid neighborhood can miss a legal outward escape from elongated fine-pitch pads.",
+  "candidates_ranked": [
+    "Bounded exact-component-checked near-edge pad anchors; preserve existing anchor prefix.",
+    "Finer global search grid: much larger graph, does not target missing terminal states.",
+    "More repair budget: repeats inadequate access candidates."
+  ],
+  "experiment": "Reuse world-space pad geometry within access calls and append exact-contained principal-axis near-edge alternatives. No clearance relaxation or changed grid pitch.",
+  "regression": "Fine-pitch rotated/offset terminal escape plus opposite-side component isolation; Tier0\u2192Tier1\u2192Tier2 sequential telemetry.",
+  "research": [
+    {
+      "source": "https://docs.kicad.org/8.0/en/pcbnew/pcbnew.html",
+      "relevance": "Interactive router optimizes pad exits; supports treating pad connection geometry as explicit routing access. Flux uses its own bounded exact-membership model."
+    }
+  ],
+  "status": "kept_local_escape_fix_and_tier1_improvement_tier2_search_cost_regression"
+}

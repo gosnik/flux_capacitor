@@ -1,0 +1,5 @@
+ANALYSIS bm_svf: rendered 1 non-authoritative near results to /home/adam/qtbits/flux_capacitor/reports/validation/pad-access-round07-20261012/tier1/failed-route-png/bm_svf/global
+ANALYSIS bm_svf: rendered 1 non-authoritative near results to /home/adam/qtbits/flux_capacitor/reports/validation/pad-access-round07-20261012/tier1/failed-route-png/bm_svf/detail
+RENDER bm_svf: final copper PNGs in /home/adam/qtbits/flux_capacitor/reports/validation/pad-access-round07-20261012/tier1/tier-1-bm_svf/copper
+PASS bm_svf: 90 paths, exact copper and external KiCad DRC
+1/1 selected corpus checks passed; 1/1 assessed boards qualified

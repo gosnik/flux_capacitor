@@ -1,0 +1,319 @@
+{
+  "binary_sha256": "72886769bd3696b4408b4cdfdbe27c94768ff8954c4017fa736934e7029c823c",
+  "configuration": {
+    "curved": true,
+    "lower_tier_iterations": "manifest/default",
+    "routing_timeout_seconds": 900,
+    "sequential": true,
+    "telemetry": "diagnostic",
+    "tier2_iterations": 30
+  },
+  "diagnosis": {
+    "baseline_commit": "ed71839",
+    "candidates_ranked": [
+      "Bounded exact-component-checked near-edge pad anchors; preserve existing anchor prefix.",
+      "Finer global search grid: much larger graph, does not target missing terminal states.",
+      "More repair budget: repeats inadequate access candidates."
+    ],
+    "evidence": {
+      "attachment_exhausted_requests": 15,
+      "missing_requests": 29,
+      "physical_opens": 43,
+      "victim_rollbacks_incoming_unroutable": 32
+    },
+    "experiment": "Reuse world-space pad geometry within access calls and append exact-contained principal-axis near-edge alternatives. No clearance relaxation or changed grid pitch.",
+    "failure_stage": "scaffold terminal attachment before graph expansion",
+    "frontier": "ft2232h_jtag",
+    "hypothesis": "Pad center-only anchors plus0.2mm grid neighborhood can miss a legal outward escape from elongated fine-pitch pads.",
+    "regression": "Fine-pitch rotated/offset terminal escape plus opposite-side component isolation; Tier0\u2192Tier1\u2192Tier2 sequential telemetry.",
+    "research": [
+      {
+        "relevance": "Interactive router optimizes pad exits; supports treating pad connection geometry as explicit routing access. Flux uses its own bounded exact-membership model.",
+        "source": "https://docs.kicad.org/8.0/en/pcbnew/pcbnew.html"
+      }
+    ],
+    "round": 7,
+    "status": "kept_local_escape_fix_and_tier1_improvement_tier2_search_cost_regression"
+  },
+  "experiment": "pad-access",
+  "frozen_source_manifest_sha256": "f0e9e6ef8450b797bf3c62c641545578c7d4a7925add1b8bb06fd14b5369696d",
+  "git_revision": "ed7183922c9535ce92862ad1c9422c0fd7b8dc9d",
+  "round": 7,
+  "round06_tier2_comparison": {
+    "compact_search_expansions": {
+      "round06": 1013,
+      "round07": 55
+    },
+    "exchange_rollbacks": {
+      "round06": 32,
+      "round07": 0
+    },
+    "expansions": {
+      "round06": 1013,
+      "round07": 55
+    },
+    "missing_connections": {
+      "round06": 29,
+      "round07": 32
+    },
+    "physical_open_connections": {
+      "round06": 43,
+      "round07": 46
+    },
+    "request_count": {
+      "round06": 117,
+      "round07": 117
+    },
+    "retained_paths": {
+      "round06": 88,
+      "round07": 85
+    },
+    "satisfied_connections": {
+      "round06": 88,
+      "round07": 85
+    },
+    "source_attachments": {
+      "round06": 3751,
+      "round07": 128
+    },
+    "target_attachments": {
+      "round06": 2810,
+      "round07": 4
+    },
+    "victim_exchanges_attempted": {
+      "round06": 32,
+      "round07": 0
+    }
+  },
+  "tiers": {
+    "tier0": {
+      "available": true,
+      "boards": [
+        {
+          "board": "pt2399_delay",
+          "complete": true,
+          "final_counts": {
+            "added_differential_pair_skew_tuning_length_nm": 0,
+            "added_track_arcs": 22,
+            "added_track_beziers": 406,
+            "added_tracks": 154,
+            "added_vias": 3,
+            "unrounded_curve_tangent_bends": 0,
+            "unrounded_non_junction_bends": 0,
+            "unrounded_straight_track_bends": 0
+          },
+          "final_curves": {
+            "added_track_arcs": 22,
+            "added_track_beziers": 406,
+            "attempted_circular_arc_candidates": 80,
+            "attempted_circular_arc_corners": 523
+          },
+          "global_runtime_seconds": 18.682791306986474,
+          "internal_violations": 0,
+          "kicad_drc": {
+            "categories": {},
+            "path": "/home/adam/qtbits/flux_capacitor/reports/validation/pad-access-round07-20261012/tier0/tier-0-pt2399_delay/kicad-drc.json",
+            "unconnected_items": 0,
+            "violations": 0
+          },
+          "level": 0,
+          "missing_termination_counts": {},
+          "open_connections": 0,
+          "peak_rss_kib": 607184,
+          "qualified": true,
+          "runtime_seconds": 65.4147719630273,
+          "scaffold": {
+            "compact_search_attempts": 1,
+            "compact_search_expansions": 24,
+            "compact_search_fallbacks": 0,
+            "compact_search_successes": 1,
+            "complete": true,
+            "coupled_victim_exchanges_accepted": 0,
+            "coupled_victim_exchanges_attempted": 0,
+            "displacement_accepted": 0,
+            "displacement_attempts": 0,
+            "exchange_rollbacks": 0,
+            "expansions": 24,
+            "goal_rejections": 0,
+            "joint_group_accepted": 0,
+            "joint_group_attempts": 0,
+            "missing_connections": 0,
+            "missing_indices": [],
+            "physical_open_connections": 0,
+            "physical_unrouted_nets": 0,
+            "request_count": 51,
+            "retained_paths": 51,
+            "routed_connections": 51,
+            "satisfied_connections": 51,
+            "searched_connections": 1,
+            "source_attachments": 128,
+            "target_attachments": 128,
+            "victim_exchanges_accepted": 0,
+            "victim_exchanges_attempted": 0
+          },
+          "status": "qualified",
+          "stop_reason": "complete"
+        }
+      ],
+      "runner_exit": "0"
+    },
+    "tier1": {
+      "available": true,
+      "boards": [
+        {
+          "board": "bm_svf",
+          "complete": true,
+          "final_counts": {
+            "added_differential_pair_skew_tuning_length_nm": 0,
+            "added_track_arcs": 131,
+            "added_track_beziers": 360,
+            "added_tracks": 526,
+            "added_vias": 57,
+            "unrounded_curve_tangent_bends": 0,
+            "unrounded_non_junction_bends": 0,
+            "unrounded_straight_track_bends": 0
+          },
+          "final_curves": {
+            "added_track_arcs": 131,
+            "added_track_beziers": 360,
+            "attempted_circular_arc_candidates": 230,
+            "attempted_circular_arc_corners": 807
+          },
+          "global_runtime_seconds": 96.90359535097377,
+          "internal_violations": 0,
+          "kicad_drc": {
+            "categories": {},
+            "path": "/home/adam/qtbits/flux_capacitor/reports/validation/pad-access-round07-20261012/tier1/tier-1-bm_svf/kicad-drc.json",
+            "unconnected_items": 0,
+            "violations": 0
+          },
+          "level": 1,
+          "missing_termination_counts": {},
+          "open_connections": 0,
+          "peak_rss_kib": 763752,
+          "qualified": true,
+          "runtime_seconds": 264.4329600580386,
+          "scaffold": {
+            "compact_search_attempts": 9,
+            "compact_search_expansions": 32664,
+            "compact_search_fallbacks": 0,
+            "compact_search_successes": 9,
+            "complete": true,
+            "coupled_victim_exchanges_accepted": 0,
+            "coupled_victim_exchanges_attempted": 0,
+            "displacement_accepted": 0,
+            "displacement_attempts": 0,
+            "exchange_rollbacks": 0,
+            "expansions": 32664,
+            "goal_rejections": 0,
+            "joint_group_accepted": 0,
+            "joint_group_attempts": 0,
+            "missing_connections": 0,
+            "missing_indices": [],
+            "physical_open_connections": 0,
+            "physical_unrouted_nets": 0,
+            "request_count": 90,
+            "retained_paths": 90,
+            "routed_connections": 90,
+            "satisfied_connections": 90,
+            "searched_connections": 12,
+            "source_attachments": 1152,
+            "target_attachments": 1152,
+            "victim_exchanges_accepted": 0,
+            "victim_exchanges_attempted": 0
+          },
+          "status": "qualified",
+          "stop_reason": "complete"
+        }
+      ],
+      "runner_exit": "0"
+    },
+    "tier2": {
+      "available": true,
+      "boards": [
+        {
+          "board": "ft2232h_jtag",
+          "complete": false,
+          "final_counts": {},
+          "final_curves": {},
+          "global_runtime_seconds": 900.1817392840167,
+          "internal_violations": null,
+          "kicad_drc": null,
+          "level": 2,
+          "missing_termination_counts": {
+            "not_attempted": 32
+          },
+          "open_connections": null,
+          "peak_rss_kib": 651452,
+          "qualified": false,
+          "runtime_seconds": 900.1817392840167,
+          "scaffold": {
+            "compact_search_attempts": 1,
+            "compact_search_expansions": 55,
+            "compact_search_fallbacks": 0,
+            "compact_search_successes": 1,
+            "complete": false,
+            "coupled_victim_exchanges_accepted": 0,
+            "coupled_victim_exchanges_attempted": 0,
+            "displacement_accepted": 0,
+            "displacement_attempts": 0,
+            "exchange_rollbacks": 0,
+            "expansions": 55,
+            "goal_rejections": 0,
+            "joint_group_accepted": 0,
+            "joint_group_attempts": 0,
+            "missing_connections": 32,
+            "missing_indices": [
+              43,
+              44,
+              46,
+              49,
+              50,
+              51,
+              52,
+              62,
+              66,
+              73,
+              74,
+              78,
+              80,
+              82,
+              84,
+              87,
+              90,
+              91,
+              92,
+              93,
+              94,
+              95,
+              97,
+              98,
+              99,
+              105,
+              108,
+              110,
+              111,
+              114,
+              115,
+              116
+            ],
+            "physical_open_connections": 46,
+            "physical_unrouted_nets": 21,
+            "request_count": 117,
+            "retained_paths": 85,
+            "routed_connections": 85,
+            "satisfied_connections": 85,
+            "searched_connections": 1,
+            "source_attachments": 128,
+            "target_attachments": 4,
+            "victim_exchanges_accepted": 0,
+            "victim_exchanges_attempted": 0
+          },
+          "status": "unlocked",
+          "stop_reason": "iteration_limit"
+        }
+      ],
+      "runner_exit": "0"
+    }
+  }
+}

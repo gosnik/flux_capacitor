@@ -1,0 +1,3 @@
+ANALYSIS ft2232h_jtag: rendered 1 non-authoritative near results to /home/adam/qtbits/flux_capacitor/reports/validation/pad-access-round07-20261012/tier2/failed-route-png/ft2232h_jtag/global
+PROBE ft2232h_jtag: incomplete as expected; stop=iteration_limit, paths=117, unrouted=0, overflow=381
+1/1 selected corpus checks passed; 0/1 assessed boards qualified

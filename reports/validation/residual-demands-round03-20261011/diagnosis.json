@@ -1,0 +1,23 @@
+{
+  "baseline_commit": "faba2a1",
+  "tier1_before": {
+    "declared_requests": 78,
+    "satisfied_requests": 78,
+    "physical_opens": 10,
+    "physical_unrouted_nets": 7,
+    "runtime_seconds": 900.203
+  },
+  "failure": "Physical pad components remain disconnected after all declared demands are satisfied. No missing request remains to drive focused repair.",
+  "change": "Append residual physical component spanning demands only after a complete declared domain, preserving checked prefix and component copper.",
+  "work_bound": "On-demand Prim frontier, linear edge memory; shared maximum 1000000 pad-pair comparisons. Incomplete net suffix rolls back.",
+  "tests": [
+    "checked disconnected trees",
+    "same-coordinate separate layers",
+    "shared layer avoids unnecessary via",
+    "fresh stable indices",
+    "pending suffix idempotence",
+    "exact pair budget and atomic rollback",
+    "source-only physical terminal engine certification"
+  ],
+  "status": "strict build and tests running"
+}

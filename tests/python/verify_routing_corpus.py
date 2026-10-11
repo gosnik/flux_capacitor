@@ -258,6 +258,25 @@ def audit_straight_copper_angles(candidate: Path) -> dict:
             "passed": counts["other"] == 0 and arcs == 0 and not re.search(r"\(gr_curve\s", source)}
 
 
+def path_inventory_acceptance(routed: dict, expected: dict, qualification: str) -> str | None:
+    if routed.get("paths") == expected["global_paths"]:
+        return "exact_global_path_count"
+    # Physical suffix demands may add paths without altering any checked original demand.
+    # This only admits the candidate to detailed validation; it never bypasses final DRC.
+    scaffold = routed.get("copper_scaffold", {})
+    count = scaffold.get("request_count", 0)
+    if (qualification == "detailed_complete"
+            and routed.get("routing_plan_complete") is True
+            and scaffold.get("complete") is True
+            and count >= expected["global_paths"]
+            and scaffold.get("satisfied_connections") == count
+            and scaffold.get("missing_connections") == 0
+            and scaffold.get("physical_open_connections") == 0
+            and scaffold.get("physical_unrouted_nets") == 0):
+        return "expanded_physical_demand"
+    return None
+
+
 def detailed_copper_ready_for_final_drc(detailed: dict, expected: dict, candidate: Path) -> bool:
     # A written diagnostic preview is not evidence of detailed completion.
     return (
@@ -475,9 +494,11 @@ def verify_board(
             )
         if board["status"] == "qualified":
             require(planning_ready, f"{board_id}: qualified routing plan regressed")
+            inventory = path_inventory_acceptance(routed, expected, qualification)
+            board_result["path_inventory_acceptance"] = inventory
             require(
-                routed.get("paths") == expected["global_paths"],
-                f"{board_id}: expected {expected['global_paths']} paths, "
+                inventory is not None,
+                f"{board_id}: expected {expected['global_paths']} paths or a certified physical expansion, "
                 f"got {routed.get('paths')}",
             )
 

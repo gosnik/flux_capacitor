@@ -1,0 +1,39 @@
+{
+  "status": "complete_not_qualified",
+  "baseline_commit": "faba2a1",
+  "build": "passed strict release CLI and engine experiment target",
+  "test": "flux_routing_engine_experiment_tests passed 0.76 seconds",
+  "review": "initial scaling finding fixed; no remaining material issues",
+  "binary_sha256": "70c4848e115cb8f1c1bb9059514d8e8414c3b6e992b181d7760c467908647f8f",
+  "benchmark_session_id": 65610,
+  "sequence": [
+    "tier0",
+    "tier1"
+  ],
+  "telemetry": "diagnostic",
+  "track_geometry": "curved",
+  "goal_achieved": false,
+  "checkpoint": "Commit/tag/push after results before another implementation round",
+  "tier0_global": {
+    "seconds": 18.24352718499722,
+    "satisfied": 51,
+    "requests": 51,
+    "physical_opens": 0,
+    "detail_not_run_reason": "legacy expected50paths guard"
+  },
+  "tier1_global": {
+    "seconds": 105.43882570002461,
+    "satisfied": 88,
+    "requests": 88,
+    "physical_opens": 0,
+    "physical_plan_certified": true
+  },
+  "tier0_supplemental_results": "reports/validation/residual-demands-round03-final-20261011",
+  "tier1_detail": {
+    "seconds": 105.84875744802412,
+    "stop_reason": "invalid_path",
+    "diagnostic": "global path contains an invalid layer transition",
+    "final_drc": "not reached"
+  },
+  "decision": "Physical hypothesis supported: both boards zero real opens. Detailed output regressed to invalid_path before curve generation; do not promote. Next experiment fixes explicit nominal-width handoff mismatch with regression coverage."
+}

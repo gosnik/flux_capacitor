@@ -10,6 +10,7 @@
 #include "flux/core/routing_rules.hpp"
 #include "flux/core/copper_geometry.hpp"
 #include "scaffold_terminal_rebind.hpp"
+#include "scaffold_physical_demands.hpp"
 #include "scaffold_access.hpp"
 
 #include <boost/multiprecision/cpp_int.hpp>
@@ -2023,6 +2024,13 @@ RoutingEngineStepResult RoutingEngine::advance(RoutingEngineStepBudget budget,
         auto requests = retained_scaffold && !retained_scaffold->requests.empty()
             ? retained_scaffold->requests : scaffold_requests(*source, domain);
         if (rebound_requests) requests = *rebound_requests;
+        if (retained_scaffold && retained_scaffold->complete) {
+          requests = append_residual_physical_demands(*retained_scaffold);
+          if (requests.size() > retained_scaffold->requests.size())
+            emit_engine_event(telemetry, "physical-demands", action, 0U, 0U,
+                "appended=" + std::to_string(requests.size() - retained_scaffold->requests.size()) +
+                "; preserved=" + std::to_string(retained_scaffold->requests.size()));
+        }
         domain.paths = requests;
         const auto scaffold = scaffold_physical_scene(*source, detail, domain);
         if (!scaffold) return;
@@ -2662,7 +2670,13 @@ RoutingEngineStepResult RoutingEngine::advance(RoutingEngineStepBudget budget,
   }
   if (action == RoutingEngineAction::construct_copper_scaffold && !pending_->plan &&
       (!state_.working_plan || !state_.working_plan->legal_scaffold_complete)) {
-    state_.next_action = select_action(RoutingEngineAction::construct_copper_scaffold);
+    // Completed declared demands can expose a new physical domain. Re-enter immediately
+    // only after the retained input changed; an unchanged failed construction stays bounded.
+    const bool residual_domain = state_.legal_scaffold && state_.legal_scaffold->complete &&
+        pending_->input_key != evidence_key(RoutingEngineAction::construct_copper_scaffold) &&
+        append_residual_physical_demands(*state_.legal_scaffold).size() > state_.legal_scaffold->requests.size();
+    state_.next_action = select_action(residual_domain ? RoutingEngineAction::none
+        : RoutingEngineAction::construct_copper_scaffold);
     state_.outcome = state_.next_action == RoutingEngineAction::none
         ? RoutingEngineOutcome::exhausted : RoutingEngineOutcome::progressed;
   }

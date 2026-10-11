@@ -24,6 +24,27 @@ class RuleContextTests(unittest.TestCase):
         self.project = b'{"board":{"design_settings":{"rules":{"min_track_width":0.7}}}}\n'
         self.source.with_suffix(".kicad_pro").write_bytes(self.project)
 
+    def test_expanded_physical_requests_require_a_complete_detailed_plan(self):
+        expected = {"global_paths": 50}
+        physical = {"paths": 51, "routing_plan_complete": True,
+                    "copper_scaffold": {"complete": True, "request_count": 51,
+                        "satisfied_connections": 51, "missing_connections": 0,
+                        "physical_open_connections": 0, "physical_unrouted_nets": 0}}
+        self.assertEqual(corpus.path_inventory_acceptance(physical, expected, "detailed_complete"),
+                         "expanded_physical_demand")
+        self.assertIsNone(corpus.path_inventory_acceptance(physical, expected, "global_complete"))
+        self.assertIsNone(corpus.path_inventory_acceptance(
+            dict(physical, routing_plan_complete=False), expected, "detailed_complete"))
+        for change in ({"complete": False}, {"request_count": 49},
+                       {"satisfied_connections": 50}, {"missing_connections": 1},
+                       {"physical_open_connections": 1}, {"physical_unrouted_nets": 1}):
+            with self.subTest(change=change):
+                broken = dict(physical, copper_scaffold=dict(physical["copper_scaffold"], **change))
+                self.assertIsNone(corpus.path_inventory_acceptance(broken, expected, "detailed_complete"))
+        self.assertIsNone(corpus.path_inventory_acceptance({"paths": 51}, expected, "detailed_complete"))
+        self.assertEqual(corpus.path_inventory_acceptance({"paths": 50}, expected, "global_complete"),
+                         "exact_global_path_count")
+
     def test_straight_angle_audit_checks_exported_decimal_copper(self):
         self.candidate.write_text("""(kicad_pcb
           (segment (start 1.1 2) (end 3.1 2) (width 0.25) (layer "F.Cu"))

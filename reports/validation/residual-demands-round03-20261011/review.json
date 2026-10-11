@@ -1,0 +1,7 @@
+{
+  "reviewer": "joint_review",
+  "initial_finding": "Quadratic edge storage and cubic edge scans in first residual helper",
+  "resolution": "On-demand Prim frontier, shared pad-pair cap, atomic per-net rollback, exact boundary regression",
+  "final_status": "no remaining material findings",
+  "additional_scope": "engine scheduling, changed-domain adoption, checked-prefix preservation"
+}

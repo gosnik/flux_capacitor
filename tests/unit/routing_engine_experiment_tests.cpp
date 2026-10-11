@@ -1,6 +1,8 @@
 #include "flux/core/routing_engine.hpp"
 #include "flux/core/router_telemetry.hpp"
 #include "../../src/scaffold_terminal_rebind.hpp"
+#include "../../src/scaffold_physical_demands.hpp"
+#include "../../src/scaffold_access.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -449,11 +451,22 @@ void rejected_scaffold_oracle_does_not_veto_an_independent_candidate() {
   extra.reference = "U3";
   extra.position = mm(50, 65);
   extra.pads.front().id = ObjectId{"source-only-pad"};
+  // Keep an independent rejection case outside this routing domain. Represented-net
+  // residual terminals are now explicitly repaired rather than intentionally left open.
+  const NetId omitted{"source-only-net"};
+  source.nets.push_back({omitted, "SOURCE_ONLY", 0U});
+  extra.pads.front().net = omitted;
+  auto second_extra = extra;
+  second_extra.id = ObjectId{"source-only-terminal-2"};
+  second_extra.reference = "U4";
+  second_extra.position = mm(60, 65);
+  second_extra.pads.front().id = ObjectId{"source-only-pad-2"};
+  source.footprints.push_back(std::move(second_extra));
   source.footprints.push_back(std::move(extra));
   auto config = experiment_config();
   config.copper_scaffold.enabled = true;
   config.planner.quantized_copper_oracle.enabled = false;
-  // The exact source has an additional open on the same net. Retain that scaffold rejection,
+  // The exact source has an additional open outside the routed net. Retain that scaffold rejection,
   // but let the independently planned candidate reach detailed source validation. Handoff is
   // not a claim that the extra source terminal is connected.
   RoutingEngine engine(planning, source, config);
@@ -625,6 +638,116 @@ void partial_scaffold_routes_missing_requests_against_retained_copper() {
               !engine.state().accepted_detailed,
           "viewer must receive retained partial copper before whole-board completion");
 }
+
+void residual_physical_demands_preserve_checked_components() {
+  auto board = two_pad_board();
+  const NetId net{"engine-experiment-net"};
+  const LayerId front{"F.Cu"};
+  for (std::size_t i = 0; i < 2U; ++i) {
+    auto pad = board.footprints[i];
+    pad.id = ObjectId{"extra-" + std::to_string(i)};
+    pad.pads.front().id = ObjectId{"extra-pad-" + std::to_string(i)};
+    pad.position = mm(i == 0U ? 20 : 80, 60);
+    board.footprints.push_back(std::move(pad));
+  }
+  board.tracks = {
+      {ObjectId{"left-tree"}, net, front, mm(20,40), mm(20,60), Nanometres::from_mm(0.2), false},
+      {ObjectId{"right-tree"}, net, front, mm(80,40), mm(80,60), Nanometres::from_mm(0.2), false}};
+  CopperScaffoldResult retained;
+  retained.copper = board;
+  retained.requests = {{net, 3U, {{mm(20,40),front},{mm(20,60),front}}},
+                       {net, 8U, {{mm(80,40),front},{mm(80,60),front}}}};
+  retained.request_count = 2U;
+  retained.satisfied_indices = {0U, 1U};
+  retained.complete = true;
+  require(append_residual_physical_demands(retained, 0U) == retained.requests,
+          "exhausted pair budget must preserve the domain without partially adding a net");
+  const auto requests = append_residual_physical_demands(retained);
+  require(requests.size() == 3U && requests[0] == retained.requests[0] &&
+              requests[1] == retained.requests[1] && requests.back().connection_index > 8U,
+          "residual component demand must append a fresh identity and preserve the checked prefix");
+  require(!scaffold_request_connected(board, requests.back()),
+          "all pads being covered by endpoints must not hide disconnected physical trees");
+  const auto result = construct_copper_scaffold(board, requests, CopperScaffoldConfig{});
+  require(result.complete && analyze_connectivity(result.copper).open_connections == 0U &&
+              scaffold_preserves_satisfied_requests(result, retained),
+          "routing the appended demand must close real connectivity while retaining checked peers");
+  require(append_residual_physical_demands(result) == result.requests,
+          "a physically connected checkpoint must not grow another suffix");
+  retained.requests = requests;
+  retained.complete = false;
+  retained.missing_indices = {2U};
+  require(append_residual_physical_demands(retained) == requests,
+          "pending residual obligations must not be duplicated");
+
+  auto layered = two_pad_board();
+  layered.footprints[1].position = layered.footprints[0].position;
+  layered.footprints[1].pads.front().layers = {LayerId{"B.Cu"}};
+  retained = CopperScaffoldResult{};
+  retained.copper = layered;
+  retained.complete = true;
+  retained.requests = {{net, 0U, {{mm(20,40),front},{mm(20,40),front}}}};
+  const auto vertical = append_residual_physical_demands(retained);
+  require(vertical.size() == 2U && vertical.back().points.front().layer != vertical.back().points.back().layer,
+          "coincident pads on different layers without a via must remain separate components");
+  retained.copper.footprints[0].pads.front().layers = {front, LayerId{"B.Cu"}};
+  retained.copper.footprints[1].pads.front().layers = {front};
+  retained.copper.footprints[1].position = mm(80,40);
+  const auto common = append_residual_physical_demands(retained);
+  require(common.size() == 2U && common.back().points.front().layer == front &&
+              common.back().points.back().layer == front,
+          "a common pad layer must avoid inventing an unnecessary via obligation");
+}
+
+void residual_demand_pair_budget_is_atomic() {
+  auto board = two_pad_board();
+  const auto original = board.footprints.front();
+  board.footprints.clear();
+  constexpr std::size_t count = 32U;
+  for (std::size_t i = 0U; i < count; ++i) {
+    auto item = original;
+    item.id = ObjectId{"budget-" + std::to_string(i)};
+    item.pads.front().id = ObjectId{"budget-pad-" + std::to_string(i)};
+    item.position = mm(5 + 2 * static_cast<double>(i), 20);
+    board.footprints.push_back(std::move(item));
+  }
+  CopperScaffoldResult retained;
+  retained.copper = board;
+  retained.complete = true;
+  retained.requests = {{NetId{"engine-experiment-net"}, 0U,
+      {{mm(5,20),LayerId{"F.Cu"}},{mm(5,20),LayerId{"F.Cu"}}}}};
+  constexpr auto pairs = count * (count - 1U) / 2U;
+  require(append_residual_physical_demands(retained, pairs - 1U) == retained.requests,
+          "a late pair-budget exhaustion must roll back the entire proposed net suffix");
+  require(append_residual_physical_demands(retained, pairs).size() == count,
+          "frontier Prim must inspect each component pair only once within its exact allowance");
+}
+
+void source_only_terminal_becomes_a_physical_obligation() {
+  const auto planning = two_pad_board();
+  auto source = planning;
+  auto extra = source.footprints.front();
+  extra.id = ObjectId{"physical-extra"};
+  extra.reference = "U3";
+  extra.position = mm(50,65);
+  extra.pads.front().id = ObjectId{"physical-extra-pad"};
+  source.footprints.push_back(std::move(extra));
+  auto config = experiment_config();
+  config.copper_scaffold.enabled = true;
+  config.planner.quantized_copper_oracle.enabled = false;
+  config.max_actions = 12U;
+  RoutingEngine engine(planning, source, config);
+  for (std::size_t step = 0; step < 20'000U && !engine.terminal(); ++step)
+    static_cast<void>(engine.advance({.work_units = 256U}));
+  const auto& state = engine.state();
+  require(state.legal_scaffold && state.legal_scaffold->requests.size() == 2U &&
+              state.legal_scaffold->complete &&
+              analyze_connectivity(state.legal_scaffold->copper).open_connections == 0U,
+          "the engine must route a physical source pad omitted from its original planning domain");
+  require(state.scaffold_oracle && state.scaffold_oracle->feasible() &&
+              engine.selected_plan() && engine.selected_plan()->legal_scaffold_complete,
+          "physical suffix completion must earn exact whole-board scaffold certification");
+}
 void direct_scaffold_terminal_rebind_is_bounded_and_preserves_peers() {
   auto board = two_pad_board();
   const auto front = LayerId{"F.Cu"};
@@ -701,6 +824,9 @@ int main() {
   physical_repair_evidence_reopens_only_changed_missing_demand();
   empty_scaffold_dispatches_missing_demand_to_regional_repair();
   partial_scaffold_routes_missing_requests_against_retained_copper();
+  residual_physical_demands_preserve_checked_components();
+  residual_demand_pair_budget_is_atomic();
+  source_only_terminal_becomes_a_physical_obligation();
   direct_scaffold_terminal_rebind_is_bounded_and_preserves_peers();
   scaffold_certifies_materialization_source();
   rejected_scaffold_oracle_does_not_veto_an_independent_candidate();

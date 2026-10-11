@@ -9583,3 +9583,27 @@ Tier 0 completed: global 107.589 s, 50/50 declared requests and one physical ope
 Tier 1 reached 78/78 declared requests with 10 physical opens across 7 nets (round 01: 76/78, 13 opens). Retained copper contains 853 tracks and 56 vias. The engine timed out at 900.203 s versus 329.070 s previously; peak RSS rose from 997,624 to 1,382,404 KiB. Five terminal rebinds were recorded, including the two newly admitted request/producer pairs 60/52 and 69/63. The final checkpoint has zero new search expansions because it reused checked paths; this is not the total run search cost.
 
 The semantic hypothesis is supported: actual physical opens decreased, not merely request counts. Retain the correction, but performance and completion remain unresolved. All declared requests being satisfied leaves no missing-request basis for targeted scaffold repair, while whole-board certification still rejects the ten physical opens. The engine consequently spends the remaining allowance exploring global/regional alternatives. Next experiment: append residual physical pad-component demands while preserving every checked canonical request and avoiding duplication of pending edges. Do not promote Tier 1 or claim final curved-copper/DRC acceptance.
+
+## Round 03 — Add residual physical component obligations
+
+### Failure
+Round 02 (`faba2a1`) completed 78/78 declared Tier-1 requests but left ten real opens across seven nets. The engine spent its remaining 900-second allowance in global/regional search because the missing-request list was empty. Tier 0 exposed the same mismatch at its scaffold checkpoint.
+
+### Hypothesis and experiment
+After all existing requests are checked, derive the actual pad-bearing copper components and append deterministic connecting obligations only for residual disconnected components on represented nets. Preserve the canonical request prefix and exact seed reuse; never replace the route tree. Do not append while any request is pending, which prevents duplicate obligations without speculative contraction. Exact physical search and whole-board oracle remain unchanged.
+
+Ranked alternatives: (1) additive residual component requests (selected); (2) add only uncovered pad endpoints (insufficient when all endpoints are covered but physical trees are separate); (3) replace every net with a fresh MST (previously regressed Tier 0 and discards checked work); (4) more global search budget (round 02 evidence shows the wrong representation remains). This adapts canonical connectivity/ratsnest concepts already researched from KiCad documentation in round 02.
+
+### Verification plan
+Micro-tests cover two disconnected checked trees, stable prefix/fresh identities, successful physical closure, idempotence, pending-demand preservation, and coincident front/back pads without a via. Engine test uses an additional physical-source terminal missing from the planning board and requires exact scaffold certification. The independent rejected-oracle fixture remains separately covered on an unrepresented net. Sequential Tier 0/Tier 1 telemetry benchmarks follow a strict build and independent review.
+
+Independent review found the initial all-pairs edge table and repeated edge scanning scaled poorly. Replaced it before benchmarking with an on-demand Prim frontier (linear frontier storage, each component pair inspected once) and a shared one-million pad-pair comparison bound. An unfinished net contributes no suffix. A 32-component regression checks the exact 496-comparison boundary and atomic rollback at 495 comparisons.
+
+### Round 03 results
+Tier 1 reached a certified physical plan in 105.439 s: 88/88 requests, zero physical opens/unrouted nets, 910 tracks and 67 vias. This closes all ten residual connections and avoids the round-02 900-second exhausted search. Tier 0 reached 51/51 and zero opens in 18.244 s (repeat 18.641 s).
+
+The original Tier-0 runner rejected 51 paths against its fixed expected50 count before detailed validation. Added a separately reported `expanded_physical_demand` structural-count alternative only for detailed-completion tiers with a complete physical plan, all expanded requests satisfied, and zero physical opens/unrouted nets. All final detailed/DRC/KiCad gates are unchanged; ten runner tests and independent review passed. Preserved the first run and its frozen source manifest; supplemental Tier-0 validation uses `residual-demands-round03-final-20261011` with the same CLI hash.
+
+Both boards now fail detailed materialization with generic `invalid_path` before curve completion (Tier1 105.849 s; Tier0 18.490 s). This is a real detailed-output regression, not a qualified pass. No final KiCad DRC was reached. Evidence points to a handoff mismatch: scaffold compact/grid paths carry explicit nominal segment widths, whereas detailed materialization requires any explicit positive width vector to contain a narrower-than-nominal segment. Its generic diagnostic mislabels all materialization failures as an invalid layer transition.
+
+Decision: preserve this experimental checkpoint because exact physical connectivity improved to zero opens, but do not promote either tier or claim preserved curved output. Next round must correct nominal-width handoff semantics and validate actual curves and DRC.

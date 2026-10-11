@@ -106,6 +106,7 @@ add_library(flux_core
   src/global_router.cpp
   src/indexed_clearance_map.cpp
   src/scaffold_access.cpp
+  src/scaffold_physical_demands.cpp
   src/copper_scaffold.cpp
   src/scaffold_joint_displacement.cpp
   src/scaffold_collision.cpp

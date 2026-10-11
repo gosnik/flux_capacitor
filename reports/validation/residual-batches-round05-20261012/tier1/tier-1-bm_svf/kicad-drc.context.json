@@ -1,0 +1,14 @@
+{
+  "candidate": "/home/adam/qtbits/flux_capacitor/reports/validation/residual-batches-round05-20261012/tier1/tier-1-bm_svf/.flux-candidate-n_qjvghf/bm_svf.kicad_pcb",
+  "candidate_sha256": "68027a741ebb62f73f6ac3e3098a13d922839a4a032a0eec03d07a4439488484",
+  "rule_context": [
+    {
+      "candidate": "/home/adam/qtbits/flux_capacitor/reports/validation/residual-batches-round05-20261012/tier1/tier-1-bm_svf/.flux-candidate-n_qjvghf/bm_svf.kicad_pro",
+      "sha256": "04856904fe9070f7decd33b676d3f58e44676b6c930e65fa8a16f0ddd65d54db",
+      "source": "/home/adam/qtbits/flux_capacitor/tests/fixtures/routing-corpus/bm_svf.kicad_pro"
+    }
+  ],
+  "schema": 1,
+  "severity": "error",
+  "source": "/home/adam/qtbits/flux_capacitor/tests/fixtures/routing-corpus/bm_svf.kicad_pcb"
+}

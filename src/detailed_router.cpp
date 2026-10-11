@@ -2587,8 +2587,8 @@ make_circular_fillet(Point previous, Point corner, Point next, Nanometres maximu
     Board& board, std::set<std::string>& used_ids, DetailedRouteResult& result,
     const DetailedRouterConfig& config, const std::set<std::string>& protected_track_ids,
     std::stop_token stop_token) {
-  if (!config.residual_bend_repair || config.max_residual_bend_repair_runs == 0U ||
-      config.max_residual_bend_repair_corners == 0U)
+  if (!config.residual_bend_repair || config.max_residual_bend_repair_batches == 0U ||
+      config.max_residual_bend_repair_runs == 0U || config.max_residual_bend_repair_corners == 0U)
     return true;
   // `scaffold_track_ids` suppresses the primary PH refit so certified scaffold centerlines stay
   // intact. This exact local trim retains both incident route endpoints and is separately
@@ -2624,132 +2624,153 @@ make_circular_fillet(Point previous, Point corner, Point next, Nanometres maximu
     const auto by = static_cast<long double>(found->second[1].direction.y.value());
     return ax * by != ay * bx;
   };
-  const auto run_count = std::min(config.max_residual_bend_repair_runs, runs.size());
-  std::size_t corners_examined = 0U;
-  for (std::size_t run_index = 0U; run_index < run_count; ++run_index) {
+  std::size_t run_index = 0U;
+  std::size_t corner = 1U;
+  for (std::size_t batch = 0U;
+       batch < config.max_residual_bend_repair_batches && run_index < runs.size(); ++batch) {
     routing_kernel_checkpoint();
     if (stop_token.stop_requested())
       return false;
-    const auto& pending = runs[run_index];
-    const auto& run = pending.run;
-    // A floating closed component has no deterministic seam predecessor, so keep its audited
-    // seam for the final audit. A closed run rooted at an audit-exempt pad/via junction can still
-    // repair every interior corner without moving that physical attachment.
-    const bool closed = run.points.size() >= 2U && run.points.front() == run.points.back();
-    if (run.topology_locked || run.points.size() < 3U ||
-        (closed && audited_straight_bend(board, pending.net, run.layer, run.points.front())) ||
-        run.original_track_ids.size() + 1U != run.points.size())
-      continue;
-    for (std::size_t corner = 1U; corner + 1U < run.points.size(); ++corner) {
-      if (corners_examined >= config.max_residual_bend_repair_corners)
-        return true;
-      ++corners_examined;
-      routing_kernel_checkpoint();
-      if (stop_token.stop_requested())
-        return false;
-      if (result.fitted_circular_arcs >= config.max_circular_arcs ||
-          result.attempted_circular_arc_candidates >= config.max_circular_arc_candidate_checks) {
-        result.circular_arc_candidate_budget_exhausted =
-            result.attempted_circular_arc_candidates >= config.max_circular_arc_candidate_checks;
-        return true;
+    ++result.residual_bend_repair_batches;
+    std::size_t runs_in_batch = 0U;
+    std::size_t eligible_corners_in_batch = 0U;
+    bool yielded_for_run_budget = false;
+    bool yielded_for_corner_budget = false;
+    while (run_index < runs.size()) {
+      if (runs_in_batch >= config.max_residual_bend_repair_runs) {
+        yielded_for_run_budget = true;
+        break;
       }
-      const auto incoming = std::find_if(board.tracks.begin(), board.tracks.end(), [&](const auto& track) {
-        return track.id.value() == run.original_track_ids[corner - 1U];
-      });
-      const auto outgoing = std::find_if(board.tracks.begin(), board.tracks.end(), [&](const auto& track) {
-        return track.id.value() == run.original_track_ids[corner];
-      });
-      if (incoming == board.tracks.end() || outgoing == board.tracks.end() || incoming->locked ||
-          outgoing->locked || incoming->net != pending.net || outgoing->net != pending.net ||
-          incoming->layer != run.layer || outgoing->layer != run.layer || incoming->width != run.width ||
-          outgoing->width != run.width ||
-          (incoming->start != run.points[corner] && incoming->end != run.points[corner]) ||
-          (outgoing->start != run.points[corner] && outgoing->end != run.points[corner]))
+      ++runs_in_batch;
+      ++result.residual_bend_repair_scanned_runs;
+      const auto& pending = runs[run_index];
+      const auto& run = pending.run;
+      // A floating closed component has no deterministic seam predecessor, so keep its audited
+      // seam for the final audit. A closed run rooted at an audit-exempt pad/via junction can
+      // still repair every interior corner without moving that physical attachment.
+      const bool closed = run.points.size() >= 2U && run.points.front() == run.points.back();
+      if (run.topology_locked || run.points.size() < 3U ||
+          (closed && audited_straight_bend(board, pending.net, run.layer, run.points.front())) ||
+          run.original_track_ids.size() + 1U != run.points.size()) {
+        ++run_index;
+        corner = 1U;
         continue;
-      if (!audited_straight_bend(board, pending.net, run.layer, run.points[corner]))
-        continue;
-      ++result.residual_bend_repair_attempted;
-      ++result.attempted_circular_arc_corners;
-      const auto incoming_index = static_cast<std::size_t>(incoming - board.tracks.begin());
-      const auto outgoing_index = static_cast<std::size_t>(outgoing - board.tracks.begin());
-      const auto original_incoming = board.tracks[incoming_index];
-      const auto original_outgoing = board.tracks[outgoing_index];
-      Board connectivity_before = board;
-      if (config.defer_saved_zone_fill_clearance_to_refill)
-        for (auto& zone : connectivity_before.zones) zone.fills.clear();
-      const auto before_connectivity = analyze_connectivity(connectivity_before);
-      bool accepted = false;
-      std::optional<std::tuple<Point, Point, Point>> previous_geometry;
-      auto radius = config.maximum_circular_arc_radius;
-      for (std::size_t backtrack = 0U; backtrack <= config.circular_arc_backtracking_steps;
-           ++backtrack, radius = Nanometres{radius.value() / 2}) {
+      }
+      while (corner + 1U < run.points.size()) {
         routing_kernel_checkpoint();
         if (stop_token.stop_requested())
           return false;
-        if (radius.value() <= 1 || result.attempted_circular_arc_candidates >=
-                                       config.max_circular_arc_candidate_checks)
-          break;
-        auto arc = make_circular_fillet(run.points[corner - 1U], run.points[corner],
-                                        run.points[corner + 1U], radius);
-        if (!arc)
-          break;
-        const auto geometry = std::tuple{arc->start, arc->middle, arc->end};
-        if (previous_geometry && *previous_geometry == geometry)
+        ++result.residual_bend_repair_scanned_points;
+        const auto corner_index = corner++;
+        if (result.fitted_circular_arcs >= config.max_circular_arcs ||
+            result.attempted_circular_arc_candidates >= config.max_circular_arc_candidate_checks) {
+          result.circular_arc_candidate_budget_exhausted =
+              result.attempted_circular_arc_candidates >= config.max_circular_arc_candidate_checks;
+          return true;
+        }
+        const auto incoming = std::find_if(board.tracks.begin(), board.tracks.end(), [&](const auto& track) {
+          return track.id.value() == run.original_track_ids[corner_index - 1U];
+        });
+        const auto outgoing = std::find_if(board.tracks.begin(), board.tracks.end(), [&](const auto& track) {
+          return track.id.value() == run.original_track_ids[corner_index];
+        });
+        if (incoming == board.tracks.end() || outgoing == board.tracks.end() || incoming->locked ||
+            outgoing->locked || incoming->net != pending.net || outgoing->net != pending.net ||
+            incoming->layer != run.layer || outgoing->layer != run.layer || incoming->width != run.width ||
+            outgoing->width != run.width)
           continue;
-        previous_geometry = geometry;
-        ++result.attempted_circular_arc_candidates;
-        arc->id = unique_id(pending.base + "-residual-arc-" + std::to_string(corner), used_ids);
-        arc->net = pending.net;
-        arc->layer = run.layer;
-        arc->width = run.width;
-        auto& mutable_incoming = board.tracks[incoming_index];
-        auto& mutable_outgoing = board.tracks[outgoing_index];
-        if (mutable_incoming.end == run.points[corner])
-          mutable_incoming.end = arc->start;
-        else
-          mutable_incoming.start = arc->start;
-        if (mutable_outgoing.start == run.points[corner])
-          mutable_outgoing.start = arc->end;
-        else
-          mutable_outgoing.end = arc->end;
-        board.track_arcs.push_back(*arc);
-        Board probe = board;
-        if (config.defer_saved_zone_fill_clearance_to_refill)
-          for (auto& zone : probe.zones) zone.fills.clear();
-        const auto validation = validate_board(probe);
-        const auto copper = check_copper_rules(probe);
-        const std::array changed_ids{arc->id.value(), mutable_incoming.id.value(), mutable_outgoing.id.value()};
-        const auto changed_copper_violation = std::any_of(copper.violations.begin(), copper.violations.end(),
-            [&changed_ids](const auto& violation) {
-              if (violation.kind == CopperViolationKind::differential_pair_skew) return false;
-              return std::any_of(changed_ids.begin(), changed_ids.end(), [&](const auto& id) {
-                return std::find(violation.object_ids.begin(), violation.object_ids.end(), id) !=
-                       violation.object_ids.end();
-              });
-            });
-        const auto after_connectivity = analyze_connectivity(probe);
-        const bool connectivity_regressed =
-            per_net_connectivity_regressed(before_connectivity, after_connectivity);
-        if (validation.ok() && !changed_copper_violation && !connectivity_regressed) {
-          accepted = true;
-          ++result.residual_bend_repair_accepted;
-          ++result.added_track_arcs;
-          ++result.fitted_circular_arcs;
-          if (backtrack > 0U) ++result.radius_reduced_circular_arcs;
-          used_ids.insert(arc->id.value());
+        const auto shared_endpoint = [&]() -> std::optional<Point> {
+          for (const auto point : {incoming->start, incoming->end})
+            if (point == outgoing->start || point == outgoing->end)
+              return point;
+          return std::nullopt;
+        }();
+        if (!shared_endpoint || !audited_straight_bend(board, pending.net, run.layer, *shared_endpoint))
+          continue;
+        if (eligible_corners_in_batch >= config.max_residual_bend_repair_corners) {
+          --corner;
+          yielded_for_corner_budget = true;
           break;
         }
-        board.track_arcs.pop_back();
-        board.tracks[incoming_index] = original_incoming;
-        board.tracks[outgoing_index] = original_outgoing;
-        ++result.rejected_circular_arc_candidates;
+        ++eligible_corners_in_batch;
+        ++result.residual_bend_repair_attempted;
+        ++result.attempted_circular_arc_corners;
+        const auto incoming_index = static_cast<std::size_t>(incoming - board.tracks.begin());
+        const auto outgoing_index = static_cast<std::size_t>(outgoing - board.tracks.begin());
+        const auto original_incoming = board.tracks[incoming_index];
+        const auto original_outgoing = board.tracks[outgoing_index];
+        const auto previous = original_incoming.start == *shared_endpoint ? original_incoming.end : original_incoming.start;
+        const auto next = original_outgoing.start == *shared_endpoint ? original_outgoing.end : original_outgoing.start;
+        Board connectivity_before = board;
+        if (config.defer_saved_zone_fill_clearance_to_refill)
+          for (auto& zone : connectivity_before.zones) zone.fills.clear();
+        const auto before_connectivity = analyze_connectivity(connectivity_before);
+        bool accepted = false;
+        std::optional<std::tuple<Point, Point, Point>> previous_geometry;
+        auto radius = config.maximum_circular_arc_radius;
+        for (std::size_t backtrack = 0U; backtrack <= config.circular_arc_backtracking_steps;
+             ++backtrack, radius = Nanometres{radius.value() / 2}) {
+          routing_kernel_checkpoint();
+          if (stop_token.stop_requested()) return false;
+          if (radius.value() <= 1 || result.attempted_circular_arc_candidates >= config.max_circular_arc_candidate_checks)
+            break;
+          auto arc = make_circular_fillet(previous, *shared_endpoint, next, radius);
+          if (!arc) break;
+          const auto geometry = std::tuple{arc->start, arc->middle, arc->end};
+          if (previous_geometry && *previous_geometry == geometry) continue;
+          previous_geometry = geometry;
+          ++result.attempted_circular_arc_candidates;
+          arc->id = unique_id(pending.base + "-residual-arc-" + std::to_string(corner_index), used_ids);
+          arc->net = pending.net; arc->layer = run.layer; arc->width = run.width;
+          auto& mutable_incoming = board.tracks[incoming_index];
+          auto& mutable_outgoing = board.tracks[outgoing_index];
+          if (mutable_incoming.end == *shared_endpoint) mutable_incoming.end = arc->start;
+          else mutable_incoming.start = arc->start;
+          if (mutable_outgoing.start == *shared_endpoint) mutable_outgoing.start = arc->end;
+          else mutable_outgoing.end = arc->end;
+          board.track_arcs.push_back(*arc);
+          Board probe = board;
+          if (config.defer_saved_zone_fill_clearance_to_refill)
+            for (auto& zone : probe.zones) zone.fills.clear();
+          const auto validation = validate_board(probe);
+          const auto copper = check_copper_rules(probe);
+          const std::array changed_ids{arc->id.value(), mutable_incoming.id.value(), mutable_outgoing.id.value()};
+          const auto changed_copper_violation = std::any_of(copper.violations.begin(), copper.violations.end(),
+              [&changed_ids](const auto& violation) {
+                if (violation.kind == CopperViolationKind::differential_pair_skew) return false;
+                return std::any_of(changed_ids.begin(), changed_ids.end(), [&](const auto& id) {
+                  return std::find(violation.object_ids.begin(), violation.object_ids.end(), id) != violation.object_ids.end();
+                });
+              });
+          const auto after_connectivity = analyze_connectivity(probe);
+          if (validation.ok() && !changed_copper_violation &&
+              !per_net_connectivity_regressed(before_connectivity, after_connectivity)) {
+            accepted = true;
+            ++result.residual_bend_repair_accepted;
+            ++result.added_track_arcs;
+            ++result.fitted_circular_arcs;
+            if (backtrack > 0U) ++result.radius_reduced_circular_arcs;
+            used_ids.insert(arc->id.value());
+            break;
+          }
+          board.track_arcs.pop_back();
+          board.tracks[incoming_index] = original_incoming;
+          board.tracks[outgoing_index] = original_outgoing;
+          ++result.rejected_circular_arc_candidates;
+        }
+        if (!accepted) {
+          ++result.residual_bend_repair_rejected;
+          ++result.withheld_circular_arc_corners;
+        }
       }
-      if (!accepted) {
-        ++result.residual_bend_repair_rejected;
-        ++result.withheld_circular_arc_corners;
-      }
+      if (yielded_for_corner_budget) break;
+      ++run_index;
+      corner = 1U;
     }
+    if (yielded_for_run_budget) ++result.residual_bend_repair_run_budget_exhaustions;
+    if (yielded_for_corner_budget) ++result.residual_bend_repair_corner_budget_exhaustions;
   }
+  if (run_index < runs.size()) result.residual_bend_repair_budget_exhausted = true;
   return true;
 }
 

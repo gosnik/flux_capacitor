@@ -9625,3 +9625,24 @@ Strict build and four focused suites passed; independent review closed an additi
 Tier 0 is qualified again: global 18.191 s, detailed 63.604 s, zero opens/internal violations, 394 Béziers, 23 arcs, 3 vias, zero unrounded non-junction bends, and external KiCad DRC passes. Both copper layer images were inspected: smooth bends, with some broad detours left for later optimization.
 
 Tier 1 passes the metadata handoff and preserves zero opens/internal violations, but fails the curved-output gate after 273.286 s: 396 Béziers, 34 arcs, 67 vias, 103 remaining straight bends. Global scaffold takes 104.633 s with 88/88 requests. Residual bend repair accepted all 34 attempted corners, suggesting coverage/budget rather than local infeasibility is now the first mechanism to investigate. Keep this narrow contract fix; do not promote Tier 1.
+
+## Round 05 — Resume residual bend repair in bounded batches
+
+### Failure and evidence
+Round 04 (`3353b6f`) produces zero-open, diagnostic KiCad-DRC-clean Tier-1 copper but retains 103 sharp straight bends. Residual repair accepted all 34 attempts; the routine only scans the first 32 chains and charges 128 points before checking corner eligibility. The separate PH budget is also divided into very small per-chain allowances, but that is deferred to keep this experiment isolated.
+
+### Hypothesis and experiment
+Retain the existing exact fillet transaction and global arc/candidate ceilings. Replace the one-prefix residual scan with finite batches that resume monotonically within and across chains. Charge corner work only for auditable eligible bends. Use current incident endpoints when fitting adjacent corners to avoid extending earlier trims. Expose scan, batch and exhaustion metrics; keep the final curve audit unchanged. This applies existing proven geometry rather than importing a new algorithm.
+
+### Validation plan
+Synthetic cases require resumption within a subdivided chain and across multiple chains under one-corner/one-run batch limits. An explicit total batch cap must leave a truthful incomplete result. Existing blocked-corner, locked/source preservation, pad-rooted loop and floating-loop regressions remain required. Then sequential Tier 0 and Tier 1 telemetry benchmarks, with final copper and external DRC verification.
+
+### Round 05 first results
+Tier 0 remains qualified (detailed 63.637 s). Tier 1 now completes curved routing in 313.308 s, with zero opens, zero internal violations, zero external KiCad DRC violations/unconnected items, and zero unrounded non-junction bends. Final copper: 550 straight segments, 137 arcs, 396 Béziers, 67 vias. Strict re-import preserves those counts and zero opens/model errors.
+
+Residual coverage visited 49 chains and 397 points in two batches, attempted137/accepted137/rejected0, and did not exhaust its total budget. This strongly supports the coverage hypothesis: the previously missed 103 bends needed no clearance relaxation or additional physical routing. First-run runner exit1 is its explicit promotion sentinel, not a routing failure. Tier1 is promoted to qualified, Tier2 unlocked, and a fresh sequential Tier0/Tier1 mandatory regression run is in progress in `residual-batches-round05-repeat-20261012`. Original inventory78 remains the structural baseline; physically certified demand expansion is separately checked.
+
+Both Tier1 layer images were inspected. Main routes have rounded turns without the previous oscillating loops; redundant same-net stubs/branches and some small staircase-like detours remain quality/performance opportunities, not permission to relax the DRC or bend gates.
+
+### Round 05 repeated qualified regression
+The promoted mandatory Tier0/Tier1 run passed with runner exit0 for both. Detailed runtime: Tier0 63.353 s, Tier1 314.896 s. Both again have zero opens, zero internal copper violations, zero unrounded bends and zero external KiCad DRC violations/unconnected items. Export byte identity versus the first run: {'tier0': {'byte_identical_export': True, 'first_sha256': 'ef790b89654918bfc83a8b6334f6c07fb25f7adcd1a272066d60a55c8f7a66d9', 'repeat_sha256': 'ef790b89654918bfc83a8b6334f6c07fb25f7adcd1a272066d60a55c8f7a66d9'}, 'tier1': {'byte_identical_export': True, 'first_sha256': '68027a741ebb62f73f6ac3e3098a13d922839a4a032a0eec03d07a4439488484', 'repeat_sha256': '68027a741ebb62f73f6ac3e3098a13d922839a4a032a0eec03d07a4439488484'}}. Keep the batch fix and promotion. The Tier1 curved-routing goal is achieved; Tier2 is now the next frontier.

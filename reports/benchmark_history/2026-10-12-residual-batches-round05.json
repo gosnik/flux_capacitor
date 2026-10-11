@@ -1,0 +1,241 @@
+{
+  "round": 5,
+  "status": "tier0_and_tier1_pass_twice",
+  "base_commit": "3353b6f",
+  "first": {
+    "binary_sha256": "6ecdc89b97ba6a0181c19090d5d92dc44f4fefd83f4e634300174d057e3da955",
+    "tiers": {
+      "tier0": {
+        "detail-result": {
+          "seconds": 63.63690833403962,
+          "complete": true,
+          "stop_reason": "complete",
+          "diagnostic": "quintic PH curve routes materialized as connected DRC-clean native line/arc copper",
+          "open_connections": 0,
+          "copper_violations": 0,
+          "added_tracks": 169,
+          "added_track_arcs": 23,
+          "added_track_beziers": 394,
+          "added_vias": 3,
+          "unrounded_non_junction_bends": 0,
+          "residual_bend_repair_accepted": 23,
+          "residual_bend_repair_attempted": 23,
+          "residual_bend_repair_batches": 1,
+          "residual_bend_repair_budget_exhausted": false,
+          "residual_bend_repair_corner_budget_exhaustions": 0,
+          "residual_bend_repair_rejected": 0,
+          "residual_bend_repair_run_budget_exhaustions": 0,
+          "residual_bend_repair_scanned_points": 78,
+          "residual_bend_repair_scanned_runs": 9
+        },
+        "global-result": {
+          "seconds": 17.975360217038542,
+          "complete": true,
+          "stop_reason": "complete",
+          "diagnostic": "",
+          "open_connections": null,
+          "copper_violations": null,
+          "added_tracks": null,
+          "added_track_arcs": null,
+          "added_track_beziers": null,
+          "added_vias": null,
+          "unrounded_non_junction_bends": null,
+          "scaffold": {
+            "request_count": 51,
+            "satisfied_connections": 51,
+            "physical_open_connections": 0,
+            "physical_unrouted_nets": 0
+          }
+        },
+        "kicad": {
+          "path": "/home/adam/qtbits/flux_capacitor/reports/validation/residual-batches-round05-20261012/tier0/tier-0-pt2399_delay/kicad-drc.json",
+          "violations": 0,
+          "unconnected_items": 0,
+          "categories": {}
+        },
+        "runner_exit": "0",
+        "qualified": true,
+        "peak_rss_kib": 621560
+      },
+      "tier1": {
+        "detail-result": {
+          "seconds": 313.3080598699744,
+          "complete": true,
+          "stop_reason": "complete",
+          "diagnostic": "quintic PH curve routes materialized as connected DRC-clean native line/arc copper",
+          "open_connections": 0,
+          "copper_violations": 0,
+          "added_tracks": 550,
+          "added_track_arcs": 137,
+          "added_track_beziers": 396,
+          "added_vias": 67,
+          "unrounded_non_junction_bends": 0,
+          "residual_bend_repair_accepted": 137,
+          "residual_bend_repair_attempted": 137,
+          "residual_bend_repair_batches": 2,
+          "residual_bend_repair_budget_exhausted": false,
+          "residual_bend_repair_corner_budget_exhaustions": 0,
+          "residual_bend_repair_rejected": 0,
+          "residual_bend_repair_run_budget_exhaustions": 1,
+          "residual_bend_repair_scanned_points": 397,
+          "residual_bend_repair_scanned_runs": 49
+        },
+        "global-result": {
+          "seconds": 105.55221875099232,
+          "complete": true,
+          "stop_reason": "complete",
+          "diagnostic": "",
+          "open_connections": null,
+          "copper_violations": null,
+          "added_tracks": null,
+          "added_track_arcs": null,
+          "added_track_beziers": null,
+          "added_vias": null,
+          "unrounded_non_junction_bends": null,
+          "scaffold": {
+            "request_count": 88,
+            "satisfied_connections": 88,
+            "physical_open_connections": 0,
+            "physical_unrouted_nets": 0
+          }
+        },
+        "kicad": {
+          "path": "/home/adam/qtbits/flux_capacitor/reports/validation/residual-batches-round05-20261012/tier1/tier-1-bm_svf/kicad-drc.json",
+          "violations": 0,
+          "unconnected_items": 0,
+          "categories": {}
+        },
+        "runner_exit": "1",
+        "qualified": true,
+        "peak_rss_kib": 708684
+      }
+    }
+  },
+  "repeat": {
+    "binary_sha256": "6ecdc89b97ba6a0181c19090d5d92dc44f4fefd83f4e634300174d057e3da955",
+    "tiers": {
+      "tier0": {
+        "detail-result": {
+          "seconds": 63.3526654120069,
+          "complete": true,
+          "stop_reason": "complete",
+          "diagnostic": "quintic PH curve routes materialized as connected DRC-clean native line/arc copper",
+          "open_connections": 0,
+          "copper_violations": 0,
+          "added_tracks": 169,
+          "added_track_arcs": 23,
+          "added_track_beziers": 394,
+          "added_vias": 3,
+          "unrounded_non_junction_bends": 0,
+          "residual_bend_repair_accepted": 23,
+          "residual_bend_repair_attempted": 23,
+          "residual_bend_repair_batches": 1,
+          "residual_bend_repair_budget_exhausted": false,
+          "residual_bend_repair_corner_budget_exhaustions": 0,
+          "residual_bend_repair_rejected": 0,
+          "residual_bend_repair_run_budget_exhaustions": 0,
+          "residual_bend_repair_scanned_points": 78,
+          "residual_bend_repair_scanned_runs": 9
+        },
+        "global-result": {
+          "seconds": 18.387136541015934,
+          "complete": true,
+          "stop_reason": "complete",
+          "diagnostic": "",
+          "open_connections": null,
+          "copper_violations": null,
+          "added_tracks": null,
+          "added_track_arcs": null,
+          "added_track_beziers": null,
+          "added_vias": null,
+          "unrounded_non_junction_bends": null,
+          "scaffold": {
+            "request_count": 51,
+            "satisfied_connections": 51,
+            "physical_open_connections": 0,
+            "physical_unrouted_nets": 0
+          }
+        },
+        "kicad": {
+          "path": "/home/adam/qtbits/flux_capacitor/reports/validation/residual-batches-round05-repeat-20261012/tier0/tier-0-pt2399_delay/kicad-drc.json",
+          "violations": 0,
+          "unconnected_items": 0,
+          "categories": {}
+        },
+        "runner_exit": "0",
+        "qualified": true,
+        "peak_rss_kib": 631824
+      },
+      "tier1": {
+        "detail-result": {
+          "seconds": 314.89613619301235,
+          "complete": true,
+          "stop_reason": "complete",
+          "diagnostic": "quintic PH curve routes materialized as connected DRC-clean native line/arc copper",
+          "open_connections": 0,
+          "copper_violations": 0,
+          "added_tracks": 550,
+          "added_track_arcs": 137,
+          "added_track_beziers": 396,
+          "added_vias": 67,
+          "unrounded_non_junction_bends": 0,
+          "residual_bend_repair_accepted": 137,
+          "residual_bend_repair_attempted": 137,
+          "residual_bend_repair_batches": 2,
+          "residual_bend_repair_budget_exhausted": false,
+          "residual_bend_repair_corner_budget_exhaustions": 0,
+          "residual_bend_repair_rejected": 0,
+          "residual_bend_repair_run_budget_exhaustions": 1,
+          "residual_bend_repair_scanned_points": 397,
+          "residual_bend_repair_scanned_runs": 49
+        },
+        "global-result": {
+          "seconds": 102.21753219194943,
+          "complete": true,
+          "stop_reason": "complete",
+          "diagnostic": "",
+          "open_connections": null,
+          "copper_violations": null,
+          "added_tracks": null,
+          "added_track_arcs": null,
+          "added_track_beziers": null,
+          "added_vias": null,
+          "unrounded_non_junction_bends": null,
+          "scaffold": {
+            "request_count": 88,
+            "satisfied_connections": 88,
+            "physical_open_connections": 0,
+            "physical_unrouted_nets": 0
+          }
+        },
+        "kicad": {
+          "path": "/home/adam/qtbits/flux_capacitor/reports/validation/residual-batches-round05-repeat-20261012/tier1/tier-1-bm_svf/kicad-drc.json",
+          "violations": 0,
+          "unconnected_items": 0,
+          "categories": {}
+        },
+        "runner_exit": "0",
+        "qualified": true,
+        "peak_rss_kib": 706560
+      }
+    }
+  },
+  "first_tier1_runner_exit_note": "Exit1 was explicit now-qualifies promotion sentinel, all physical/curved/external DRC gates passed. Repeat uses qualified manifest and exits0.",
+  "promotion": {
+    "tier1": "qualified",
+    "tier2": "unlocked"
+  },
+  "tests": "strict build and4focused suites pass; independent source and promotion reviews clean",
+  "geometry_comparison": {
+    "tier0": {
+      "byte_identical_export": true,
+      "first_sha256": "ef790b89654918bfc83a8b6334f6c07fb25f7adcd1a272066d60a55c8f7a66d9",
+      "repeat_sha256": "ef790b89654918bfc83a8b6334f6c07fb25f7adcd1a272066d60a55c8f7a66d9"
+    },
+    "tier1": {
+      "byte_identical_export": true,
+      "first_sha256": "68027a741ebb62f73f6ac3e3098a13d922839a4a032a0eec03d07a4439488484",
+      "repeat_sha256": "68027a741ebb62f73f6ac3e3098a13d922839a4a032a0eec03d07a4439488484"
+    }
+  }
+}

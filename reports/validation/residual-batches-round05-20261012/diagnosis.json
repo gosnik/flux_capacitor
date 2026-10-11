@@ -1,0 +1,15 @@
+{
+  "round": 5,
+  "failure": "Tier1 has zero opens and internal/diagnostic external DRC violations but 103 unrounded straight bends.",
+  "evidence": {
+    "residual_attempted": 34,
+    "accepted": 34,
+    "rejected": 0,
+    "run_cap": 32,
+    "scanned_corner_cap": 128
+  },
+  "hypothesis": "Residual coverage is truncated by one fixed prefix and spending corner budget before eligibility.",
+  "experiment": "Monotonic cursor through bounded batches; count actual audited bends; retain exact transactional checks and global candidate/arc caps.",
+  "separate_deferred_issue": "Primary PH budget divided over127 initial chains gives only2 candidates per run.",
+  "status": "implementation_pending"
+}

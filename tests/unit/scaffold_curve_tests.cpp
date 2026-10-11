@@ -186,6 +186,69 @@ void residual_bend_repair_uses_exact_fillet_after_ph_rejection() {
   check_join(arc.start);
   check_join(arc.end);
 }
+void residual_bend_batches_resume_without_charging_collinear_points() {
+  const auto source = board();
+  GlobalRoutePath path;
+  path.net = NetId{"scaffold"}; path.legal_scaffold = true;
+  path.points = {{mm(2, 2), LayerId{"F.Cu"}}, {mm(2, 4), LayerId{"F.Cu"}},
+                 {mm(2, 6), LayerId{"F.Cu"}}, {mm(2, 8), LayerId{"F.Cu"}},
+                 {mm(8, 8), LayerId{"F.Cu"}}, {mm(8, 14), LayerId{"F.Cu"}},
+                 {mm(14, 14), LayerId{"F.Cu"}}};
+  RoutingPlanResult plan;
+  plan.legal_scaffold_complete = true; plan.paths = {path};
+  plan.coarse_global.stop_reason = GlobalRouterStopReason::complete;
+  DetailedRouterConfig config;
+  config.circular_arc_refinement = true;
+  config.spline_minimum_bend_radius = Nanometres::from_mm(100.0);
+  config.spline_control_corridor = Nanometres::from_mm(0.1);
+  config.retry_failed_spline_routes_after_commits = false;
+  config.max_residual_bend_repair_runs = 1U;
+  config.max_residual_bend_repair_corners = 1U;
+  config.max_residual_bend_repair_batches = 2U;
+  const auto limited = materialize_detailed_route(source, plan, config);
+  require(!limited.complete() && limited.candidate && limited.copper_drc.ok() &&
+              limited.residual_bend_repair_accepted == 2U &&
+              limited.residual_bend_repair_batches == 2U &&
+              limited.residual_bend_repair_budget_exhausted &&
+              limited.unrounded_non_junction_bends == 1U,
+          "bounded residual cursor must spend two batches on two real bends, not collinear points");
+  config.max_residual_bend_repair_batches = 3U;
+  const auto complete = materialize_detailed_route(source, plan, config);
+  require(complete.complete() && complete.candidate && complete.copper_drc.ok() &&
+              complete.residual_bend_repair_accepted == 3U &&
+              complete.residual_bend_repair_batches == 3U &&
+              !complete.residual_bend_repair_budget_exhausted &&
+              complete.unrounded_non_junction_bends == 0U,
+          "residual cursor must resume within a chain and reach the last bend");
+}
+void residual_bend_batches_resume_across_chains() {
+  const auto source = board();
+  RoutingPlanResult plan;
+  plan.legal_scaffold_complete = true;
+  plan.coarse_global.stop_reason = GlobalRouterStopReason::complete;
+  for (std::size_t index = 0; index < 3U; ++index) {
+    GlobalRoutePath path;
+    path.net = NetId{"scaffold"}; path.legal_scaffold = true; path.connection_index = index;
+    const auto y = 2.0 + 8.0 * static_cast<double>(index);
+    path.points = {{mm(2, y), LayerId{"F.Cu"}}, {mm(8, y), LayerId{"F.Cu"}},
+                   {mm(8, y + 4.0), LayerId{"F.Cu"}}};
+    plan.paths.push_back(path);
+  }
+  DetailedRouterConfig config;
+  config.circular_arc_refinement = true;
+  config.spline_minimum_bend_radius = Nanometres::from_mm(100.0);
+  config.spline_control_corridor = Nanometres::from_mm(0.1);
+  config.retry_failed_spline_routes_after_commits = false;
+  config.max_residual_bend_repair_runs = 1U;
+  config.max_residual_bend_repair_batches = 3U;
+  const auto detailed = materialize_detailed_route(source, plan, config);
+  require(detailed.complete() && detailed.copper_drc.ok() &&
+              detailed.residual_bend_repair_accepted == 3U &&
+              detailed.residual_bend_repair_batches == 3U &&
+              detailed.residual_bend_repair_scanned_runs == 3U &&
+              detailed.unrounded_non_junction_bends == 0U,
+          "residual run batches must advance to later chains without restarting a prefix");
+}
 void residual_bend_repair_rejects_blocked_corner_without_mutating_copper() {
   auto source = board();
   source.nets.push_back({NetId{"blocker"}, "blocker", 2U});
@@ -294,4 +357,4 @@ void residual_bend_repair_skips_floating_closed_chain() {
           "a floating closed chain must keep its ambiguous audited seam untouched");
 }
 } // namespace
-int main() { materializes_complete_scaffold_without_regional_plan(); explicit_nominal_widths_match_implicit_certified_scaffold(); malformed_certified_width_metadata_is_rejected(); unbacked_neck_down_metadata_is_rejected(); invalid_certified_layer_transition_is_rejected(); failed_curve_fit_retains_scaffold_and_unrelated_copper(); residual_bend_repair_uses_exact_fillet_after_ph_rejection(); residual_bend_repair_rejects_blocked_corner_without_mutating_copper(); residual_bend_repair_preserves_existing_routing(); residual_bend_repair_handles_pad_anchored_closed_chain(); residual_bend_repair_skips_floating_closed_chain(); return EXIT_SUCCESS; }
+int main() { materializes_complete_scaffold_without_regional_plan(); explicit_nominal_widths_match_implicit_certified_scaffold(); malformed_certified_width_metadata_is_rejected(); unbacked_neck_down_metadata_is_rejected(); invalid_certified_layer_transition_is_rejected(); failed_curve_fit_retains_scaffold_and_unrelated_copper(); residual_bend_repair_uses_exact_fillet_after_ph_rejection(); residual_bend_batches_resume_without_charging_collinear_points(); residual_bend_batches_resume_across_chains(); residual_bend_repair_rejects_blocked_corner_without_mutating_copper(); residual_bend_repair_preserves_existing_routing(); residual_bend_repair_handles_pad_anchored_closed_chain(); residual_bend_repair_skips_floating_closed_chain(); return EXIT_SUCCESS; }

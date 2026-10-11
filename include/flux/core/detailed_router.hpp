@@ -43,6 +43,9 @@ struct DetailedRouterConfig {
   // remaining eligible straight-track bends using the same exact fillet transaction. This never
   // changes the final bend audit or touches locked/protected copper.
   bool residual_bend_repair{true};
+  // Each residual batch visits at most this many frozen chains and eligible corners. Batches
+  // resume their deterministic cursor, so skipped geometry never repeatedly starves later bends.
+  std::size_t max_residual_bend_repair_batches{32};
   std::size_t max_residual_bend_repair_runs{32};
   std::size_t max_residual_bend_repair_corners{128};
   bool differential_pair_skew_tuning{false};
@@ -185,6 +188,12 @@ struct DetailedRouteResult {
   std::size_t residual_bend_repair_attempted{0};
   std::size_t residual_bend_repair_accepted{0};
   std::size_t residual_bend_repair_rejected{0};
+  std::size_t residual_bend_repair_batches{0};
+  std::size_t residual_bend_repair_scanned_runs{0};
+  std::size_t residual_bend_repair_scanned_points{0};
+  std::size_t residual_bend_repair_run_budget_exhaustions{0};
+  std::size_t residual_bend_repair_corner_budget_exhaustions{0};
+  bool residual_bend_repair_budget_exhausted{false};
   std::size_t spline_committed_context_retry_tasks{0};
   std::size_t spline_committed_context_retry_commits{0};
   std::size_t added_vias{0};

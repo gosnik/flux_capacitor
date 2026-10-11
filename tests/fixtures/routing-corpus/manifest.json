@@ -54,7 +54,7 @@
     {
       "id": "bm_svf",
       "level": 1,
-      "status": "unlocked",
+      "status": "qualified",
       "qualification": "detailed_complete",
       "probe_iterations": 30,
       "probe_timeout_seconds": 7200,
@@ -99,14 +99,20 @@
         "vias": 0,
         "zones": 0,
         "max_core_validation_errors": 0,
-        "max_track_arcs": 0
+        "max_track_arcs": 0,
+        "open_connections": 78,
+        "global_paths": 78
       },
-      "note": "Tall analog state-variable filter module; all 78 connections seed, but one bounded pass retains negotiated congestion."
+      "note": "Qualified curved routing: complete physical connectivity and external KiCad DRC; retained physical demands may expand the canonical 78-path inventory.",
+      "curved_expected": {
+        "min_track_arcs": 1,
+        "max_unrounded_non_junction_bends": 0
+      }
     },
     {
       "id": "ft2232h_jtag",
       "level": 2,
-      "status": "locked",
+      "status": "unlocked",
       "qualification": "detailed_complete",
       "kicad_routing_tools_set": "set5",
       "repo": "thecasterian/FT2232-JTAG-UART",

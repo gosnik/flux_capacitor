@@ -1,0 +1,239 @@
+{
+  "schema": 1,
+  "source_corpus": {
+    "repository": "drandyhaas/KiCadRoutingTools",
+    "commit": "661c88b3c3b0ebc9ade65eab63d30b1cde217fb4",
+    "discussion": "https://github.com/drandyhaas/KiCadRoutingTools/discussions/117",
+    "stress_directory": "https://github.com/drandyhaas/KiCadRoutingTools/tree/main/tests/stress",
+    "additional_catalog_commits": [
+      "ec2bf0e1021c0ed95c45b14664d02c56777a0974"
+    ]
+  },
+  "preparation": {
+    "method": "KiCadRoutingTools tests/stress/prep_set2.py",
+    "kicad_version": "9.0.8",
+    "compatibility_change": "Passed null OUTLINE_ERROR_HANDLER before the allow-arcs boolean to match the KiCad 9 GetBoardPolygonOutlines overload.",
+    "result": "Normalized with pcbnew, removed tracks/vias/copper zones, retained rule areas, rebuilt Edge.Cuts, removed non-routing graphics, and retained a normalized routed reference."
+  },
+  "boards": [
+    {
+      "id": "pt2399_delay",
+      "level": 0,
+      "status": "qualified",
+      "qualification": "detailed_complete",
+      "probe_timeout_seconds": 600,
+      "kicad_routing_tools_set": "set13",
+      "repo": "storskegg/Block-PT2399",
+      "commit": "cf5bedc2295c0ad2a7b3bfe4b9055eafed56edd2",
+      "path": "Block-PT2399.kicad_pcb",
+      "source_url": "https://raw.githubusercontent.com/storskegg/Block-PT2399/cf5bedc2295c0ad2a7b3bfe4b9055eafed56edd2/Block-PT2399.kicad_pcb",
+      "license": "Apache-2.0",
+      "license_file": "licenses/pt2399_delay.txt",
+      "source_sha256": "54a647047f6b1f55e56dee4050cbffae0c42dc462a84109abffd3c213e4dcb2d",
+      "board_sha256": "c48693b458eb28ae11f2ef099acf33ee9a797d87f430457c6961b41e2f2c4cab",
+      "reference_sha256": "0ffb5710e07ee6f65bb6951a9ca1ebf9d52bb701852b1e9f83696991043d7eb6",
+      "project_sha256": "ddbcc3d30ca8a4e88f38be0bb5a12f4f29f67048bd503d3e77b2e615196bab8a",
+      "license_sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "expected": {
+        "footprints": 33,
+        "nets": 24,
+        "tracks": 0,
+        "vias": 0,
+        "zones": 0,
+        "max_core_validation_errors": 0,
+        "open_connections": 50,
+        "global_paths": 50,
+        "max_track_arcs": 0
+      },
+      "note": "Default real-board smoke gate: analog delay block with through-hole potentiometers.",
+      "curved_expected": {
+        "min_track_arcs": 1,
+        "max_unrounded_non_junction_bends": 0
+      }
+    },
+    {
+      "id": "bm_svf",
+      "level": 1,
+      "status": "qualified",
+      "qualification": "detailed_complete",
+      "probe_iterations": 30,
+      "probe_timeout_seconds": 7200,
+      "router_args": [
+        "--crossing-safe-diagonal-grid",
+        "--direct-medial",
+        "--grid-pitch-nm",
+        "650000",
+        "--xpbd-relaxation",
+        "--xpbd-feedback",
+        "--atomic-net-trees",
+        "--hard-capacity-start-iteration",
+        "4",
+        "--max-hard-capacity-ripup-attempts-per-pass",
+        "8",
+        "--max-hard-capacity-ripup-nets-per-attempt",
+        "8",
+        "--max-hard-capacity-conflict-set-states-per-attempt",
+        "256",
+        "--terminal-escape-proximity-cost",
+        "500",
+        "--rollback-failed-hard-capacity-ripup",
+        "--defer-hard-capacity-ripup-victims-to-pass-tail",
+        "--protect-recovered-hard-capacity-ripup-nets"
+      ],
+      "kicad_routing_tools_set": "set15",
+      "repo": "bread-modular/bread-modular",
+      "commit": "09ff60b19e7f8cb47b458185cef44005c8a29728",
+      "path": "modules/svf/svf.kicad_pcb",
+      "source_url": "https://raw.githubusercontent.com/bread-modular/bread-modular/09ff60b19e7f8cb47b458185cef44005c8a29728/modules/svf/svf.kicad_pcb",
+      "license": "MIT",
+      "license_file": "licenses/bm_svf.txt",
+      "source_sha256": "50724997f09cbbe331081bb51a9959a37158eeec1ca8e4c7977834e5d5f1c835",
+      "board_sha256": "308ce5513cb6b2b33820648a0062a54f548f6b3c13d856cdcd9b7c3ac8a20d2a",
+      "reference_sha256": "52317a66f7442b3b260f07ff1b7c16dd94f99c088c61533b81698cbda6d4d77b",
+      "project_sha256": "04856904fe9070f7decd33b676d3f58e44676b6c930e65fa8a16f0ddd65d54db",
+      "license_sha256": "e1aaf7c7f14ea7c5cf91bc900811289e557e109a46512b428ede67a8408e9b6d",
+      "expected": {
+        "footprints": 34,
+        "nets": 28,
+        "tracks": 0,
+        "vias": 0,
+        "zones": 0,
+        "max_core_validation_errors": 0,
+        "max_track_arcs": 0,
+        "open_connections": 78,
+        "global_paths": 78
+      },
+      "note": "Qualified curved routing: complete physical connectivity and external KiCad DRC; retained physical demands may expand the canonical 78-path inventory.",
+      "curved_expected": {
+        "min_track_arcs": 1,
+        "max_unrounded_non_junction_bends": 0
+      }
+    },
+    {
+      "id": "ft2232h_jtag",
+      "level": 2,
+      "status": "unlocked",
+      "qualification": "detailed_complete",
+      "kicad_routing_tools_set": "set5",
+      "repo": "thecasterian/FT2232-JTAG-UART",
+      "commit": "503ddfb760f8fc75196cef801b0203f5e2b00d07",
+      "path": "Rev.A/ft2232h-jtag-uart.kicad_pcb",
+      "source_url": "https://raw.githubusercontent.com/thecasterian/FT2232-JTAG-UART/503ddfb760f8fc75196cef801b0203f5e2b00d07/Rev.A/ft2232h-jtag-uart.kicad_pcb",
+      "license": "BSD-3-Clause",
+      "license_file": "licenses/ft2232h_jtag.txt",
+      "license_source_url": "https://raw.githubusercontent.com/thecasterian/FT2232-JTAG-UART/503ddfb760f8fc75196cef801b0203f5e2b00d07/LICENSE",
+      "source_sha256": "2324185ca57850e90dd36d831a1fc847be9a5382a3160c684e0bf7b4a2839441",
+      "board_sha256": "882c35ac781cf8fc292dc025b8d22944077cc54002c6c73cf2613056f8b8b95b",
+      "reference_sha256": "6c7736712837b03b9855cea32d6652f6592398640fea86e4f390645cab43eb08",
+      "project_sha256": "00edffa7cc27d9c31b57714ce3a5cdff5f68a89425071f2b353672767939f237",
+      "license_sha256": "f13e0f99552413df5793df2fb30d737afe2bc80c3ef13f48731ae5675e670fab",
+      "expected": {
+        "footprints": 41,
+        "nets": 62,
+        "tracks": 0,
+        "vias": 0,
+        "zones": 0,
+        "open_connections": 117,
+        "max_core_validation_errors": 0,
+        "max_track_arcs": 0
+      },
+      "curved_expected": {
+        "min_track_arcs": 1,
+        "max_unrounded_non_junction_bends": 0
+      },
+      "note": "FT2232H dual JTAG/UART adapter: compact 64-pin fine-pitch fanout and USB interface; clean routed reference.",
+      "source_corpus_commit": "ec2bf0e1021c0ed95c45b14664d02c56777a0974",
+      "preparation": {
+        "method": "KiCadRoutingTools tests/stress/prep_set2.py",
+        "kicad_version": "9.0.8",
+        "compatibility_change": "Passed null OUTLINE_ERROR_HANDLER before the allow-arcs boolean to match the KiCad 9 GetBoardPolygonOutlines overload. Resolved swig_compat import against the pinned checkout.",
+        "result": "Normalized source and retained routed reference; stripped tracks, vias and copper zones, retained rule areas; rebuilt Edge.Cuts and removed non-routing board graphics. Original PCB and project retained under source/. Source rules and placements were not edited."
+      },
+      "probe_timeout_seconds": 7200
+    },
+    {
+      "id": "gb_nintendo_power",
+      "level": 3,
+      "status": "locked",
+      "qualification": "detailed_complete",
+      "kicad_routing_tools_set": "set24",
+      "repo": "RWeick/DMG-A20-01-Nintendo-Power-Cartridge",
+      "commit": "85b24c7d2eff4973f8333ba6e65c3ce02eb74a1c",
+      "path": "DMG-A20-01.kicad_pcb",
+      "source_url": "https://raw.githubusercontent.com/RWeick/DMG-A20-01-Nintendo-Power-Cartridge/85b24c7d2eff4973f8333ba6e65c3ce02eb74a1c/DMG-A20-01.kicad_pcb",
+      "license": "GPL-3.0-only",
+      "license_file": "licenses/gb_nintendo_power.txt",
+      "license_source_url": "https://raw.githubusercontent.com/RWeick/DMG-A20-01-Nintendo-Power-Cartridge/85b24c7d2eff4973f8333ba6e65c3ce02eb74a1c/LICENSE",
+      "source_sha256": "cd556e973c1e56588ca5673c2f2480d5a9f054fd1025c51f3ce083a44b29207b",
+      "board_sha256": "068464af04d5e63c87b70fbebbd155c35bc64411c2cee683f7c96a10d900eb7d",
+      "reference_sha256": "b3baf4d5d5dbf651e8ef8dc8659fc260a25175f4746cf42ac666628ce5015994",
+      "project_sha256": "701eb343408e933b989365af667b0771ff37ed1b41dac99d6c69d3926f78b403",
+      "license_sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+      "expected": {
+        "footprints": 22,
+        "nets": 72,
+        "tracks": 0,
+        "vias": 0,
+        "zones": 0,
+        "open_connections": 148,
+        "max_core_validation_errors": 0,
+        "max_track_arcs": 0
+      },
+      "curved_expected": {
+        "min_track_arcs": 1,
+        "max_unrounded_non_junction_bends": 0
+      },
+      "note": "Nintendo Power Game Boy flash cartridge: 80-pad IC and parallel memory buses; original reference has one starved thermal, two copper-edge violations and one open, all removed-copper issues.",
+      "source_corpus_commit": "ec2bf0e1021c0ed95c45b14664d02c56777a0974",
+      "preparation": {
+        "method": "KiCadRoutingTools tests/stress/prep_set2.py",
+        "kicad_version": "9.0.8",
+        "compatibility_change": "Passed null OUTLINE_ERROR_HANDLER before the allow-arcs boolean to match the KiCad 9 GetBoardPolygonOutlines overload. Resolved swig_compat import against the pinned checkout.",
+        "result": "Normalized source and retained routed reference; stripped tracks, vias and copper zones, retained rule areas; rebuilt Edge.Cuts and removed non-routing board graphics. Original PCB and project retained under source/. Source rules and placements were not edited."
+      },
+      "probe_timeout_seconds": 7200
+    },
+    {
+      "id": "nascom_eprom_80bus",
+      "level": 4,
+      "status": "locked",
+      "qualification": "detailed_complete",
+      "kicad_routing_tools_set": "set23",
+      "repo": "codesqueak/EPROM_Card",
+      "commit": "dfb8a674e2897479aab17d956dff47495f1089c6",
+      "path": "kicad/80bus.kicad_pcb",
+      "source_url": "https://raw.githubusercontent.com/codesqueak/EPROM_Card/dfb8a674e2897479aab17d956dff47495f1089c6/kicad/80bus.kicad_pcb",
+      "license": "CERN-OHL-S-2.0",
+      "license_file": "licenses/nascom_eprom_80bus.txt",
+      "license_source_url": "https://raw.githubusercontent.com/codesqueak/EPROM_Card/dfb8a674e2897479aab17d956dff47495f1089c6/LICENSE",
+      "source_sha256": "4c3ff03fe1f0465481273d768ff2617cff87e7d2f17b4f8362c06f93dea925d2",
+      "board_sha256": "9643c1614510fec42da90165ab3c9a99f4bbb2e7103db6b680659987370b8659",
+      "reference_sha256": "cd0cddc88cb454fe9ef713507aec073158c9ec16751fcf2ca311cd2265b3fb68",
+      "project_sha256": "11001c7d528621af1303081fd46ff1f0f15e7dc8b8b9a3b526ea735bcfe4b6fb",
+      "license_sha256": "9a9fe411d9be2e1778c5dc15a3e38440e865ccc0074edaf66f37b9079d7f58f6",
+      "expected": {
+        "footprints": 79,
+        "nets": 155,
+        "tracks": 0,
+        "vias": 0,
+        "zones": 0,
+        "open_connections": 415,
+        "max_core_validation_errors": 0,
+        "max_track_arcs": 0
+      },
+      "curved_expected": {
+        "min_track_arcs": 1,
+        "max_unrounded_non_junction_bends": 0
+      },
+      "note": "Nascom/Gemini EPROM card: 415 connections across repeated DIP sockets and a large card-edge bus; clean routed reference.",
+      "source_corpus_commit": "ec2bf0e1021c0ed95c45b14664d02c56777a0974",
+      "preparation": {
+        "method": "KiCadRoutingTools tests/stress/prep_set2.py",
+        "kicad_version": "9.0.8",
+        "compatibility_change": "Passed null OUTLINE_ERROR_HANDLER before the allow-arcs boolean to match the KiCad 9 GetBoardPolygonOutlines overload. Resolved swig_compat import against the pinned checkout.",
+        "result": "Normalized source and retained routed reference; stripped tracks, vias and copper zones, retained rule areas; rebuilt Edge.Cuts and removed non-routing board graphics. Original PCB and project retained under source/. Source rules and placements were not edited."
+      },
+      "probe_timeout_seconds": 7200
+    }
+  ]
+}

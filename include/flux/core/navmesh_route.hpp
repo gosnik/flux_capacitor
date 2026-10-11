@@ -288,6 +288,55 @@ private:
   Stats stats_;
 };
 
+// A realization-owned, immutable-geometry screening session.  Routes may use different guides
+// and therefore build different cell lattices, while still asking the same clearance domain
+// about many of the same cell chords.  This context shares those conservative classifications
+// without ever retaining dynamic copper, route history, or a result beyond its owning snapshot.
+// Calls are safe from concurrent route workers.  Misses are classified by the calling worker;
+// waiters only join an already-running identical chord request, so this introduces no background
+// workers or dependence on the shared routing worker budget.
+class NavMeshScreeningContext {
+public:
+  struct Stats {
+    std::size_t requests{0U};
+    std::size_t domain_hits{0U};
+    std::size_t domain_misses{0U};
+    std::size_t chord_cache_hits{0U};
+    std::size_t chord_cache_misses{0U};
+    std::size_t coalesced_chord_waits{0U};
+    std::size_t retained_chords{0U};
+    std::size_t evictions{0U};
+    std::size_t classifier_batches{0U};
+    std::size_t batched_chord_requests{0U};
+    std::size_t gpu_dispatches{0U};
+    std::size_t gpu_work_items{0U};
+    std::size_t resident_boundary_uploads{0U};
+    std::size_t resident_boundary_reuses{0U};
+    std::uint64_t classifier_elapsed_us{0U};
+  };
+
+  explicit NavMeshScreeningContext(std::size_t maximum_chords = 262'144U,
+                                   std::size_t maximum_domains = 8U);
+
+  // Returns an independently prepared lattice.  Geometry-equivalent calls share boundary
+  // screening even when topology guides, search bounds, or cell budgets differ.
+  [[nodiscard]] std::shared_ptr<const PreparedNavMeshDomain>
+  prepare(const OffsetFreeSpaceRegion& region, const NavMeshConfig& config,
+          bool validate_source_topology = true);
+
+  [[nodiscard]] Stats stats() const;
+
+  // Internal support for the NavMesh builder.  The returned values preserve the ordinary exact
+  // chord contract; GPU results may only short-circuit definitely-clear chords.
+  [[nodiscard]] std::vector<std::optional<Nanometres>>
+  assess(const OffsetFreeSpaceRegion& region, const PreparedNavMeshDomain& prepared,
+         const std::vector<std::pair<Point, Point>>& chords);
+
+private:
+  struct Impl;
+  std::shared_ptr<Impl> impl_;
+};
+
 struct PreparedNavMeshPointQuery {
   bool inside{false};
   long double boundary_distance_nm{0.0L};

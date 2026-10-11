@@ -5,6 +5,7 @@
 #include <limits>
 #include <optional>
 #include <queue>
+#include <chrono>
 
 namespace flux {
 namespace {
@@ -34,6 +35,30 @@ constexpr auto unreachable = std::numeric_limits<std::uint32_t>::max();
   return point_segment_distance(
       RoutingComputePoint{x, y, 0, segment.layer, std::numeric_limits<std::uint32_t>::max()},
       segment);
+}
+
+[[nodiscard]] RoutingComputeDomainPointResult domain_points_cpu(
+    const std::vector<std::pair<std::int64_t, std::int64_t>>& points,
+    const std::vector<RoutingComputeSegment>& boundaries) {
+  RoutingComputeDomainPointResult result;
+  result.signed_distances_nm.reserve(points.size());
+  for (const auto [x, y] : points) {
+    long double nearest = std::numeric_limits<long double>::infinity();
+    bool inside = false;
+    for (const auto& edge : boundaries) {
+      nearest = std::min(nearest, point_segment_distance(x, y, edge));
+      const auto ay = edge.first_y_nm, by = edge.second_y_nm;
+      if ((ay > y) != (by > y)) {
+        const auto crossing = static_cast<long double>(edge.first_x_nm) +
+            ((static_cast<long double>(y) - ay) *
+             (static_cast<long double>(edge.second_x_nm) - edge.first_x_nm)) /
+                (static_cast<long double>(by) - ay);
+        if (crossing > static_cast<long double>(x)) inside = !inside;
+      }
+    }
+    result.signed_distances_nm.push_back(inside ? nearest : -nearest);
+  }
+  return result;
 }
 
 [[nodiscard]] bool segments_intersect(const RoutingComputeSegment& first,
@@ -273,6 +298,64 @@ scores_cpu(const std::vector<RoutingComputeLinearCandidate>& candidates,
 [[nodiscard]] RoutingComputeSplineBatchResult
 spline_batch_cpu(const RoutingComputeSplineBatchInput& input) {
   RoutingComputeSplineBatchResult result;
+  if (input.candidate_count == 0U || input.sample_count < 2U ||
+      input.sample_count > std::numeric_limits<std::size_t>::max() / input.candidate_count) {
+    result.diagnostic = "invalid spline sample product";
+    return result;
+  }
+  const auto compact = !input.quintic_bezier_controls_nm.empty();
+  if (compact) {
+    const auto spans = input.quintic_spans_per_candidate;
+    if (spans == 0U || spans > std::numeric_limits<std::size_t>::max() / 6U ||
+        input.candidate_count > std::numeric_limits<std::size_t>::max() / (spans * 6U) ||
+        input.candidate_count > std::numeric_limits<std::size_t>::max() / spans ||
+        input.sample_count < 2U ||
+        input.quintic_bezier_controls_nm.size() != input.candidate_count * spans * 6U ||
+        input.quintic_span_intervals.size() != input.candidate_count * spans) {
+      result.diagnostic = "invalid compact quintic spline batch";
+      return result;
+    }
+    result.positions_nm.resize(input.sample_count * input.candidate_count);
+    for (std::size_t candidate = 0U; candidate < input.candidate_count; ++candidate) {
+      for (std::size_t sample = 0U; sample < input.sample_count; ++sample) {
+        const auto parameter = static_cast<long double>(sample) /
+                               static_cast<long double>(input.sample_count - 1U);
+        std::size_t span = spans - 1U;
+        for (std::size_t candidate_span = 0U; candidate_span < spans; ++candidate_span) {
+          const auto interval = input.quintic_span_intervals[candidate * spans + candidate_span];
+          if (parameter <= static_cast<long double>(interval.second) || candidate_span + 1U == spans) {
+            span = candidate_span;
+            break;
+          }
+        }
+        const auto interval = input.quintic_span_intervals[candidate * spans + span];
+        const auto width = static_cast<long double>(interval.second) - interval.first;
+        if (!(width > 0.0L)) {
+          result.positions_nm.clear();
+          result.diagnostic = "invalid compact quintic span interval";
+          return result;
+        }
+        const auto local = std::clamp((parameter - static_cast<long double>(interval.first)) / width,
+                                      0.0L, 1.0L);
+        const auto complement = 1.0L - local;
+        const std::array<long double, 6U> basis{
+            complement * complement * complement * complement * complement,
+            5.0L * local * complement * complement * complement * complement,
+            10.0L * local * local * complement * complement * complement,
+            10.0L * local * local * local * complement * complement,
+            5.0L * local * local * local * local * complement,
+            local * local * local * local * local};
+        long double x = 0.0L, y = 0.0L;
+        const auto control_base = (candidate * spans + span) * 6U;
+        for (std::size_t control = 0U; control < basis.size(); ++control) {
+          x += basis[control] * input.quintic_bezier_controls_nm[control_base + control].first;
+          y += basis[control] * input.quintic_bezier_controls_nm[control_base + control].second;
+        }
+        result.positions_nm[candidate * input.sample_count + sample] = {x, y};
+      }
+    }
+    return result;
+  }
   const auto controls_per_candidate = input.control_points_nm.size() / input.candidate_count;
   result.positions_nm.resize(input.sample_count * input.candidate_count);
   for (std::size_t candidate = 0U; candidate < input.candidate_count; ++candidate) {
@@ -490,6 +573,9 @@ RoutingComputeSplineBatchResult
 evaluate_routing_spline_batch_gpu(const RoutingComputeSplineBatchInput&);
 RoutingComputeSplineScoreResult
 score_routing_spline_candidates_gpu(const RoutingComputeSplineScoreInput&);
+RoutingComputeDomainPointResult probe_routing_domain_points_gpu(
+    const std::vector<std::pair<std::int64_t, std::int64_t>>&,
+    const std::vector<RoutingComputeSegment>&);
 RoutingComputeBroadphaseResult
 discover_routing_broadphase_pairs_gpu(const std::vector<RoutingComputePrimitiveBounds>&,
                                       std::size_t);
@@ -514,6 +600,46 @@ RoutingComputeDeviceInfo routing_compute_device_info() {
   return {false, {}, {}, 0U, 0U, 0U, 0U,
           "Flux was built without the mandatory Vulkan routing backend"};
 #endif
+}
+
+RoutingComputeDomainPointResult probe_routing_domain_points(
+    const std::vector<std::pair<std::int64_t, std::int64_t>>& points,
+    const std::vector<RoutingComputeSegment>& boundary_segments, bool prefer_gpu) {
+  const auto started = std::chrono::steady_clock::now();
+  if (points.empty() || boundary_segments.empty()) {
+    RoutingComputeDomainPointResult result;
+    result.diagnostic = "routing domain probe requires points and boundary";
+    return result;
+  }
+  // A scoring-field caller can fall back to its spatially indexed scalar query on overload.
+  // Do not replace a bounded GPU rejection with billions of brute-force CPU edge tests.
+  constexpr std::size_t maximum_advisory_pairs = 16'777'216U;
+  if (prefer_gpu && points.size() > maximum_advisory_pairs / boundary_segments.size()) {
+    RoutingComputeDomainPointResult result;
+    result.cpu_fallback = true;
+    result.diagnostic = "routing domain advisory pair budget exceeded; use indexed scalar fallback";
+    return result;
+  }
+#if FLUX_HAS_VULKAN_HYDRAULIC_PATHS
+  // Bound a single advisory workload; larger calls retain exact CPU behavior instead of risking
+  // an unbounded device dispatch.
+  if (prefer_gpu && points.size() <= 65'536U && boundary_segments.size() <= 65'536U) {
+    auto gpu = probe_routing_domain_points_gpu(points, boundary_segments);
+    if (gpu.ok()) return gpu;
+    auto cpu = domain_points_cpu(points, boundary_segments);
+    cpu.cpu_fallback = true;
+    cpu.elapsed_us = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - started).count());
+    return cpu;
+  }
+#else
+  static_cast<void>(prefer_gpu);
+#endif
+  auto result = domain_points_cpu(points, boundary_segments);
+  result.cpu_fallback = prefer_gpu;
+  result.elapsed_us = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+      std::chrono::steady_clock::now() - started).count());
+  return result;
 }
 
 RoutingComputeProximityResult
@@ -704,18 +830,32 @@ filter_routing_via_candidates(const RoutingComputeViaCandidateInput& input, bool
 
 RoutingComputeSplineBatchResult
 evaluate_routing_spline_batch(const RoutingComputeSplineBatchInput& input, bool prefer_gpu) {
-  if (input.control_points_nm.empty() || input.sample_count == 0U || input.candidate_count == 0U ||
-      input.control_points_nm.size() % input.candidate_count != 0U ||
+  const auto compact = !input.quintic_bezier_controls_nm.empty();
+  const auto compact_counts_valid = input.quintic_spans_per_candidate > 0U &&
+                                    input.quintic_spans_per_candidate <=
+                                        std::numeric_limits<std::size_t>::max() / 6U &&
+                                    input.candidate_count <= std::numeric_limits<std::size_t>::max() /
+                                        input.quintic_spans_per_candidate &&
+                                    input.candidate_count <= std::numeric_limits<std::size_t>::max() /
+                                        (input.quintic_spans_per_candidate * 6U);
+  if (input.sample_count == 0U || input.candidate_count == 0U ||
+      (!compact && (input.control_points_nm.empty() ||
+                    input.control_points_nm.size() % input.candidate_count != 0U ||
+                    input.basis_coefficients.size() != input.control_points_nm.size() * input.sample_count)) ||
+      (compact && (!compact_counts_valid || input.sample_count < 2U ||
+                   input.quintic_bezier_controls_nm.size() !=
+                       input.candidate_count * input.quintic_spans_per_candidate * 6U ||
+                   input.quintic_span_intervals.size() !=
+                       input.candidate_count * input.quintic_spans_per_candidate)) ||
       input.sample_count > std::numeric_limits<std::size_t>::max() / input.candidate_count ||
-      input.control_points_nm.size() >
-          std::numeric_limits<std::size_t>::max() / input.sample_count ||
-      input.basis_coefficients.size() != input.control_points_nm.size() * input.sample_count) {
+      (!compact && input.control_points_nm.size() >
+                       std::numeric_limits<std::size_t>::max() / input.sample_count)) {
     return RoutingComputeSplineBatchResult{
         {}, false, false, "invalid routing compute spline batch"};
   }
 #if FLUX_HAS_VULKAN_HYDRAULIC_PATHS
   const auto total_samples = input.sample_count * input.candidate_count;
-  if (prefer_gpu && total_samples >= 32U &&
+  if (prefer_gpu && !compact && total_samples >= 32U &&
       input.control_points_nm.size() <= std::numeric_limits<std::size_t>::max() / total_samples &&
       total_samples * (input.control_points_nm.size() / input.candidate_count) >= 512U) {
     auto gpu = evaluate_routing_spline_batch_gpu(input);
@@ -733,6 +873,14 @@ evaluate_routing_spline_batch(const RoutingComputeSplineBatchInput& input, bool 
 
 RoutingComputeSplineScoreResult
 score_routing_spline_candidates(const RoutingComputeSplineScoreInput& input, bool prefer_gpu) {
+  const auto compact = !input.quintic_bezier_controls_nm.empty();
+  const auto compact_counts_valid = input.quintic_spans_per_candidate > 0U &&
+                                    input.quintic_spans_per_candidate <=
+                                        std::numeric_limits<std::size_t>::max() / 6U &&
+                                    input.candidate_count <= std::numeric_limits<std::size_t>::max() /
+                                        input.quintic_spans_per_candidate &&
+                                    input.candidate_count <= std::numeric_limits<std::size_t>::max() /
+                                        (input.quintic_spans_per_candidate * 6U);
   const auto field_count =
       input.field_width > 0U && input.field_height > 0U &&
               input.field_width <= std::numeric_limits<std::size_t>::max() / input.field_height
@@ -740,9 +888,32 @@ score_routing_spline_candidates(const RoutingComputeSplineScoreInput& input, boo
           : 0U;
   if (input.top_k == 0U || input.field_pitch_nm <= 0 ||
       input.signed_clearance_nm.size() != field_count ||
-      input.corridor_mask.size() != field_count) {
-    return RoutingComputeSplineScoreResult{
-        {}, 0U, false, false, "invalid routing spline score request"};
+      input.corridor_mask.size() != field_count || input.sample_count < 3U ||
+      input.candidate_count == 0U ||
+      input.sample_count > std::numeric_limits<std::size_t>::max() / input.candidate_count ||
+      (!compact && input.control_points_nm.size() >
+                       std::numeric_limits<std::size_t>::max() / input.sample_count) ||
+      (!compact && (input.control_points_nm.empty() ||
+                    input.control_points_nm.size() % input.candidate_count != 0U ||
+                    input.basis_coefficients.size() != input.control_points_nm.size() * input.sample_count)) ||
+      (compact && (!compact_counts_valid ||
+                   input.quintic_bezier_controls_nm.size() != input.candidate_count *
+                       input.quintic_spans_per_candidate * 6U ||
+                   input.quintic_span_intervals.size() != input.candidate_count *
+                       input.quintic_spans_per_candidate))) {
+    RoutingComputeSplineScoreResult result;
+    result.diagnostic = "invalid routing spline score request";
+    return result;
+  }
+  if (compact && std::any_of(input.quintic_span_intervals.begin(),
+                             input.quintic_span_intervals.end(), [](const auto interval) {
+        return !std::isfinite(interval.first) || !std::isfinite(interval.second) ||
+               interval.first < 0.0F || interval.second > 1.0F ||
+               !(interval.second > interval.first);
+      })) {
+    RoutingComputeSplineScoreResult result;
+    result.diagnostic = "invalid compact quintic parameter interval";
+    return result;
   }
 #if FLUX_HAS_VULKAN_HYDRAULIC_PATHS
   if (prefer_gpu && input.candidate_count >= 16U) {

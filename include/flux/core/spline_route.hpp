@@ -203,6 +203,28 @@ struct SplineClearanceProbe {
   bool represented_legal{false};
 };
 using SplineClearanceEvaluator = std::function<SplineClearanceProbe(SplineVector)>;
+// Optional bulk form used exclusively to populate advisory scoring fields.  It must preserve the
+// input order; malformed or incomplete output is ignored in favour of the scalar evaluator.
+// Shape and continuous-envelope certificates always retain the scalar long-double predicate.
+using SplineClearanceBatchEvaluator =
+    std::function<std::vector<SplineClearanceProbe>(const std::vector<SplineVector>&)>;
+struct SplineEnvelopeChord {
+  SplineVector first;
+  SplineVector second;
+  Nanometres radius{0};
+};
+// A clear result must include exact endpoint containment and a conservative capsule-vs-boundary
+// proof. It may skip redundant scalar clearance probes; corridor/topology and final certificates
+// remain CPU-authoritative, while ambiguous spans keep the ordinary exact path.
+struct SplineEnvelopeScreenResult {
+  std::vector<std::uint8_t> definitely_clear;
+  bool used_gpu{false};
+  bool cpu_fallback{false};
+  std::size_t dispatches{0U};
+  std::uint64_t elapsed_us{0U};
+};
+using SplineEnvelopeScreenEvaluator =
+    std::function<SplineEnvelopeScreenResult(const std::vector<SplineEnvelopeChord>&)>;
 using SplineRouteConstraintEvaluator = std::function<bool(const QuinticPHRoute&)>;
 
 struct SplineContinuousEnvelopeConfig {
@@ -358,6 +380,7 @@ struct SplineTrajectoryOptimizationResult {
   std::size_t gpu_polish_batches{0U};
   std::size_t gpu_polish_dispatches{0U};
   std::size_t gpu_polish_cpu_fallbacks{0U};
+  std::uint64_t gpu_polish_solve_us{0U};
   std::size_t gpu_polish_candidates{0U};
   std::size_t gpu_polish_exact_shortlist_checks{0U};
   std::size_t parallel_exact_waves{0U};
@@ -496,7 +519,8 @@ certify_quintic_ph_shape(const QuinticPHRoute& route,
 [[nodiscard]] SplineContinuousEnvelopeCertificate
 certify_quintic_ph_continuous_envelope(const QuinticPHRoute& route, Nanometres minimum_clearance,
                                        const SplineClearanceEvaluator& clearance_evaluator,
-                                       const SplineContinuousEnvelopeConfig& config = {});
+                                       const SplineContinuousEnvelopeConfig& config = {},
+                                       const SplineEnvelopeScreenEvaluator& envelope_screen_evaluator = {});
 
 [[nodiscard]] std::size_t
 shove_quintic_ph_interpolation_corridor(QuinticPHRoute& route, long double parameter,
@@ -508,7 +532,9 @@ shove_quintic_ph_interpolation_corridor(QuinticPHRoute& route, long double param
 optimize_quintic_ph_trajectory(QuinticPHRoute& route,
                                const SplineTrajectoryOptimizationConfig& config,
                                const SplineClearanceEvaluator& clearance_evaluator,
-                               const SplineRouteConstraintEvaluator& route_constraint = {});
+                               const SplineRouteConstraintEvaluator& route_constraint = {},
+                               const SplineClearanceBatchEvaluator& clearance_batch_evaluator = {},
+                               const SplineEnvelopeScreenEvaluator& envelope_screen_evaluator = {});
 struct PHRouteTighteningStatistics {
   std::size_t candidate_checks{0U};
   std::size_t paired_attempts{0U};

@@ -70,6 +70,39 @@ bool segment_crosses_i64(ivec2 a, ivec2 b, ivec2 c, ivec2 d) {
 }
 
 vec2 spline_position(uint candidate, uint sample_index) {
+  // Mode 7 can receive compact PH spans: six Bézier controls per span and a normalized interval
+  // per span.  Keep the legacy dense basis layout for generic batch evaluation (mode 4).
+  if (push.mode == 7u && push.height != 0u) {
+    float parameter = push.width > 1u ? float(sample_index) / float(push.width - 1u) : 0.0;
+    uint span = push.count_b - 1u;
+    float begin = uintBitsToFloat(input_b[(candidate * push.count_b + span) * 2u]);
+    float end = uintBitsToFloat(input_b[(candidate * push.count_b + span) * 2u + 1u]);
+    for (uint candidate_span = 0u; candidate_span < push.count_b; ++candidate_span) {
+      float candidate_end = uintBitsToFloat(input_b[(candidate * push.count_b + candidate_span) * 2u + 1u]);
+      if (parameter <= candidate_end || candidate_span + 1u == push.count_b) {
+        span = candidate_span;
+        begin = uintBitsToFloat(input_b[(candidate * push.count_b + span) * 2u]);
+        end = candidate_end;
+        break;
+      }
+    }
+    float local = clamp((parameter - begin) / max(end - begin, 1.0e-12), 0.0, 1.0);
+    float inverse = 1.0 - local;
+    float basis[6] = float[6](inverse * inverse * inverse * inverse * inverse,
+                               5.0 * local * inverse * inverse * inverse * inverse,
+                               10.0 * local * local * inverse * inverse * inverse,
+                               10.0 * local * local * local * inverse * inverse,
+                               5.0 * local * local * local * local * inverse,
+                               local * local * local * local * local);
+    vec2 position = vec2(0.0);
+    uint control_base = (candidate * push.count_b + span) * 6u;
+    for (uint control = 0u; control < 6u; ++control) {
+      uint control_offset = (control_base + control) * 2u;
+      position += basis[control] * vec2(uintBitsToFloat(input_a[control_offset]),
+                                        uintBitsToFloat(input_a[control_offset + 1u]));
+    }
+    return position;
+  }
   uint control_base = candidate * push.count_b;
   uint coefficient_base = (candidate * push.width + sample_index) * push.count_b;
   vec2 position = vec2(0.0);
@@ -109,6 +142,28 @@ void main() {
     output_data[out_index + 1u] = selected;
     output_data[out_index + 2u] = best < 0.0 ? 1u : 0u;
     output_data[out_index + 3u] = checks;
+    return;
+  }
+  if (push.mode == 18u) {
+    // Advisory signed distance for closed even/odd contours. Coordinates are relative to a
+    // bounded origin supplied by the host; CPU polygon containment remains authoritative.
+    if (invocation >= push.count_a) return;
+    uint q = invocation * 5u;
+    vec2 point = vec2(int(input_a[q]), int(input_a[q + 1u]));
+    float nearest = 3.402823466e+38;
+    bool inside = false;
+    for (uint index = 0u; index < push.count_b; ++index) {
+      uint s = index * 7u;
+      vec2 first = vec2(int(input_b[s]), int(input_b[s + 1u]));
+      vec2 second = vec2(int(input_b[s + 2u]), int(input_b[s + 3u]));
+      nearest = min(nearest, point_segment_distance(point, first, second));
+      if ((first.y > point.y) != (second.y > point.y)) {
+        float crossing = first.x + (point.y - first.y) * (second.x - first.x) /
+                                      (second.y - first.y);
+        if (crossing > point.x) inside = !inside;
+      }
+    }
+    output_data[invocation] = floatBitsToUint(inside ? nearest : -nearest);
     return;
   }
   if (push.mode == 1u) {

@@ -1,0 +1,321 @@
+{
+  "round": 10,
+  "experiment": "batched-gpu-materialization-with-exact-acceptance",
+  "recorded_at": "2026-10-11T23:59:16.295642+00:00",
+  "git_revision": "69528639c77c629bf36c7573b8390be25a0f2363",
+  "revision_note": "Pre-commit HEAD; frozen source hashes identify the tested working tree.",
+  "binary_sha256": "cb0636814be13ce64100e5d97071b3f24289cd69e7934a4d3a79ecfad85ba0bb",
+  "frozen_source_manifest_sha256": "62d4e99b6feebf24a30f8ec4e7c4e7094e9cb019631d019f367d13778150665f",
+  "configuration": {
+    "sequential": true,
+    "telemetry": "diagnostic",
+    "curved": true,
+    "routing_timeout_seconds": 900,
+    "external_kicad_drc": true
+  },
+  "diagnosis": {
+    "round": 10,
+    "baseline_commit": "6952863",
+    "board": "bm_svf",
+    "tier": 1,
+    "failure": "End-to-end detailed routing is slow despite complete curved copper and zero external DRC violations.",
+    "baseline": {
+      "detail_seconds": 336.38552,
+      "materialization_seconds": 238.134121,
+      "realization_seconds": 236.513745,
+      "preparation_worker_seconds": 127.951104,
+      "trajectory_worker_seconds": 79.239684,
+      "candidate_checks": 245806
+    },
+    "hypothesis": "Batch repeated geometry and curve-ranking work; retain immutable geometry buffers and reuse chord certificates across routes. Exact CPU acceptance is preserved.",
+    "requested_scope": [
+      "GPU-resident boundary distance batches",
+      "compact quintic candidate GPU sampling and scoring",
+      "bounded shared NavMesh chord screening",
+      "conservative curve envelope screening with exact ambiguous handling"
+    ],
+    "success_criterion": "Tier0 and Tier1 retain complete curved routing and external KiCad DRC; actual GPU use and residency are demonstrated and runtime compared without adding standalone global benchmark time.",
+    "tier2_scope": "Prior failure precedes materialization; this experiment does not claim to resolve it."
+  },
+  "validation": {
+    "release_build": "passed",
+    "binary_sha256": "cb0636814be13ce64100e5d97071b3f24289cd69e7934a4d3a79ecfad85ba0bb",
+    "independent_review": "All findings fixed; final malformed envelope guard rechecked with no remaining blocker.",
+    "core_suite": {
+      "passed": 71,
+      "total": 71,
+      "coverage_note": "71/71 before final narrow interval and malformed-envelope guards; final guarded build retested affected mechanisms and all six dependent suites."
+    },
+    "final_focused": [
+      "routing_compute_compact_quintic_scores_match_dense_authority",
+      "routing_compute_domain_points_match_cpu_even_odd",
+      "failed_spline_chains_retry_against_committed_copper",
+      "navmesh_screening_context_coalesces_snapshot_chords_without_stale_domains",
+      "ph_envelope_capsules_preserve_ambiguous_exact_fallback"
+    ],
+    "regression_suites": [
+      "flux_layered_navmesh_tests",
+      "flux_ph_tightening_tests",
+      "flux_copper_scaffold_tests",
+      "flux_scaffold_curve_tests",
+      "flux_scaffold_collision_tests",
+      "flux_routing_engine_experiment_tests"
+    ],
+    "status": "passed"
+  },
+  "comparison": {
+    "tier0": {
+      "baseline_detail_seconds": 62.542786112986505,
+      "detail_seconds": 57.842960138979834,
+      "change_percent": -7.514577245593457,
+      "complete": true,
+      "stop_reason": "complete",
+      "open_connections": 0,
+      "counts": {
+        "added_track_arcs": 28,
+        "added_track_beziers": 383,
+        "added_tracks": 175,
+        "added_vias": 3,
+        "copper_violation_counts": {},
+        "copper_violations": 0,
+        "unrounded_non_junction_bends": 0
+      },
+      "kicad": {
+        "available": true,
+        "violations": 0,
+        "unconnected_items": 0,
+        "categories": {}
+      },
+      "copper_byte_identical": false,
+      "copper_sha256": "aedb2f598244a54e8885bda7066c2d7ec9c63a00de644ac2d055d4333a52b24d",
+      "peak_rss_kib": 574984,
+      "timings_and_gpu": {
+        "residual_bend_repair_microseconds": 6676540,
+        "spline_clearance_batch_microseconds": 106906,
+        "spline_clearance_batch_queries": 767232,
+        "spline_clearance_cpu_fallbacks": 16,
+        "spline_clearance_gpu_dispatches": 161,
+        "spline_clearance_resident_reuses": 138,
+        "spline_clearance_resident_uploads": 23,
+        "spline_envelope_cpu_fallbacks": 0,
+        "spline_envelope_gpu_dispatches": 2222,
+        "spline_envelope_microseconds": 1471482,
+        "spline_envelope_proven_clear": 57935,
+        "spline_envelope_queries": 59976,
+        "spline_envelope_resident_reuses": 2222,
+        "spline_envelope_resident_uploads": 0,
+        "spline_exact_merge_microseconds": 6608625,
+        "spline_gpu_polish_batches": 1145,
+        "spline_gpu_polish_candidates": 79235,
+        "spline_gpu_polish_cpu_fallbacks": 0,
+        "spline_gpu_polish_dispatches": 985,
+        "spline_gpu_polish_exact_shortlist_checks": 9160,
+        "spline_gpu_polish_microseconds": 622931,
+        "spline_gpu_precondition_accepted": 12,
+        "spline_gpu_precondition_attempts": 59,
+        "spline_gpu_precondition_cpu_fallbacks": 0,
+        "spline_gpu_precondition_dispatches": 59,
+        "spline_gpu_precondition_legal": 12,
+        "spline_gpu_precondition_solve_us": 16865,
+        "spline_navigation_mesh_microseconds": 14778372,
+        "spline_navigation_preparation_microseconds": 35824661,
+        "spline_realization_microseconds": 39110325,
+        "spline_route_refinement_microseconds": 94198453,
+        "spline_screening_batched_chords": 318917,
+        "spline_screening_batches": 188,
+        "spline_screening_cache_hits": 85897,
+        "spline_screening_cache_misses": 318917,
+        "spline_screening_coalesced_waits": 140172,
+        "spline_screening_gpu_dispatches": 1746,
+        "spline_screening_gpu_work_items": 371943743,
+        "spline_screening_microseconds": 1817290,
+        "spline_screening_resident_reuses": 1694,
+        "spline_screening_resident_uploads": 52,
+        "spline_trajectory_microseconds": 26309447
+      },
+      "engine_phases": [
+        {
+          "action": "global",
+          "elapsed_microseconds": 13578102,
+          "work_units": 7717
+        },
+        {
+          "action": "copper-scaffold",
+          "elapsed_microseconds": 1940950,
+          "work_units": 4703
+        },
+        {
+          "action": "copper-scaffold",
+          "elapsed_microseconds": 1908153,
+          "work_units": 710
+        },
+        {
+          "action": "materialize",
+          "elapsed_microseconds": 39338761,
+          "work_units": 6337
+        }
+      ],
+      "board": "tier-0-pt2399_delay",
+      "runner_exit": 0,
+      "global_runtime_seconds": 18.05539402802242,
+      "command_configuration": {
+        "arcs": true,
+        "max_expansions": 50000,
+        "max_router_iterations": 30,
+        "max_static_seed_workers": 2,
+        "outer_timeout_seconds": 960,
+        "router_args": [
+          "--curved-tracks"
+        ],
+        "routing_timeout_seconds": 900,
+        "search_diversification": true,
+        "telemetry_level": "diagnostic",
+        "write_incomplete_preview": true
+      },
+      "qualified": true
+    },
+    "tier1": {
+      "baseline_detail_seconds": 336.38551975396695,
+      "detail_seconds": 310.1826254979824,
+      "change_percent": -7.789542865920451,
+      "complete": true,
+      "stop_reason": "complete",
+      "open_connections": 0,
+      "counts": {
+        "added_track_arcs": 105,
+        "added_track_beziers": 407,
+        "added_tracks": 442,
+        "added_vias": 57,
+        "copper_violation_counts": {},
+        "copper_violations": 0,
+        "unrounded_non_junction_bends": 0
+      },
+      "kicad": {
+        "available": true,
+        "violations": 0,
+        "unconnected_items": 0,
+        "categories": {}
+      },
+      "copper_byte_identical": false,
+      "copper_sha256": "e590ca054a300ac5ed05684e32eb934c1396007983c536ca0fd2c0548b662e85",
+      "peak_rss_kib": 566684,
+      "timings_and_gpu": {
+        "residual_bend_repair_microseconds": 32933704,
+        "spline_clearance_batch_microseconds": 183715,
+        "spline_clearance_batch_queries": 1732224,
+        "spline_clearance_cpu_fallbacks": 54,
+        "spline_clearance_gpu_dispatches": 132,
+        "spline_clearance_resident_reuses": 74,
+        "spline_clearance_resident_uploads": 58,
+        "spline_envelope_cpu_fallbacks": 0,
+        "spline_envelope_gpu_dispatches": 3759,
+        "spline_envelope_microseconds": 3183538,
+        "spline_envelope_proven_clear": 77110,
+        "spline_envelope_queries": 88195,
+        "spline_envelope_resident_reuses": 3754,
+        "spline_envelope_resident_uploads": 5,
+        "spline_exact_merge_microseconds": 17696731,
+        "spline_gpu_polish_batches": 1798,
+        "spline_gpu_polish_candidates": 120704,
+        "spline_gpu_polish_cpu_fallbacks": 0,
+        "spline_gpu_polish_dispatches": 1491,
+        "spline_gpu_polish_exact_shortlist_checks": 14384,
+        "spline_gpu_polish_microseconds": 1303269,
+        "spline_gpu_precondition_accepted": 56,
+        "spline_gpu_precondition_attempts": 113,
+        "spline_gpu_precondition_cpu_fallbacks": 0,
+        "spline_gpu_precondition_dispatches": 113,
+        "spline_gpu_precondition_legal": 51,
+        "spline_gpu_precondition_solve_us": 35239,
+        "spline_navigation_mesh_microseconds": 111410887,
+        "spline_navigation_preparation_microseconds": 129797507,
+        "spline_realization_microseconds": 211562640,
+        "spline_route_refinement_microseconds": 590936299,
+        "spline_screening_batched_chords": 3009234,
+        "spline_screening_batches": 966,
+        "spline_screening_cache_hits": 341447,
+        "spline_screening_cache_misses": 3009234,
+        "spline_screening_coalesced_waits": 1344031,
+        "spline_screening_gpu_dispatches": 33843,
+        "spline_screening_gpu_work_items": 8578197318,
+        "spline_screening_microseconds": 30116643,
+        "spline_screening_resident_reuses": 33576,
+        "spline_screening_resident_uploads": 267,
+        "spline_trajectory_microseconds": 61827510
+      },
+      "engine_phases": [
+        {
+          "action": "global",
+          "elapsed_microseconds": 34643010,
+          "work_units": 425420
+        },
+        {
+          "action": "copper-scaffold",
+          "elapsed_microseconds": 52610035,
+          "work_units": 2996803
+        },
+        {
+          "action": "copper-scaffold",
+          "elapsed_microseconds": 3148488,
+          "work_units": 20034
+        },
+        {
+          "action": "copper-scaffold",
+          "elapsed_microseconds": 5416420,
+          "work_units": 70430
+        },
+        {
+          "action": "materialize",
+          "elapsed_microseconds": 213199321,
+          "work_units": 13295
+        }
+      ],
+      "board": "tier-1-bm_svf",
+      "runner_exit": 0,
+      "global_runtime_seconds": 95.68701497802977,
+      "command_configuration": {
+        "arcs": true,
+        "max_expansions": 50000,
+        "max_router_iterations": 30,
+        "max_static_seed_workers": 2,
+        "outer_timeout_seconds": 960,
+        "router_args": [
+          "--crossing-safe-diagonal-grid",
+          "--direct-medial",
+          "--grid-pitch-nm",
+          "650000",
+          "--xpbd-relaxation",
+          "--xpbd-feedback",
+          "--atomic-net-trees",
+          "--hard-capacity-start-iteration",
+          "4",
+          "--max-hard-capacity-ripup-attempts-per-pass",
+          "8",
+          "--max-hard-capacity-ripup-nets-per-attempt",
+          "8",
+          "--max-hard-capacity-conflict-set-states-per-attempt",
+          "256",
+          "--terminal-escape-proximity-cost",
+          "500",
+          "--rollback-failed-hard-capacity-ripup",
+          "--defer-hard-capacity-ripup-victims-to-pass-tail",
+          "--protect-recovered-hard-capacity-ripup-nets",
+          "--curved-tracks"
+        ],
+        "routing_timeout_seconds": 900,
+        "search_diversification": true,
+        "telemetry_level": "diagnostic",
+        "write_incomplete_preview": true
+      },
+      "qualified": true
+    }
+  },
+  "interpretation": {
+    "decision": "keep",
+    "timing_caveat": "Single-run comparisons; worker timings overlap and must not be added to wall time. Standalone global harness run is separate from detail-command duration.",
+    "visual_inspection": "Both copper layers viewed for Tier0 and Tier1. Rounded main paths and ordinary straight runs; no obvious new looping artifact. Small local detours and retained stubs remain; no shortest-path optimality claim. Tier0 final output identical to preliminary pre-guard output that was visually inspected.",
+    "tier2": "Not rerun: its preserved Round07 timeout precedes materialization; no claim of improvement or qualification.",
+    "remaining_cost": "Tier1 materialization 213.20s, serial exact merge 17.70s, residual bend repair 32.93s; overlapping worker NavMesh 111.41s and navigation preparation 129.80s remain substantial. GPU score batches 1.30s cannot explain most wall time."
+  },
+  "superseded_run": "pre-malformed-guard artifacts retained locally; Tier1 interrupted for malformed-envelope guard fix"
+}

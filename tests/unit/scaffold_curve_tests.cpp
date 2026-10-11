@@ -567,8 +567,10 @@ void spline_navigation_cache_preserves_parallel_copper() {
   config.retry_failed_spline_routes_after_commits = false;
   config.spline_route_workers = 1U;
   config.reuse_spline_navigation_preparation = false;
+  config.gpu_materialization_batches = false;
   const auto uncached = materialize_detailed_route(source, plan, config);
   config.reuse_spline_navigation_preparation = true;
+  config.gpu_materialization_batches = true;
   config.spline_route_workers = 3U;
   const auto cached = materialize_detailed_route(source, plan, config);
   require(uncached.candidate && cached.candidate && uncached.copper_drc.ok() && cached.copper_drc.ok(),

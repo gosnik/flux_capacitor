@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
@@ -70,7 +71,9 @@ public:
                               const std::vector<std::uint32_t>& initial_state,
                               std::size_t output_words, Push push, std::size_t work_items,
                               std::size_t passes, std::vector<std::uint32_t>& output,
-                              bool& final_in_state, std::string& error) {
+                              bool& final_in_state, std::string& error,
+                              std::size_t* resident_uploads = nullptr,
+                              std::size_t* resident_reuses = nullptr) {
     if (!ok()) {
       error = diagnostic_;
       return false;
@@ -80,8 +83,11 @@ public:
       error = "invalid routing compute dispatch";
       return false;
     }
+    const bool resident_geometry = !second.empty() && (push.mode == 6U || push.mode == 18U) &&
+        second.size() <= resident_byte_budget_ / sizeof(std::uint32_t);
     const std::array<std::size_t, 4U> words{
-        std::max<std::size_t>(1U, first.size()), std::max<std::size_t>(1U, second.size()),
+        std::max<std::size_t>(1U, first.size()),
+        resident_geometry ? 1U : std::max<std::size_t>(1U, second.size()),
         std::max<std::size_t>(1U, initial_state.size()), std::max<std::size_t>(1U, output_words)};
     for (std::size_t index = 0U; index < buffers_.size(); ++index) {
       if (!ensure_buffer(words[index] * sizeof(std::uint32_t), buffers_[index])) {
@@ -91,8 +97,40 @@ public:
     }
     if (!first.empty())
       std::memcpy(buffers_[0].mapped, first.data(), first.size() * sizeof(std::uint32_t));
-    if (!second.empty())
-      std::memcpy(buffers_[1].mapped, second.data(), second.size() * sizeof(std::uint32_t));
+    // Geometry is immutable for modes 6/18. Keep bounded exact-content buffers resident across
+    // both pipelines. All callers hold context_mutex and each submission finishes before eviction.
+    auto descriptors = buffers_;
+    if (!second.empty()) {
+      if (resident_geometry) {
+        auto found = std::find_if(resident_.begin(), resident_.end(),
+            [&](const ResidentInput& entry) { return entry.words == second; });
+        if (found == resident_.end()) {
+          const auto bytes = second.size() * sizeof(std::uint32_t);
+          while (!resident_.empty() &&
+                 (resident_bytes_ + bytes > resident_byte_budget_ || resident_.size() >= 16U)) {
+            const auto oldest = std::min_element(resident_.begin(), resident_.end(),
+                [](const auto& a, const auto& b) { return a.last_use < b.last_use; });
+            resident_bytes_ -= oldest->words.size() * sizeof(std::uint32_t);
+            destroy(oldest->buffer);
+            resident_.erase(oldest);
+          }
+          ResidentInput entry;
+          if (!upload_immutable_geometry(second, entry.buffer, error))
+            return false;
+          entry.words = second;
+          resident_bytes_ += bytes;
+          resident_.push_back(std::move(entry));
+          found = std::prev(resident_.end());
+          if (resident_uploads) ++*resident_uploads;
+        } else if (resident_reuses) {
+          ++*resident_reuses;
+        }
+        found->last_use = ++resident_clock_;
+        descriptors[1] = found->buffer;
+      } else {
+        std::memcpy(buffers_[1].mapped, second.data(), second.size() * sizeof(std::uint32_t));
+      }
+    }
     if (!initial_state.empty()) {
       std::memcpy(buffers_[2].mapped, initial_state.data(),
                   initial_state.size() * sizeof(std::uint32_t));
@@ -100,7 +138,7 @@ public:
                   std::min(initial_state.size(), output_words) * sizeof(std::uint32_t));
     }
 
-    if (!update_descriptor_set(buffers_) || !prepare_command_buffer()) {
+    if (!update_descriptor_set(descriptors) || !prepare_command_buffer()) {
       error = "routing compute command resources failed";
       return false;
     }
@@ -238,6 +276,76 @@ private:
     return create_buffer(size, buffer);
   }
 
+  [[nodiscard]] bool upload_immutable_geometry(const std::vector<std::uint32_t>& words,
+                                                Buffer& destination, std::string& error) {
+    const auto bytes = words.size() * sizeof(std::uint32_t);
+    VkBufferCreateInfo info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    info.size = static_cast<VkDeviceSize>(bytes);
+    info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateBuffer(device_, &info, nullptr, &destination.handle) != VK_SUCCESS) {
+      error = "routing resident device buffer creation failed";
+      return false;
+    }
+    destination.size = info.size;
+    VkMemoryRequirements requirements{};
+    vkGetBufferMemoryRequirements(device_, destination.handle, &requirements);
+    std::uint32_t type = 0U;
+    if (!vulkan::Runtime::instance().find_memory_type(requirements.memoryTypeBits,
+                                                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, type)) {
+      destroy(destination);
+      error = "routing resident device-local memory is unavailable";
+      return false;
+    }
+    VkMemoryAllocateInfo allocation{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    allocation.allocationSize = requirements.size;
+    allocation.memoryTypeIndex = type;
+    if (vkAllocateMemory(device_, &allocation, nullptr, &destination.memory) != VK_SUCCESS ||
+        vkBindBufferMemory(device_, destination.handle, destination.memory, 0U) != VK_SUCCESS) {
+      destroy(destination);
+      error = "routing resident device allocation failed";
+      return false;
+    }
+    Buffer staging;
+    const auto fail = [&] {
+      destroy(staging);
+      destroy(destination);
+      return false;
+    };
+    if (!create_buffer(bytes, staging)) {
+      error = "routing resident staging allocation failed";
+      return fail();
+    }
+    std::memcpy(staging.mapped, words.data(), bytes);
+    if (!prepare_command_buffer()) {
+      error = "routing resident transfer command allocation failed";
+      return fail();
+    }
+    VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    if (vkBeginCommandBuffer(command_, &begin) != VK_SUCCESS) {
+      error = "routing resident transfer recording failed";
+      return fail();
+    }
+    VkBufferCopy copy{};
+    copy.size = static_cast<VkDeviceSize>(bytes);
+    vkCmdCopyBuffer(command_, staging.handle, destination.handle, 1U, &copy);
+    VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0U, 1U, &barrier,
+                         0U, nullptr, 0U, nullptr);
+    if (vkEndCommandBuffer(command_) != VK_SUCCESS) {
+      error = "routing resident transfer finalization failed";
+      return fail();
+    }
+    if (!vulkan::Runtime::instance().submit_and_wait(command_, error))
+      return fail();
+    destroy(staging);
+    return true;
+  }
+
   [[nodiscard]] bool update_descriptor_set(const std::array<Buffer, 4U>& buffers) {
     if (descriptor_pool_ == VK_NULL_HANDLE) {
       VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4U};
@@ -295,8 +403,10 @@ private:
     }
   }
   void shutdown() {
-    if (device_ != VK_NULL_HANDLE)
+    if (device_ != VK_NULL_HANDLE) {
+      for (auto& entry : resident_) destroy(entry.buffer);
       destroy(buffers_);
+    }
     if (pipeline_ != VK_NULL_HANDLE)
       vkDestroyPipeline(device_, pipeline_, nullptr);
     if (layout_ != VK_NULL_HANDLE)
@@ -321,6 +431,15 @@ private:
   VkDescriptorSet descriptor_set_{VK_NULL_HANDLE};
   VkPipelineLayout layout_{VK_NULL_HANDLE};
   VkPipeline pipeline_{VK_NULL_HANDLE};
+  struct ResidentInput {
+    std::vector<std::uint32_t> words;
+    Buffer buffer;
+    std::uint64_t last_use{0U};
+  };
+  static constexpr std::size_t resident_byte_budget_ = 32U * 1024U * 1024U;
+  std::vector<ResidentInput> resident_;
+  std::size_t resident_bytes_{0U};
+  std::uint64_t resident_clock_{0U};
   std::array<Buffer, 4U> buffers_;
   std::string diagnostic_;
 };
@@ -343,9 +462,13 @@ struct PackedGeometry {
 };
 
 [[nodiscard]] PackedGeometry pack_geometry(const std::vector<RoutingComputePoint>& points,
-                                           const std::vector<RoutingComputeSegment>& segments) {
+                                           const std::vector<RoutingComputeSegment>& segments,
+                                           std::optional<std::pair<std::int64_t, std::int64_t>> origin = {}) {
   PackedGeometry packed;
-  if (!points.empty()) {
+  if (origin) {
+    packed.origin_x = origin->first;
+    packed.origin_y = origin->second;
+  } else if (!points.empty()) {
     packed.origin_x = points.front().x_nm;
     packed.origin_y = points.front().y_nm;
   } else if (!segments.empty()) {
@@ -446,6 +569,64 @@ probe_routing_proximity_gpu(const std::vector<RoutingComputePoint>& queries,
   return result;
 }
 
+RoutingComputeDomainPointResult probe_routing_domain_points_gpu(
+    const std::vector<std::pair<std::int64_t, std::int64_t>>& points,
+    const std::vector<RoutingComputeSegment>& boundaries) {
+  RoutingComputeDomainPointResult result;
+  const auto started = std::chrono::steady_clock::now();
+  std::vector<RoutingComputePoint> query;
+  query.reserve(points.size());
+  for (const auto [x, y] : points)
+    query.push_back({x, y, 0, 0U, std::numeric_limits<std::uint32_t>::max()});
+  auto packed = pack_geometry(query, boundaries, boundaries.empty()
+      ? std::nullopt : std::optional{std::pair{boundaries.front().first_x_nm,
+                                             boundaries.front().first_y_nm}});
+  if (!packed.diagnostic.empty()) { result.diagnostic = packed.diagnostic; return result; }
+  // Both domain and chord kernels use only boundary endpoints. Canonical metadata permits the
+  // same resident geometry to be shared despite caller-specific owner/layer annotations.
+  for (std::size_t edge = 0U; edge < boundaries.size(); ++edge)
+    for (std::size_t word = 4U; word < 7U; ++word) packed.segments[edge * 7U + word] = 0U;
+  constexpr std::size_t maximum_pairs_per_dispatch = 4'194'304U;
+  const auto batch_size = std::max<std::size_t>(1U,
+      maximum_pairs_per_dispatch / std::max<std::size_t>(1U, boundaries.size()));
+  result.signed_distances_nm.reserve(points.size());
+  for (std::size_t begin = 0U; begin < points.size(); begin += batch_size) {
+    const auto count = std::min(batch_size, points.size() - begin);
+    const std::vector<std::uint32_t> packed_points(
+        packed.points.begin() + static_cast<std::ptrdiff_t>(begin * 5U),
+        packed.points.begin() + static_cast<std::ptrdiff_t>((begin + count) * 5U));
+    Push push;
+    push.mode = 18U;
+    push.count_a = static_cast<std::uint32_t>(count);
+    push.count_b = static_cast<std::uint32_t>(boundaries.size());
+    std::vector<std::uint32_t> raw;
+    bool final_state = false;
+    {
+      std::lock_guard lock(context_mutex());
+      if (!context().dispatch(packed_points, packed.segments, {}, count, push, count, 1U,
+                              raw, final_state, result.diagnostic,
+                              &result.resident_geometry_uploads,
+                              &result.resident_geometry_reuses)) return result;
+    }
+    ++result.dispatches;
+    for (const auto word : raw) {
+      float value = 0.0F;
+      std::memcpy(&value, &word, sizeof(value));
+      if (!std::isfinite(value)) {
+        result.signed_distances_nm.clear();
+        result.diagnostic = "routing domain GPU output is not finite";
+        return result;
+      }
+      result.signed_distances_nm.push_back(static_cast<long double>(value));
+    }
+    if (begin + count < points.size()) routing_kernel_checkpoint();
+  }
+  result.used_gpu = true;
+  result.elapsed_us = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+      std::chrono::steady_clock::now() - started).count());
+  return result;
+}
+
 RoutingComputeSegmentPairResult discover_routing_segment_conflicts_gpu(
     const std::vector<RoutingComputeSegment>& segments,
     const std::vector<std::pair<std::uint32_t, std::uint32_t>>& pairs, std::int64_t guard) {
@@ -516,7 +697,9 @@ classify_routing_chords_gpu(const std::vector<RoutingComputeSegment>& chords,
       chunk.insert(chunk.end(),
                    boundary_segments.begin() + static_cast<std::ptrdiff_t>(boundary_begin),
                    boundary_segments.begin() + static_cast<std::ptrdiff_t>(boundary_begin + boundary_count));
-      const auto packed = pack_geometry({}, chunk);
+      const auto packed = pack_geometry({}, chunk,
+          std::pair{boundary_segments[boundary_begin].first_x_nm,
+                    boundary_segments[boundary_begin].first_y_nm});
       if (!packed.diagnostic.empty()) {
         result.diagnostic = packed.diagnostic;
         return result;
@@ -525,6 +708,8 @@ classify_routing_chords_gpu(const std::vector<RoutingComputeSegment>& chords,
       const auto chord_end = packed.segments.begin() + static_cast<std::ptrdiff_t>(chord_words);
       std::vector<std::uint32_t> packed_chords(packed.segments.begin(), chord_end);
       std::vector<std::uint32_t> packed_boundaries(chord_end, packed.segments.end());
+      for (std::size_t edge = 0U; edge < boundary_count; ++edge)
+        for (std::size_t word = 4U; word < 7U; ++word) packed_boundaries[edge * 7U + word] = 0U;
       Push push;
       push.mode = 6U;
       push.count_a = static_cast<std::uint32_t>(this_chord_count);
@@ -536,7 +721,8 @@ classify_routing_chords_gpu(const std::vector<RoutingComputeSegment>& chords,
         std::lock_guard lock(context_mutex());
         dispatched = context().dispatch(packed_chords, packed_boundaries, {}, this_chord_count * 3U,
                                         push, this_chord_count, 1U, raw, final_state,
-                                        result.diagnostic);
+                                        result.diagnostic, &result.resident_boundary_uploads,
+                                        &result.resident_boundary_reuses);
       }
       if (!dispatched)
         return result;
@@ -821,19 +1007,40 @@ evaluate_routing_spline_batch_gpu(const RoutingComputeSplineBatchInput& input) {
 RoutingComputeSplineScoreResult
 score_routing_spline_candidates_gpu(const RoutingComputeSplineScoreInput& input) {
   RoutingComputeSplineScoreResult result;
-  if (input.control_points_nm.empty() || input.candidate_count == 0U || input.sample_count < 3U ||
-      input.control_points_nm.size() % input.candidate_count != 0U ||
+  const auto started = std::chrono::steady_clock::now();
+  const auto compact = !input.quintic_bezier_controls_nm.empty();
+  const auto& source_controls = compact ? input.quintic_bezier_controls_nm : input.control_points_nm;
+  const auto compact_counts_valid = input.quintic_spans_per_candidate > 0U &&
+                                    input.quintic_spans_per_candidate <=
+                                        std::numeric_limits<std::size_t>::max() / 6U &&
+                                    input.candidate_count <= std::numeric_limits<std::size_t>::max() /
+                                        input.quintic_spans_per_candidate &&
+                                    input.candidate_count <= std::numeric_limits<std::size_t>::max() /
+                                        (input.quintic_spans_per_candidate * 6U) &&
+                                    input.candidate_count <= std::numeric_limits<std::uint32_t>::max() &&
+                                    input.quintic_spans_per_candidate <=
+                                        std::numeric_limits<std::uint32_t>::max();
+  if (source_controls.empty() || input.candidate_count == 0U || input.sample_count < 3U ||
+      input.sample_count > std::numeric_limits<std::uint32_t>::max() ||
+      input.candidate_count > std::numeric_limits<std::uint32_t>::max() / 4U ||
+      source_controls.size() > std::numeric_limits<std::uint32_t>::max() / 2U ||
+      (!compact && input.control_points_nm.size() % input.candidate_count != 0U) ||
+      (compact && (!compact_counts_valid ||
+                   source_controls.size() != input.candidate_count *
+                       input.quintic_spans_per_candidate * 6U ||
+                   input.quintic_span_intervals.size() != input.candidate_count *
+                       input.quintic_spans_per_candidate)) ||
       input.field_width > std::numeric_limits<std::uint32_t>::max() ||
       input.field_height > std::numeric_limits<std::uint32_t>::max() || input.field_pitch_nm <= 0 ||
       input.field_pitch_nm > std::numeric_limits<std::int32_t>::max()) {
     result.diagnostic = "routing spline score exceeds GPU bounds";
     return result;
   }
-  const auto origin_x = input.control_points_nm.front().first;
-  const auto origin_y = input.control_points_nm.front().second;
+  const auto origin_x = source_controls.front().first;
+  const auto origin_y = source_controls.front().second;
   std::vector<std::uint32_t> controls;
-  controls.reserve(input.control_points_nm.size() * 2U);
-  for (const auto [x, y] : input.control_points_nm) {
+  controls.reserve(source_controls.size() * 2U);
+  for (const auto [x, y] : source_controls) {
     const auto relative_x = relative_coordinate(x, origin_x);
     const auto relative_y = relative_coordinate(y, origin_y);
     if (!relative_x || !relative_y) {
@@ -847,12 +1054,23 @@ score_routing_spline_candidates_gpu(const RoutingComputeSplineScoreInput& input)
     }
   }
   std::vector<std::uint32_t> coefficients;
-  coefficients.reserve(input.basis_coefficients.size());
-  for (const auto coefficient : input.basis_coefficients) {
-    const auto value = static_cast<float>(coefficient);
-    std::uint32_t bits = 0U;
-    std::memcpy(&bits, &value, sizeof(bits));
-    coefficients.push_back(bits);
+  if (compact) {
+    coefficients.reserve(input.quintic_span_intervals.size() * 2U);
+    for (const auto [begin, end] : input.quintic_span_intervals) {
+      std::uint32_t begin_bits = 0U, end_bits = 0U;
+      std::memcpy(&begin_bits, &begin, sizeof(begin_bits));
+      std::memcpy(&end_bits, &end, sizeof(end_bits));
+      coefficients.push_back(begin_bits);
+      coefficients.push_back(end_bits);
+    }
+  } else {
+    coefficients.reserve(input.basis_coefficients.size());
+    for (const auto coefficient : input.basis_coefficients) {
+      const auto value = static_cast<float>(coefficient);
+      std::uint32_t bits = 0U;
+      std::memcpy(&bits, &value, sizeof(bits));
+      coefficients.push_back(bits);
+    }
   }
   const auto field_origin_x = relative_coordinate(input.field_origin_x_nm, origin_x);
   const auto field_origin_y = relative_coordinate(input.field_origin_y_nm, origin_y);
@@ -882,8 +1100,10 @@ score_routing_spline_candidates_gpu(const RoutingComputeSplineScoreInput& input)
   Push push;
   push.mode = 7U;
   push.count_a = static_cast<std::uint32_t>(input.candidate_count);
-  push.count_b = static_cast<std::uint32_t>(input.control_points_nm.size() / input.candidate_count);
+  push.count_b = static_cast<std::uint32_t>(compact ? input.quintic_spans_per_candidate
+                                                     : input.control_points_nm.size() / input.candidate_count);
   push.width = static_cast<std::uint32_t>(input.sample_count);
+  push.height = compact ? 1U : 0U;
   for (std::size_t weight = 0U; weight < input.objective_weights.size(); ++weight)
     std::memcpy(&push.weights[weight], &input.objective_weights[weight], sizeof(std::uint32_t));
   std::vector<std::uint32_t> raw;
@@ -913,6 +1133,9 @@ score_routing_spline_candidates_gpu(const RoutingComputeSplineScoreInput& input)
   ranking.resize(std::min(input.top_k, ranking.size()));
   result.shortlist = std::move(ranking);
   result.used_gpu = true;
+  result.dispatches = 1U;
+  result.elapsed_us = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+      std::chrono::steady_clock::now() - started).count());
   return result;
 }
 

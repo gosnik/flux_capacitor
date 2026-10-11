@@ -1,0 +1,24 @@
+{
+  "round": 10,
+  "baseline_commit": "6952863",
+  "board": "bm_svf",
+  "tier": 1,
+  "failure": "End-to-end detailed routing is slow despite complete curved copper and zero external DRC violations.",
+  "baseline": {
+    "detail_seconds": 336.38552,
+    "materialization_seconds": 238.134121,
+    "realization_seconds": 236.513745,
+    "preparation_worker_seconds": 127.951104,
+    "trajectory_worker_seconds": 79.239684,
+    "candidate_checks": 245806
+  },
+  "hypothesis": "Batch repeated geometry and curve-ranking work; retain immutable geometry buffers and reuse chord certificates across routes. Exact CPU acceptance is preserved.",
+  "requested_scope": [
+    "GPU-resident boundary distance batches",
+    "compact quintic candidate GPU sampling and scoring",
+    "bounded shared NavMesh chord screening",
+    "conservative curve envelope screening with exact ambiguous handling"
+  ],
+  "success_criterion": "Tier0 and Tier1 retain complete curved routing and external KiCad DRC; actual GPU use and residency are demonstrated and runtime compared without adding standalone global benchmark time.",
+  "tier2_scope": "Prior failure precedes materialization; this experiment does not claim to resolve it."
+}

@@ -104,6 +104,7 @@ struct DetailedRouterConfig {
   // Reuse only immutable free-space/offset preparation among spline tasks in one realization
   // pass.  Per-run NavMesh construction and route search remain independent.
   bool reuse_spline_navigation_preparation{true};
+  bool gpu_materialization_batches{true};
   // One bounded retry of still-unrounded chains after neighbouring curve transactions commit.
   // No-progress passes stop immediately; accepted copper remains immutable within each batch.
   bool retry_failed_spline_routes_after_commits{true};
@@ -214,6 +215,34 @@ struct DetailedRouteResult {
   std::uint64_t spline_trajectory_microseconds{0U};
   std::uint64_t generated_tail_cleanup_microseconds{0U};
   std::uint64_t spline_realization_microseconds{0U};
+  std::size_t spline_screening_batched_chords{0U};
+  std::size_t spline_screening_resident_uploads{0U};
+  std::size_t spline_screening_resident_reuses{0U};
+  std::size_t spline_screening_cache_hits{0U};
+  std::size_t spline_screening_cache_misses{0U};
+  std::size_t spline_screening_coalesced_waits{0U};
+  std::size_t spline_screening_batches{0U};
+  std::size_t spline_screening_gpu_dispatches{0U};
+  std::size_t spline_screening_gpu_work_items{0U};
+  std::uint64_t spline_screening_microseconds{0U};
+  std::size_t spline_envelope_queries{0U};
+  std::size_t spline_envelope_proven_clear{0U};
+  std::size_t spline_envelope_gpu_dispatches{0U};
+  std::size_t spline_envelope_cpu_fallbacks{0U};
+  std::size_t spline_envelope_resident_uploads{0U};
+  std::size_t spline_envelope_resident_reuses{0U};
+  std::uint64_t spline_envelope_microseconds{0U};
+  std::size_t spline_clearance_batch_queries{0U};
+  std::size_t spline_clearance_gpu_dispatches{0U};
+  std::size_t spline_clearance_cpu_fallbacks{0U};
+  std::size_t spline_clearance_resident_uploads{0U};
+  std::size_t spline_clearance_resident_reuses{0U};
+  std::uint64_t spline_clearance_batch_microseconds{0U};
+  std::uint64_t spline_gpu_polish_microseconds{0U};
+  std::uint64_t spline_navigation_mesh_microseconds{0U};
+  std::uint64_t spline_route_refinement_microseconds{0U};
+  std::uint64_t spline_exact_merge_microseconds{0U};
+  std::uint64_t residual_bend_repair_microseconds{0U};
   std::size_t spline_committed_context_retry_tasks{0};
   std::size_t spline_committed_context_retry_commits{0};
   std::size_t added_vias{0};

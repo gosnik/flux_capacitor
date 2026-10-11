@@ -3012,15 +3012,76 @@ SplineShapeCertificate certify_quintic_ph_shape(const QuinticPHRoute& route,
   return result;
 }
 
+[[nodiscard]] std::vector<SplineEnvelopeChord>
+make_quintic_ph_envelope_capsules(const QuinticPHRoute& subject, Nanometres minimum_clearance) {
+  std::vector<SplineEnvelopeChord> capsules;
+  capsules.reserve(subject.segments.size());
+  for (const auto& segment : subject.segments) {
+    if (segment.bezier.size() != 6U)
+      return {};
+    if (std::any_of(segment.bezier.begin(), segment.bezier.end(), [](const auto point) {
+          return !std::isfinite(point.x) || !std::isfinite(point.y) ||
+                 point.x <= static_cast<long double>(std::numeric_limits<std::int64_t>::min()) ||
+                 point.x >= static_cast<long double>(std::numeric_limits<std::int64_t>::max()) ||
+                 point.y <= static_cast<long double>(std::numeric_limits<std::int64_t>::min()) ||
+                 point.y >= static_cast<long double>(std::numeric_limits<std::int64_t>::max());
+        })) return {};
+    const auto first = segment.bezier.front(), last = segment.bezier.back();
+    const auto chord = subtract(last, first);
+    const auto squared = chord.x * chord.x + chord.y * chord.y;
+    long double radius = 0.0L;
+    for (const auto control : segment.bezier) {
+      const auto offset = subtract(control, first);
+      const auto fraction = squared > 0.0L ? std::clamp((offset.x * chord.x + offset.y * chord.y) / squared, 0.0L, 1.0L) : 0.0L;
+      radius = std::max(radius, norm(subtract(control, add(first, scale(chord, fraction)))));
+    }
+    const auto expanded = radius + std::max<std::int64_t>(0, minimum_clearance.value());
+    if (!std::isfinite(expanded) ||
+        expanded > static_cast<long double>(std::numeric_limits<std::int64_t>::max()))
+      return {};
+    capsules.push_back({first, last, Nanometres{static_cast<std::int64_t>(std::ceil(
+        expanded))}});
+  }
+  return capsules;
+}
+
 SplineContinuousEnvelopeCertificate
 certify_quintic_ph_continuous_envelope(const QuinticPHRoute& route, Nanometres minimum_clearance,
                                        const SplineClearanceEvaluator& clearance_evaluator,
-                                       const SplineContinuousEnvelopeConfig& config) {
+                                       const SplineContinuousEnvelopeConfig& config,
+                                       const SplineEnvelopeScreenEvaluator& envelope_screen_evaluator) {
   SplineContinuousEnvelopeCertificate result;
   if (route.segments.empty())
     return result;
-  const auto tolerance = std::max(1.0L, static_cast<long double>(config.hull_tolerance.value()));
+  // A certificate must reject malformed cached geometry before delegating to either an advisory
+  // capsule proof or a caller-provided scalar field. `bezier` is a fixed six-control array, but
+  // retain the size check so this remains fail-closed if its representation changes.
   for (const auto& segment : route.segments) {
+    if (segment.bezier.size() != 6U ||
+        std::any_of(segment.bezier.begin(), segment.bezier.end(), [](const auto point) {
+          return !std::isfinite(point.x) || !std::isfinite(point.y) ||
+                 point.x <= static_cast<long double>(std::numeric_limits<std::int64_t>::min()) ||
+                 point.x >= static_cast<long double>(std::numeric_limits<std::int64_t>::max()) ||
+                 point.y <= static_cast<long double>(std::numeric_limits<std::int64_t>::min()) ||
+                 point.y >= static_cast<long double>(std::numeric_limits<std::int64_t>::max());
+        })) {
+      ++result.clearance_violations;
+      return result;
+    }
+  }
+  std::vector<std::uint8_t> span_clear(route.segments.size(), 0U);
+  if (envelope_screen_evaluator && clearance_evaluator) {
+    const auto capsules = make_quintic_ph_envelope_capsules(route, minimum_clearance);
+    // Do not treat an empty or incomplete capsule list as an all-clear proof.
+    if (capsules.size() == route.segments.size()) {
+      const auto screened = envelope_screen_evaluator(capsules);
+      if (screened.definitely_clear.size() == route.segments.size())
+        span_clear = screened.definitely_clear;
+    }
+  }
+  const auto tolerance = std::max(1.0L, static_cast<long double>(config.hull_tolerance.value()));
+  for (std::size_t segment_index = 0U; segment_index < route.segments.size(); ++segment_index) {
+    const auto& segment = route.segments[segment_index];
     std::vector<TessellationNode> stack{
         {segment.bezier, segment.route_parameter_start, segment.route_parameter_end, 0U}};
     while (!stack.empty()) {
@@ -3048,20 +3109,26 @@ certify_quintic_ph_continuous_envelope(const QuinticPHRoute& route, Nanometres m
       // transaction authority.
       if (!corridor_legal && clearance_evaluator) {
         const auto midpoint = evaluate_bezier(node.controls, 0.5L);
-        const auto probe = clearance_evaluator(midpoint);
-        if (probe.clearance_nm < result.worst_clearance_nm) {
-          result.worst_clearance_nm = probe.clearance_nm;
-          result.worst_parameter = (node.first + node.last) * 0.5L;
-          result.worst_normal = probe.obstacle_normal;
-        }
         const auto near_selected_corridor =
             route.prepared_corridor &&
             corridor_distance_to_point(*route.prepared_corridor, midpoint) <= diameter + tolerance;
-        corridor_legal =
-            near_selected_corridor && probe.represented_legal &&
-            probe.clearance_nm - diameter >= static_cast<long double>(minimum_clearance.value());
+        if (span_clear[segment_index]) {
+          // Capsule clearance was proved against the actual offset boundary. Retain the exact
+          // selected-corridor proximity condition so this acceleration cannot change homotopy.
+          corridor_legal = near_selected_corridor;
+        } else {
+          const auto probe = clearance_evaluator(midpoint);
+          if (probe.clearance_nm < result.worst_clearance_nm) {
+            result.worst_clearance_nm = probe.clearance_nm;
+            result.worst_parameter = (node.first + node.last) * 0.5L;
+            result.worst_normal = probe.obstacle_normal;
+          }
+          corridor_legal =
+              near_selected_corridor && probe.represented_legal &&
+              probe.clearance_nm - diameter >= static_cast<long double>(minimum_clearance.value());
+        }
       }
-      if (clearance_evaluator && !config.corridor_certifies_clearance) {
+      if (clearance_evaluator && !config.corridor_certifies_clearance && !span_clear[segment_index]) {
         const auto probe = clearance_evaluator(evaluate_bezier(node.controls, 0.5L));
         if (probe.clearance_nm < result.worst_clearance_nm) {
           result.worst_clearance_nm = probe.clearance_nm;
@@ -3142,7 +3209,9 @@ SplineTrajectoryOptimizationResult
 optimize_quintic_ph_trajectory(QuinticPHRoute& route,
                                const SplineTrajectoryOptimizationConfig& config,
                                const SplineClearanceEvaluator& clearance_evaluator,
-                               const SplineRouteConstraintEvaluator& route_constraint) {
+                               const SplineRouteConstraintEvaluator& route_constraint,
+                               const SplineClearanceBatchEvaluator& clearance_batch_evaluator,
+                               const SplineEnvelopeScreenEvaluator& envelope_screen_evaluator) {
   SplineTrajectoryOptimizationResult result;
   if (!rebuild_quintic_ph_route(route) || route.control_points.size() < 2U ||
       config.maximum_candidate_checks == 0U || (route_constraint && !route_constraint(route)))
@@ -3449,14 +3518,25 @@ optimize_quintic_ph_trajectory(QuinticPHRoute& route,
     const auto field_cells = score_template.field_width * score_template.field_height;
     score_template.signed_clearance_nm.resize(field_cells);
     score_template.corridor_mask.resize(field_cells, best.prepared_corridor ? 0U : 1U);
+    std::vector<SplineVector> field_points;
+    field_points.reserve(field_cells);
     for (std::size_t cell = 0U; cell < field_cells; ++cell) {
       const auto x = cell % score_template.field_width;
       const auto y = cell / score_template.field_width;
-      const auto point = SplineVector{
+      field_points.push_back(SplineVector{
           static_cast<long double>(score_template.field_origin_x_nm) + (x + 0.5L) * pitch,
-          static_cast<long double>(score_template.field_origin_y_nm) + (y + 0.5L) * pitch};
+          static_cast<long double>(score_template.field_origin_y_nm) + (y + 0.5L) * pitch});
+    }
+    // The batch callback is intentionally restricted to this lossy ranking field.  Its output
+    // never reaches a hard acceptance or certificate, and malformed output falls back to the
+    // existing scalar predicate rather than changing routing behaviour.
+    const auto batch_probes = clearance_batch_evaluator ? clearance_batch_evaluator(field_points)
+                                                        : std::vector<SplineClearanceProbe>{};
+    const auto have_batch_probes = batch_probes.size() == field_points.size();
+    for (std::size_t cell = 0U; cell < field_cells; ++cell) {
+      const auto point = field_points[cell];
       if (clearance_evaluator) {
-        const auto probe = clearance_evaluator(point);
+        const auto probe = have_batch_probes ? batch_probes[cell] : clearance_evaluator(point);
         score_template.signed_clearance_nm[cell] = static_cast<float>(
             probe.represented_legal ? probe.clearance_nm : -std::abs(probe.clearance_nm));
       } else {
@@ -3599,32 +3679,37 @@ optimize_quintic_ph_trajectory(QuinticPHRoute& route,
       batch.candidate_count = candidate_routes.size();
       batch.top_k = std::min<std::size_t>(candidate_routes.size(),
                                           std::max<std::size_t>(config.gpu_polish_shortlist, 8U));
-      const auto controls_per_candidate =
-          quintic_ph_bezier_controls(candidate_routes.front()).size();
-      bool batch_valid = controls_per_candidate > 0U;
-      batch.control_points_nm.reserve(controls_per_candidate * candidate_routes.size());
-      batch.basis_coefficients.reserve(controls_per_candidate * config.samples *
-                                       candidate_routes.size());
+      // The resident scorer evaluates quintic Bernstein bases itself. Supplying the cached PH
+      // span controls and their normalized route intervals avoids materialising O(C*S*6N) CPU
+      // basis rows and the equally dense sampled positions.  Rebuilding remains reserved for
+      // the exact long-double candidates selected after advisory ranking.
+      const auto spans_per_candidate = candidate_routes.front().segments.size();
+      bool batch_valid = spans_per_candidate > 0U;
+      batch.quintic_spans_per_candidate = spans_per_candidate;
+      batch.quintic_bezier_controls_nm.reserve(spans_per_candidate * 6U * candidate_routes.size());
+      batch.quintic_span_intervals.reserve(spans_per_candidate * candidate_routes.size());
       for (const auto& candidate : candidate_routes) {
-        const auto controls = quintic_ph_bezier_controls(candidate);
-        if (controls.size() != controls_per_candidate) {
+        if (candidate.segments.size() != spans_per_candidate ||
+            candidate.node_parameters.size() != spans_per_candidate + 1U) {
           batch_valid = false;
           break;
         }
-        for (const auto control : controls) {
-          batch.control_points_nm.emplace_back(static_cast<std::int64_t>(std::llround(control.x)),
-                                               static_cast<std::int64_t>(std::llround(control.y)));
-        }
-        for (std::size_t sample = 0U; sample < config.samples; ++sample) {
-          const auto parameter =
-              static_cast<long double>(sample) / static_cast<long double>(config.samples - 1U);
-          const auto basis = quintic_ph_bezier_basis(candidate, parameter);
-          if (basis.size() != controls_per_candidate) {
+        for (std::size_t span = 0U; span < spans_per_candidate; ++span) {
+          const auto& segment = candidate.segments[span];
+          const auto begin = candidate.node_parameters[span];
+          const auto end = candidate.node_parameters[span + 1U];
+          if (segment.bezier.size() != 6U || !std::isfinite(begin) || !std::isfinite(end) ||
+              begin < 0.0L || end > 1.0L || !(end > begin)) {
             batch_valid = false;
             break;
           }
-          batch.basis_coefficients.insert(batch.basis_coefficients.end(), basis.begin(),
-                                          basis.end());
+          batch.quintic_span_intervals.emplace_back(static_cast<float>(begin),
+                                                    static_cast<float>(end));
+          for (const auto control : segment.bezier) {
+            batch.quintic_bezier_controls_nm.emplace_back(
+                static_cast<std::int64_t>(std::llround(control.x)),
+                static_cast<std::int64_t>(std::llround(control.y)));
+          }
         }
         if (!batch_valid)
           break;
@@ -3632,13 +3717,19 @@ optimize_quintic_ph_trajectory(QuinticPHRoute& route,
       const auto evaluated = batch_valid ? score_routing_spline_candidates(batch, true)
                                          : RoutingComputeSplineScoreResult{};
       if (evaluated.ok()) {
-        ++result.gpu_polish_dispatches;
+        // A successful CPU implementation is still useful, but must not be reported as a GPU
+        // dispatch.  The backend returns both facts independently when a GPU attempt falls back.
+        if (evaluated.used_gpu)
+          result.gpu_polish_dispatches += evaluated.dispatches;
+        if (evaluated.cpu_fallback)
+          ++result.gpu_polish_cpu_fallbacks;
+        result.gpu_polish_solve_us += evaluated.elapsed_us;
         exact_candidates.clear();
         exact_candidates.reserve(evaluated.shortlist.size());
         for (const auto& ranked : evaluated.shortlist)
           exact_candidates.push_back(ranked.candidate);
         result.gpu_polish_exact_shortlist_checks += exact_candidates.size();
-      } else if (batch_valid) {
+      } else if (batch_valid && evaluated.cpu_fallback) {
         ++result.gpu_polish_cpu_fallbacks;
       }
     }
@@ -3646,6 +3737,36 @@ optimize_quintic_ph_trajectory(QuinticPHRoute& route,
       TrajectoryAssessment assessment;
       SplineContinuousEnvelopeCertificate continuous_envelope;
     };
+    // Rebuild and topology-vet deterministically before parallel exact work, so one bounded
+    // capsule query covers the complete wave instead of issuing a GPU/CPU boundary query per
+    // certificate. Each worker receives only its immutable slice of clear-span flags.
+    std::vector<std::uint8_t> exact_ready(exact_candidates.size(), 0U);
+    std::vector<std::vector<std::uint8_t>> cached_span_clear(exact_candidates.size());
+    std::vector<SplineEnvelopeChord> wave_capsules;
+    std::vector<std::pair<std::size_t, std::size_t>> capsule_slices(exact_candidates.size());
+    for (std::size_t slot = 0U; slot < exact_candidates.size(); ++slot) {
+      auto& candidate = candidate_routes[exact_candidates[slot]];
+      if (!rebuild_quintic_ph_route_around_control(candidate,
+                                                   candidate_control_nodes[exact_candidates[slot]]) ||
+          (route_constraint && !route_constraint(candidate)))
+        continue;
+      exact_ready[slot] = 1U;
+      if (!envelope_screen_evaluator)
+        continue;
+      const auto capsules = make_quintic_ph_envelope_capsules(candidate, config.minimum_clearance);
+      capsule_slices[slot] = {wave_capsules.size(), capsules.size()};
+      wave_capsules.insert(wave_capsules.end(), capsules.begin(), capsules.end());
+    }
+    if (envelope_screen_evaluator && !wave_capsules.empty()) {
+      const auto screened = envelope_screen_evaluator(wave_capsules);
+      if (screened.definitely_clear.size() == wave_capsules.size()) {
+        for (std::size_t slot = 0U; slot < capsule_slices.size(); ++slot) {
+          const auto [begin, count] = capsule_slices[slot];
+          cached_span_clear[slot].assign(screened.definitely_clear.begin() + static_cast<std::ptrdiff_t>(begin),
+                                         screened.definitely_clear.begin() + static_cast<std::ptrdiff_t>(begin + count));
+        }
+      }
+    }
     std::vector<std::optional<ExactCandidateEvaluation>> exact_evaluations(exact_candidates.size());
     if (exact_candidate_lease.workers() > 1U && exact_candidates.size() > 1U) {
       ++result.parallel_exact_waves;
@@ -3654,15 +3775,21 @@ optimize_quintic_ph_trajectory(QuinticPHRoute& route,
     exact_candidate_pool.run(exact_candidates.size(), [&](std::size_t slot) {
       const auto candidate_index = exact_candidates[slot];
       auto& candidate = candidate_routes[candidate_index];
-      if (!rebuild_quintic_ph_route_around_control(candidate,
-                                                   candidate_control_nodes[candidate_index]))
+      if (!exact_ready[slot])
         return;
-      if (route_constraint && !route_constraint(candidate))
-        return;
+      const SplineEnvelopeScreenEvaluator cached_screen = [flags = cached_span_clear[slot]](
+                                                       const std::vector<SplineEnvelopeChord>& capsules) {
+        SplineEnvelopeScreenResult screened;
+        if (flags.size() == capsules.size())
+          screened.definitely_clear = flags;
+        return screened;
+      };
       exact_evaluations[slot] = ExactCandidateEvaluation{
           assess_trajectory(candidate, config, clearance_evaluator),
           certify_quintic_ph_continuous_envelope(candidate, config.minimum_clearance,
-                                                 clearance_evaluator, config.continuous_envelope)};
+                                                 clearance_evaluator, config.continuous_envelope,
+                                                 envelope_screen_evaluator ? cached_screen
+                                                                          : SplineEnvelopeScreenEvaluator{})};
     });
     std::optional<std::size_t> selected_slot;
     for (std::size_t slot = 0U; slot < exact_candidates.size(); ++slot) {

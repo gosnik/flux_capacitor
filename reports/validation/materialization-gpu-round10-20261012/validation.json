@@ -1,0 +1,26 @@
+{
+  "release_build": "passed",
+  "binary_sha256": "cb0636814be13ce64100e5d97071b3f24289cd69e7934a4d3a79ecfad85ba0bb",
+  "independent_review": "All findings fixed; final malformed envelope guard rechecked with no remaining blocker.",
+  "core_suite": {
+    "passed": 71,
+    "total": 71,
+    "coverage_note": "71/71 before final narrow interval and malformed-envelope guards; final guarded build retested affected mechanisms and all six dependent suites."
+  },
+  "final_focused": [
+    "routing_compute_compact_quintic_scores_match_dense_authority",
+    "routing_compute_domain_points_match_cpu_even_odd",
+    "failed_spline_chains_retry_against_committed_copper",
+    "navmesh_screening_context_coalesces_snapshot_chords_without_stale_domains",
+    "ph_envelope_capsules_preserve_ambiguous_exact_fallback"
+  ],
+  "regression_suites": [
+    "flux_layered_navmesh_tests",
+    "flux_ph_tightening_tests",
+    "flux_copper_scaffold_tests",
+    "flux_scaffold_curve_tests",
+    "flux_scaffold_collision_tests",
+    "flux_routing_engine_experiment_tests"
+  ],
+  "status": "passed"
+}

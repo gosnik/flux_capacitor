@@ -47,6 +47,25 @@ struct RoutingComputeProximityResult {
   [[nodiscard]] bool ok() const { return diagnostic.empty(); }
 };
 
+// Advisory signed distance to a closed even/odd boundary contour.  A negative value denotes
+// outside.  It is never a legality certificate: callers must retain their exact polygon test.
+struct RoutingComputeDomainPointResult {
+  std::vector<long double> signed_distances_nm;
+  bool used_gpu{false};
+  bool cpu_fallback{false};
+  std::size_t dispatches{0U};
+  std::size_t resident_geometry_uploads{0U};
+  std::size_t resident_geometry_reuses{0U};
+  std::uint64_t elapsed_us{0U};
+  std::string diagnostic;
+  [[nodiscard]] bool ok() const { return diagnostic.empty(); }
+};
+
+[[nodiscard]] RoutingComputeDomainPointResult
+probe_routing_domain_points(const std::vector<std::pair<std::int64_t, std::int64_t>>& points,
+                            const std::vector<RoutingComputeSegment>& boundary_segments,
+                            bool prefer_gpu = true);
+
 [[nodiscard]] RoutingComputeProximityResult
 probe_routing_proximity(const std::vector<RoutingComputePoint>& queries,
                         const std::vector<RoutingComputeSegment>& segments,
@@ -61,6 +80,12 @@ struct RoutingComputeSplineBatchInput {
   // Samples per candidate; returned positions are candidate-major.
   std::size_t sample_count{0U};
   std::size_t candidate_count{1U};
+  // Optional compact candidate-major quintic Bézier representation.  Six controls per span and
+  // one [begin,end] parameter interval per span; dense basis_coefficients remains authoritative
+  // when this is empty.
+  std::vector<std::pair<std::int64_t, std::int64_t>> quintic_bezier_controls_nm;
+  std::vector<std::pair<float, float>> quintic_span_intervals;
+  std::size_t quintic_spans_per_candidate{0U};
 };
 
 struct RoutingComputeSplineBatchResult {
@@ -106,6 +131,8 @@ struct RoutingComputeSplineScoreResult {
   bool used_gpu{false};
   bool cpu_fallback{false};
   std::string diagnostic;
+  std::size_t dispatches{0U};
+  std::uint64_t elapsed_us{0U};
   [[nodiscard]] bool ok() const { return diagnostic.empty() && !shortlist.empty(); }
 };
 
@@ -145,6 +172,8 @@ struct RoutingComputeChordBatchResult {
   // These remain zero for CPU-only classification and are advisory telemetry only.
   std::size_t gpu_batch_count{0U};
   std::size_t gpu_work_items{0U};
+  std::size_t resident_boundary_uploads{0U};
+  std::size_t resident_boundary_reuses{0U};
 
   [[nodiscard]] bool ok() const { return diagnostic.empty(); }
 };

@@ -7,6 +7,8 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <condition_variable>
 #include <cmath>
 #include <cstdint>
 #include <deque>
@@ -17,6 +19,8 @@
 #include <queue>
 #include <set>
 #include <tuple>
+#include <thread>
+#include <unordered_map>
 
 namespace flux {
 namespace {
@@ -247,7 +251,8 @@ void build_cutout_bvh(PreparedNavMeshDomain& prepared) {
 // or linearly rescan polygon boundary state. Domain topology is validated once by the caller.
 [[nodiscard]] std::vector<std::optional<Nanometres>>
 assess_prepared_navmesh_chords(const PreparedNavMeshDomain& prepared,
-                               const std::vector<std::pair<Point, Point>>& chords) {
+                               const std::vector<std::pair<Point, Point>>& chords,
+                               RoutingComputeChordBatchResult* compute_stats = nullptr) {
   std::vector<std::optional<Nanometres>> result(chords.size());
   const auto acceptance_clearance = static_cast<long double>(std::max<std::int64_t>(
       prepared.pitch.value() / 4, prepared.minimum_boundary_clearance.value()));
@@ -269,6 +274,9 @@ assess_prepared_navmesh_chords(const PreparedNavMeshDomain& prepared,
   const auto gpu_classification = classify_routing_chords(
       compute_chords, compute_boundaries,
       static_cast<std::int64_t>(std::ceil(acceptance_clearance)), 2'048, true);
+  if (compute_stats != nullptr) {
+    *compute_stats = gpu_classification;
+  }
   std::vector<std::size_t> pending;
   pending.reserve(64U);
   for (std::size_t index = 0U; index < chords.size(); ++index) {
@@ -480,11 +488,241 @@ void build_navmesh_adjacency(PreparedNavMeshDomain& prepared) {
 
 } // namespace
 
+struct NavMeshScreeningContext::Impl {
+  struct ChordKey {
+    std::int64_t first_x{0}, first_y{0}, second_x{0}, second_y{0};
+    bool operator==(const ChordKey&) const = default;
+  };
+  struct ChordKeyHash {
+    std::size_t operator()(const ChordKey& key) const noexcept {
+      std::size_t value = static_cast<std::size_t>(key.first_x);
+      const auto mix = [&](std::int64_t component) {
+        value ^= static_cast<std::size_t>(component) + 0x9e3779b97f4a7c15ULL + (value << 6U) +
+                 (value >> 2U);
+      };
+      mix(key.first_y);
+      mix(key.second_x);
+      mix(key.second_y);
+      return value;
+    }
+  };
+  struct Certificate {
+    bool accepted{false};
+    std::int64_t clearance_nm{0};
+  };
+  struct Pending {
+    bool ready{false};
+    Certificate certificate;
+    std::exception_ptr error;
+  };
+  struct QueuedChord {
+    ChordKey key;
+    std::pair<Point, Point> chord;
+    std::shared_ptr<Pending> pending;
+  };
+  struct Domain {
+    OffsetFreeSpaceRegion region;
+    std::int64_t acceptance_clearance_nm{0};
+    std::unordered_map<ChordKey, Certificate, ChordKeyHash> certificates;
+    std::unordered_map<ChordKey, std::shared_ptr<Pending>, ChordKeyHash> pending;
+    std::vector<QueuedChord> queued;
+    bool servicing{false};
+  };
+
+  explicit Impl(std::size_t chords, std::size_t domains)
+      : maximum_chords(chords), maximum_domains(domains) {}
+
+  std::size_t maximum_chords;
+  std::size_t maximum_domains;
+  mutable std::mutex mutex;
+  std::condition_variable ready;
+  std::vector<std::shared_ptr<Domain>> domains;
+  NavMeshScreeningContext::Stats stats;
+};
+
+NavMeshScreeningContext::NavMeshScreeningContext(std::size_t maximum_chords,
+                                                 std::size_t maximum_domains)
+    : impl_(std::make_shared<Impl>(maximum_chords, maximum_domains)) {}
+
+std::vector<std::optional<Nanometres>> NavMeshScreeningContext::assess(
+    const OffsetFreeSpaceRegion& region, const PreparedNavMeshDomain& prepared,
+    const std::vector<std::pair<Point, Point>>& chords) {
+  std::vector<std::optional<Nanometres>> result(chords.size());
+  if (chords.empty() || impl_->maximum_chords == 0U || impl_->maximum_domains == 0U) {
+    return assess_prepared_navmesh_chords(prepared, chords);
+  }
+  struct WaitingChord {
+    std::size_t result_index{0U};
+    std::shared_ptr<Impl::Pending> pending;
+  };
+  std::vector<WaitingChord> waiting;
+  std::shared_ptr<Impl::Domain> domain;
+  bool leader = false;
+  bool uncached = false;
+  const auto chord_key = [](Point first, Point second) {
+    if (second < first) std::swap(first, second);
+    return Impl::ChordKey{first.x.value(), first.y.value(), second.x.value(), second.y.value()};
+  };
+  const auto acceptance_clearance_nm =
+      std::max<std::int64_t>(prepared.pitch.value() / 4,
+                             prepared.minimum_boundary_clearance.value());
+  {
+    std::lock_guard lock(impl_->mutex);
+    ++impl_->stats.requests;
+    for (const auto& candidate : impl_->domains) {
+      if (candidate->region == region &&
+          candidate->acceptance_clearance_nm == acceptance_clearance_nm) {
+        domain = candidate;
+        ++impl_->stats.domain_hits;
+        break;
+      }
+    }
+    if (!domain) {
+      ++impl_->stats.domain_misses;
+      domain = std::make_shared<Impl::Domain>();
+      domain->region = region;
+      domain->acceptance_clearance_nm = acceptance_clearance_nm;
+      if (impl_->domains.size() >= impl_->maximum_domains) {
+        const auto evicted = std::find_if(impl_->domains.begin(), impl_->domains.end(),
+                                          [](const auto& candidate) {
+                                            return candidate->pending.empty();
+                                          });
+        if (evicted != impl_->domains.end()) {
+          impl_->stats.retained_chords -= (*evicted)->certificates.size();
+          impl_->domains.erase(evicted);
+          ++impl_->stats.evictions;
+        }
+      }
+      if (impl_->domains.size() < impl_->maximum_domains) {
+        impl_->domains.push_back(domain);
+      } else {
+        // A fully busy cache must not count or retain an unowned ephemeral domain. Its chord
+        // work remains exact for this request, but it cannot serve another route safely.
+        domain.reset();
+      }
+    }
+    if (!domain) {
+      // No cache slot is currently available. Do the complete exact request outside the lock.
+      uncached = true;
+    }
+    for (std::size_t index = 0U; !uncached && index < chords.size(); ++index) {
+      const auto key = chord_key(chords[index].first, chords[index].second);
+      if (const auto cached = domain->certificates.find(key); cached != domain->certificates.end()) {
+        ++impl_->stats.chord_cache_hits;
+        if (cached->second.accepted) result[index] = Nanometres{cached->second.clearance_nm};
+        continue;
+      }
+      if (const auto active = domain->pending.find(key); active != domain->pending.end()) {
+        ++impl_->stats.coalesced_chord_waits;
+        waiting.push_back({index, active->second});
+        continue;
+      }
+      ++impl_->stats.chord_cache_misses;
+      auto pending = std::make_shared<Impl::Pending>();
+      domain->pending.emplace(key, pending);
+      domain->queued.push_back({key, chords[index], pending});
+      waiting.push_back({index, std::move(pending)});
+    }
+    if (!uncached && !domain->servicing && !domain->queued.empty()) {
+      domain->servicing = true;
+      leader = true;
+    }
+  }
+  if (uncached) return assess_prepared_navmesh_chords(prepared, chords);
+  if (leader) {
+    constexpr std::size_t maximum_cross_route_batch = 12'288U;
+    for (;;) {
+      std::vector<Impl::QueuedChord> batch_requests;
+      {
+        std::unique_lock lock(impl_->mutex);
+        // Give already-runnable route workers one scheduling hand-off to enqueue their work;
+        // do not wait for future work before publishing this caller's certificates.
+        lock.unlock();
+        std::this_thread::yield();
+        lock.lock();
+        const auto count = std::min(maximum_cross_route_batch, domain->queued.size());
+        batch_requests.insert(batch_requests.end(),
+                              std::make_move_iterator(domain->queued.begin()),
+                              std::make_move_iterator(domain->queued.begin() +
+                                                      static_cast<std::ptrdiff_t>(count)));
+        domain->queued.erase(domain->queued.begin(), domain->queued.begin() +
+                                                   static_cast<std::ptrdiff_t>(count));
+      }
+      std::exception_ptr error;
+      std::vector<std::optional<Nanometres>> assessed;
+      RoutingComputeChordBatchResult compute_stats;
+      const auto started = std::chrono::steady_clock::now();
+      try {
+        std::vector<std::pair<Point, Point>> batch;
+        batch.reserve(batch_requests.size());
+        for (const auto& request : batch_requests) batch.push_back(request.chord);
+        assessed = assess_prepared_navmesh_chords(prepared, batch, &compute_stats);
+      } catch (...) {
+        error = std::current_exception();
+      }
+      const auto elapsed = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::steady_clock::now() - started).count());
+      bool continue_servicing = false;
+      {
+        std::lock_guard lock(impl_->mutex);
+        ++impl_->stats.classifier_batches;
+        impl_->stats.batched_chord_requests += batch_requests.size();
+        impl_->stats.gpu_dispatches += compute_stats.gpu_batch_count;
+        impl_->stats.gpu_work_items += compute_stats.gpu_work_items;
+        impl_->stats.resident_boundary_uploads += compute_stats.resident_boundary_uploads;
+        impl_->stats.resident_boundary_reuses += compute_stats.resident_boundary_reuses;
+        impl_->stats.classifier_elapsed_us += elapsed;
+        const auto per_domain_limit =
+            std::max<std::size_t>(1U, impl_->maximum_chords / impl_->maximum_domains);
+        for (std::size_t index = 0U; index < batch_requests.size(); ++index) {
+          auto& request = batch_requests[index];
+          request.pending->error = error;
+          if (!error && index < assessed.size() && assessed[index]) {
+            request.pending->certificate = {true, assessed[index]->value()};
+          }
+          request.pending->ready = true;
+          domain->pending.erase(request.key);
+          if (!error) {
+            if (domain->certificates.size() >= per_domain_limit) {
+              domain->certificates.erase(domain->certificates.begin());
+              --impl_->stats.retained_chords;
+              ++impl_->stats.evictions;
+            }
+            domain->certificates.insert_or_assign(request.key, request.pending->certificate);
+            ++impl_->stats.retained_chords;
+          }
+        }
+        continue_servicing = !domain->queued.empty();
+        if (!continue_servicing) domain->servicing = false;
+      }
+      impl_->ready.notify_all();
+      if (!continue_servicing) break;
+    }
+  }
+  if (!waiting.empty()) {
+    std::unique_lock lock(impl_->mutex);
+    for (const auto& request : waiting) {
+      impl_->ready.wait(lock, [&] { return request.pending->ready; });
+      if (request.pending->error) std::rethrow_exception(request.pending->error);
+      if (request.pending->certificate.accepted) {
+        result[request.result_index] = Nanometres{request.pending->certificate.clearance_nm};
+      }
+    }
+  }
+  return result;
+}
+
+NavMeshScreeningContext::Stats NavMeshScreeningContext::stats() const {
+  std::lock_guard lock(impl_->mutex);
+  return impl_->stats;
+}
+
 namespace {
 
 PreparedNavMeshDomain prepare_navmesh_domain_impl(const OffsetFreeSpaceRegion& region,
                                                   const NavMeshConfig& config,
-                                                  bool validate_source_topology) {
+                                                  bool validate_source_topology,
+                                                  NavMeshScreeningContext* screening_context = nullptr) {
   PreparedNavMeshDomain result;
   if (config.cell_pitch.value() <= 0 || config.maximum_cells == 0U ||
       config.maximum_guide_distance.value() < 0 || config.minimum_boundary_clearance.value() < 0 ||
@@ -653,7 +891,9 @@ PreparedNavMeshDomain prepare_navmesh_domain_impl(const OffsetFreeSpaceRegion& r
       chords.emplace_back(corners[0], corners[2]);
       chords.emplace_back(corners[1], corners[3]);
     }
-    const auto certificates = assess_prepared_navmesh_chords(result, chords);
+    const auto certificates = screening_context != nullptr
+                                  ? screening_context->assess(region, result, chords)
+                                  : assess_prepared_navmesh_chords(result, chords);
     for (std::size_t index = 0U; index < candidates.size(); ++index) {
       auto legal = true;
       for (std::size_t chord = 0U; chord < 6U; ++chord) {
@@ -722,7 +962,8 @@ PreparedNavMeshDomain prepare_navmesh_domain_impl(const OffsetFreeSpaceRegion& r
         if (result.usped_refined_parents > 0U) {
           auto fallback_config = config;
           fallback_config.usped.enabled = false;
-          auto fallback = prepare_navmesh_domain_impl(region, fallback_config, validate_source_topology);
+          auto fallback = prepare_navmesh_domain_impl(region, fallback_config,
+                                                      validate_source_topology, screening_context);
           fallback.usped = config.usped;
           fallback.usped_diagnostic = "USPED refinement exceeded mesh budget; retained baseline decomposition";
           return fallback;
@@ -760,6 +1001,13 @@ PreparedNavMeshDomain prepare_navmesh_domain_impl(const OffsetFreeSpaceRegion& r
 PreparedNavMeshDomain prepare_navmesh_domain(const OffsetFreeSpaceRegion& region,
                                              const NavMeshConfig& config) {
   return prepare_navmesh_domain_impl(region, config, true);
+}
+
+std::shared_ptr<const PreparedNavMeshDomain>
+NavMeshScreeningContext::prepare(const OffsetFreeSpaceRegion& region, const NavMeshConfig& config,
+                                 bool validate_source_topology) {
+  return std::make_shared<const PreparedNavMeshDomain>(
+      prepare_navmesh_domain_impl(region, config, validate_source_topology, this));
 }
 
 std::shared_ptr<const PreparedNavMeshDomain>

@@ -40,6 +40,22 @@
 namespace flux {
 namespace {
 
+class MaterializationTimer {
+public:
+  explicit MaterializationTimer(std::uint64_t& total) : total_(total) {}
+  ~MaterializationTimer() { finish(); }
+  void finish() {
+    if (finished_) return;
+    total_ += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - start_).count());
+    finished_ = true;
+  }
+private:
+  std::uint64_t& total_;
+  std::chrono::steady_clock::time_point start_{std::chrono::steady_clock::now()};
+  bool finished_{false};
+};
+
 [[nodiscard]] bool collinear(Point first, Point middle, Point last) {
   const auto first_x = middle.x.value() - first.x.value();
   const auto first_y = middle.y.value() - first.y.value();
@@ -3498,7 +3514,9 @@ first_spline_collision(const CopperDrcReport& report,
                                      std::set<std::string>& used_ids, DetailedRouteResult& result,
                                      const DetailedRouterConfig& config,
                                      std::stop_token stop_token,
-                                     SplineNavigationPreparationCache* preparation_cache = nullptr) {
+                                     SplineNavigationPreparationCache* preparation_cache = nullptr,
+                                     NavMeshScreeningContext* screening_context = nullptr) {
+  MaterializationTimer refinement_timer(result.spline_route_refinement_microseconds);
   std::shared_ptr<SplineNavigationPreparationEntry> entry;
   if (preparation_cache != nullptr) {
     const SplineNavigationPreparationCache::Key key{net, run.layer, run.width};
@@ -3541,6 +3559,7 @@ first_spline_collision(const CopperDrcReport& report,
   const auto route_radius = Nanometres{(run.width.value() + 1) / 2};
   const auto center_clearance =
       Nanometres{route_radius.value() + navigation_board.rules.copper_to_edge_clearance.value()};
+  MaterializationTimer navigation_timer(result.spline_navigation_mesh_microseconds);
   const auto& navigation_regions = preparation.regions;
   const bool navigation_regions_are_offset = preparation.regions_are_offset;
   if (!navigation_regions_are_offset) {
@@ -3548,7 +3567,7 @@ first_spline_collision(const CopperDrcReport& report,
     result.spline_navmesh_last_diagnostic = preparation.diagnostic;
   }
   std::optional<NavMeshRouteResult> navigation;
-  std::optional<PreparedNavMeshDomain> prepared_navigation;
+  std::shared_ptr<const PreparedNavMeshDomain> prepared_navigation;
   const OffsetFreeSpaceRegion* selected_region = nullptr;
   auto selected_planning_points = run.points;
   for (const auto& region : navigation_regions) {
@@ -3576,7 +3595,10 @@ first_spline_collision(const CopperDrcReport& report,
         true,
         2U,
         Nanometres{0}};
-    auto prepared = prepare_navmesh_domain(region, navmesh_config);
+    auto prepared = screening_context != nullptr
+        ? screening_context->prepare(region, navmesh_config)
+        : std::make_shared<const PreparedNavMeshDomain>(
+              prepare_navmesh_domain(region, navmesh_config));
     // Certified scaffolds use the NavMesh only as a local clearance guard.  Re-searching between
     // their endpoints could replace the selected route class, so retain the source corridor.
     const auto source_corridor = run.topology_locked
@@ -3585,7 +3607,7 @@ first_spline_collision(const CopperDrcReport& report,
                                         config.spline_minimum_bend_radius)
         : std::optional<NavMeshRouteResult>{};
     auto routed = source_corridor ? *source_corridor
-        : route_prepared_navmesh(prepared, run.points.front(), run.points.back(), navmesh_config);
+        : route_prepared_navmesh(*prepared, run.points.front(), run.points.back(), navmesh_config);
     result.spline_navmesh_refined_parents += routed.adaptive_refined_parent_cells;
     result.spline_navmesh_refined_leaves += routed.adaptive_refined_leaf_cells;
     result.spline_navmesh_rejected_leaves += routed.adaptive_rejected_leaf_cells;
@@ -3632,6 +3654,7 @@ first_spline_collision(const CopperDrcReport& report,
     ++result.spline_navmesh_failures;
     return false;
   }
+  navigation_timer.finish();
   ++result.spline_navmesh_routes;
   result.spline_funnel_points += navigation->centerline.size();
   if (!navigation->topology_signature.valid) {
@@ -3711,6 +3734,111 @@ first_spline_collision(const CopperDrcReport& report,
         query.inside ? distance : -distance,
         length > 0.0L ? SplineVector{dx / length, dy / length} : SplineVector{}, query.inside};
   };
+  // Advisory field samples are independent and share this immutable offset domain.  Keep
+  // scalar CPU queries for shape, topology and continuous-copper certificates.
+  std::vector<RoutingComputeSegment> field_boundaries;
+  const auto add_contour = [&](const Polygon& polygon) {
+    for (std::size_t edge = 0U; edge < polygon.vertices.size(); ++edge) {
+      const auto a = polygon.vertices[edge];
+      const auto b = polygon.vertices[(edge + 1U) % polygon.vertices.size()];
+      field_boundaries.push_back({a.x.value(), a.y.value(), b.x.value(), b.y.value()});
+    }
+  };
+  if (config.gpu_materialization_batches && config.prefer_gpu_spline_trajectory) {
+    add_contour(selected_region->area);
+    for (const auto& hole : selected_region->holes) add_contour(hole);
+  }
+  const SplineClearanceBatchEvaluator clearance_batch_evaluator = field_boundaries.empty()
+      ? SplineClearanceBatchEvaluator{}
+      : SplineClearanceBatchEvaluator{[&](const std::vector<SplineVector>& points) {
+          std::vector<std::pair<std::int64_t, std::int64_t>> queries;
+          queries.reserve(points.size());
+          for (const auto point : points) {
+            const auto exact = quantize(point);
+            queries.emplace_back(exact.x.value(), exact.y.value());
+          }
+          const auto assessed = probe_routing_domain_points(queries, field_boundaries, true);
+          result.spline_clearance_batch_queries += queries.size();
+          result.spline_clearance_gpu_dispatches += assessed.dispatches;
+          result.spline_clearance_resident_uploads += assessed.resident_geometry_uploads;
+          result.spline_clearance_resident_reuses += assessed.resident_geometry_reuses;
+          result.spline_clearance_cpu_fallbacks += assessed.cpu_fallback ? 1U : 0U;
+          result.spline_clearance_batch_microseconds += assessed.elapsed_us;
+          std::vector<SplineClearanceProbe> probes;
+          if (!assessed.ok() || assessed.signed_distances_nm.size() != queries.size()) return probes;
+          probes.reserve(queries.size());
+          for (const auto distance : assessed.signed_distances_nm)
+            probes.push_back({distance, {}, distance >= 0.0L});
+          return probes;
+        }};
+  // Exact-candidate workers may invoke certificates concurrently. Accumulate locally and fold
+  // only after every synchronous optimizer call has joined its workers.
+  struct EnvelopeCounters {
+    DetailedRouteResult& result;
+    std::atomic<std::uint64_t> spline_envelope_queries{0U};
+    std::atomic<std::uint64_t> spline_envelope_proven_clear{0U};
+    std::atomic<std::uint64_t> spline_envelope_gpu_dispatches{0U};
+    std::atomic<std::uint64_t> spline_envelope_cpu_fallbacks{0U};
+    std::atomic<std::uint64_t> spline_envelope_resident_uploads{0U};
+    std::atomic<std::uint64_t> spline_envelope_resident_reuses{0U};
+    std::atomic<std::uint64_t> spline_envelope_microseconds{0U};
+    ~EnvelopeCounters() {
+      result.spline_envelope_queries += spline_envelope_queries.load(std::memory_order_relaxed);
+      result.spline_envelope_proven_clear += spline_envelope_proven_clear.load(std::memory_order_relaxed);
+      result.spline_envelope_gpu_dispatches += spline_envelope_gpu_dispatches.load(std::memory_order_relaxed);
+      result.spline_envelope_cpu_fallbacks += spline_envelope_cpu_fallbacks.load(std::memory_order_relaxed);
+      result.spline_envelope_resident_uploads += spline_envelope_resident_uploads.load(std::memory_order_relaxed);
+      result.spline_envelope_resident_reuses += spline_envelope_resident_reuses.load(std::memory_order_relaxed);
+      result.spline_envelope_microseconds += spline_envelope_microseconds.load(std::memory_order_relaxed);
+    }
+  } envelope_counters{result};
+  const SplineEnvelopeScreenEvaluator envelope_screen_evaluator = field_boundaries.empty()
+      ? SplineEnvelopeScreenEvaluator{}
+      : SplineEnvelopeScreenEvaluator{[&](const std::vector<SplineEnvelopeChord>& capsules) {
+          SplineEnvelopeScreenResult screened;
+          const auto started = std::chrono::steady_clock::now();
+          screened.definitely_clear.resize(capsules.size(), 0U);
+          std::vector<RoutingComputeSegment> chords;
+          chords.reserve(capsules.size());
+          for (const auto& capsule : capsules) {
+            const auto first = quantize(capsule.first), second = quantize(capsule.second);
+            chords.push_back({first.x.value(), first.y.value(), second.x.value(), second.y.value(),
+                              0, 0U, 0U});
+          }
+          const auto assessed = classify_routing_chords(chords, field_boundaries, 0, 2048, true);
+          screened.used_gpu = assessed.used_gpu;
+          screened.cpu_fallback = assessed.cpu_fallback;
+          screened.dispatches = assessed.gpu_batch_count;
+          envelope_counters.spline_envelope_queries += capsules.size();
+          envelope_counters.spline_envelope_gpu_dispatches += assessed.gpu_batch_count;
+          envelope_counters.spline_envelope_cpu_fallbacks += assessed.cpu_fallback ? 1U : 0U;
+          envelope_counters.spline_envelope_resident_uploads += assessed.resident_boundary_uploads;
+          envelope_counters.spline_envelope_resident_reuses += assessed.resident_boundary_reuses;
+          if (assessed.ok() && assessed.chords.size() == capsules.size()) {
+            for (std::size_t index = 0U; index < capsules.size(); ++index) {
+              const auto& proof = assessed.chords[index];
+              // These boundaries already include the copper envelope. Two additional nm cover
+              // endpoint rounding; the classifier has already subtracted its FP32 guard.
+              if (proof.classification != RoutingComputeChordClass::definitely_clear ||
+                  capsules[index].radius.value() < 0 ||
+                  static_cast<long double>(proof.conservative_clearance_nm) <
+                      static_cast<long double>(capsules[index].radius.value()) + 2.0L)
+                continue;
+              if (query_prepared_navmesh_point(*prepared_navigation,
+                                               quantize(capsules[index].first)).inside &&
+                  query_prepared_navmesh_point(*prepared_navigation,
+                                               quantize(capsules[index].second)).inside) {
+                screened.definitely_clear[index] = 1U;
+                ++envelope_counters.spline_envelope_proven_clear;
+              }
+            }
+          }
+          screened.elapsed_us = static_cast<std::uint64_t>(
+              std::chrono::duration_cast<std::chrono::microseconds>(
+                  std::chrono::steady_clock::now() - started).count());
+          envelope_counters.spline_envelope_microseconds += screened.elapsed_us;
+          return screened;
+        }};
   // The exact offset free-space query remains the physical authority. The selected guard-cell
   // union is additionally retained as a continuous topology corridor so an initially overshooting
   // PH branch can be pulled back into its route class instead of being rejected before the
@@ -3922,7 +4050,8 @@ first_spline_collision(const CopperDrcReport& report,
   const auto spline_before_optimization = *spline;
   const auto trajectory_started = std::chrono::steady_clock::now();
   const auto optimized = optimize_quintic_ph_trajectory(*spline, trajectory_config,
-                                                        clearance_evaluator, route_constraint);
+                                                        clearance_evaluator, route_constraint, clearance_batch_evaluator,
+                                                        envelope_screen_evaluator);
   result.spline_trajectory_microseconds +=
       static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
           std::chrono::steady_clock::now() - trajectory_started).count());
@@ -3939,6 +4068,7 @@ first_spline_collision(const CopperDrcReport& report,
   result.spline_gpu_precondition_accepted += optimized.gpu_precondition_accepted ? 1U : 0U;
   result.spline_gpu_precondition_legal += optimized.gpu_precondition_legal ? 1U : 0U;
   result.spline_gpu_precondition_solve_us += optimized.gpu_precondition_solve_us;
+  result.spline_gpu_polish_microseconds += optimized.gpu_polish_solve_us;
   result.spline_gpu_polish_batches += optimized.gpu_polish_batches;
   result.spline_gpu_polish_dispatches += optimized.gpu_polish_dispatches;
   result.spline_gpu_polish_cpu_fallbacks += optimized.gpu_polish_cpu_fallbacks;
@@ -4228,7 +4358,8 @@ first_spline_collision(const CopperDrcReport& report,
         pending_pns_doglegs += pns.added_dogleg_tracks;
         const auto refit_started = std::chrono::steady_clock::now();
         const auto refitted =
-            optimize_quintic_ph_trajectory(*spline, trajectory_config, clearance_evaluator);
+            optimize_quintic_ph_trajectory(*spline, trajectory_config, clearance_evaluator, {},
+                                            clearance_batch_evaluator, envelope_screen_evaluator);
         result.spline_trajectory_microseconds +=
             static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - refit_started).count());
@@ -4405,6 +4536,23 @@ void accumulate_spline_route_attempt_metrics(DetailedRouteResult& target,
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_navigation_preparation_hits);
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_navigation_preparation_microseconds);
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_trajectory_microseconds);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_envelope_queries);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_envelope_proven_clear);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_envelope_gpu_dispatches);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_envelope_cpu_fallbacks);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_envelope_resident_uploads);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_envelope_resident_reuses);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_envelope_microseconds);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_clearance_batch_queries);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_clearance_gpu_dispatches);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_clearance_cpu_fallbacks);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_clearance_resident_uploads);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_clearance_resident_reuses);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_clearance_batch_microseconds);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_gpu_polish_microseconds);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_navigation_mesh_microseconds);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_route_refinement_microseconds);
+
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_navmesh_refined_parents);
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_navmesh_refined_leaves);
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_navmesh_rejected_leaves);
@@ -7139,6 +7287,9 @@ materialize_impl(const Board& source, const GlobalRouteResult& global,
         navigation_preparation_cache->entries.emplace(key, std::move(entry));
       }
     }
+    std::unique_ptr<NavMeshScreeningContext> screening_context;
+    if (config.gpu_materialization_batches)
+      screening_context = std::make_unique<NavMeshScreeningContext>();
     std::atomic<std::size_t> next_task{0U};
     const auto run_task = [&] {
       while (!stop_token.stop_requested()) {
@@ -7155,7 +7306,7 @@ materialize_impl(const Board& source, const GlobalRouteResult& global,
           local_config.max_spline_candidate_checks = candidate_budget_per_route;
           if (refine_spline_run(local_board, spline_navigation_board, pending.net, pending.run,
                                 pending.base, local_used_ids, completed.metrics, local_config,
-                                stop_token, navigation_preparation_cache.get())) {
+                                stop_token, navigation_preparation_cache.get(), screening_context.get())) {
             completed.delta = make_spline_route_delta(spline_navigation_board, local_board);
           }
         } catch (...) {
@@ -7176,14 +7327,29 @@ materialize_impl(const Board& source, const GlobalRouteResult& global,
       workers.clear();
     }
 
+    if (screening_context) {
+      const auto screening = screening_context->stats();
+      result.spline_screening_batched_chords += screening.batched_chord_requests;
+      result.spline_screening_resident_uploads += screening.resident_boundary_uploads;
+      result.spline_screening_resident_reuses += screening.resident_boundary_reuses;
+      result.spline_screening_cache_hits += screening.chord_cache_hits;
+      result.spline_screening_cache_misses += screening.chord_cache_misses;
+      result.spline_screening_coalesced_waits += screening.coalesced_chord_waits;
+      result.spline_screening_batches += screening.classifier_batches;
+      result.spline_screening_gpu_dispatches += screening.gpu_dispatches;
+      result.spline_screening_gpu_work_items += screening.gpu_work_items;
+      result.spline_screening_microseconds += screening.classifier_elapsed_us;
+    }
     result.spline_parallel_route_tasks += board_level_spline_runs.size();
     result.spline_parallel_route_workers += worker_count;
     for (std::size_t task = 0U; task < task_results.size(); ++task) {
+      MaterializationTimer merge_timer(result.spline_exact_merge_microseconds);
       routing_kernel_checkpoint();
       if (stop_token.stop_requested()) {
         result.candidate = std::move(candidate);
         result.stop_reason = DetailedRouterStopReason::cancelled;
         result.diagnostic = "detailed routing cancelled during parallel route realization";
+        merge_timer.finish();
         return result;
       }
       const auto& pending = board_level_spline_runs[task];
@@ -7330,13 +7496,16 @@ materialize_impl(const Board& source, const GlobalRouteResult& global,
   // PH/PNS owns the primary realization. Only after those bounded transactions have committed do
   // we inspect the remaining eligible straight chains and apply the exact fillet transaction.
   // Mixed curve tangencies remain for the final audit; this pass never reinterprets them.
+  MaterializationTimer residual_timer(result.residual_bend_repair_microseconds);
   if (use_circular_arc_refinement && !repair_residual_straight_bends(
           candidate, used_ids, result, config, curve_protected_track_ids, stop_token)) {
     result.candidate = std::move(candidate);
     result.stop_reason = DetailedRouterStopReason::cancelled;
     result.diagnostic = "detailed routing cancelled during residual bend repair";
+    residual_timer.finish();
     return result;
   }
+  residual_timer.finish();
   result.spline_realization_microseconds +=
       static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
           std::chrono::steady_clock::now() - spline_realization_started).count());
@@ -7413,6 +7582,35 @@ materialize_impl(const Board& source, const GlobalRouteResult& global,
     fallback.spline_trajectory_microseconds += result.spline_trajectory_microseconds;
     fallback.generated_tail_cleanup_microseconds += result.generated_tail_cleanup_microseconds;
     fallback.spline_realization_microseconds += result.spline_realization_microseconds;
+    fallback.spline_screening_batched_chords += result.spline_screening_batched_chords;
+    fallback.spline_screening_resident_uploads += result.spline_screening_resident_uploads;
+    fallback.spline_screening_resident_reuses += result.spline_screening_resident_reuses;
+    fallback.spline_screening_cache_hits += result.spline_screening_cache_hits;
+    fallback.spline_screening_cache_misses += result.spline_screening_cache_misses;
+    fallback.spline_screening_coalesced_waits += result.spline_screening_coalesced_waits;
+    fallback.spline_screening_batches += result.spline_screening_batches;
+    fallback.spline_screening_gpu_dispatches += result.spline_screening_gpu_dispatches;
+    fallback.spline_screening_gpu_work_items += result.spline_screening_gpu_work_items;
+    fallback.spline_screening_microseconds += result.spline_screening_microseconds;
+    fallback.spline_envelope_queries += result.spline_envelope_queries;
+    fallback.spline_envelope_proven_clear += result.spline_envelope_proven_clear;
+    fallback.spline_envelope_gpu_dispatches += result.spline_envelope_gpu_dispatches;
+    fallback.spline_envelope_cpu_fallbacks += result.spline_envelope_cpu_fallbacks;
+    fallback.spline_envelope_resident_uploads += result.spline_envelope_resident_uploads;
+    fallback.spline_envelope_resident_reuses += result.spline_envelope_resident_reuses;
+    fallback.spline_envelope_microseconds += result.spline_envelope_microseconds;
+    fallback.spline_clearance_batch_queries += result.spline_clearance_batch_queries;
+    fallback.spline_clearance_gpu_dispatches += result.spline_clearance_gpu_dispatches;
+    fallback.spline_clearance_cpu_fallbacks += result.spline_clearance_cpu_fallbacks;
+    fallback.spline_clearance_resident_uploads += result.spline_clearance_resident_uploads;
+    fallback.spline_clearance_resident_reuses += result.spline_clearance_resident_reuses;
+    fallback.spline_clearance_batch_microseconds += result.spline_clearance_batch_microseconds;
+    fallback.spline_gpu_polish_microseconds += result.spline_gpu_polish_microseconds;
+    fallback.spline_navigation_mesh_microseconds += result.spline_navigation_mesh_microseconds;
+    fallback.spline_route_refinement_microseconds += result.spline_route_refinement_microseconds;
+    fallback.spline_exact_merge_microseconds += result.spline_exact_merge_microseconds;
+    fallback.residual_bend_repair_microseconds += result.residual_bend_repair_microseconds;
+
     fallback.regional_native_spline_runs_materialized =
         result.regional_native_spline_runs_materialized;
     fallback.regional_native_track_segments_materialized =

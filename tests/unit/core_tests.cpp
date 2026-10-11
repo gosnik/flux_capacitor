@@ -2121,6 +2121,9 @@ void failed_spline_chains_retry_against_committed_copper() {
   config.continuous_refinement = false;
   config.circular_arc_refinement = true;
   // Isolate PH committed-context retries from the later residual fillet postpass.
+  // The conservative capsule proof can legalize both bends immediately. Disable it here to
+  // retain a genuinely stale-context failure for the retry mechanism's control case.
+  config.gpu_materialization_batches = false;
   config.residual_bend_repair = false;
   config.spline_minimum_bend_radius = Nanometres::from_mm(1.0);
   config.spline_control_corridor = Nanometres::from_mm(1.0);
@@ -2140,6 +2143,14 @@ void failed_spline_chains_retry_against_committed_copper() {
               result.spline_committed_context_retry_commits == 1U,
           "a failed outer bend must be reconsidered after its inner neighbour is rounded: " +
               result.diagnostic);
+  config.gpu_materialization_batches = true;
+  config.retry_failed_spline_routes_after_commits = false;
+  const auto screened = flux::materialize_detailed_route(board, global, config);
+  require(screened.complete() && screened.copper_drc.ok() &&
+              screened.connectivity.open_connections == 0U &&
+              screened.spline_envelope_proven_clear > 0U,
+          "conservative envelope proofs should legalize the nested bends in their first snapshot");
+
 }
 
 void dense_candidate_grid_requires_enforced_physical_clearance() {
@@ -9348,6 +9359,66 @@ void regional_ownership_and_immutable_cache_are_dependency_bound() {
   require(!flux::validate_regional_native_ownership(transaction), "two owning windows fail closed");
 }
 
+void navmesh_screening_context_coalesces_snapshot_chords_without_stale_domains() {
+  flux::OffsetFreeSpaceRegion region;
+  region.area = rectangle(0, 0, 12, 12);
+  region.holes.push_back(rectangle(5, 4, 7, 8));
+  flux::NavMeshConfig first_config;
+  first_config.cell_pitch = Nanometres::from_mm(1.0);
+  first_config.maximum_cells = 20'000U;
+  first_config.maximum_guide_distance = Nanometres::from_mm(2.0);
+  first_config.topology_guide = {mm(1, 1), mm(11, 1), mm(11, 11)};
+  auto second_config = first_config;
+  second_config.topology_guide = {mm(1, 1), mm(11, 1), mm(1, 11)};
+  const auto serial_first = flux::prepare_navmesh_domain(region, first_config);
+  const auto serial_second = flux::prepare_navmesh_domain(region, second_config);
+  flux::NavMeshScreeningContext context(40'000U, 2U);
+  std::shared_ptr<const flux::PreparedNavMeshDomain> concurrent_first;
+  std::shared_ptr<const flux::PreparedNavMeshDomain> concurrent_second;
+  std::exception_ptr first_error;
+  std::exception_ptr second_error;
+  std::barrier gate{3};
+  const auto prepare = [&](const flux::NavMeshConfig& config,
+                           std::shared_ptr<const flux::PreparedNavMeshDomain>& output,
+                           std::exception_ptr& error) {
+    try {
+      gate.arrive_and_wait();
+      output = context.prepare(region, config);
+    } catch (...) {
+      error = std::current_exception();
+    }
+  };
+  std::thread first(prepare, std::cref(first_config), std::ref(concurrent_first),
+                    std::ref(first_error));
+  std::thread second(prepare, std::cref(second_config), std::ref(concurrent_second),
+                     std::ref(second_error));
+  gate.arrive_and_wait();
+  first.join();
+  second.join();
+  if (first_error) std::rethrow_exception(first_error);
+  if (second_error) std::rethrow_exception(second_error);
+  const auto shared_stats = context.stats();
+  require(concurrent_first && concurrent_second && serial_first.ok() && serial_second.ok() &&
+              concurrent_first->cells == serial_first.cells &&
+              concurrent_second->cells == serial_second.cells &&
+              concurrent_first->adjacency_by_cell == serial_first.adjacency_by_cell &&
+              concurrent_second->adjacency_by_cell == serial_second.adjacency_by_cell &&
+              shared_stats.requests >= 2U && shared_stats.domain_hits >= 1U &&
+              shared_stats.chord_cache_hits + shared_stats.coalesced_chord_waits > 0U &&
+              shared_stats.classifier_batches > 0U && shared_stats.batched_chord_requests > 0U,
+          "concurrent guide-specific preparation must exactly match serial cells while sharing "
+          "immutable chord screening");
+  auto changed_region = region;
+  changed_region.holes.push_back(rectangle(1, 9, 3, 11));
+  const auto changed = context.prepare(changed_region, first_config);
+  const auto changed_stats = context.stats();
+  require(changed && changed->ok() && changed_stats.domain_misses >= 2U &&
+              !flux::query_prepared_navmesh_point(*changed, mm(2, 10)).inside &&
+              flux::query_prepared_navmesh_point(*concurrent_first, mm(2, 10)).inside,
+          "a changed immutable clearance domain must miss the shared screening cache without "
+          "mutating outstanding snapshots");
+}
+
 void usped_mountains_inform_navmesh_without_changing_free_space() {
   const std::vector<std::uint8_t> mask{1, 1, 0, 1, 1};
   const std::vector<double> clearance{0.1, 3.0, 0.0, 3.0, 0.1};
@@ -9663,6 +9734,177 @@ void routing_compute_chord_batches_are_bounded_and_conservative() {
               (!gpu.used_gpu || gpu.chords.front().closest_boundary == 0U),
           "bounded translated chord screening must retain exact survivors and aggregate every "
           "resident boundary chunk");
+}
+
+void ph_envelope_capsules_preserve_ambiguous_exact_fallback() {
+  const auto route = flux::make_quintic_ph_route({mm(0, 0), mm(5, 0), mm(10, 0)});
+  require(route.has_value(), "straight PH capsule fixture must interpolate");
+  std::size_t scalar_probes = 0U;
+  const auto clearance = [&](flux::SplineVector) {
+    ++scalar_probes;
+    return flux::SplineClearanceProbe{20'000'000.0L, {}, true};
+  };
+  bool expanded = false;
+  const flux::SplineEnvelopeScreenEvaluator proof = [&](const auto& capsules) {
+    expanded = !capsules.empty() && std::all_of(capsules.begin(), capsules.end(),
+        [](const auto& capsule) { return capsule.radius.value() >= 100'000; });
+    flux::SplineEnvelopeScreenResult result;
+    result.definitely_clear.assign(capsules.size(), 1U);
+    return result;
+  };
+  const auto screened = flux::certify_quintic_ph_continuous_envelope(
+      *route, Nanometres{100'000}, clearance, {}, proof);
+  require(screened.legal && expanded && scalar_probes == 0U,
+          "clear capsule proofs must include requested clearance and skip redundant scalar probes");
+  const flux::SplineEnvelopeScreenEvaluator uncertain = [](const auto& capsules) {
+    flux::SplineEnvelopeScreenResult result;
+    result.definitely_clear.assign(capsules.size(), 0U);
+    return result;
+  };
+  const auto ambiguous = flux::certify_quintic_ph_continuous_envelope(
+      *route, Nanometres{100'000}, clearance, {}, uncertain);
+  require(ambiguous.legal && scalar_probes > 0U,
+          "ambiguous capsule screening must retain the ordinary scalar certificate");
+  const auto blocked = flux::certify_quintic_ph_continuous_envelope(
+      *route, Nanometres{100'000}, [](flux::SplineVector) {
+        return flux::SplineClearanceProbe{-1.0L, {}, false};
+      }, {}, uncertain);
+  require(!blocked.legal && blocked.clearance_violations > 0U,
+          "uncertain envelope screening must not accept blocked geometry");
+  auto malformed = *route;
+  malformed.segments.front().bezier[2U].x = std::numeric_limits<long double>::quiet_NaN();
+  std::size_t malformed_proofs = 0U;
+  std::size_t malformed_scalar_probes = 0U;
+  const flux::SplineEnvelopeScreenEvaluator malformed_proof = [&](const auto&) {
+    ++malformed_proofs;
+    flux::SplineEnvelopeScreenResult result;
+    result.definitely_clear = {1U};
+    return result;
+  };
+  const auto malformed_certificate = flux::certify_quintic_ph_continuous_envelope(
+      malformed, Nanometres{100'000}, [&](flux::SplineVector) {
+        ++malformed_scalar_probes;
+        return flux::SplineClearanceProbe{20'000'000.0L, {}, true};
+      }, {}, malformed_proof);
+  require(malformed_proofs == 0U && malformed_scalar_probes == 0U && !malformed_certificate.legal &&
+              malformed_certificate.clearance_violations > 0U,
+          "malformed PH spans must reject before all-clear scalar or capsule callbacks");
+  auto empty = *route;
+  empty.segments.clear();
+  const auto empty_certificate = flux::certify_quintic_ph_continuous_envelope(
+      empty, Nanometres{100'000}, clearance, {}, proof);
+  require(!empty_certificate.legal,
+          "an empty PH segment cache must not be accepted by the envelope certificate");
+}
+
+void routing_compute_domain_points_match_cpu_even_odd() {
+  const std::vector<flux::RoutingComputeSegment> boundary{
+      {0, 0, 100, 0}, {100, 0, 100, 100}, {100, 100, 0, 100}, {0, 100, 0, 0},
+      {30, 30, 70, 30}, {70, 30, 70, 70}, {70, 70, 30, 70}, {30, 70, 30, 30}};
+  const std::vector<std::pair<std::int64_t, std::int64_t>> points{{10, 10}, {50, 50}, {120, 10}, {0, 50}};
+  const auto cpu = flux::probe_routing_domain_points(points, boundary, false);
+  const auto screened = flux::probe_routing_domain_points(points, boundary, true);
+  require(cpu.ok() && screened.ok() && cpu.signed_distances_nm.size() == points.size() &&
+              screened.signed_distances_nm.size() == points.size() &&
+              cpu.signed_distances_nm[0] > 0.0L && cpu.signed_distances_nm[1] < 0.0L &&
+              cpu.signed_distances_nm[2] < 0.0L && cpu.signed_distances_nm[3] >= 0.0L &&
+              std::all_of(cpu.signed_distances_nm.begin(), cpu.signed_distances_nm.end(),
+                          [](long double v) { return std::isfinite(v); }) &&
+              (!screened.used_gpu || std::all_of(screened.signed_distances_nm.begin(), screened.signed_distances_nm.end(),
+                  [](long double v) { return std::isfinite(v); })),
+          "domain point screening must preserve closed-outline/hole sign and finite advisory output");
+  if (screened.used_gpu) {
+    require(std::equal(cpu.signed_distances_nm.begin(), cpu.signed_distances_nm.end(),
+                       screened.signed_distances_nm.begin(), [](long double exact, long double advisory) {
+                         return std::abs(exact - advisory) <= 1.0L;
+                       }) && screened.dispatches > 0U &&
+                  screened.resident_geometry_uploads + screened.resident_geometry_reuses > 0U,
+            "GPU domain distances must agree with CPU signs/distances and report an upload");
+  }
+  const std::vector<std::pair<std::int64_t, std::int64_t>> shifted{{11'000, 10}, {11'050, 50}};
+  const auto reused = flux::probe_routing_domain_points(shifted, boundary, true);
+  const std::vector<flux::RoutingComputeSegment> chords(512U,
+      flux::RoutingComputeSegment{10'000, 10, 10'100, 10, 0, 0U, 0U});
+  auto annotated_boundary = boundary;
+  for (auto& edge : annotated_boundary) edge.owner = 42U;
+  const auto chord = flux::classify_routing_chords(chords, annotated_boundary, 1, 1, true);
+  require(chord.ok() && (!chord.used_gpu || chord.resident_boundary_reuses > 0U),
+          "chord screening must reuse distance-query geometry despite unused owner annotations");
+  const auto reused_after_chord = flux::probe_routing_domain_points(shifted, boundary, true);
+  require(reused.ok() && chord.ok() && reused_after_chord.ok() &&
+              (!reused.used_gpu || reused.resident_geometry_reuses > 0U) &&
+              (!reused_after_chord.used_gpu || reused_after_chord.resident_geometry_reuses > 0U),
+          "same boundary must survive changed query origins and chord interleaving in resident storage");
+  auto changed_boundary = boundary;
+  changed_boundary[0].second_x_nm = 101;
+  const auto invalidated = flux::probe_routing_domain_points(shifted, changed_boundary, true);
+  require(invalidated.ok() && (!invalidated.used_gpu || invalidated.resident_geometry_uploads > 0U),
+          "changed domain boundary content must invalidate resident geometry");
+  const auto empty = flux::probe_routing_domain_points({}, boundary, true);
+  require(!empty.ok(), "empty domain query must be rejected rather than treated as legal");
+  const std::vector<std::pair<std::int64_t, std::int64_t>> excessive_points(4096U, {10, 10});
+  const std::vector<flux::RoutingComputeSegment> excessive_edges(4097U, boundary.front());
+  const auto bounded = flux::probe_routing_domain_points(excessive_points, excessive_edges, true);
+  require(!bounded.ok() && bounded.cpu_fallback && !bounded.used_gpu && bounded.dispatches == 0U &&
+              bounded.signed_distances_nm.empty(),
+          "oversized advisory work must request indexed fallback before any brute-force dispatch");
+  const std::vector<std::pair<std::int64_t, std::int64_t>> huge{{5'000'000'000'000LL, 0},
+                                                                  {5'000'000'001'000LL, 0}};
+  const auto fallback = flux::probe_routing_domain_points(huge, boundary, true);
+  require(fallback.ok() && !fallback.used_gpu &&
+              (!flux::routing_compute_gpu_available() || fallback.cpu_fallback),
+          "unrepresentable relative GPU domain coordinates must use CPU fallback");
+}
+
+void routing_compute_compact_quintic_scores_match_dense_authority() {
+  flux::RoutingComputeSplineScoreInput compact;
+  compact.candidate_count = 16U;
+  compact.sample_count = 33U;
+  compact.quintic_spans_per_candidate = 1U;
+  compact.quintic_span_intervals.assign(compact.candidate_count, {0.0F, 1.0F});
+  for (std::size_t candidate = 0U; candidate < compact.candidate_count; ++candidate) {
+    const auto y = static_cast<std::int64_t>(candidate) * 10'000;
+    compact.quintic_bezier_controls_nm.insert(compact.quintic_bezier_controls_nm.end(),
+                                               {{0, y}, {200'000, y}, {400'000, y},
+                                                {600'000, y}, {800'000, y}, {1'000'000, y}});
+  }
+  compact.field_width = 128U;
+  compact.field_height = 32U;
+  compact.field_origin_x_nm = 0;
+  compact.field_origin_y_nm = 0;
+  compact.field_pitch_nm = 10'000;
+  compact.signed_clearance_nm.assign(compact.field_width * compact.field_height, 1'000'000.0F);
+  compact.corridor_mask.assign(compact.field_width * compact.field_height, 1U);
+  compact.top_k = 4U;
+  compact.objective_weights = {1.0F, 0.0F, 0.0F, 0.0F, 0.0F};
+  auto overflowing_samples = compact;
+  overflowing_samples.sample_count = std::numeric_limits<std::size_t>::max();
+  require(!flux::score_routing_spline_candidates(overflowing_samples, false).ok() &&
+              !flux::score_routing_spline_candidates(overflowing_samples, true).ok(),
+          "compact scoring must reject overflowing candidate/sample products before allocation");
+  auto invalid_interval = compact;
+  invalid_interval.quintic_span_intervals.front().second =
+      std::numeric_limits<float>::quiet_NaN();
+  require(!flux::score_routing_spline_candidates(invalid_interval, false).ok() &&
+              !flux::score_routing_spline_candidates(invalid_interval, true).ok(),
+          "compact scoring must reject nonfinite intervals before either backend");
+  const auto cpu = flux::score_routing_spline_candidates(compact, false);
+  const auto accelerated = flux::score_routing_spline_candidates(compact, true);
+  auto overflow = compact;
+  overflow.candidate_count = std::numeric_limits<std::size_t>::max();
+  const auto rejected_overflow = flux::score_routing_spline_candidates(overflow, false);
+  require(cpu.ok() && accelerated.ok() && cpu.shortlist.size() == compact.top_k &&
+              accelerated.shortlist.size() == compact.top_k &&
+              std::equal(cpu.shortlist.begin(), cpu.shortlist.end(), accelerated.shortlist.begin(),
+                         [](const auto& expected, const auto& actual) {
+                           return expected.candidate == actual.candidate &&
+                                  expected.violations == actual.violations &&
+                                  std::abs(expected.objective - actual.objective) < 1.0e-3L;
+                         }) &&
+              (!flux::routing_compute_gpu_available() || accelerated.used_gpu) &&
+              !rejected_overflow.ok(),
+          "compact quintic controls and intervals must score without dense CPU basis packing and "
+          "retain the deterministic advisory ranking");
 }
 
 void physical_copper_t_junction_is_preserved_during_ph_realization() {
@@ -11073,10 +11315,18 @@ int main(int argc, char** argv) {
        usped_mountains_inform_navmesh_without_changing_free_space},
       {"regional_ownership_and_immutable_cache_are_dependency_bound",
        regional_ownership_and_immutable_cache_are_dependency_bound},
+      {"navmesh_screening_context_coalesces_snapshot_chords_without_stale_domains",
+       navmesh_screening_context_coalesces_snapshot_chords_without_stale_domains},
       {"advanced_routing_compute_shortlists_preserve_cpu_authority",
        advanced_routing_compute_shortlists_preserve_cpu_authority},
       {"routing_compute_chord_batches_are_bounded_and_conservative",
        routing_compute_chord_batches_are_bounded_and_conservative},
+      {"ph_envelope_capsules_preserve_ambiguous_exact_fallback",
+       ph_envelope_capsules_preserve_ambiguous_exact_fallback},
+      {"routing_compute_domain_points_match_cpu_even_odd",
+       routing_compute_domain_points_match_cpu_even_odd},
+      {"routing_compute_compact_quintic_scores_match_dense_authority",
+       routing_compute_compact_quintic_scores_match_dense_authority},
       {"physical_copper_t_junction_is_preserved_during_ph_realization",
        physical_copper_t_junction_is_preserved_during_ph_realization},
       {"same_net_vertical_features_are_reused_as_transition_portals",

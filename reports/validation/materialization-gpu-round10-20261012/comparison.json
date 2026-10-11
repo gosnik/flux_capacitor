@@ -1,0 +1,191 @@
+{
+  "tier0": {
+    "baseline_detail_seconds": 62.542786112986505,
+    "detail_seconds": 57.842960138979834,
+    "change_percent": -7.514577245593457,
+    "complete": true,
+    "stop_reason": "complete",
+    "open_connections": 0,
+    "counts": {
+      "added_track_arcs": 28,
+      "added_track_beziers": 383,
+      "added_tracks": 175,
+      "added_vias": 3,
+      "copper_violation_counts": {},
+      "copper_violations": 0,
+      "unrounded_non_junction_bends": 0
+    },
+    "kicad": {
+      "available": true,
+      "violations": 0,
+      "unconnected_items": 0,
+      "categories": {}
+    },
+    "copper_byte_identical": false,
+    "copper_sha256": "aedb2f598244a54e8885bda7066c2d7ec9c63a00de644ac2d055d4333a52b24d",
+    "peak_rss_kib": 574984,
+    "timings_and_gpu": {
+      "residual_bend_repair_microseconds": 6676540,
+      "spline_clearance_batch_microseconds": 106906,
+      "spline_clearance_batch_queries": 767232,
+      "spline_clearance_cpu_fallbacks": 16,
+      "spline_clearance_gpu_dispatches": 161,
+      "spline_clearance_resident_reuses": 138,
+      "spline_clearance_resident_uploads": 23,
+      "spline_envelope_cpu_fallbacks": 0,
+      "spline_envelope_gpu_dispatches": 2222,
+      "spline_envelope_microseconds": 1471482,
+      "spline_envelope_proven_clear": 57935,
+      "spline_envelope_queries": 59976,
+      "spline_envelope_resident_reuses": 2222,
+      "spline_envelope_resident_uploads": 0,
+      "spline_exact_merge_microseconds": 6608625,
+      "spline_gpu_polish_batches": 1145,
+      "spline_gpu_polish_candidates": 79235,
+      "spline_gpu_polish_cpu_fallbacks": 0,
+      "spline_gpu_polish_dispatches": 985,
+      "spline_gpu_polish_exact_shortlist_checks": 9160,
+      "spline_gpu_polish_microseconds": 622931,
+      "spline_gpu_precondition_accepted": 12,
+      "spline_gpu_precondition_attempts": 59,
+      "spline_gpu_precondition_cpu_fallbacks": 0,
+      "spline_gpu_precondition_dispatches": 59,
+      "spline_gpu_precondition_legal": 12,
+      "spline_gpu_precondition_solve_us": 16865,
+      "spline_navigation_mesh_microseconds": 14778372,
+      "spline_navigation_preparation_microseconds": 35824661,
+      "spline_realization_microseconds": 39110325,
+      "spline_route_refinement_microseconds": 94198453,
+      "spline_screening_batched_chords": 318917,
+      "spline_screening_batches": 188,
+      "spline_screening_cache_hits": 85897,
+      "spline_screening_cache_misses": 318917,
+      "spline_screening_coalesced_waits": 140172,
+      "spline_screening_gpu_dispatches": 1746,
+      "spline_screening_gpu_work_items": 371943743,
+      "spline_screening_microseconds": 1817290,
+      "spline_screening_resident_reuses": 1694,
+      "spline_screening_resident_uploads": 52,
+      "spline_trajectory_microseconds": 26309447
+    },
+    "engine_phases": [
+      {
+        "action": "global",
+        "elapsed_microseconds": 13578102,
+        "work_units": 7717
+      },
+      {
+        "action": "copper-scaffold",
+        "elapsed_microseconds": 1940950,
+        "work_units": 4703
+      },
+      {
+        "action": "copper-scaffold",
+        "elapsed_microseconds": 1908153,
+        "work_units": 710
+      },
+      {
+        "action": "materialize",
+        "elapsed_microseconds": 39338761,
+        "work_units": 6337
+      }
+    ]
+  },
+  "tier1": {
+    "baseline_detail_seconds": 336.38551975396695,
+    "detail_seconds": 310.1826254979824,
+    "change_percent": -7.789542865920451,
+    "complete": true,
+    "stop_reason": "complete",
+    "open_connections": 0,
+    "counts": {
+      "added_track_arcs": 105,
+      "added_track_beziers": 407,
+      "added_tracks": 442,
+      "added_vias": 57,
+      "copper_violation_counts": {},
+      "copper_violations": 0,
+      "unrounded_non_junction_bends": 0
+    },
+    "kicad": {
+      "available": true,
+      "violations": 0,
+      "unconnected_items": 0,
+      "categories": {}
+    },
+    "copper_byte_identical": false,
+    "copper_sha256": "e590ca054a300ac5ed05684e32eb934c1396007983c536ca0fd2c0548b662e85",
+    "peak_rss_kib": 566684,
+    "timings_and_gpu": {
+      "residual_bend_repair_microseconds": 32933704,
+      "spline_clearance_batch_microseconds": 183715,
+      "spline_clearance_batch_queries": 1732224,
+      "spline_clearance_cpu_fallbacks": 54,
+      "spline_clearance_gpu_dispatches": 132,
+      "spline_clearance_resident_reuses": 74,
+      "spline_clearance_resident_uploads": 58,
+      "spline_envelope_cpu_fallbacks": 0,
+      "spline_envelope_gpu_dispatches": 3759,
+      "spline_envelope_microseconds": 3183538,
+      "spline_envelope_proven_clear": 77110,
+      "spline_envelope_queries": 88195,
+      "spline_envelope_resident_reuses": 3754,
+      "spline_envelope_resident_uploads": 5,
+      "spline_exact_merge_microseconds": 17696731,
+      "spline_gpu_polish_batches": 1798,
+      "spline_gpu_polish_candidates": 120704,
+      "spline_gpu_polish_cpu_fallbacks": 0,
+      "spline_gpu_polish_dispatches": 1491,
+      "spline_gpu_polish_exact_shortlist_checks": 14384,
+      "spline_gpu_polish_microseconds": 1303269,
+      "spline_gpu_precondition_accepted": 56,
+      "spline_gpu_precondition_attempts": 113,
+      "spline_gpu_precondition_cpu_fallbacks": 0,
+      "spline_gpu_precondition_dispatches": 113,
+      "spline_gpu_precondition_legal": 51,
+      "spline_gpu_precondition_solve_us": 35239,
+      "spline_navigation_mesh_microseconds": 111410887,
+      "spline_navigation_preparation_microseconds": 129797507,
+      "spline_realization_microseconds": 211562640,
+      "spline_route_refinement_microseconds": 590936299,
+      "spline_screening_batched_chords": 3009234,
+      "spline_screening_batches": 966,
+      "spline_screening_cache_hits": 341447,
+      "spline_screening_cache_misses": 3009234,
+      "spline_screening_coalesced_waits": 1344031,
+      "spline_screening_gpu_dispatches": 33843,
+      "spline_screening_gpu_work_items": 8578197318,
+      "spline_screening_microseconds": 30116643,
+      "spline_screening_resident_reuses": 33576,
+      "spline_screening_resident_uploads": 267,
+      "spline_trajectory_microseconds": 61827510
+    },
+    "engine_phases": [
+      {
+        "action": "global",
+        "elapsed_microseconds": 34643010,
+        "work_units": 425420
+      },
+      {
+        "action": "copper-scaffold",
+        "elapsed_microseconds": 52610035,
+        "work_units": 2996803
+      },
+      {
+        "action": "copper-scaffold",
+        "elapsed_microseconds": 3148488,
+        "work_units": 20034
+      },
+      {
+        "action": "copper-scaffold",
+        "elapsed_microseconds": 5416420,
+        "work_units": 70430
+      },
+      {
+        "action": "materialize",
+        "elapsed_microseconds": 213199321,
+        "work_units": 13295
+      }
+    ]
+  }
+}

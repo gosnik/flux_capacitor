@@ -1,0 +1,14 @@
+{
+  "incident": "Compact round freeze was mistakenly run against this earlier directory. Original benchmark outputs were not rerun or changed.",
+  "restored_source_snapshot_files": [
+    "apps/flux-cli/main.cpp",
+    "include/flux/core/copper_scaffold.hpp",
+    "src/copper_scaffold.cpp",
+    "tests/unit/copper_scaffold_tests.cpp"
+  ],
+  "manifest_restored_from_commit": "a649f0f",
+  "original_binary_sha256": "02284789190709e97c2f78cdf1ed1aa18eaf5fe2162bbe773cf233096c827d0d",
+  "original_frozen_binary_available": false,
+  "replacement_binary_moved_to": "flux-cli-overwritten-during-compact-freeze",
+  "recovery": "The baseline source is preserved exactly in commit a649f0f and source-snapshot; rebuild it for future baseline runs. Existing benchmark metrics remain the original recorded outcomes."
+}

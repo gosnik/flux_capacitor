@@ -1,0 +1,51 @@
+Test project /home/adam/qtbits/flux_capacitor/build/release
+      Start   1: flux_unit_tests
+ 1/20 Test   #1: flux_unit_tests .............................   Passed   98.41 sec
+      Start   2: flux_layered_navmesh_tests
+ 2/20 Test   #2: flux_layered_navmesh_tests ..................   Passed    0.00 sec
+      Start   3: flux_regional_hc_composition_tests
+ 3/20 Test   #3: flux_regional_hc_composition_tests ..........   Passed    0.00 sec
+      Start   5: flux_routing_engine_policy_tests
+ 4/20 Test   #5: flux_routing_engine_policy_tests ............   Passed    0.00 sec
+      Start   6: flux_routing_engine_experiment_tests
+ 5/20 Test   #6: flux_routing_engine_experiment_tests ........   Passed    0.67 sec
+      Start   8: flux_regional_preparation_tests
+ 6/20 Test   #8: flux_regional_preparation_tests .............   Passed    0.70 sec
+      Start   9: flux_channel_occupancy_tests
+ 7/20 Test   #9: flux_channel_occupancy_tests ................   Passed    0.00 sec
+      Start  10: flux_regional_channel_spatial_index_tests
+ 8/20 Test  #10: flux_regional_channel_spatial_index_tests ...   Passed    0.00 sec
+      Start  20: flux_telemetry_viewer_tests
+ 9/20 Test  #20: flux_telemetry_viewer_tests .................   Passed    0.16 sec
+      Start  21: flux_telemetry_live_client_tests
+10/20 Test  #21: flux_telemetry_live_client_tests ............   Passed    1.20 sec
+      Start 155: flux_terrain_evolution_tests
+11/20 Test #155: flux_terrain_evolution_tests ................   Passed    0.00 sec
+      Start 156: flux_terrain_evolution_gpu_tests
+12/20 Test #156: flux_terrain_evolution_gpu_tests ............   Passed    0.84 sec
+      Start 157: flux_terrain_evolution_integration_tests
+13/20 Test #157: flux_terrain_evolution_integration_tests ....   Passed    0.20 sec
+      Start 159: flux_board_terrain_guidance_tests
+14/20 Test #159: flux_board_terrain_guidance_tests ...........   Passed    0.00 sec
+      Start 166: flux_regional_candidate_policy_tests
+15/20 Test #166: flux_regional_candidate_policy_tests ........   Passed    0.00 sec
+      Start 168: flux_routing_engine_budget_tests
+16/20 Test #168: flux_routing_engine_budget_tests ............   Passed    0.00 sec
+      Start 170: flux_copper_scaffold_tests
+17/20 Test #170: flux_copper_scaffold_tests ..................   Passed    1.60 sec
+      Start 171: flux_scaffold_curve_tests
+18/20 Test #171: flux_scaffold_curve_tests ...................   Passed    1.77 sec
+      Start 172: flux_scaffold_collision_tests
+19/20 Test #172: flux_scaffold_collision_tests ...............   Passed    0.01 sec
+      Start 173: flux_scaffold_joint_displacement_tests
+20/20 Test #173: flux_scaffold_joint_displacement_tests ......   Passed    0.39 sec
+
+100% tests passed, 0 tests failed out of 20
+
+Label Time Summary:
+gpu          =   0.84 sec*proc (1 test)
+risk         =   7.35 sec*proc (16 tests)
+routing      =   5.16 sec*proc (13 tests)
+telemetry    =   1.35 sec*proc (2 tests)
+
+Total Test time (real) = 105.98 sec

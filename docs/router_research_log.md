@@ -9473,3 +9473,89 @@ Structured comparison: `reports/benchmark_history/2026-10-11-joint-passages.json
 Validation, frozen sources, telemetry and diagnostic sweep:
 `reports/validation/joint-passages-20261011/`.
 
+## 2026-10-11 — Compact physical search before path-dependent fallback
+
+### Failure and hypothesis
+Tier 1 retained 64/78 requests, with all 14 missing requests exhausting search expansions
+and zero assembled-goal rejections. The checkpoint consumed 9718226 expansions. Source
+attachments number 25–128 per failing request, and the rich state distinguishes source,
+arrival direction and canonical via history at every cell. Hypothesis: this multiplicity
+spends bounded search effort on paths with equivalent immediate futures before reaching
+useful legal goals. Relaxation cannot compensate for missing candidate paths.
+
+### Research and experiment
+Boost's shortest-path documentation describes one distance/predecessor per vertex
+(https://www.boost.org/doc/libs/latest/libs/graph/doc/html/graph/algorithms/shortest_paths/dijkstra_shortest_paths.html).
+That is applicable to the immutable edge-clearance graph but not a completeness guarantee
+for assembled copper with path-dependent drilled-hole constraints. Therefore test a bounded
+compact multi-source proposal search, with exact full-path admission and the existing rich
+search as fallback. Both passes share the original expansion allowance. Keep soft blocked
+passage search unchanged to isolate the experiment. Measure compact successes, fallbacks,
+expansions and total physical connectivity, not merely abstract graph coverage.
+
+### Validation plan
+Use a frozen retained-scene replay of failed requests for an on/off comparison, followed
+by focused regression and independent review. Run the curved Tier 0 and Tier 1 benchmarks
+sequentially with telemetry. Retain only evidence-backed gains; never weaken exact gates.
+
+### Isolated retained-scene replay
+All 14 failing canonical paths were reconstructed from request evidence and searched
+independently against all 776 retained generated tracks/vias plus the original board.
+Exchange/displacement recovery was disabled. The first comparison solved 0/14 with
+compact search disabled and 12/14 with it enabled, each accepted output passing exact
+copper checks. Total expansions fell from 1400000 to 296628; aggregate time was 7.888 s
+versus 8.526 s, so this is a reachability gain, not a demonstrated runtime speedup.
+The old search reused many edge checks across labels; compact search visits more distinct
+physical edges. The 12 successes needed 1152–18001 expansions each. Requests 63 and 69
+still exhausted the shared 100000 expansion limit. These independent routes have not yet
+been shown to coexist. An accidental repeated harness invocation reproduced all outcomes;
+the structured comparison retains only the first run.
+
+Initial focused validation caught an undersized new moat-test budget (1000 versus the
+existing equivalent fixture's 100000); the corrected fixture retains the original bound.
+Independent review identified missing cancellation termination evidence in compact search;
+the returns now record cancellation and a managed-kernel regression exercises this path.
+Baseline commit a649f0f and tag codex/tier1-curved-baseline-20261011 were pushed before
+this round, preserving the experiment as a separate working-tree delta.
+
+### Full validation and sequential curved tier results
+All 20 regression targets passed in 105.98 s. Strict release CLI built successfully;
+independent review's cancellation finding is closed. The final executable hash is
+f513ffd0bc6bfce46ebca0e03b4cdaf27835008282f559bf3a109e4fbf754daa.
+Tier 0 then Tier 1 ran sequentially with diagnostic telemetry and curved-track settings.
+
+Tier 0: global109.75 s, detail323.83 s; 50/50 declared requests, one scaffold physical
+open, then zero diagnostic final opens/violations/unsmoothed joints and 199 Beziers.
+KiCad diagnostic DRC reports zero violations and zero unconnected items. Both copper
+layers were inspected visually: smooth bends without new looping artifacts. Qualification
+remains incomplete_global_route, matching the immediate baseline. Compact search did not
+run for this tier: the missing physical terminal is not in its declared demand domain.
+
+Tier 1:76/78 checked requests,13 physical opens across7 nets,829 tracks,54 vias.
+Baseline:64/78,24 opens across10 nets,754 tracks,22 vias. Global runtime329.07 s versus
+385.82 s. Retained-checkpoint expansions1349002 versus9718226; these are not aggregates
+over discarded engine attempts. The retained checkpoint records34 compact attempts,
+6 compact successes and28 fallbacks; earlier accepted compact work can be carried as
+retained paths rather than counted again. No displacement/exchange transaction succeeded.
+The coarse result says complete and the frontier runner exits0, but the routing engine
+exhausted and the physical scaffold is incomplete: Tier 1 is NOT passed. No final curved
+Tier-1 board or final KiCad qualification exists for this round.
+
+Remaining requests60(net12,connection9) and69(net1,connection6) both have physically
+absent target endpoints with one legal grid attachment and terminate on expansion caps.
+Request69's orphan is exactly on request63's original coarse path, supporting explicit
+producer/component attachment rather than retaining a stale literal coordinate. The13
+physical opens despite only2 missing declared demands show additional physical coverage
+work is required. Next hypothesis: repair physical terminal obligation coverage and
+rebind orphan branches using their proven producer relationships, preserving checked peers.
+
+Decision: KEEP compact search. The matched replay and full benchmark support the state
+multiplicity hypothesis. Do not increase its default allowance:50000 compact expansions
+failed to solve the two remaining isolated baseline requests and only increased cost.
+
+Artifact note: a runner path mistake overwrote the earlier joint-passages local frozen
+executable during preparation. Original benchmark outputs were unchanged. Its source
+manifest and source snapshot were restored from baseline commit a649f0f; the replacement
+binary was isolated and the unavailable original binary is explicitly documented in
+joint-passages-20261011/artifact-integrity.json. Git source/tag isolation remained intact.
+Structured round history: reports/benchmark_history/2026-10-11-compact-search.json.

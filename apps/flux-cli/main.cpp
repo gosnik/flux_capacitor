@@ -4247,6 +4247,10 @@ void print_route_result(const flux::GlobalRouteResult& result,
                 << ", \"expansions\": " << scaffold.counters.expansions
                 << ", \"candidate_rejections\": " << scaffold.counters.candidate_rejections
                 << ", \"goal_rejections\": " << scaffold.counters.goal_rejections
+                << ", \"compact_search_attempts\": " << scaffold.counters.compact_search_attempts
+                << ", \"compact_search_expansions\": " << scaffold.counters.compact_search_expansions
+                << ", \"compact_search_successes\": " << scaffold.counters.compact_search_successes
+                << ", \"compact_search_fallbacks\": " << scaffold.counters.compact_search_fallbacks
                 << ", \"peak_via_history_nodes\": " << scaffold.counters.peak_via_history_nodes
                 << ", \"via_history_budget_exhaustions\": " << scaffold.counters.via_history_budget_exhaustions
                 << ", \"source_attachments\": " << scaffold.counters.source_attachments

@@ -1,0 +1,21 @@
+{
+  "experiment": "compact physical search before rich-state fallback",
+  "baseline_commit": "a649f0f",
+  "baseline_tag": "codex/tier1-curved-baseline-20261011",
+  "input_board": "tests/fixtures/routing-corpus/bm_svf.kicad_pcb",
+  "request_evidence": "reports/validation/joint-passages-20261011/tier1/tier-1-bm_svf/global-result.json",
+  "generated_copper": "reports/validation/joint-passages-20261011/tier1-retained-generated.json",
+  "replay_input": "failed-requests.json",
+  "request_count": 14,
+  "fixed_generated_primitives": 776,
+  "scope": "Each request independently against the same immutable retained scene; no generated owners removed. Coordinates/layers verified against canonical identity; coarse-only annotations omitted. Nominal width resolved from board rules.",
+  "recovery": "disabled",
+  "variants": {
+    "off": 0,
+    "on": 25000,
+    "remaining_cap_check": 50000
+  },
+  "total_search_expansions_per_request": 100000,
+  "results": "replay-result.json",
+  "remaining_cap_result": "Neither request63 nor69 completed at50000compactexpansions; keep25000default."
+}

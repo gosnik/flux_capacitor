@@ -1,0 +1,4 @@
+request=63 compact_search=0 requests=1 satisfied=0 missing=1 complete=0 expansions=100000 compact_expansions=0 compact_successes=0 compact_fallbacks=0 goal_rejections=0 elapsed_ms=983 exact_drc_violations=0
+request=63 compact_search=1 requests=1 satisfied=0 missing=1 complete=0 expansions=100000 compact_expansions=50000 compact_successes=0 compact_fallbacks=1 goal_rejections=0 elapsed_ms=3016 exact_drc_violations=0
+request=69 compact_search=0 requests=1 satisfied=0 missing=1 complete=0 expansions=100000 compact_expansions=0 compact_successes=0 compact_fallbacks=0 goal_rejections=0 elapsed_ms=478 exact_drc_violations=0
+request=69 compact_search=1 requests=1 satisfied=0 missing=1 complete=0 expansions=100000 compact_expansions=50000 compact_successes=0 compact_fallbacks=1 goal_rejections=0 elapsed_ms=2829 exact_drc_violations=0

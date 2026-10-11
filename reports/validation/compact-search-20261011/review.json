@@ -1,0 +1,10 @@
+{
+  "status": "reviewed",
+  "initial_findings": [
+    {
+      "issue": "compact cancellation did not record termination",
+      "resolution": "both returns call finish(cancelled); separate-stop-token managed-kernel regression added"
+    }
+  ],
+  "remaining_material_findings": 0
+}

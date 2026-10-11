@@ -50,6 +50,8 @@ struct CopperScaffoldConfig {
   std::size_t maximum_attachment_states{128U};
   std::size_t attachment_radius_cells{2U};
   std::size_t maximum_goal_attempts{64U};
+  // Optional optimistic node-dominance pass before the provenance-rich search. Zero disables it.
+  std::size_t compact_search_expansions{25'000U};
   std::size_t maximum_via_history_nodes{262'144U};
   std::uint64_t planar_step_cost{10U};
   std::uint64_t diagonal_step_cost{14U};
@@ -148,6 +150,10 @@ struct CopperScaffoldCounters {
   std::size_t searched_connections{0U};
   std::size_t routed_connections{0U};
   std::size_t expansions{0U};
+  std::size_t compact_search_expansions{0U};
+  std::size_t compact_search_attempts{0U};
+  std::size_t compact_search_successes{0U};
+  std::size_t compact_search_fallbacks{0U};
   std::size_t candidate_rejections{0U};
   std::size_t published_tracks{0U};
   std::size_t published_vias{0U};

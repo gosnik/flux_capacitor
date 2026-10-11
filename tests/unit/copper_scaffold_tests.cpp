@@ -1,5 +1,6 @@
 #include "flux/core/copper_scaffold.hpp"
 #include "flux/core/drc.hpp"
+#include "flux/core/routing_kernel.hpp"
 #include "../../src/scaffold_via_history.hpp"
 #include "../../src/scaffold_access.hpp"
 
@@ -468,6 +469,93 @@ void rejected_goal_assembly_does_not_end_connection_search() {
           "a rejected assembly must leave different via histories at the same endpoint state searchable");
   require(check_copper_rules(result.copper).ok(), "recovered goal assembly must pass full copper DRC");
 }
+void compact_search_preserves_component_attachment_provenance_within_shared_budget() {
+  auto board = fixture();
+  board.layers.resize(1U);
+  board.tracks.push_back({ObjectId{"compact-source"}, NetId{"a"}, LayerId{"F.Cu"},
+                          mm(2,2), mm(18,2), Nanometres::from_mm(0.2), false});
+  board.tracks.push_back({ObjectId{"compact-obstacle"}, NetId{"b"}, LayerId{"F.Cu"},
+                          mm(8,3), mm(8,9), Nanometres::from_mm(0.2), false});
+  const auto demand = request(NetId{"a"}, mm(2,2), LayerId{"F.Cu"}, mm(15,8), LayerId{"F.Cu"});
+  CopperScaffoldConfig config;
+  config.grid_pitch = Nanometres::from_mm(0.5);
+  config.maximum_expansions_per_connection = 200U;
+  config.compact_search_expansions = 80U;
+  const auto result = construct_copper_scaffold(board, {demand}, config);
+  require(result.complete && result.paths.size() == 1U &&
+              result.paths.front().points.front() == GlobalRoutePoint{mm(15,2), LayerId{"F.Cu"}} &&
+              result.counters.compact_search_attempts == 1U &&
+              result.counters.compact_search_expansions <= config.compact_search_expansions &&
+              result.counters.expansions <= config.maximum_expansions_per_connection,
+          "compact search must retain the chosen source attachment and share the connection budget");
+  require(scaffold_request_connected(result.copper, demand) && check_copper_rules(result.copper).ok(),
+          "compact-source reconstruction must pass exact connectivity and copper legality");
+
+  auto disabled = config;
+  disabled.compact_search_expansions = 0U;
+  const auto baseline = construct_copper_scaffold(board, {demand}, disabled);
+  require(baseline.complete && baseline.counters.compact_search_attempts == 0U &&
+              baseline.counters.compact_search_expansions == 0U &&
+              scaffold_request_connected(baseline.copper, demand) && check_copper_rules(baseline.copper).ok(),
+          "zero compact budget must retain the provenance-rich baseline search");
+}
+void compact_search_falls_back_when_via_history_changes_goal_legality() {
+  auto board = fixture();
+  board.rules.hole_to_hole_clearance = Nanometres::from_mm(3.8);
+  // This F.Cu moat forces a two-via connection. The optimistic node-only pass
+  // can reach the same goal without retaining the drilled-site history; the
+  // rich fallback must retain it to reject the first close via pair and find
+  // the alternative legal placement.
+  const std::vector<Point> ring{mm(11.4,9.4), mm(12.6,9.4), mm(12.6,10.6), mm(11.4,10.6)};
+  for (std::size_t i = 0U; i < ring.size(); ++i)
+    board.tracks.push_back({ObjectId{"compact-moat" + std::to_string(i)}, NetId{"b"}, LayerId{"F.Cu"},
+                            ring[i], ring[(i + 1U) % ring.size()], Nanometres::from_mm(0.2), false});
+  const auto demand = request(NetId{"a"}, mm(8,10), LayerId{"F.Cu"}, mm(12,10), LayerId{"F.Cu"});
+  CopperScaffoldConfig config;
+  config.grid_pitch = Nanometres::from_mm(0.5);
+  config.maximum_attachment_states = 1U;
+  config.maximum_goal_attempts = 256U;
+  config.maximum_expansions_per_connection = 100'000U;
+  config.compact_search_expansions = 128U;
+  const auto result = construct_copper_scaffold(board, {demand}, config);
+  require(result.complete && result.counters.compact_search_attempts == 1U &&
+              result.counters.compact_search_fallbacks == 1U && result.counters.goal_rejections > 0U &&
+              result.counters.expansions <= config.maximum_expansions_per_connection,
+          "path-dependent via legality must fall through compact dominance to rich-state search");
+  require(scaffold_request_connected(result.copper, demand) && check_copper_rules(result.copper).ok(),
+          "rich fallback must publish only an exactly legal via realization");
+}
+void compact_search_cancellation_records_started_work() {
+  auto board = fixture();
+  board.layers.resize(1U);
+  board.tracks.push_back({ObjectId{"closed-wall"}, NetId{"b"}, LayerId{"F.Cu"},
+                          mm(10,0), mm(10,20), Nanometres::from_mm(0.2), true});
+  const auto demand = request(NetId{"a"}, mm(2,10), LayerId{"F.Cu"}, mm(18,10), LayerId{"F.Cu"});
+  CopperScaffoldConfig config;
+  config.maximum_victim_exchanges = 0U;
+  config.maximum_joint_passage_candidates = 0U;
+  config.maximum_displacement_attempts = 0U;
+  config.maximum_coupled_exchange_attempts = 0U;
+  CopperScaffoldResult result;
+  std::stop_source search_stop;
+  RoutingKernel kernel([&](std::stop_token) {
+    result = construct_copper_scaffold(board, {demand}, config, search_stop.get_token());
+  });
+  require(kernel.advance({2048U, std::chrono::seconds{10}}) == RoutingKernelStatus::yielded,
+          "closed passage must retain an active bounded search");
+  search_stop.request_stop();
+  while (kernel.advance({2048U, std::chrono::seconds{10}}) != RoutingKernelStatus::finished) {}
+  require(result.counters.compact_search_expansions > 0U && result.counters.cancelled &&
+              result.request_evidence.size() == 1U &&
+              result.request_evidence.front().termination == CopperScaffoldSearchTermination::cancelled,
+          ("cancel evidence: compact=" + std::to_string(result.counters.compact_search_expansions) +
+           "; cancelled=" + std::to_string(result.counters.cancelled) +
+           "; evidence=" + std::to_string(result.request_evidence.size()) +
+           "; termination=" + (result.request_evidence.empty() ? std::string{"none"} :
+               std::string{to_string(result.request_evidence.front().termination)})).c_str());
+  require(result.paths.empty() && result.copper == board,
+          "cancelled compact search must not publish candidate copper");
+}
 void disconnected_padded_components_are_not_counted_as_connected() {
   auto board = fixture();
   for (int i = 0; i < 2; ++i) {
@@ -527,6 +615,9 @@ int main() {
   pad_membership_does_not_accept_copper_on_a_wrong_coarse_layer();
   disconnected_padded_components_are_not_counted_as_connected();
   rejected_goal_assembly_does_not_end_connection_search();
+  compact_search_preserves_component_attachment_provenance_within_shared_budget();
+  compact_search_falls_back_when_via_history_changes_goal_legality();
+  compact_search_cancellation_records_started_work();
   component_geometry_precedes_disconnected_pad_fanout();
   search_uses_a_component_branch_instead_of_fixed_endpoint();
   existing_component_is_a_completed_transaction_without_new_copper();

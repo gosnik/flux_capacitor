@@ -529,6 +529,99 @@ struct PassageSearch {
     edge_cache.emplace(key, legal);
     return legal;
   };
+  const std::array<std::pair<int, int>, 8> offsets{{{-1,-1},{0,-1},{1,-1},{-1,0},{1,0},{-1,1},{0,1},{1,1}}};
+  // First try a compact optimistic search keyed only by node.  This deliberately discards
+  // source/arrival/via-history labels to avoid multiplying the frontier on large boards; every
+  // candidate still goes through the exact legality and connectivity gates below.  The richer
+  // search remains the fallback for cases where provenance matters.
+  const auto compact_limit = std::min(config.compact_search_expansions,
+      config.maximum_expansions_per_connection / 2U);
+  std::size_t compact_used = 0U, goal_attempts = 0U;
+  const auto compact_goal_limit = config.maximum_goal_attempts / 2U;
+  if (!passage_search && compact_limit > 0U && compact_goal_limit > 0U) {
+    ++counters.compact_search_attempts;
+    std::priority_queue<QueueEntry, std::vector<QueueEntry>, QueueOrder> compact_open;
+    std::map<Node, std::uint64_t> compact_distance;
+    std::map<Node, std::pair<Node, std::size_t>> compact_previous;
+    std::map<Node, std::size_t> compact_source;
+    for (std::size_t i = 0U; i < starts.size(); ++i) {
+      const auto old = compact_distance.find(starts[i].node);
+      if (old == compact_distance.end() || starts[i].cost < old->second) {
+        compact_distance[starts[i].node] = starts[i].cost;
+        compact_source[starts[i].node] = i;
+        compact_open.push({starts[i].cost + estimate(starts[i].node), starts[i].cost,
+                           {starts[i].node, i, std::numeric_limits<std::size_t>::max(), 0U}});
+      }
+    }
+    while (!compact_open.empty() && compact_used < compact_limit &&
+           goal_attempts < compact_goal_limit) {
+      routing_kernel_checkpoint();
+      if (token.stop_requested()) {
+        counters.cancelled = true; finish(CopperScaffoldSearchTermination::cancelled); return std::nullopt;
+      }
+      const auto current = compact_open.top(); compact_open.pop();
+      const auto found = compact_distance.find(current.state.node);
+      if (found == compact_distance.end() || found->second != current.g) continue;
+      ++compact_used; ++counters.expansions; ++counters.compact_search_expansions;
+      const auto goal = goals_at.find(current.state.node);
+      if (goal != goals_at.end()) for (const auto goal_id : goal->second) {
+        if (goal_attempts >= compact_goal_limit) break;
+        routing_kernel_checkpoint();
+        if (token.stop_requested()) {
+        counters.cancelled = true; finish(CopperScaffoldSearchTermination::cancelled); return std::nullopt;
+      }
+        ++goal_attempts;
+        std::vector<Node> chain{current.state.node};
+        for (auto node = current.state.node; compact_previous.contains(node); ) {
+          node = compact_previous.at(node).first; chain.push_back(node);
+        }
+        std::reverse(chain.begin(), chain.end());
+        GlobalRoutePath path; path.net = request.net; path.connection_index = request.connection_index;
+        path.points.push_back(starts[compact_source.at(chain.front())].anchor);
+        for (const auto& node : chain) {
+          const GlobalRoutePoint point{point_for(node, minimum, config.grid_pitch), layers[node.layer]};
+          if (path.points.back() != point) path.points.push_back(point);
+        }
+        if (path.points.back() != goals[goal_id].anchor) path.points.push_back(goals[goal_id].anchor);
+        clear_coarse_metadata(path); compress_collinear_grid_runs(path);
+        path.segment_widths.assign(path.points.size() - 1U, rules.track_width);
+        path.segment_width_kinds.assign(path.points.size() - 1U, GlobalRouteSegmentWidthKind::nominal);
+        Trial trial;
+        if (legal_trial(base, path, index, trial) && scaffold_request_connected(trial.board, request)) {
+          ++counters.compact_search_successes;
+          finish(CopperScaffoldSearchTermination::search_succeeded); return trial;
+        }
+        ++counters.goal_rejections; ++counters.candidate_rejections;
+      }
+      const auto point = point_for(current.state.node, minimum, config.grid_pitch);
+      const auto enqueue_compact = [&](Node next, std::uint64_t step) {
+        const auto candidate = current.g + step;
+        const auto old = compact_distance.find(next);
+        if (old == compact_distance.end() || candidate < old->second) {
+          compact_distance[next] = candidate; compact_source[next] = compact_source[current.state.node];
+          compact_previous[next] = {current.state.node, compact_source[next]};
+          compact_open.push({candidate + estimate(next), candidate,
+                             {next, compact_source[next], 0U, 0U}});
+        }
+      };
+      for (const auto& [dx, dy] : offsets) {
+        Node next{current.state.node.x + dx, current.state.node.y + dy, current.state.node.layer};
+        if (next.x < 0 || next.y < 0 || next.x > xmax || next.y > ymax) continue;
+        const auto next_point = point_for(next, minimum, config.grid_pitch);
+        if (!domain.map->exact_query(next_point.x.value(), next_point.y.value()).inside ||
+            !geometry::segment_inside_board_area(point, next_point, base) ||
+            !grid_edge_is_legal(current.state.node, next)) continue;
+        enqueue_compact(next, (dx && dy ? config.diagonal_step_cost : config.planar_step_cost) +
+            soft_penalty(current.state.node, next));
+      }
+      if (passage_search) continue;
+      for (std::size_t layer = 0U; layer < layers.size(); ++layer) if (layer != current.state.node.layer) {
+        Node next{current.state.node.x, current.state.node.y, layer};
+        if (grid_edge_is_legal(current.state.node, next)) enqueue_compact(next, config.via_cost);
+      }
+    }
+    ++counters.compact_search_fallbacks;
+  }
   std::priority_queue<QueueEntry, std::vector<QueueEntry>, QueueOrder> open;
   std::map<SearchState, std::uint64_t> distance;
   std::map<SearchState, SearchState> previous;
@@ -537,7 +630,6 @@ struct PassageSearch {
     distance[state] = starts[i].cost;
     open.push({estimate(state.node) + starts[i].cost, starts[i].cost, state});
   }
-  const std::array<std::pair<int, int>, 8> offsets{{{-1,-1},{0,-1},{1,-1},{-1,0},{1,0},{-1,1},{0,1},{1,1}}};
   // Only drill-pair rules couple same-net via choices across otherwise legal edges. Keep an
   // exact canonical set of new drilled positions when that rule applies; static clearance and
   // all final copper checks remain authoritative in either mode.
@@ -558,7 +650,7 @@ struct PassageSearch {
     }
     return result;
   };
-  std::size_t local_expansions = 0U, goal_attempts = 0U;
+  std::size_t local_expansions = 0U;
   std::deque<std::pair<QueueEntry, std::size_t>> deferred_goals;
   std::set<std::pair<SearchState, std::size_t>> rejected_goals;
   const auto assemble_goal = [&](const QueueEntry& current, std::size_t goal_id) -> std::optional<Trial> {
@@ -593,7 +685,8 @@ struct PassageSearch {
     ++counters.goal_rejections; ++counters.candidate_rejections;
     return std::nullopt;
   };
-  while (!open.empty() && local_expansions < config.maximum_expansions_per_connection &&
+  const auto rich_budget = config.maximum_expansions_per_connection - compact_used;
+  while (!open.empty() && local_expansions < rich_budget &&
          goal_attempts < config.maximum_goal_attempts) {
     routing_kernel_checkpoint();
     if (token.stop_requested()) { counters.cancelled = true; return std::nullopt; }
@@ -651,7 +744,7 @@ struct PassageSearch {
   if (counters.cancelled) finish(CopperScaffoldSearchTermination::cancelled);
   else if (goal_attempts >= config.maximum_goal_attempts)
     finish(CopperScaffoldSearchTermination::goal_attempt_budget_exhausted);
-  else if (local_expansions >= config.maximum_expansions_per_connection)
+  else if (local_expansions >= rich_budget)
     finish(CopperScaffoldSearchTermination::expansion_budget_exhausted);
   else finish(CopperScaffoldSearchTermination::search_exhausted);
   return std::nullopt;

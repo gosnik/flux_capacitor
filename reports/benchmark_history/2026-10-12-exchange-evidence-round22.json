@@ -1,0 +1,1229 @@
+{
+  "git_revision": "6701f43dfc60771fbdafd8c27d9fad4bcb561788",
+  "binary_sha256": "2378d80e2ae29ceee4ff277f1eb9a5b82642092488d14b03a114f6413d5a64c7",
+  "configuration": {
+    "sequential": true,
+    "curved": true,
+    "telemetry": "diagnostic",
+    "iterations": 30,
+    "routing_timeout_seconds": 900,
+    "outer_timeout_seconds": 960
+  },
+  "tiers": {
+    "tier2": {
+      "global": {
+        "duration_seconds": 252.30503048899118,
+        "command_configuration": {
+          "max_expansions": 50000,
+          "max_router_iterations": 30,
+          "max_static_seed_workers": 2,
+          "router_args": [
+            "--curved-tracks"
+          ],
+          "routing_timeout_seconds": 900,
+          "search_diversification": true,
+          "telemetry_level": "diagnostic"
+        },
+        "complete": true,
+        "stop_reason": "complete",
+        "diagnostic": "affected routing cone completed with compatible paths reused through free-space corridors",
+        "routing_plan_complete": false,
+        "paths": 117,
+        "unrouted_nets": 0,
+        "unrouted_net_ids": [],
+        "total_overflow": 0,
+        "corridor_overflow": 0,
+        "clearance_shadow_overflow": 215,
+        "routing_engine_outcome": "exhausted",
+        "scaffold": {
+          "access_generation_microseconds": 0,
+          "attachment_generation_microseconds": 0,
+          "attachment_search_early_successes": 0,
+          "attachment_search_probes": 0,
+          "attachment_search_rounds": 0,
+          "blocked_passages": [],
+          "cancelled": false,
+          "candidate_rejections": 0,
+          "compact_search_attempts": 0,
+          "compact_search_expansions": 0,
+          "compact_search_fallbacks": 0,
+          "compact_search_successes": 0,
+          "complete": false,
+          "completed_transactions": 114,
+          "component_connections": 0,
+          "coupled_component_victims_accepted": 0,
+          "coupled_component_victims_attempted": 0,
+          "coupled_expansion_budget_exhaustions": 0,
+          "coupled_victim_exchanges_accepted": 0,
+          "coupled_victim_exchanges_attempted": 0,
+          "displacement_accepted": 0,
+          "displacement_attempts": 0,
+          "displacement_budget_exhausted": 0,
+          "displacement_moved_tracks": 0,
+          "displacement_moved_vias": 0,
+          "displacement_reconstruction_rejections": 0,
+          "displacement_search_expansions": 0,
+          "displacement_search_failures": 0,
+          "displacement_shove_rejections": 0,
+          "displacement_validation_rejections": 0,
+          "domain_build_microseconds": 0,
+          "duplicate_rejected_assemblies": 0,
+          "edge_validation_microseconds": 0,
+          "exact_goal_validation_microseconds": 0,
+          "exchange_rollback_evidence": [],
+          "exchange_rollbacks": 0,
+          "expansions": 0,
+          "goal_rejections": 0,
+          "joint_avbd_invocations": 0,
+          "joint_budget_exhausted": 0,
+          "joint_exact_rejections": 0,
+          "joint_group_accepted": 0,
+          "joint_group_attempts": 0,
+          "joint_passage_candidates": 0,
+          "joint_pns_attempts": 0,
+          "joint_search_expansions": 0,
+          "joint_xpbd_invocations": 0,
+          "missing_connections": 3,
+          "missing_indices": [
+            44,
+            91,
+            115
+          ],
+          "outward_attachment_probes": 0,
+          "outward_attachments": 0,
+          "peak_via_history_nodes": 0,
+          "physical_open_connections": 18,
+          "physical_unrouted_nets": 7,
+          "published_tracks": 1224,
+          "published_vias": 54,
+          "request_count": 117,
+          "request_evidence": [],
+          "retained_paths": 114,
+          "routed_connections": 114,
+          "satisfied_connections": 114,
+          "satisfied_indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+            33,
+            34,
+            35,
+            36,
+            37,
+            38,
+            39,
+            40,
+            41,
+            42,
+            43,
+            45,
+            46,
+            47,
+            48,
+            49,
+            50,
+            51,
+            52,
+            53,
+            54,
+            55,
+            56,
+            57,
+            58,
+            59,
+            60,
+            61,
+            62,
+            63,
+            64,
+            65,
+            66,
+            67,
+            68,
+            69,
+            70,
+            71,
+            72,
+            73,
+            74,
+            75,
+            76,
+            77,
+            78,
+            79,
+            80,
+            81,
+            82,
+            83,
+            84,
+            85,
+            86,
+            87,
+            88,
+            89,
+            90,
+            92,
+            93,
+            94,
+            95,
+            96,
+            97,
+            98,
+            99,
+            100,
+            101,
+            102,
+            103,
+            104,
+            105,
+            106,
+            107,
+            108,
+            109,
+            110,
+            111,
+            112,
+            113,
+            114,
+            116
+          ],
+          "search_microseconds": 0,
+          "searched_connections": 0,
+          "source_attachments": 0,
+          "survivor_tracks_preserved": 0,
+          "survivor_vias_preserved": 0,
+          "target_attachments": 0,
+          "via_history_budget_exhaustions": 0,
+          "victim_exchanges_accepted": 0,
+          "victim_exchanges_attempted": 0
+        },
+        "phases": [
+          {
+            "action": "global",
+            "elapsed_microseconds": 48541105,
+            "work_units": 431963,
+            "accepted": true,
+            "diagnostic": "split global checkpoint"
+          },
+          {
+            "action": "copper-scaffold",
+            "elapsed_microseconds": 81959266,
+            "work_units": 5734392,
+            "accepted": true,
+            "diagnostic": "some requested connections have no bounded legal scaffold; missing kicad-net-13:0; missing kicad-net-3:1; missing kicad-net-3:2; missing kicad-net-3:4; missing kicad-net-61:3; missing kicad-net-8:0; scaffold requests=117, prior_requests=0, satisfied=111, gained=111, domain=reconstructed"
+          },
+          {
+            "action": "copper-scaffold",
+            "elapsed_microseconds": 28566924,
+            "work_units": 1015556,
+            "accepted": true,
+            "diagnostic": "some requested connections have no bounded legal scaffold; missing kicad-net-13:0; missing kicad-net-3:1; missing kicad-net-8:0; scaffold requests=117, prior_requests=117, satisfied=114, gained=114, domain=reconstructed"
+          },
+          {
+            "action": "copper-scaffold",
+            "elapsed_microseconds": 28349125,
+            "work_units": 1009642,
+            "accepted": false,
+            "diagnostic": "some requested connections have no bounded legal scaffold; missing kicad-net-13:0; missing kicad-net-3:1; missing kicad-net-8:0; scaffold requests=117, prior_requests=117, satisfied=114, gained=0, domain=compatible"
+          },
+          {
+            "action": "regional",
+            "elapsed_microseconds": 8341991,
+            "work_units": 7350089,
+            "accepted": false,
+            "diagnostic": "some requested connections have no bounded legal scaffold; missing kicad-net-13:0; missing kicad-net-3:1; missing kicad-net-8:0; scaffold requests=117, prior_requests=117, satisfied=114, gained=0, domain=compatible"
+          },
+          {
+            "action": "usped",
+            "elapsed_microseconds": 47982151,
+            "work_units": 35429,
+            "accepted": true,
+            "diagnostic": "split global checkpoint"
+          }
+        ]
+      },
+      "kicad_drc": [],
+      "final_copper_files": [],
+      "peak_rss_kib": 1289060,
+      "harness_exit": 0
+    }
+  },
+  "decision": "keep telemetry; routing outcome unchanged from Round21",
+  "lower_tier_validation": "Round21 algorithm unchanged; telemetry-only change tested with focused engine test",
+  "verification": {
+    "build_command": "ninja -C build/release flux-cli flux_routing_engine_experiment_tests",
+    "build_status": "PASS",
+    "build_log": "reports/validation/exchange-evidence-round22-20261012/build.log",
+    "focused_command": "ctest --test-dir build/release -j1 --output-on-failure -R '^flux_routing_engine_experiment_tests$'",
+    "focused_status": "PASS",
+    "focused_passed": 1,
+    "focused_failed": 0,
+    "focused_log": "reports/validation/exchange-evidence-round22-20261012/focused.log",
+    "noop_command": "ninja -C build/release flux-cli",
+    "noop_status": "PASS",
+    "noop_log": "reports/validation/exchange-evidence-round22-20261012/noop-build.log",
+    "repair_replay": "NOT RUN per instruction",
+    "latest_build_status": "PASS",
+    "latest_build_log": "reports/validation/exchange-evidence-round22-20261012/build-rerun.log",
+    "latest_focused_status": "PASS",
+    "latest_focused_passed": 1,
+    "latest_focused_failed": 0,
+    "latest_focused_log": "reports/validation/exchange-evidence-round22-20261012/focused-rerun.log",
+    "latest_noop_status": "PASS",
+    "latest_noop_log": "reports/validation/exchange-evidence-round22-20261012/noop-build-rerun.log",
+    "telemetry_correction": "victim identity order preserved; blocker sets sorted"
+  },
+  "artifacts": "reports/validation/exchange-evidence-round22-20261012",
+  "replay": {
+    "source": {
+      "generated_copper": "generated-copper:latest",
+      "target_indices": [
+        11,
+        19,
+        43,
+        44,
+        45,
+        91,
+        115
+      ]
+    },
+    "baseline_exact_drc": {
+      "count": 6,
+      "violations": [
+        {
+          "code": "pad_clearance",
+          "kind": 5,
+          "object_ids": [
+            "8522c2c5-ca6c-4da1-8f4f-90ac691da2a4",
+            "bb01a994-0623-4156-a92c-bfac14b38f00"
+          ]
+        },
+        {
+          "code": "pad_clearance",
+          "kind": 5,
+          "object_ids": [
+            "f92bbfaf-c546-44d9-8050-7419596a2e98",
+            "4e59a9de-5f12-489e-b35b-d2cb3b958b2d"
+          ]
+        },
+        {
+          "code": "pad_clearance",
+          "kind": 5,
+          "object_ids": [
+            "0fb22c1b-3c01-4b38-a5a8-3e1967c2f64c",
+            "0b8e7ced-0282-4965-b9ea-de4a21f5fb5c"
+          ]
+        },
+        {
+          "code": "pad_clearance",
+          "kind": 5,
+          "object_ids": [
+            "f46edc79-7aa7-4ada-869e-c70a2c7e8470",
+            "2f22251c-da13-4c14-8d57-e7c260e99d83"
+          ]
+        },
+        {
+          "code": "pad_clearance",
+          "kind": 5,
+          "object_ids": [
+            "25a699bd-7a00-4eeb-965c-582db9192b8c",
+            "cd44ddd7-7fc6-433b-b21b-e71771a0982a"
+          ]
+        },
+        {
+          "code": "pad_clearance",
+          "kind": 5,
+          "object_ids": [
+            "bc5edf5c-3f4c-4ac0-ab18-0093ab96ea4f",
+            "020eaed4-b827-4449-a2db-6de578612b22"
+          ]
+        }
+      ]
+    },
+    "outcomes": [
+      {
+        "scenario": "incoming-91-victims-43",
+        "incoming": 91,
+        "victims": [
+          43
+        ],
+        "complete": false,
+        "satisfied_local_indices": [
+          0
+        ],
+        "missing_local_indices": [
+          1
+        ],
+        "runtime_ms": 603,
+        "expansions": 1988,
+        "compact_expansions": 1988,
+        "exact_drc_violations": 6,
+        "new_exact_drc_violations": [],
+        "whole_board_open_connections": 17,
+        "whole_board_unrouted_nets": 8,
+        "requests": [
+          {
+            "index": 91,
+            "termination": "search_succeeded",
+            "blockers": [],
+            "attachments": {
+              "source_component_anchors": 5,
+              "target_component_anchors": 5,
+              "source_legal_attachments": 21,
+              "target_legal_attachments": 125
+            }
+          },
+          {
+            "index": 43,
+            "termination": "attachment_exhausted",
+            "blockers": [
+              "5cd9fbe6-c198-4332-8d94-dfa4d664d9f2",
+              "8534ec78-7b91-484f-8d46-ac4b54154f27",
+              "__flux-copper-scaffold-0-track-0_",
+              "__flux-copper-scaffold-0-track-1_",
+              "__flux-copper-scaffold-0-track-2_",
+              "__flux-copper-scaffold-0-track-3_",
+              "__flux-copper-scaffold-11-track-2",
+              "__flux-copper-scaffold-19-track-12",
+              "__flux-copper-scaffold-19-track-13",
+              "c1ed7ffb-1af2-4734-98a6-e65abbaec994",
+              "e476585b-6f5d-412a-9fa9-e7a9aa22cb59",
+              "e7e32d03-6c54-4581-92bc-7d75b1332c25",
+              "efc0a0ce-22bc-47e6-87f8-9e9364e8863d"
+            ],
+            "attachments": {
+              "source_component_anchors": 10,
+              "target_component_anchors": 5,
+              "source_legal_attachments": 128,
+              "target_legal_attachments": 0
+            }
+          }
+        ],
+        "incoming_blocker_geometry": [
+          {
+            "id": "__flux-copper-scaffold-0-track-0_",
+            "kind": "track",
+            "net": "kicad-net-3",
+            "start": {
+              "x_nm": 122750000,
+              "y_nm": 113375000
+            },
+            "end": {
+              "x_nm": 122750000,
+              "y_nm": 113889383
+            },
+            "layers": [
+              "F.Cu"
+            ]
+          },
+          {
+            "id": "__flux-copper-scaffold-0-track-1_",
+            "kind": "track",
+            "net": "kicad-net-3",
+            "start": {
+              "x_nm": 122750000,
+              "y_nm": 113889383
+            },
+            "end": {
+              "x_nm": 122900000,
+              "y_nm": 114000000
+            },
+            "layers": [
+              "F.Cu"
+            ]
+          },
+          {
+            "id": "__flux-copper-scaffold-0-track-2_",
+            "kind": "track",
+            "net": "kicad-net-3",
+            "start": {
+              "x_nm": 122900000,
+              "y_nm": 114000000
+            },
+            "end": {
+              "x_nm": 123100000,
+              "y_nm": 114000000
+            },
+            "layers": [
+              "F.Cu"
+            ]
+          },
+          {
+            "id": "__flux-copper-scaffold-0-track-3_",
+            "kind": "track",
+            "net": "kicad-net-3",
+            "start": {
+              "x_nm": 123100000,
+              "y_nm": 114000000
+            },
+            "end": {
+              "x_nm": 123700000,
+              "y_nm": 114600000
+            },
+            "layers": [
+              "F.Cu"
+            ]
+          }
+        ]
+      },
+      {
+        "scenario": "incoming-44-victims-43-45",
+        "incoming": 44,
+        "victims": [
+          43,
+          45
+        ],
+        "complete": false,
+        "satisfied_local_indices": [
+          0
+        ],
+        "missing_local_indices": [
+          1,
+          2
+        ],
+        "runtime_ms": 400,
+        "expansions": 3110,
+        "compact_expansions": 3110,
+        "exact_drc_violations": 6,
+        "new_exact_drc_violations": [],
+        "whole_board_open_connections": 19,
+        "whole_board_unrouted_nets": 8,
+        "requests": [
+          {
+            "index": 44,
+            "termination": "search_succeeded",
+            "blockers": [],
+            "attachments": {
+              "source_component_anchors": 10,
+              "target_component_anchors": 5,
+              "source_legal_attachments": 128,
+              "target_legal_attachments": 21
+            }
+          },
+          {
+            "index": 43,
+            "termination": "attachment_exhausted",
+            "blockers": [
+              "5cd9fbe6-c198-4332-8d94-dfa4d664d9f2",
+              "8534ec78-7b91-484f-8d46-ac4b54154f27",
+              "__flux-copper-scaffold-0-track-6_",
+              "__flux-copper-scaffold-0-via-4",
+              "__flux-copper-scaffold-11-track-2",
+              "__flux-copper-scaffold-19-track-12",
+              "__flux-copper-scaffold-19-track-13",
+              "c1ed7ffb-1af2-4734-98a6-e65abbaec994",
+              "e476585b-6f5d-412a-9fa9-e7a9aa22cb59",
+              "e7e32d03-6c54-4581-92bc-7d75b1332c25",
+              "efc0a0ce-22bc-47e6-87f8-9e9364e8863d"
+            ],
+            "attachments": {
+              "source_component_anchors": 10,
+              "target_component_anchors": 5,
+              "source_legal_attachments": 128,
+              "target_legal_attachments": 0
+            }
+          },
+          {
+            "index": 45,
+            "termination": "attachment_exhausted",
+            "blockers": [
+              "0c8a4b81-ea09-4637-914c-5ca94a2805d8",
+              "36800ebe-5cd5-4067-a4cd-15a6c616124f",
+              "5793efbb-c711-4f04-8217-5bf894a1577e",
+              "5cd9fbe6-c198-4332-8d94-dfa4d664d9f2",
+              "8534ec78-7b91-484f-8d46-ac4b54154f27",
+              "__flux-copper-scaffold-0-track-6_",
+              "__flux-copper-scaffold-0-via-4",
+              "__flux-copper-scaffold-11-track-2",
+              "__flux-copper-scaffold-46-track-12",
+              "__flux-copper-scaffold-54-track-0",
+              "c1ed7ffb-1af2-4734-98a6-e65abbaec994"
+            ],
+            "attachments": {
+              "source_component_anchors": 10,
+              "target_component_anchors": 5,
+              "source_legal_attachments": 128,
+              "target_legal_attachments": 0
+            }
+          }
+        ],
+        "incoming_blocker_geometry": [
+          {
+            "id": "__flux-copper-scaffold-0-track-6_",
+            "kind": "track",
+            "net": "kicad-net-13",
+            "start": {
+              "x_nm": 123750000,
+              "y_nm": 113889383
+            },
+            "end": {
+              "x_nm": 123750000,
+              "y_nm": 113375000
+            },
+            "layers": [
+              "F.Cu"
+            ]
+          },
+          {
+            "id": "__flux-copper-scaffold-0-via-4",
+            "kind": "via",
+            "net": "kicad-net-13",
+            "start": {
+              "x_nm": 123700000,
+              "y_nm": 113900000
+            },
+            "layers": [
+              "F.Cu",
+              "B.Cu"
+            ]
+          }
+        ]
+      },
+      {
+        "scenario": "incoming-44-victims-45-43",
+        "incoming": 44,
+        "victims": [
+          45,
+          43
+        ],
+        "complete": false,
+        "satisfied_local_indices": [
+          0
+        ],
+        "missing_local_indices": [
+          1,
+          2
+        ],
+        "runtime_ms": 398,
+        "expansions": 3110,
+        "compact_expansions": 3110,
+        "exact_drc_violations": 6,
+        "new_exact_drc_violations": [],
+        "whole_board_open_connections": 19,
+        "whole_board_unrouted_nets": 8,
+        "requests": [
+          {
+            "index": 44,
+            "termination": "search_succeeded",
+            "blockers": [],
+            "attachments": {
+              "source_component_anchors": 10,
+              "target_component_anchors": 5,
+              "source_legal_attachments": 128,
+              "target_legal_attachments": 21
+            }
+          },
+          {
+            "index": 45,
+            "termination": "attachment_exhausted",
+            "blockers": [
+              "0c8a4b81-ea09-4637-914c-5ca94a2805d8",
+              "36800ebe-5cd5-4067-a4cd-15a6c616124f",
+              "5793efbb-c711-4f04-8217-5bf894a1577e",
+              "5cd9fbe6-c198-4332-8d94-dfa4d664d9f2",
+              "8534ec78-7b91-484f-8d46-ac4b54154f27",
+              "__flux-copper-scaffold-0-track-6_",
+              "__flux-copper-scaffold-0-via-4",
+              "__flux-copper-scaffold-11-track-2",
+              "__flux-copper-scaffold-46-track-12",
+              "__flux-copper-scaffold-54-track-0",
+              "c1ed7ffb-1af2-4734-98a6-e65abbaec994"
+            ],
+            "attachments": {
+              "source_component_anchors": 10,
+              "target_component_anchors": 5,
+              "source_legal_attachments": 128,
+              "target_legal_attachments": 0
+            }
+          },
+          {
+            "index": 43,
+            "termination": "attachment_exhausted",
+            "blockers": [
+              "5cd9fbe6-c198-4332-8d94-dfa4d664d9f2",
+              "8534ec78-7b91-484f-8d46-ac4b54154f27",
+              "__flux-copper-scaffold-0-track-6_",
+              "__flux-copper-scaffold-0-via-4",
+              "__flux-copper-scaffold-11-track-2",
+              "__flux-copper-scaffold-19-track-12",
+              "__flux-copper-scaffold-19-track-13",
+              "c1ed7ffb-1af2-4734-98a6-e65abbaec994",
+              "e476585b-6f5d-412a-9fa9-e7a9aa22cb59",
+              "e7e32d03-6c54-4581-92bc-7d75b1332c25",
+              "efc0a0ce-22bc-47e6-87f8-9e9364e8863d"
+            ],
+            "attachments": {
+              "source_component_anchors": 10,
+              "target_component_anchors": 5,
+              "source_legal_attachments": 128,
+              "target_legal_attachments": 0
+            }
+          }
+        ],
+        "incoming_blocker_geometry": [
+          {
+            "id": "__flux-copper-scaffold-0-track-6_",
+            "kind": "track",
+            "net": "kicad-net-13",
+            "start": {
+              "x_nm": 123750000,
+              "y_nm": 113889383
+            },
+            "end": {
+              "x_nm": 123750000,
+              "y_nm": 113375000
+            },
+            "layers": [
+              "F.Cu"
+            ]
+          },
+          {
+            "id": "__flux-copper-scaffold-0-via-4",
+            "kind": "via",
+            "net": "kicad-net-13",
+            "start": {
+              "x_nm": 123700000,
+              "y_nm": 113900000
+            },
+            "layers": [
+              "F.Cu",
+              "B.Cu"
+            ]
+          }
+        ]
+      },
+      {
+        "scenario": "incoming-44-victims-11-19",
+        "incoming": 44,
+        "victims": [
+          11,
+          19
+        ],
+        "complete": false,
+        "satisfied_local_indices": [
+          0,
+          1
+        ],
+        "missing_local_indices": [
+          2
+        ],
+        "runtime_ms": 958,
+        "expansions": 4287,
+        "compact_expansions": 4287,
+        "exact_drc_violations": 6,
+        "new_exact_drc_violations": [],
+        "whole_board_open_connections": 18,
+        "whole_board_unrouted_nets": 6,
+        "requests": [
+          {
+            "index": 44,
+            "termination": "search_succeeded",
+            "blockers": [],
+            "attachments": {
+              "source_component_anchors": 10,
+              "target_component_anchors": 5,
+              "source_legal_attachments": 128,
+              "target_legal_attachments": 4
+            }
+          },
+          {
+            "index": 11,
+            "termination": "search_succeeded",
+            "blockers": [],
+            "attachments": {
+              "source_component_anchors": 5,
+              "target_component_anchors": 32,
+              "source_legal_attachments": 21,
+              "target_legal_attachments": 128
+            }
+          },
+          {
+            "index": 19,
+            "termination": "attachment_exhausted",
+            "blockers": [
+              "36800ebe-5cd5-4067-a4cd-15a6c616124f",
+              "__flux-copper-scaffold-0-track-10_",
+              "__flux-copper-scaffold-0-track-11_",
+              "__flux-copper-scaffold-0-track-12_",
+              "__flux-copper-scaffold-0-track-8_",
+              "__flux-copper-scaffold-0-track-9_",
+              "__flux-copper-scaffold-46-track-2",
+              "__flux-copper-scaffold-95-track-25",
+              "__flux-copper-scaffold-95-track-26",
+              "c1ed7ffb-1af2-4734-98a6-e65abbaec994"
+            ],
+            "attachments": {
+              "source_component_anchors": 5,
+              "target_component_anchors": 1,
+              "source_legal_attachments": 120,
+              "target_legal_attachments": 0
+            }
+          }
+        ],
+        "incoming_blocker_geometry": [
+          {
+            "id": "__flux-copper-scaffold-0-track-8_",
+            "kind": "track",
+            "net": "kicad-net-13",
+            "start": {
+              "x_nm": 121300000,
+              "y_nm": 111500000
+            },
+            "end": {
+              "x_nm": 123400000,
+              "y_nm": 111500000
+            },
+            "layers": [
+              "F.Cu"
+            ]
+          },
+          {
+            "id": "__flux-copper-scaffold-0-track-9_",
+            "kind": "track",
+            "net": "kicad-net-13",
+            "start": {
+              "x_nm": 123400000,
+              "y_nm": 111500000
+            },
+            "end": {
+              "x_nm": 123500000,
+              "y_nm": 111600000
+            },
+            "layers": [
+              "F.Cu"
+            ]
+          },
+          {
+            "id": "__flux-copper-scaffold-0-track-10_",
+            "kind": "track",
+            "net": "kicad-net-13",
+            "start": {
+              "x_nm": 123500000,
+              "y_nm": 111600000
+            },
+            "end": {
+              "x_nm": 123600000,
+              "y_nm": 111600000
+            },
+            "layers": [
+              "F.Cu"
+            ]
+          },
+          {
+            "id": "__flux-copper-scaffold-0-track-11_",
+            "kind": "track",
+            "net": "kicad-net-13",
+            "start": {
+              "x_nm": 123600000,
+              "y_nm": 111600000
+            },
+            "end": {
+              "x_nm": 123700000,
+              "y_nm": 111700000
+            },
+            "layers": [
+              "F.Cu"
+            ]
+          },
+          {
+            "id": "__flux-copper-scaffold-0-track-12_",
+            "kind": "track",
+            "net": "kicad-net-13",
+            "start": {
+              "x_nm": 123700000,
+              "y_nm": 111700000
+            },
+            "end": {
+              "x_nm": 123750000,
+              "y_nm": 111975000
+            },
+            "layers": [
+              "F.Cu"
+            ]
+          }
+        ]
+      },
+      {
+        "scenario": "incoming-44-victims-19-11",
+        "incoming": 44,
+        "victims": [
+          19,
+          11
+        ],
+        "complete": false,
+        "satisfied_local_indices": [
+          0,
+          2
+        ],
+        "missing_local_indices": [
+          1
+        ],
+        "runtime_ms": 944,
+        "expansions": 4287,
+        "compact_expansions": 4287,
+        "exact_drc_violations": 6,
+        "new_exact_drc_violations": [],
+        "whole_board_open_connections": 18,
+        "whole_board_unrouted_nets": 6,
+        "requests": [
+          {
+            "index": 44,
+            "termination": "search_succeeded",
+            "blockers": [],
+            "attachments": {
+              "source_component_anchors": 10,
+              "target_component_anchors": 5,
+              "source_legal_attachments": 128,
+              "target_legal_attachments": 4
+            }
+          },
+          {
+            "index": 19,
+            "termination": "attachment_exhausted",
+            "blockers": [
+              "36800ebe-5cd5-4067-a4cd-15a6c616124f",
+              "__flux-copper-scaffold-0-track-10_",
+              "__flux-copper-scaffold-0-track-11_",
+              "__flux-copper-scaffold-0-track-12_",
+              "__flux-copper-scaffold-0-track-8_",
+              "__flux-copper-scaffold-0-track-9_",
+              "__flux-copper-scaffold-46-track-2",
+              "__flux-copper-scaffold-95-track-25",
+              "__flux-copper-scaffold-95-track-26",
+              "c1ed7ffb-1af2-4734-98a6-e65abbaec994"
+            ],
+            "attachments": {
+              "source_component_anchors": 5,
+              "target_component_anchors": 1,
+              "source_legal_attachments": 120,
+              "target_legal_attachments": 0
+            }
+          },
+          {
+            "index": 11,
+            "termination": "search_succeeded",
+            "blockers": [],
+            "attachments": {
+              "source_component_anchors": 5,
+              "target_component_anchors": 32,
+              "source_legal_attachments": 21,
+              "target_legal_attachments": 128
+            }
+          }
+        ],
+        "incoming_blocker_geometry": [
+          {
+            "id": "__flux-copper-scaffold-0-track-8_",
+            "kind": "track",
+            "net": "kicad-net-13",
+            "start": {
+              "x_nm": 121300000,
+              "y_nm": 111500000
+            },
+            "end": {
+              "x_nm": 123400000,
+              "y_nm": 111500000
+            },
+            "layers": [
+              "F.Cu"
+            ]
+          },
+          {
+            "id": "__flux-copper-scaffold-0-track-9_",
+            "kind": "track",
+            "net": "kicad-net-13",
+            "start": {
+              "x_nm": 123400000,
+              "y_nm": 111500000
+            },
+            "end": {
+              "x_nm": 123500000,
+              "y_nm": 111600000
+            },
+            "layers": [
+              "F.Cu"
+            ]
+          },
+          {
+            "id": "__flux-copper-scaffold-0-track-10_",
+            "kind": "track",
+            "net": "kicad-net-13",
+            "start": {
+              "x_nm": 123500000,
+              "y_nm": 111600000
+            },
+            "end": {
+              "x_nm": 123600000,
+              "y_nm": 111600000
+            },
+            "layers": [
+              "F.Cu"
+            ]
+          },
+          {
+            "id": "__flux-copper-scaffold-0-track-11_",
+            "kind": "track",
+            "net": "kicad-net-13",
+            "start": {
+              "x_nm": 123600000,
+              "y_nm": 111600000
+            },
+            "end": {
+              "x_nm": 123700000,
+              "y_nm": 111700000
+            },
+            "layers": [
+              "F.Cu"
+            ]
+          },
+          {
+            "id": "__flux-copper-scaffold-0-track-12_",
+            "kind": "track",
+            "net": "kicad-net-13",
+            "start": {
+              "x_nm": 123700000,
+              "y_nm": 111700000
+            },
+            "end": {
+              "x_nm": 123750000,
+              "y_nm": 111975000
+            },
+            "layers": [
+              "F.Cu"
+            ]
+          }
+        ]
+      },
+      {
+        "scenario": "incoming-91-victims-11-19",
+        "incoming": 91,
+        "victims": [
+          11,
+          19
+        ],
+        "complete": false,
+        "satisfied_local_indices": [
+          0,
+          1
+        ],
+        "missing_local_indices": [
+          2
+        ],
+        "runtime_ms": 713,
+        "expansions": 816,
+        "compact_expansions": 816,
+        "exact_drc_violations": 6,
+        "new_exact_drc_violations": [],
+        "whole_board_open_connections": 17,
+        "whole_board_unrouted_nets": 6,
+        "requests": [
+          {
+            "index": 91,
+            "termination": "search_succeeded",
+            "blockers": [],
+            "attachments": {
+              "source_component_anchors": 5,
+              "target_component_anchors": 5,
+              "source_legal_attachments": 4,
+              "target_legal_attachments": 125
+            }
+          },
+          {
+            "index": 11,
+            "termination": "search_succeeded",
+            "blockers": [],
+            "attachments": {
+              "source_component_anchors": 5,
+              "target_component_anchors": 32,
+              "source_legal_attachments": 4,
+              "target_legal_attachments": 128
+            }
+          },
+          {
+            "index": 19,
+            "termination": "attachment_exhausted",
+            "blockers": [
+              "36800ebe-5cd5-4067-a4cd-15a6c616124f",
+              "__flux-copper-scaffold-0-track-1_",
+              "__flux-copper-scaffold-0-track-2_",
+              "__flux-copper-scaffold-46-track-2",
+              "__flux-copper-scaffold-95-track-25",
+              "__flux-copper-scaffold-95-track-26",
+              "c1ed7ffb-1af2-4734-98a6-e65abbaec994"
+            ],
+            "attachments": {
+              "source_component_anchors": 5,
+              "target_component_anchors": 1,
+              "source_legal_attachments": 120,
+              "target_legal_attachments": 0
+            }
+          }
+        ],
+        "incoming_blocker_geometry": [
+          {
+            "id": "__flux-copper-scaffold-0-track-1_",
+            "kind": "track",
+            "net": "kicad-net-3",
+            "start": {
+              "x_nm": 122800000,
+              "y_nm": 111700000
+            },
+            "end": {
+              "x_nm": 123600000,
+              "y_nm": 110900000
+            },
+            "layers": [
+              "F.Cu"
+            ]
+          },
+          {
+            "id": "__flux-copper-scaffold-0-track-2_",
+            "kind": "track",
+            "net": "kicad-net-3",
+            "start": {
+              "x_nm": 123600000,
+              "y_nm": 110900000
+            },
+            "end": {
+              "x_nm": 124300000,
+              "y_nm": 110900000
+            },
+            "layers": [
+              "F.Cu"
+            ]
+          }
+        ]
+      },
+      {
+        "scenario": "incoming-91-victims-19-11",
+        "incoming": 91,
+        "victims": [
+          19,
+          11
+        ],
+        "complete": false,
+        "satisfied_local_indices": [
+          0,
+          2
+        ],
+        "missing_local_indices": [
+          1
+        ],
+        "runtime_ms": 704,
+        "expansions": 816,
+        "compact_expansions": 816,
+        "exact_drc_violations": 6,
+        "new_exact_drc_violations": [],
+        "whole_board_open_connections": 17,
+        "whole_board_unrouted_nets": 6,
+        "requests": [
+          {
+            "index": 91,
+            "termination": "search_succeeded",
+            "blockers": [],
+            "attachments": {
+              "source_component_anchors": 5,
+              "target_component_anchors": 5,
+              "source_legal_attachments": 4,
+              "target_legal_attachments": 125
+            }
+          },
+          {
+            "index": 19,
+            "termination": "attachment_exhausted",
+            "blockers": [
+              "36800ebe-5cd5-4067-a4cd-15a6c616124f",
+              "__flux-copper-scaffold-0-track-1_",
+              "__flux-copper-scaffold-0-track-2_",
+              "__flux-copper-scaffold-46-track-2",
+              "__flux-copper-scaffold-95-track-25",
+              "__flux-copper-scaffold-95-track-26",
+              "c1ed7ffb-1af2-4734-98a6-e65abbaec994"
+            ],
+            "attachments": {
+              "source_component_anchors": 5,
+              "target_component_anchors": 1,
+              "source_legal_attachments": 120,
+              "target_legal_attachments": 0
+            }
+          },
+          {
+            "index": 11,
+            "termination": "search_succeeded",
+            "blockers": [],
+            "attachments": {
+              "source_component_anchors": 5,
+              "target_component_anchors": 32,
+              "source_legal_attachments": 4,
+              "target_legal_attachments": 128
+            }
+          }
+        ],
+        "incoming_blocker_geometry": [
+          {
+            "id": "__flux-copper-scaffold-0-track-1_",
+            "kind": "track",
+            "net": "kicad-net-3",
+            "start": {
+              "x_nm": 122800000,
+              "y_nm": 111700000
+            },
+            "end": {
+              "x_nm": 123600000,
+              "y_nm": 110900000
+            },
+            "layers": [
+              "F.Cu"
+            ]
+          },
+          {
+            "id": "__flux-copper-scaffold-0-track-2_",
+            "kind": "track",
+            "net": "kicad-net-3",
+            "start": {
+              "x_nm": 123600000,
+              "y_nm": 110900000
+            },
+            "end": {
+              "x_nm": 124300000,
+              "y_nm": 110900000
+            },
+            "layers": [
+              "F.Cu"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

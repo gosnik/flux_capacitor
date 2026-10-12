@@ -1,0 +1,23 @@
+{
+  "build_command": "ninja -C build/release flux-cli flux_routing_engine_experiment_tests",
+  "build_status": "PASS",
+  "build_log": "reports/validation/exchange-evidence-round22-20261012/build.log",
+  "focused_command": "ctest --test-dir build/release -j1 --output-on-failure -R '^flux_routing_engine_experiment_tests$'",
+  "focused_status": "PASS",
+  "focused_passed": 1,
+  "focused_failed": 0,
+  "focused_log": "reports/validation/exchange-evidence-round22-20261012/focused.log",
+  "noop_command": "ninja -C build/release flux-cli",
+  "noop_status": "PASS",
+  "noop_log": "reports/validation/exchange-evidence-round22-20261012/noop-build.log",
+  "repair_replay": "NOT RUN per instruction",
+  "latest_build_status": "PASS",
+  "latest_build_log": "reports/validation/exchange-evidence-round22-20261012/build-rerun.log",
+  "latest_focused_status": "PASS",
+  "latest_focused_passed": 1,
+  "latest_focused_failed": 0,
+  "latest_focused_log": "reports/validation/exchange-evidence-round22-20261012/focused-rerun.log",
+  "latest_noop_status": "PASS",
+  "latest_noop_log": "reports/validation/exchange-evidence-round22-20261012/noop-build-rerun.log",
+  "telemetry_correction": "victim identity order preserved; blocker sets sorted"
+}

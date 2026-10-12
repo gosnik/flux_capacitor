@@ -653,6 +653,36 @@ void emit_engine_event(RouterTelemetrySink* sink, const char* phase, RoutingEngi
                  "; " + detail;
   static_cast<void>(sink->try_emit(std::move(event)));
 }
+
+// Event detail uses semicolon-delimited fields. Keep evidence values parseable even when an
+// externally supplied identifier contains punctuation, while retaining a deterministic compact
+// representation for diagnostic tools.
+[[nodiscard]] std::string telemetry_evidence_list(std::vector<std::string> values, bool preserve_order = false) {
+  if (!preserve_order) {
+    std::sort(values.begin(), values.end());
+    values.erase(std::unique(values.begin(), values.end()), values.end());
+  }
+  constexpr char hex[] = "0123456789ABCDEF";
+  std::ostringstream out;
+  out << values.size() << ':';
+  for (const auto& value : values) {
+    std::string escaped;
+    escaped.reserve(value.size());
+    for (const auto character : value) {
+      const auto byte = static_cast<unsigned char>(character);
+      if ((byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') ||
+          (byte >= '0' && byte <= '9') || byte == '-' || byte == '_' || byte == '.')
+        escaped.push_back(character);
+      else {
+        escaped.push_back('%');
+        escaped.push_back(hex[byte >> 4U]);
+        escaped.push_back(hex[byte & 0x0fU]);
+      }
+    }
+    out << escaped.size() << ':' << escaped;
+  }
+  return std::move(out).str();
+}
 } // namespace
 
 std::pair<std::vector<GlobalRoutePath>, std::vector<ScaffoldTerminalRebind>>
@@ -2053,6 +2083,18 @@ RoutingEngineStepResult RoutingEngine::advance(RoutingEngineStepBudget budget,
         if (telemetry) {
           const auto& result = *tx->scaffold;
           const auto& c = result.counters;
+          const auto object_list = [](const std::vector<ObjectId>& objects) {
+            std::vector<std::string> values;
+            values.reserve(objects.size());
+            for (const auto& object : objects) values.push_back(object.value());
+            return telemetry_evidence_list(std::move(values));
+          };
+          const auto net_list = [](const std::vector<NetId>& nets) {
+            std::vector<std::string> values;
+            values.reserve(nets.size());
+            for (const auto& net : nets) values.push_back(net.value());
+            return telemetry_evidence_list(std::move(values));
+          };
           emit_engine_event(telemetry, "scaffold-search-result", action, tx->ordinal, c.expansions,
               "satisfied=" + std::to_string(result.satisfied_indices.size()) +
               "; missing=" + std::to_string(result.missing_indices.size()) +
@@ -2061,7 +2103,17 @@ RoutingEngineStepResult RoutingEngine::advance(RoutingEngineStepBudget budget,
               "; attachment_us=" + std::to_string(c.attachment_generation_microseconds) +
               "; outward_probes=" + std::to_string(c.outward_attachment_probes) +
               "; outward_attachments=" + std::to_string(c.outward_attachments) +
-              "; goal_rejections=" + std::to_string(c.goal_rejections));
+              "; goal_rejections=" + std::to_string(c.goal_rejections) +
+              "; victim_attempts=" + std::to_string(c.victim_exchanges_attempted) +
+              "; victim_accepted=" + std::to_string(c.victim_exchanges_accepted) +
+              "; coupled_attempts=" + std::to_string(c.coupled_victim_exchanges_attempted) +
+              "; coupled_accepted=" + std::to_string(c.coupled_victim_exchanges_accepted) +
+              "; coupled_budget_exhaustions=" + std::to_string(c.coupled_expansion_budget_exhaustions) +
+              "; rollbacks=" + std::to_string(c.exchange_rollbacks) +
+              "; rollback_incoming=" + std::to_string(c.exchange_rollbacks_incoming_unroutable) +
+              "; rollback_victim=" + std::to_string(c.exchange_rollbacks_victim_unroutable) +
+              "; rollback_connectivity=" + std::to_string(c.exchange_rollbacks_connectivity_not_preserved) +
+              "; rollback_cancelled=" + std::to_string(c.exchange_rollbacks_cancelled));
           for (const auto index : result.missing_indices) {
             if (index >= result.request_evidence.size()) continue;
             const auto& evidence = result.request_evidence[index];
@@ -2073,7 +2125,17 @@ RoutingEngineStepResult RoutingEngine::advance(RoutingEngineStepBudget budget,
                 "; target_anchors=" + std::to_string(evidence.target_component_anchors) +
                 "; source_attachments=" + std::to_string(evidence.source_legal_attachments) +
                 "; target_attachments=" + std::to_string(evidence.target_legal_attachments) +
-                "; blocker_objects=" + std::to_string(evidence.blocker_objects.size()));
+                "; blocker_objects=" + std::to_string(evidence.blocker_objects.size()) +
+                "; blocker_ids=" + object_list(evidence.blocker_objects) +
+                "; blocker_nets=" + net_list(evidence.blocker_nets));
+          }
+          for (const auto& rollback : result.exchange_rollbacks) {
+            emit_engine_event(telemetry, "scaffold-exchange-rollback", action, tx->ordinal, 0U,
+                "incoming=" + telemetry_evidence_list({rollback.request_identity}) +
+                "; reason=" + std::string(to_string(rollback.reason)) +
+                "; victims=" + telemetry_evidence_list(rollback.victim_request_identities, true) +
+                "; blocker_ids=" + object_list(rollback.blocker_objects) +
+                "; blocker_nets=" + net_list(rollback.blocker_nets));
           }
         }
         tx->plan = certified_scaffold_plan(*scaffold, *prior, *tx->scaffold,

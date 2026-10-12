@@ -10055,3 +10055,22 @@ KiCad’s [joint representation](https://docs.kicad.org/doxygen/pns__joint_8h_so
 All 11 regression targets pass, including retained-checkpoint replay of the appended demand. Independent review found no material issue after cancellation checks were added through supplemental staging and immediately before commit. Frozen source remained unchanged. Sequential curved telemetry runs preserve byte-identical Tier0/1 copper, both with zero opens and internal/external KiCad DRC: detailed runtime29.948s/107.060s versus29.571s/104.561s.
 
 Tier2 improves114/117→117/118 scaffold requests (one preservation demand appended), remaining request115 only; physical opens15→14. Runtime278.111s versus313.552s Round24/316.035s Round25, peakRSS1210528KiB. First pass accepts one supplemental demand, one transaction rebind and one coupled exchange; later passes retain it. No final curved materialization or external KiCad validation is reached, so Tier2 remains incomplete. Keep the general atomic preservation repair. Next diagnose request115 and why outstanding real pad components do not become actionable residual demands.
+
+## Round27 — Per-net residual connectivity frontier (2026-10-12)
+
+### Failure and hypothesis
+Round26 ends117/118 explicit demands but14 physical opens across5 nets. Current helper and engine both require whole-scaffold completion before deriving residual pad-component obligations. Thus one pending net starves otherwise completed nets of concrete physical work. Admit residuals only for nets whose declared demands are all checked; pending same-net obligations suppress duplicates. Existing domains remain an exact prefix, bounds/physical validation remain unchanged.
+
+### Research and ranking
+[OpenROAD detailed routing](https://openroad.readthedocs.io/en/latest/main/src/drt/README.html) separates pin access, assignment, search/repair and DRC, with net-specific debugging and reroute scheduling. This supports inspecting physical obligations independently of abstract completion; per-net admission is an evidence-driven Flux change, not an algorithm claimed from that source. Prefer this small scheduling correction over enlarging request115 search: current replay has128 source/16 target attachments,50k expansions exhausted in2.330s,0 new DRC; prior50k/200k experiment also failed. Success requires fewer physical opens without lower-tier regression, not simply a larger demand count.
+
+### Results and decision
+All11 regression targets pass, final no-op build and independent review pass. Source manifest unchanged throughout sequential telemetry benchmarks. Tier0 passes51/51, zero opens/internal/external DRC, byte-identical copper,30.432s detailed. Tier1 passes91/91, zero opens/internal/external DRC and unrounded non-junction bends,106.411s detailed; primitive counts unchanged499tracks/125arcs/359Beziers/57vias. Its file ordering changes, but measured geometry signatures match the prior run.
+
+Tier2 improves physical opens14→1, scaffold117/118→130/131,309.399s versus278.111s, peakRSS1274020KiB. Thirteen residual obligations are ultimately appended and completed; net8/request115 remains. Keep the change: the observed mechanism was incomplete-net starvation of physical demand generation. This is not Tier2 completion: no final curved materialization or external final-board promotion.
+
+At the user's explicit request, fresh Tier3 comparison runs on the same frozen build:140.902s, iteration limit,51/148 scaffold demands,97 physical opens, peakRSS559280KiB. No final materialization. KRT matched dimensions gives10 opens onTier2 in14.766s and83 onTier3 in162.172s; both incomplete under independent KiCad validation. Detailed KRT configuration and comparison are recorded separately.
+
+Next hypothesis: remaining /TCK_TXD_A is searched at0.25mm nominal width, while the known-good reference uses0.20mm with one0.60/0.30 via. Legal attachment counts do not prove a reachable free-space corridor, and final-reset via counters cannot exclude via-state growth. Test width feasibility with a controlled offline replay before implementing local width alternatives; do not simply increase global budgets or lower clearances.
+
+Independent post-run provisional scaffold export confirms KiCad unconnected items1/97 onTier2/3 and no clearance/hole violations. Tier2 has21 track_dangling warnings plus41 inherited footprint warnings; Tier3 has only22 footprint/6silk warnings. This is straight scaffold evidence, not final curved certification.

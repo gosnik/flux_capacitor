@@ -1,0 +1,55 @@
+{
+  "helper_compile": "PASS",
+  "helper_command": "c++ -std=c++20 -O2 -Iinclude export_scaffold.cpp build/release/libflux_core.a -lvulkan -lboost_json -lboost_container -lcrypto build/release/libflux_telemetry.a -o export_scaffold",
+  "exports": {
+    "tier2_ft2232h_jtag": "PASS",
+    "tier3_gb_nintendo_power": "PASS"
+  },
+  "kicad_drc": {
+    "tier2_ft2232h_jtag": {
+      "exit": 5,
+      "violations": 62,
+      "unconnected_items": 1,
+      "categories": {
+        "lib_footprint_issues": 41,
+        "track_dangling": 21
+      }
+    },
+    "tier3_gb_nintendo_power": {
+      "exit": 5,
+      "violations": 28,
+      "unconnected_items": 97,
+      "categories": {
+        "silk_overlap": 6,
+        "lib_footprint_issues": 22
+      }
+    }
+  },
+  "flux_inspect_kicad": {
+    "tier2_ft2232h_jtag": {
+      "exit": 0,
+      "open_connections": 1,
+      "tracks": 1322,
+      "vias": 74
+    },
+    "tier3_gb_nintendo_power": {
+      "exit": 0,
+      "open_connections": 97,
+      "tracks": 279,
+      "vias": 20
+    }
+  },
+  "provenance": {
+    "tier2": {
+      "source": "tests/fixtures/routing-corpus/ft2232h_jtag.kicad_pcb",
+      "telemetry": "reports/validation/residual-frontier-round27-20261012/tier2/telemetry/ft2232h_jtag-global.jsonl",
+      "output": "reports/validation/residual-frontier-round27-20261012/tier2/diagnostic-scaffold/ft2232h_jtag.kicad_pcb"
+    },
+    "tier3": {
+      "source": "tests/fixtures/routing-corpus/gb_nintendo_power.kicad_pcb",
+      "telemetry": "reports/validation/residual-frontier-round27-20261012/tier3/telemetry/gb_nintendo_power-global.jsonl",
+      "output": "reports/validation/residual-frontier-round27-20261012/tier3/diagnostic-scaffold/gb_nintendo_power.kicad_pcb"
+    }
+  },
+  "provisional_straight_scaffold": true
+}

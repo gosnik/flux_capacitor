@@ -1,0 +1,12 @@
+{
+  "build": "PASS",
+  "build_command": "cmake --build build/release -j4 --target flux-cli flux_unit_tests flux_copper_transaction_tests flux_span_certificate_tests flux_board_free_space_cache_tests flux_ph_tightening_tests flux_layered_navmesh_tests flux_copper_scaffold_tests flux_scaffold_curve_tests flux_scaffold_collision_tests flux_routing_engine_experiment_tests flux_scaffold_joint_displacement_tests",
+  "tests": "PASS",
+  "test_count": 11,
+  "no_op_build": "PASS",
+  "logs": {
+    "build": "full-build-final.log",
+    "no_op_build": "no-op-build.log",
+    "ctest_prefix": "final-ctest-"
+  }
+}

@@ -93,12 +93,37 @@ std::vector<GlobalRoutePath>
 append_residual_physical_demands(const CopperScaffoldResult& retained,
                                  std::size_t maximum_pad_pair_checks) {
   auto result = retained.requests;
-  if (!retained.complete || !retained.missing_indices.empty()) return result;
+
+  // A partial checkpoint may safely grow only the nets whose declared requests have all been
+  // checked.  Reject malformed status vectors as a whole: they cannot safely scope retained
+  // copper.  A complete result predates explicit satisfied indices, so it retains the legacy
+  // implicit-satisfaction interpretation only when both status vectors are absent.
+  const bool implicit_complete = retained.complete && retained.satisfied_indices.empty() &&
+      retained.missing_indices.empty();
+  std::vector<bool> satisfied(retained.requests.size(), false);
+  std::vector<bool> missing(retained.requests.size(), false);
+  const auto classify = [&](const std::vector<std::size_t>& indices, std::vector<bool>& target,
+                            const std::vector<bool>& other) {
+    for (const auto index : indices) {
+      if (index >= retained.requests.size() || target[index] || other[index]) return false;
+      target[index] = true;
+    }
+    return true;
+  };
+  if (!classify(retained.satisfied_indices, satisfied, missing) ||
+      !classify(retained.missing_indices, missing, satisfied))
+    return result;
 
   std::set<NetId> represented;
   std::map<NetId, std::size_t> next_index;
-  for (const auto& request : result) {
+  std::map<NetId, bool> all_declared_requests_satisfied;
+  std::map<NetId, bool> has_pending_request;
+  for (std::size_t index = 0U; index < result.size(); ++index) {
+    const auto& request = result[index];
     represented.insert(request.net);
+    const auto status = all_declared_requests_satisfied.try_emplace(request.net, true);
+    status.first->second = status.first->second && satisfied[index];
+    has_pending_request[request.net] = has_pending_request[request.net] || missing[index];
     const auto next = request.connection_index == std::numeric_limits<std::size_t>::max()
                           ? request.connection_index
                           : request.connection_index + 1U;
@@ -122,6 +147,8 @@ append_residual_physical_demands(const CopperScaffoldResult& retained,
 
   std::size_t pair_checks = 0U;
   for (const auto& net : represented) {
+    if (has_pending_request[net] || (!implicit_complete && !all_declared_requests_satisfied[net]))
+      continue;
     const auto named = named_nets.find(net);
     if (named == named_nets.end() || named->second.empty()) continue;
     if (next_index[net] == std::numeric_limits<std::size_t>::max()) continue;

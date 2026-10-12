@@ -723,6 +723,63 @@ void residual_demand_pair_budget_is_atomic() {
           "frontier Prim must inspect each component pair only once within its exact allowance");
 }
 
+void partial_residual_physical_demands_are_net_scoped() {
+  auto board = two_pad_board();
+  const NetId completed{"engine-experiment-net"};
+  const NetId pending{"unrelated-pending-net"};
+  const LayerId front{"F.Cu"};
+  board.nets.push_back({pending, "PENDING", 1U});
+  for (std::size_t i = 0; i < 2U; ++i) {
+    auto pad = board.footprints[i];
+    pad.id = ObjectId{"partial-extra-" + std::to_string(i)};
+    pad.pads.front().id = ObjectId{"partial-extra-pad-" + std::to_string(i)};
+    pad.position = mm(i == 0U ? 20 : 80, 60);
+    board.footprints.push_back(std::move(pad));
+  }
+  for (std::size_t i = 0; i < 2U; ++i) {
+    auto pad = board.footprints[i];
+    pad.id = ObjectId{"partial-pending-" + std::to_string(i)};
+    pad.pads.front().id = ObjectId{"partial-pending-pad-" + std::to_string(i)};
+    pad.pads.front().net = pending;
+    pad.position = mm(i == 0U ? 20 : 80, 20);
+    board.footprints.push_back(std::move(pad));
+  }
+  board.tracks = {
+      {ObjectId{"partial-left-tree"}, completed, front, mm(20,40), mm(20,60),
+       Nanometres::from_mm(0.2), false},
+      {ObjectId{"partial-right-tree"}, completed, front, mm(80,40), mm(80,60),
+       Nanometres::from_mm(0.2), false}};
+
+  CopperScaffoldResult retained;
+  retained.copper = board;
+  retained.requests = {
+      {completed, 3U, {{mm(20,40),front},{mm(20,60),front}}},
+      {completed, 8U, {{mm(80,40),front},{mm(80,60),front}}},
+      {pending, 0U, {{mm(20,20),front},{mm(80,20),front}}}};
+  retained.request_count = retained.requests.size();
+  retained.satisfied_indices = {0U, 1U};
+  retained.missing_indices = {2U};
+
+  auto incomplete_status = retained;
+  incomplete_status.complete = true;
+  incomplete_status.satisfied_indices = {0U};
+  incomplete_status.missing_indices.clear();
+  require(append_residual_physical_demands(incomplete_status) == incomplete_status.requests,
+          "a complete flag must not bypass incomplete explicit request classification");
+
+  const auto appended = append_residual_physical_demands(retained);
+  require(appended.size() == 4U && appended[0] == retained.requests[0] &&
+              appended[1] == retained.requests[1] && appended[2] == retained.requests[2] &&
+              appended.back().net == completed && appended.back().connection_index > 8U,
+          "a partial checkpoint must append only the completed net's disconnected component gap");
+
+  retained.requests = appended;
+  retained.request_count = retained.requests.size();
+  retained.missing_indices = {2U, 3U};
+  require(append_residual_physical_demands(retained) == appended,
+          "a pending residual demand for the completed net must prevent a duplicate suffix");
+}
+
 void pad_preservation_demands_restore_only_regressed_components() {
   const NetId net{"engine-experiment-net"};
   const LayerId front{"F.Cu"};
@@ -932,6 +989,7 @@ int main() {
   partial_scaffold_routes_missing_requests_against_retained_copper();
   residual_physical_demands_preserve_checked_components();
   residual_demand_pair_budget_is_atomic();
+  partial_residual_physical_demands_are_net_scoped();
   pad_preservation_demands_restore_only_regressed_components();
   pad_preservation_demand_bounds_are_all_or_none();
   source_only_terminal_becomes_a_physical_obligation();

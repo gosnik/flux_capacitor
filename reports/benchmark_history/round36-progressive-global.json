@@ -1,0 +1,60 @@
+{
+  "round": 36,
+  "date": "2026-10-13",
+  "baseline_revision": "0c02566423e1a61170cb8c4a531e83db17c31ef9",
+  "dirty": true,
+  "frozen_binary_sha256": "64a5d4a80633926bd82b2f2dc5274f4e3623ed9ad1ad9f9e65d4c63738d11357",
+  "tests": {
+    "focused_ctest": 5,
+    "risk_ctest": 33,
+    "private_lease_regression": true,
+    "release_build": true,
+    "viewer_build": true,
+    "independent_review": "clear"
+  },
+  "tiers": [
+    {
+      "tier": 0,
+      "board": "pt2399_delay",
+      "passed": true,
+      "detail_seconds": 39.04248273803387,
+      "previous_detail_seconds": 31.043898970005102,
+      "copper_identical": true,
+      "opens": 0,
+      "internal_copper_violations": 0,
+      "beziers": 396,
+      "arcs": 24,
+      "kicad_error_violations": 0,
+      "kicad_reported_unconnected_items": 0
+    },
+    {
+      "tier": 1,
+      "board": "bm_svf",
+      "passed": true,
+      "detail_seconds": 117.32829506398411,
+      "previous_detail_seconds": 106.31443923700135,
+      "copper_identical": true,
+      "opens": 0,
+      "internal_copper_violations": 0,
+      "beziers": 359,
+      "arcs": 125,
+      "kicad_error_violations": 0,
+      "kicad_reported_unconnected_items": 0
+    },
+    {
+      "tier": 2,
+      "board": "ft2232h_jtag",
+      "passed": true,
+      "detail_seconds": 255.0712883209926,
+      "previous_detail_seconds": 223.75914746301714,
+      "copper_identical": true,
+      "opens": 0,
+      "internal_copper_violations": 0,
+      "beziers": 421,
+      "arcs": 164,
+      "kicad_error_violations": 0,
+      "kicad_reported_unconnected_items": 0
+    }
+  ],
+  "report_directory": "reports/validation/progressive-global-round36-20261013"
+}

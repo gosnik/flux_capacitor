@@ -232,6 +232,38 @@ bool topology_connected(const RoutingPlanResult& p) {
 bool topology_ready(const RoutingPlanResult& p) {
   return topology_connected(p) && p.coarse_global.total_overflow == 0U;
 }
+[[nodiscard]] std::size_t routing_connection_demand(const Board& board,
+                                                     const GlobalRouterConfig& global) {
+  std::set<NetId> scoped_nets;
+  if (global.selected_nets.empty()) {
+    for (const auto& net : board.nets)
+      if (!net.name.empty()) scoped_nets.insert(net.id);
+  } else {
+    scoped_nets.insert(global.selected_nets.begin(), global.selected_nets.end());
+  }
+  std::map<NetId, std::size_t> terminals;
+  for (const auto& footprint : board.footprints)
+    for (const auto& pad : footprint.pads)
+      if (scoped_nets.contains(pad.net) && !pad.layers.empty()) ++terminals[pad.net];
+  std::size_t demand = 0U;
+  for (const auto& [_, count] : terminals) demand = plus(demand, count > 1U ? count - 1U : 0U);
+  return demand;
+}
+bool has_evaluated_physical_scene(const RoutingPlanResult& plan);
+[[nodiscard]] bool should_use_progressive_global_preparation(
+    const Board& board, const RoutingEngineConfig& config, RoutingEngineAction action,
+    const std::optional<RoutingPlanResult>& prior) {
+  if ((action != RoutingEngineAction::global_allocation &&
+       action != RoutingEngineAction::feedback_global_replan &&
+       action != RoutingEngineAction::usped_global_replan) ||
+      config.initial_global_preparation_timeout.count() <= 0)
+    return false;
+  // Once a physical scene has rejected or accepted the seed, portfolio diversity is useful
+  // evidence. The demand gate leaves ordinary boards on their established rich path.
+  return (!prior || !has_evaluated_physical_scene(*prior)) &&
+      routing_connection_demand(board, config.planner.global) >=
+          config.progressive_global_preparation_connection_threshold;
+}
 auto plan_order(const RoutingPlanResult& p) { return routing_quality(&p, nullptr); }
 auto detailed_order(const DetailedRouteResult& d) { return routing_quality(nullptr, &d); }
 RoutingPhysicalEvidence physical_evidence(const RoutingPlanResult* plan,
@@ -1837,6 +1869,10 @@ RoutingEngineStepResult RoutingEngine::advance(RoutingEngineStepBudget budget,
     const auto mode = config_.planning_mode;
     const auto sampled_repair = config_.post_negotiation_sampled_conflict_repair;
     const auto repair_cones = config_.max_post_negotiation_sampled_conflict_repair_cones;
+    const bool progressive_global_preparation =
+        should_use_progressive_global_preparation(planning_board_, config_, action, prior);
+    const auto progressive_global_preparation_timeout = progressive_global_preparation
+        ? static_cast<std::size_t>(config_.initial_global_preparation_timeout.count()) : 0U;
     auto* tx = pending_.get();
     auto* board = &planning_board_;
     auto* source = &materialization_source_;
@@ -1846,11 +1882,16 @@ RoutingEngineStepResult RoutingEngine::advance(RoutingEngineStepBudget budget,
                                                   detail, scaffold_config, retained_scaffold, rebound_requests,
                                                   mode, sampled_repair, repair_cones, board,
                                                   source, preparation, decisions,
+                                                  progressive_global_preparation,
+                                                  progressive_global_preparation_timeout,
                                                   telemetry](std::stop_token token) mutable {
       if (action == RoutingEngineAction::global_allocation ||
           action == RoutingEngineAction::feedback_global_replan ||
           action == RoutingEngineAction::usped_global_replan) {
         auto p = planner;
+        p.global.preparation_mode = progressive_global_preparation
+            ? GlobalPreparationMode::progressive_seed : GlobalPreparationMode::rich;
+        p.global.static_seed_preparation_timeout_ms = progressive_global_preparation_timeout;
         if (p.full_strength_first_pass) {
           activate_full_strength(p.global);
           if (action == RoutingEngineAction::global_allocation &&

@@ -752,7 +752,8 @@ void print_route_result(const flux::GlobalRouteResult& result,
       << result.configured_max_static_seed_rrt_connect_candidates << ",\n"
       << "  \"configured_max_static_seed_rrt_connect_iterations\": "
       << result.configured_max_static_seed_rrt_connect_iterations << ",\n"
-      << "  \"configured_static_seed_hydraulic_mandatory\": true,\n"
+      << "  \"configured_static_seed_hydraulic_mandatory\": "
+      << (result.configured_preparation_mode == flux::GlobalPreparationMode::rich ? "true" : "false") << ",\n"
       << "  \"configured_max_static_seed_hydraulic_candidates\": "
       << result.configured_max_static_seed_hydraulic_candidates << ",\n"
       << "  \"configured_static_seed_hydraulic_gpu_preferred\": "
@@ -865,6 +866,13 @@ void print_route_result(const flux::GlobalRouteResult& result,
       << "  \"static_seed_connections\": " << result.static_seed_connections << ",\n"
       << "  \"static_seed_tasks_dispatched\": " << result.static_seed_tasks_dispatched << ",\n"
       << "  \"static_seed_workers_used\": " << result.static_seed_workers_used << ",\n"
+      << "  \"configured_preparation_mode\": "
+      << json_quote(result.configured_preparation_mode == flux::GlobalPreparationMode::progressive_seed
+                        ? "progressive_seed" : "rich") << ",\n"
+      << "  \"configured_static_seed_preparation_timeout_ms\": "
+      << result.configured_static_seed_preparation_timeout_ms << ",\n"
+      << "  \"static_seed_preparation_timed_out\": "
+      << (result.static_seed_preparation_timed_out ? "true" : "false") << ",\n"
       << "  \"static_seed_searches\": " << result.static_seed_searches << ",\n"
       << "  \"static_seed_candidates\": " << result.static_seed_candidates << ",\n"
       << "  \"static_seed_search_expansions\": " << result.static_seed_search_expansions << ",\n"
@@ -4577,6 +4585,16 @@ void print_detailed_result(const flux::DetailedRouteResult& result,
   } else {
     std::cout << (global->configured_single_lane_direct_voronoi_resources ? "true" : "false");
   }
+  std::cout << ",\n  \"configured_preparation_mode\": ";
+  if (!global) std::cout << "null";
+  else std::cout << json_quote(global->configured_preparation_mode == flux::GlobalPreparationMode::progressive_seed
+                                  ? "progressive_seed" : "rich");
+  std::cout << ",\n  \"configured_static_seed_preparation_timeout_ms\": ";
+  if (!global) std::cout << "null";
+  else std::cout << global->configured_static_seed_preparation_timeout_ms;
+  std::cout << ",\n  \"static_seed_preparation_timed_out\": ";
+  if (!global) std::cout << "null";
+  else std::cout << (global->static_seed_preparation_timed_out ? "true" : "false");
   std::cout << ",\n  \"static_seed_searches\": ";
   if (global == nullptr) {
     std::cout << "null";
@@ -5870,6 +5888,13 @@ void print_integrated_result(const flux::IntegratedOptimizationResult& result,
       << "  \"configured_crossing_safe_diagonal_grid_edges\": "
       << (result.global_route.configured_crossing_safe_diagonal_grid_edges ? "true" : "false")
       << ",\n"
+      << "  \"configured_preparation_mode\": "
+      << json_quote(result.global_route.configured_preparation_mode == flux::GlobalPreparationMode::progressive_seed
+                        ? "progressive_seed" : "rich") << ",\n"
+      << "  \"configured_static_seed_preparation_timeout_ms\": "
+      << result.global_route.configured_static_seed_preparation_timeout_ms << ",\n"
+      << "  \"static_seed_preparation_timed_out\": "
+      << (result.global_route.static_seed_preparation_timed_out ? "true" : "false") << ",\n"
       << "  \"static_seed_searches\": " << result.global_route.static_seed_searches << ",\n"
       << "  \"static_seed_candidates\": " << result.global_route.static_seed_candidates << ",\n"
       << "  \"static_seed_corridor_nodes\": " << result.global_route.static_seed_corridor_nodes

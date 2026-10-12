@@ -10198,3 +10198,22 @@ Independent review found a reflex-vertex containment hole in the initial rectang
 The final core suite passed76/76 cases,33 relevant CTest targets passed, and native normalization tests passed4/4. The selectively prepared ESC imports strictly with all107 zones and four exact custom pads. Native DRC reports zero error violations and499 reported open items;499 is KiCad's unconnected-item reporting cap, not the total. Flux reports555 source connections. Source board files and non-fill expressions were preserved.
 
 The frozen60-minute attempt ended after3655.037s with no completed global checkpoint or physical copper candidate; peakRSS7433444KiB. Engine outcome is timed-out despite unset result defaults saying invalid_input. Provisional alternatives were published but not handed to physical routing. Telemetry grew to approximately997MB. This is a preparation failure, not evidence of geometric infeasibility. Keep import fixes; address bounded preparation next. Evidence: `reports/validation/esc-import-round35-20261013/`.
+
+## Round36 — Progressive global preparation and retained checkpoints
+
+### Failure and hypothesis
+Round35 spent its entire hour inside eager static seed preparation. Raw child threads did not participate in the managed continuation barrier; no engine decision point completed. Five growing trees per net and expensive refinement preceded physical feedback. The engine then discarded unfinished global work and returned default invalid-input diagnostics.
+
+### Research and experiment
+[OMPL termination conditions](https://ompl.kavrakilab.org/plannerTerminationConditions.html) separate bounded search termination from problem validity; its [planner continuation contract](https://ompl.kavrakilab.org/classompl_1_1base_1_1Planner.html) retains search state while the problem is unchanged. Apply the same lifecycle principle using Flux's existing managed kernel and child-task barrier, preserving immutable scene identity and deterministic reduction. Obtain inexpensive initial seeds before optional refinement and preserve completed checkpoints on cancellation. Physical copper still requires exact validation.
+
+### Verification plan
+Focused managed-worker yield/resume/cancellation and engine handoff regressions, independent review, sequential telemetry lower-tier benchmarks, then an ESC attempt comparing time to first physical routing against the prior3600-second preparation timeout.
+
+### Implementation scope
+The engine selects progressive preparation for at least256 named, scoped pad-connection demands (configurable), with a1000ms private seed allowance. This bounds the initial portfolio workload while preserving established small-board policy. Progressive preparation retains complete first trees, defers whole-board terrain and optional seed refinement, and returns remaining demand to ordinary allocation and physical scaffold construction. Both search and refinement workers now use the managed child barrier, retaining stack/frontier state across engine slices. Rich preparation is enabled after evaluated physical evidence.
+
+Preparation expiry and session cancellation are separate: the former returns completed work without cancelling the engine; the latter preserves previously completed global/scaffold checkpoints and discards in-flight transactions. This is in-process continuation and existing incremental route reuse, not an on-disk resume format or a cache of arbitrary stale refined portfolios. CLI reports mode, allowance and exhaustion; an empty timed-out result no longer masquerades as invalid input.
+
+### Round36 verification
+Release and viewer builds passed; focused CTest5/5, risk CTest33/33, and the private preparation lease regression passed. Independent review is clear after mode-aware validation, early diagnostic fields, watcher cleanup, and worker-lease fixes. Frozen sequential Tier0/1/2 all passed exact copper and external KiCad DRC, with byte-identical board outputs to Round34. Detailed times: Tier0 39.042s (previous 31.044s), Tier1 117.328s (previous 106.314s), Tier2 255.071s (previous 223.759s). The responsiveness change has measurable overhead on small boards; evaluate its benefit on the previously preparation-bound ESC. Telemetry and source hashes are preserved under `reports/validation/progressive-global-round36-20261013/`.

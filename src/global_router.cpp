@@ -25,6 +25,7 @@
 #include <atomic>
 #include <cmath>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -1016,6 +1017,7 @@ struct StaticSeedStats {
   std::size_t pns_ineligible_collisions{0};
   std::size_t pns_candidate_checks{0};
   std::size_t pns_local_splits{0};
+  bool preparation_timed_out{false};
   bool budget_exhausted{false};
 };
 
@@ -2588,26 +2590,29 @@ private:
           config.present_congestion_multiplier_per_mille;
   const bool invalid_diagonal_policy =
       config.allow_diagonal_grid_edges && config.allow_crossing_safe_diagonal_grid_edges;
+  const bool progressive_seed = config.preparation_mode == GlobalPreparationMode::progressive_seed;
   const bool rrt_seed_family_slots_overflow =
       config.max_static_seed_rrt_connect_candidates > std::numeric_limits<std::size_t>::max() - 2U;
   const bool static_seed_family_slots_overflow =
       rrt_seed_family_slots_overflow || config.max_static_seed_hydraulic_candidates >
                                             std::numeric_limits<std::size_t>::max() - 2U -
                                                 config.max_static_seed_rrt_connect_candidates;
-  const auto required_static_seed_family_slots =
-      static_seed_family_slots_overflow ? std::numeric_limits<std::size_t>::max()
+  const auto required_static_seed_family_slots = progressive_seed
+                                                    ? std::size_t{1U}
+                                                    : static_seed_family_slots_overflow
+                                        ? std::numeric_limits<std::size_t>::max()
                                         : 2U +
                                               (config.use_static_seed_rrt_connect_alternatives
                                                    ? config.max_static_seed_rrt_connect_candidates
                                                    : 0U) +
                                               config.max_static_seed_hydraulic_candidates;
   const bool hydraulic_gpu_available = hydraulic_gpu_compute_available();
-  if (!hydraulic_gpu_available) {
+  if (!progressive_seed && !hydraulic_gpu_available) {
     diagnostic = "Flux routing requires a working Vulkan compute device; the mandatory startup "
                  "probe could not initialize and dispatch the hydraulic kernel";
     return std::nullopt;
   }
-  if (!config.static_seed_hydraulic_flow.prefer_gpu) {
+  if (!progressive_seed && !config.static_seed_hydraulic_flow.prefer_gpu) {
     if (!config.static_seed_hydraulic_flow.evolve_terrain_height) {
       diagnostic = "Flux production routing cannot disable mandatory GPU hydraulic discovery; the "
                    "CPU implementation is reserved for deterministic tests and oracle comparisons";
@@ -2615,9 +2620,10 @@ private:
     }
   }
   const bool invalid_static_seed =
-      static_seed_family_slots_overflow ||
+      (!progressive_seed && static_seed_family_slots_overflow) ||
       config.max_static_seed_candidates_per_connection < required_static_seed_family_slots ||
-      config.max_static_seed_searches == 0U || config.max_static_seed_reprojection_searches == 0U ||
+      config.max_static_seed_searches == 0U ||
+      (!progressive_seed && (config.max_static_seed_reprojection_searches == 0U ||
       (config.use_static_seed_rrt_connect_alternatives &&
        (config.max_static_seed_rrt_connect_candidates == 0U ||
         config.max_static_seed_rrt_connect_iterations == 0U)) ||
@@ -2641,8 +2647,8 @@ private:
        config.static_seed_hydraulic_flow.lateral_erosion_divisor == 0U) ||
       config.static_seed_alternative_edge_penalty == 0U ||
       config.static_seed_corridor_departure_penalty == 0U ||
-      config.max_static_seed_corridor_cells == 0U;
-  const bool invalid_spline_refinement =
+      config.max_static_seed_corridor_cells == 0U));
+  const bool invalid_spline_refinement = !progressive_seed && (
       config.global_spline_tessellation_tolerance.value() <= 0 ||
       config.global_spline_control_corridor.value() <= 0 ||
       config.global_spline_shove_step.value() <= 0 ||
@@ -2658,7 +2664,7 @@ private:
       config.max_global_spline_trajectory_candidate_checks < 4U ||
       config.max_global_pns_propagation_depth == 0U ||
       config.max_global_pns_candidate_checks == 0U ||
-      config.maximum_global_pns_displacement < config.global_spline_shove_step;
+      config.maximum_global_pns_displacement < config.global_spline_shove_step);
   if (config.grid_pitch.value() <= 0 || config.edge_capacity != 1U || config.max_iterations == 0U ||
       config.max_expansions_per_connection == 0U || invalid_retry_weight ||
       invalid_frontier_reuse || invalid_present_escalation || invalid_local_pin_escape ||
@@ -4265,6 +4271,49 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
 
   const RoutingOccupancy empty_occupancy;
   const VoronoiPathFinderGuidance empty_guidance;
+  const bool progressive_seed = config.preparation_mode == GlobalPreparationMode::progressive_seed;
+  const auto preparation_started = std::chrono::steady_clock::now();
+  const auto preparation_deadline = config.static_seed_preparation_timeout_ms == 0U
+                                        ? std::optional<std::chrono::steady_clock::time_point>{}
+                                        : std::optional{preparation_started + std::chrono::milliseconds{
+                                              config.static_seed_preparation_timeout_ms}};
+  std::stop_source preparation_stop;
+  std::atomic_bool preparation_timed_out{false};
+  std::stop_callback cancelled{stop_token, [&] { preparation_stop.request_stop(); }};
+  std::mutex deadline_mutex;
+  std::condition_variable deadline_changed;
+  bool preparation_finished = false;
+  std::jthread deadline_watcher;
+  if (preparation_deadline) {
+    deadline_watcher = std::jthread([&](std::stop_token watcher_stop) {
+      std::unique_lock lock(deadline_mutex);
+      if (!deadline_changed.wait_until(lock, *preparation_deadline,
+                                       [&] { return preparation_finished || watcher_stop.stop_requested(); }) &&
+          !stop_token.stop_requested()) {
+        preparation_timed_out.store(true, std::memory_order_relaxed);
+        preparation_stop.request_stop();
+      }
+    });
+  }
+  struct PreparationFinishGuard {
+    std::mutex& mutex;
+    std::condition_variable& changed;
+    bool& finished;
+    ~PreparationFinishGuard() {
+      {
+        std::lock_guard lock(mutex);
+        finished = true;
+      }
+      changed.notify_all();
+    }
+  } finish_guard{deadline_mutex, deadline_changed, preparation_finished};
+  const auto finish_preparation = [&] {
+    {
+      std::lock_guard lock(deadline_mutex);
+      preparation_finished = true;
+    }
+    deadline_changed.notify_all();
+  };
 
   struct NetSeedTaskResult {
     StaticSeedPlan plan;
@@ -4275,7 +4324,6 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
         : obstacles(std::move(worker_obstacles)) {}
   };
   std::vector<std::unique_ptr<NetSeedTaskResult>> task_results(tasks.size());
-  std::atomic_size_t next_task{0U};
   const auto hardware_workers = std::max(1U, std::thread::hardware_concurrency());
   const auto requested_workers =
       config.max_static_seed_workers == 0U ? hardware_workers : config.max_static_seed_workers;
@@ -4286,12 +4334,8 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
   const auto task_budget = [](std::size_t total, std::size_t index, std::size_t count) {
     return count == 0U ? 0U : total / count + (index < total % count ? 1U : 0U);
   };
-  const auto run_task = [&]() {
-    while (!stop_token.stop_requested()) {
-      const auto task_index = next_task.fetch_add(1U, std::memory_order_relaxed);
-      if (task_index >= tasks.size()) {
-        return;
-      }
+  const auto run_task = [&](std::size_t task_index) {
+      if (preparation_stop.stop_requested()) return;
       auto result = std::make_unique<NetSeedTaskResult>(obstacles.fork_worker());
       try {
         const auto& task = tasks[task_index];
@@ -4304,9 +4348,19 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
           local_stats.connections = task.terminals.size() - 1U;
           std::set<Edge> first_tree_edges;
           std::vector<std::vector<std::vector<std::size_t>>> retained_trees;
-          for (std::size_t tree_candidate = 0U;
-               tree_candidate < task_config.max_static_seed_candidates_per_connection;
+          const auto tree_candidate_limit = progressive_seed
+                                                ? std::size_t{1U}
+                                                : task_config.max_static_seed_candidates_per_connection;
+          for (std::size_t tree_candidate = 0U; tree_candidate < tree_candidate_limit;
                ++tree_candidate) {
+            routing_kernel_checkpoint();
+            if (preparation_stop.stop_requested()) {
+              local_stats.preparation_timed_out =
+                  preparation_timed_out.load(std::memory_order_relaxed);
+              local_stats.budget_exhausted = local_stats.budget_exhausted ||
+                                             local_stats.preparation_timed_out;
+              break;
+            }
             std::set<std::size_t> tree(task.terminals.front().grid_nodes.begin(),
                                        task.terminals.front().grid_nodes.end());
             std::vector<std::size_t> remaining;
@@ -4357,10 +4411,15 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
                                        initial_history, corridors, corridor_neck_downs,
                                        empty_guidance, voronoi_allocation, result->obstacles, task,
                                        task_config, task_config.use_direct_voronoi_resource_edges,
-                                       false, 1'000U, policy, stop_token);
+                                       false, 1'000U, policy, preparation_stop.get_token());
               local_stats.search_expansions =
                   saturating_count_add(local_stats.search_expansions, route.expansions);
               if (route.cancelled) {
+                local_stats.preparation_timed_out =
+                    preparation_timed_out.load(std::memory_order_relaxed);
+                local_stats.budget_exhausted = local_stats.budget_exhausted ||
+                                               local_stats.preparation_timed_out;
+                complete_tree = false;
                 break;
               }
               if (route.nodes.empty() && task_config.use_direct_voronoi_resource_edges) {
@@ -4373,7 +4432,7 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
                 route = search_path(grid, terminal.grid_nodes, goals, empty_occupancy,
                                     initial_history, corridors, corridor_neck_downs, empty_guidance,
                                     voronoi_allocation, result->obstacles, task, task_config, false,
-                                    false, 1'000U, policy, stop_token);
+                                    false, 1'000U, policy, preparation_stop.get_token());
                 local_stats.search_expansions =
                     saturating_count_add(local_stats.search_expansions, route.expansions);
               }
@@ -4461,21 +4520,18 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
             local_plan.candidates.insert(local_plan.candidates.end(),
                                          std::make_move_iterator(branches.begin()),
                                          std::make_move_iterator(branches.end()));
+            // Publish the complete tree to its isolated slot before a kernel boundary. A local
+            // preparation deadline must never turn an already usable tree into a failed worker.
+            if (!preparation_stop.stop_requested()) routing_kernel_checkpoint();
           }
         }
       } catch (...) {
-        result->failure = std::current_exception();
+        if (!stop_token.stop_requested()) result->failure = std::current_exception();
       }
       task_results[task_index] = std::move(result);
-    }
   };
-  std::vector<std::jthread> workers;
-  workers.reserve(worker_count);
-  if (worker_count == 0U) run_task();
-  for (std::size_t index = 0U; index < worker_count; ++index) {
-    workers.emplace_back(run_task);
-  }
-  workers.clear();
+  run_bounded_routing_tasks(tasks.size(), std::max<std::size_t>(1U, worker_count),
+                            stop_token, run_task);
   worker_lease = {};
 
   // Stable slots decouple completion order from all externally visible candidate/metric order.
@@ -4501,12 +4557,37 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
     stats.tree_joins = saturating_count_add(stats.tree_joins, local.tree_joins);
     stats.growth_reorderings =
         saturating_count_add(stats.growth_reorderings, local.growth_reorderings);
+    stats.preparation_timed_out = stats.preparation_timed_out || local.preparation_timed_out;
     stats.budget_exhausted = stats.budget_exhausted || local.budget_exhausted;
     plan.candidates.insert(plan.candidates.end(),
                            std::make_move_iterator(result->plan.candidates.begin()),
                            std::make_move_iterator(result->plan.candidates.end()));
   }
   stats.candidates = plan.candidates.size();
+
+  // The progressive pass is an intentionally complete-but-cheap first portfolio.  Every
+  // retained branch belongs to candidate zero's whole growing tree; do not run coupled portfolio
+  // filtering or geometry replacement on a partially prepared alternative set.
+  if (progressive_seed) {
+    stats.preparation_timed_out = stats.preparation_timed_out ||
+                                      preparation_timed_out.load(std::memory_order_relaxed);
+    stats.budget_exhausted = stats.budget_exhausted || stats.preparation_timed_out;
+    std::set<std::pair<NetId, std::size_t>> covered_connections;
+    for (const auto& candidate : plan.candidates) {
+      covered_connections.emplace(candidate.net, candidate.connection_index);
+      if (candidate.route.nodes.size() > 1U) ++stats.direct_medial_candidates;
+    }
+    for (const auto& task : tasks) {
+      for (std::size_t connection = 0U; connection + 1U < task.terminals.size(); ++connection) {
+        if (!covered_connections.contains({task.net, connection})) ++stats.terminals_without_seed;
+      }
+    }
+    for (auto& result : task_results) {
+      if (result) obstacles.absorb_worker(std::move(result->obstacles));
+    }
+    finish_preparation();
+    return plan;
+  }
 
   std::map<std::string, std::vector<NetId>> coupled_groups;
   std::map<std::string, std::uint64_t> coupled_group_demands;
@@ -4759,16 +4840,20 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
   }
   plan.candidates.clear();
   std::vector<std::unique_ptr<NetRefinementTaskResult>> refinement_results(tasks.size());
-  std::atomic_size_t next_refinement_task{0U};
-  const auto run_refinement_task = [&]() {
-    while (!stop_token.stop_requested()) {
-      const auto task_index = next_refinement_task.fetch_add(1U, std::memory_order_relaxed);
-      if (task_index >= tasks.size()) {
-        return;
-      }
+  const auto run_refinement_task = [&](std::size_t task_index) {
       auto result = std::make_unique<NetRefinementTaskResult>(
           task_results[task_index] ? std::move(task_results[task_index]->obstacles)
                                    : obstacles.fork_worker());
+      if (preparation_stop.stop_requested()) {
+        // A deadline may arrive between the seed reduction and this task slot. Retain the
+        // complete carrier trees unchanged; allocation can consume them without refinement.
+        result->plan.candidates = std::move(refinement_inputs[task_index]);
+        result->plan.stats.preparation_timed_out =
+            preparation_timed_out.load(std::memory_order_relaxed);
+        result->plan.stats.budget_exhausted = result->plan.stats.preparation_timed_out;
+        refinement_results[task_index] = std::move(result);
+        return;
+      }
       try {
         auto& plan = result->plan;
         auto& stats = plan.stats;
@@ -4842,7 +4927,9 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
         for (std::size_t candidate_index = 0U; candidate_index < plan.candidates.size();
              ++candidate_index) {
           auto& candidate = plan.candidates[candidate_index];
-          if (stop_token.stop_requested()) {
+          if (preparation_stop.stop_requested()) {
+            stats.preparation_timed_out = preparation_timed_out.load(std::memory_order_relaxed);
+            stats.budget_exhausted = stats.budget_exhausted || stats.preparation_timed_out;
             break;
           }
           const auto task = tasks.begin() + static_cast<std::ptrdiff_t>(task_index);
@@ -5066,7 +5153,7 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
                     }
                     routed = route_prepared_navmesh_hydraulic(
                         *domain.prepared_regions[region_index], points.front(), points.back(),
-                        navmesh_config, hydraulic_config, stop_token);
+                        navmesh_config, hydraulic_config, preparation_stop.get_token());
                     if (!routed.hydraulic_erosion_field.empty()) {
                       candidate.hydraulic_fields.push_back(
                           GlobalSeedCandidate::HydraulicFieldEvidence{
@@ -5769,7 +5856,8 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
           auto refined = search_path(
               grid, candidate.starts, candidate.goals, empty_occupancy, initial_history, corridors,
               corridor_neck_downs, empty_guidance, voronoi_allocation, *selected_obstacles, *task,
-              config, config.use_direct_voronoi_resource_edges, false, 1'000U, policy, stop_token);
+              config, config.use_direct_voronoi_resource_edges, false, 1'000U, policy,
+              preparation_stop.get_token());
           stats.search_expansions =
               saturating_count_add(stats.search_expansions, refined.expansions);
           if (refined.cancelled) {
@@ -5825,11 +5913,11 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
           ++stats.reprojections_accepted;
         }
       } catch (...) {
-        result->failure = std::current_exception();
+        if (!stop_token.stop_requested()) result->failure = std::current_exception();
       }
       // A completed net's immutable candidate geometry is safe to observe before other workers
       // finish. It remains provisional; publication cannot influence routing or reduction order.
-      if (publish_candidate && !result->failure && !stop_token.stop_requested()) {
+      if (publish_candidate && !result->failure && !preparation_stop.stop_requested()) {
         try {
           for (const auto& candidate : result->plan.candidates) publish_candidate(candidate);
         } catch (...) {
@@ -5837,14 +5925,16 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
         }
       }
       refinement_results[task_index] = std::move(result);
-    }
   };
-  workers.clear();
-  next_refinement_task.store(0U, std::memory_order_relaxed);
-  for (std::size_t index = 0U; index < worker_count; ++index) {
-    workers.emplace_back(run_refinement_task);
-  }
-  workers.clear();
+  // Keep the session stop token distinct from the preparation lease: an expired preparation
+  // budget simply returns its completed candidates, while a caller cancellation still unwinds
+  // the managed child batch through the normal RoutingKernel contract.
+  auto refinement_worker_lease =
+      acquire_cpu_workers(std::min<std::size_t>(tasks.size(), requested_workers));
+  const auto refinement_workers = refinement_worker_lease.workers();
+  run_bounded_routing_tasks(tasks.size(), std::max<std::size_t>(1U, refinement_workers),
+                            stop_token, run_refinement_task);
+  refinement_worker_lease = {};
 
   for (auto& result : refinement_results) {
     if (!result) {
@@ -6002,6 +6092,7 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
     stats.pns_candidate_checks =
         saturating_count_add(stats.pns_candidate_checks, local.pns_candidate_checks);
     stats.pns_local_splits = saturating_count_add(stats.pns_local_splits, local.pns_local_splits);
+    stats.preparation_timed_out = stats.preparation_timed_out || local.preparation_timed_out;
     stats.budget_exhausted = stats.budget_exhausted || local.budget_exhausted;
 
     const auto proposal_offset = plan.shove_proposals.size();
@@ -6055,6 +6146,10 @@ build_static_hybrid_seed_plan(const Board& board, const Grid& grid,
       }
     }
   }
+  stats.preparation_timed_out = stats.preparation_timed_out ||
+                                    preparation_timed_out.load(std::memory_order_relaxed);
+  stats.budget_exhausted = stats.budget_exhausted || stats.preparation_timed_out;
+  finish_preparation();
   return plan;
 }
 [[nodiscard]] std::vector<std::size_t>
@@ -12681,6 +12776,9 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
                                     RouterTelemetrySink* telemetry,
                                     bool preserve_unaffected_provisional_congestion = false) {
   GlobalRouteResult invalid;
+  invalid.configured_preparation_mode = config.preparation_mode;
+  invalid.configured_static_seed_preparation_timeout_ms =
+      config.static_seed_preparation_timeout_ms;
   const auto emit_telemetry = [telemetry](RouterTelemetryEvent event) {
     if (telemetry != nullptr) {
       static_cast<void>(telemetry->try_emit(std::move(event)));
@@ -12753,7 +12851,8 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
   auto tasks = make_tasks(board, *grid, config);
   std::shared_ptr<const BoardTerrainGuidance> board_terrain_guidance;
   BoardTerrainGuidanceStats board_terrain_stats;
-  if (!tasks.empty() && config.board_terrain_guidance.enabled && config.board_terrain_guidance_cache) {
+  if (!tasks.empty() && config.preparation_mode == GlobalPreparationMode::rich &&
+      config.board_terrain_guidance.enabled && config.board_terrain_guidance_cache) {
     const auto preparation_start = std::chrono::steady_clock::now();
     RouterTelemetryEvent progress;
     progress.kind = RouterTelemetryEventKind::search_summary;
@@ -13449,6 +13548,9 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
     result.clearance_shadow_owner_history_passes = clearance_shadow_owner_history_passes;
     result.configured_single_lane_direct_voronoi_resources =
         config.single_lane_direct_voronoi_resources;
+    result.configured_preparation_mode = config.preparation_mode;
+    result.configured_static_seed_preparation_timeout_ms =
+        config.static_seed_preparation_timeout_ms;
     result.configured_max_static_seed_candidates_per_connection =
         config.max_static_seed_candidates_per_connection;
     result.configured_max_static_seed_searches = config.max_static_seed_searches;
@@ -13655,6 +13757,7 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
     result.static_seed_joint_groups = static_seed_plan.stats.joint_groups;
     result.static_seed_joint_group_candidates = static_seed_plan.stats.joint_group_candidates;
     result.static_seed_joint_groups_withheld = static_seed_plan.stats.joint_groups_withheld;
+    result.static_seed_preparation_timed_out = static_seed_plan.stats.preparation_timed_out;
     result.static_seed_budget_exhausted = static_seed_plan.stats.budget_exhausted;
     result.global_pns_proposal_attempts = static_seed_plan.stats.pns_proposal_attempts;
     result.global_pns_eligible_collisions = static_seed_plan.stats.pns_eligible_collisions;
@@ -14774,6 +14877,9 @@ GlobalRouteResult route_global_impl(const Board& board, const GlobalRouterConfig
     current.configured_clearance_shadow_cost_quantum = config.clearance_shadow_cost_quantum;
     current.configured_capacity_reserve_per_mille = config.capacity_reserve_per_mille;
     current.configured_capacity_reserve_cost = config.capacity_reserve_cost;
+    current.configured_preparation_mode = config.preparation_mode;
+    current.configured_static_seed_preparation_timeout_ms =
+        config.static_seed_preparation_timeout_ms;
     current.configured_single_lane_direct_voronoi_resources =
         config.single_lane_direct_voronoi_resources;
     current.configured_max_static_seed_candidates_per_connection =

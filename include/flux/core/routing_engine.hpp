@@ -130,6 +130,12 @@ struct RoutingEngineConfig {
   // Deprecated: exact state-key suppression is handled by RoutingExperimentScheduleState.
   std::size_t max_repeated_action_attempts{2U};
   std::chrono::milliseconds experiment_quantum{500};
+  // First-pass global portfolios can defer physical evidence for minutes. Above the bounded
+  // connection-demand threshold (256 demands, or at least 1,280 trees at the default five
+  // candidates), initial allocation keeps one usable tree per connection within this window;
+  // a later physical diagnosis unlocks rich portfolios. Zero disables the progressive request.
+  std::chrono::milliseconds initial_global_preparation_timeout{1000};
+  std::size_t progressive_global_preparation_connection_threshold{256U};
   // Applied to bounded diagnosis/repair experiments only; initial global allocation and exact
   // materialization remain governed by their own work limits/shared deadline.
   // Optional per-experiment safety cap. By default the shared deadline and completed-search

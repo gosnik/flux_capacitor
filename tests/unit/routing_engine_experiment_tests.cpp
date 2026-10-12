@@ -1,4 +1,5 @@
 #include "flux/core/routing_engine.hpp"
+#include "flux/core/routing_feedback.hpp"
 #include "flux/core/router_telemetry.hpp"
 #include "../../src/scaffold_terminal_rebind.hpp"
 #include "../../src/scaffold_physical_demands.hpp"
@@ -153,7 +154,9 @@ void physical_repair_evidence_reopens_only_changed_missing_demand() {
 
 void parked_engine_resumes_without_committing_partial_state() {
   const auto board = two_pad_board();
-  RoutingEngine engine(board, board, experiment_config());
+  auto config = experiment_config();
+  config.progressive_global_preparation_connection_threshold = 1U;
+  RoutingEngine engine(board, board, config);
   const auto first = engine.advance({.work_units = 1U, .time_slice = std::chrono::milliseconds{20}});
   require(first.outcome == RoutingEngineOutcome::yielded && engine.state().attempts.empty() &&
               !engine.selected_plan(),
@@ -178,6 +181,13 @@ void parked_engine_resumes_without_committing_partial_state() {
               engine.state().outcome == RoutingEngineOutcome::awaiting_materialization &&
               engine.selected_plan() != nullptr,
           "a parked engine must resume the retained transaction to its normal plan-only handoff");
+  require(engine.state().working_plan &&
+              engine.state().working_plan->coarse_global.configured_preparation_mode ==
+                  GlobalPreparationMode::progressive_seed &&
+              engine.state().working_plan->coarse_global
+                      .configured_static_seed_preparation_timeout_ms ==
+                  static_cast<std::size_t>(config.initial_global_preparation_timeout.count()),
+          "a demand-qualified initial allocation must request bounded progressive preparation");
 }
 
 void cancellation_and_deadline_dispose_parked_engine_work() {
@@ -189,8 +199,16 @@ void cancellation_and_deadline_dispose_parked_engine_work() {
   std::stop_source stop;
   stop.request_stop();
   require(cancelled.advance({}, stop.get_token()).outcome == RoutingEngineOutcome::cancelled &&
-              cancelled.state().attempts.empty() && !cancelled.selected_plan(),
-          "cancelling a parked transaction must clear uncommitted engine work");
+              cancelled.state().outcome == RoutingEngineOutcome::cancelled &&
+              cancelled.state().attempts.empty() && !cancelled.selected_plan() &&
+              !cancelled.selected_detailed(),
+          "cancelling a parked transaction must clear uncommitted global and detailed checkpoints");
+  const auto session = run_persistent_routing_session(board, board, {}, stop.get_token());
+  require(session.engine_outcome == RoutingEngineOutcome::cancelled &&
+              session.routing.coarse_global.stop_reason == GlobalRouterStopReason::cancelled &&
+              session.detailed.stop_reason == DetailedRouterStopReason::cancelled &&
+              !session.detailed.candidate,
+          "a stopped session without checkpoints must not report default invalid input or copper");
 
   auto timed_config = config;
   timed_config.shared_deadline = std::chrono::milliseconds{100};
@@ -199,8 +217,9 @@ void cancellation_and_deadline_dispose_parked_engine_work() {
           "deadline fixture must first park a live transaction");
   std::this_thread::sleep_for(std::chrono::milliseconds{150});
   require(timed.advance().outcome == RoutingEngineOutcome::timed_out && timed.state().attempts.empty() &&
-              !timed.selected_plan(),
-          "deadline expiry must dispose a parked transaction without publishing partial routing");
+              timed.state().outcome == RoutingEngineOutcome::timed_out && !timed.selected_plan() &&
+              !timed.selected_detailed(),
+          "deadline expiry must remain distinct from cancellation without publishing checkpoints");
 }
 
 void continuation_dependencies_and_knowledge_merge_are_bounded() {

@@ -236,6 +236,20 @@ run_persistent_routing_session(const Board& planning_board, const Board& materia
   if (const auto* selected = engine.selected_plan()) result.routing = *selected;
   if (const auto* selected = engine.selected_detailed()) result.detailed = *selected;
   result.engine_outcome = engine.state().outcome;
+  // No checkpoint means these result objects still contain their invalid-input defaults.
+  // Cancellation is not input rejection, and unset validation counters are not a DRC result.
+  if (result.engine_outcome == RoutingEngineOutcome::timed_out ||
+      result.engine_outcome == RoutingEngineOutcome::cancelled) {
+    if (!engine.selected_plan()) {
+      result.routing.stop_reason = RoutingPlanStopReason::cancelled;
+      result.routing.coarse_global.stop_reason = GlobalRouterStopReason::cancelled;
+      result.routing.coarse_global.diagnostic = "stopped before a global routing checkpoint";
+    }
+    if (!engine.selected_detailed()) {
+      result.detailed.stop_reason = DetailedRouterStopReason::cancelled;
+      result.detailed.diagnostic = "stopped before copper materialization and validation";
+    }
+  }
   result.engine_attempts = engine.state().attempts;
   if (engine.state().legal_scaffold)
     result.retained_scaffold_counters = engine.state().legal_scaffold->counters;

@@ -19,6 +19,11 @@ class RouterTelemetrySink;
 
 enum class GlobalRouteCheckpointObjective { aggregate_overflow, dimensioned_physical_overflow };
 
+// Rich preparation retains the complete static topology portfolio.  A progressive seed is a
+// deliberately cheap, independently usable first tree for every connection; an engine can use
+// its physical result before asking a later pass to pay for alternatives and geometry refinement.
+enum class GlobalPreparationMode { rich, progressive_seed };
+
 struct GlobalRouterConfig {
   // Diagnostic artifact generation may route a lossy KiCad projection whose unrelated
   // placement/courtyard defects fail canonical validation. This never changes geometric route
@@ -179,13 +184,17 @@ struct GlobalRouterConfig {
   // fallback. The latter is protected because the KRT bm_svf oracle proves that a longer outer
   // homotopy can be the physically feasible answer even when it is unattractive in isolation.
   std::size_t max_static_seed_candidates_per_connection{5};
+  GlobalPreparationMode preparation_mode{GlobalPreparationMode::rich};
+  // Zero leaves static preparation unbounded. A positive value interrupts an in-flight search,
+  // but only complete trees are retained, so every retained candidate remains allocatable.
+  std::size_t static_seed_preparation_timeout_ms{0};
   std::size_t max_static_seed_searches{200'000};
   std::size_t max_static_seed_reprojection_searches{200'000};
   bool use_static_seed_rrt_connect_alternatives{true};
   std::size_t max_static_seed_rrt_connect_candidates{1};
   std::size_t max_static_seed_rrt_connect_iterations{2'048};
-  // Hydraulic erosion is a mandatory per-layer topology family. It has no disable switch: every
-  // static portfolio must reserve and evaluate at least one bounded hydraulic candidate.
+  // Hydraulic erosion is a mandatory per-layer topology family for rich preparation. A
+  // progressive seed intentionally defers it until a physical result justifies the cost.
   std::size_t max_static_seed_hydraulic_candidates{1};
   HydraulicPathConfig static_seed_hydraulic_flow = [] {
     HydraulicPathConfig flow;
@@ -812,6 +821,8 @@ struct GlobalRouteResult {
   std::size_t clearance_shadow_reserve_penalty_events{0};
   std::uint64_t capacity_reserve_penalty{0};
   bool configured_single_lane_direct_voronoi_resources{false};
+  GlobalPreparationMode configured_preparation_mode{GlobalPreparationMode::rich};
+  std::size_t configured_static_seed_preparation_timeout_ms{0};
   std::size_t configured_max_static_seed_candidates_per_connection{0};
   std::size_t configured_max_static_seed_searches{0};
   std::size_t configured_max_static_seed_reprojection_searches{0};
@@ -976,6 +987,7 @@ struct GlobalRouteResult {
   std::size_t static_seed_joint_groups{0};
   std::size_t static_seed_joint_group_candidates{0};
   std::size_t static_seed_joint_groups_withheld{0};
+  bool static_seed_preparation_timed_out{false};
   bool static_seed_budget_exhausted{false};
   std::vector<GlobalRoutingShoveProposal> selected_shove_proposals;
   std::size_t global_pns_proposal_attempts{0};

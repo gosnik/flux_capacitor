@@ -17,6 +17,7 @@
 #include "flux/core/routing_compute.hpp"
 #include "flux/core/routing_feedback.hpp"
 #include "flux/core/routing_engine.hpp"
+#include "flux/core/routing_kernel.hpp"
 #include "flux/core/routing_rules.hpp"
 #include "flux/core/spline_route.hpp"
 #include "flux/io/kicad_export.hpp"
@@ -11563,6 +11564,60 @@ void work_plan_round_trip_is_strict_source_bound_and_non_authoritative() {
       "a pre-requested stop token must cancel before routing and preserve the source checkpoint");
 }
 
+void progressive_static_seed_preparation_retains_a_cheap_allocatable_tree() {
+  auto config = GlobalRouterConfig{};
+  config.preparation_mode = flux::GlobalPreparationMode::progressive_seed;
+  config.static_seed_preparation_timeout_ms = 1'000U;
+  config.max_static_seed_workers = 2U;
+  config.max_iterations = 1U;
+  config.max_static_seed_candidates_per_connection = 1U;
+  config.max_static_seed_reprojection_searches = 0U;
+  config.use_static_seed_rrt_connect_alternatives = false;
+  config.max_static_seed_rrt_connect_candidates = 0U;
+  config.max_static_seed_rrt_connect_iterations = 0U;
+  config.max_static_seed_hydraulic_candidates = 0U;
+  config.static_seed_hydraulic_flow = {};
+  config.max_static_seed_corridor_cells = 0U;
+  const auto routed = flux::route_global(two_pad_board(), config);
+  require(routed.configured_preparation_mode == flux::GlobalPreparationMode::progressive_seed &&
+              routed.configured_static_seed_preparation_timeout_ms == 1'000U &&
+              routed.static_seed_complete_trees >= 1U && !routed.paths.empty() &&
+              routed.static_seed_searches <= routed.static_seed_connections &&
+              routed.static_seed_hydraulic_attempts == 0U &&
+              routed.static_seed_rrt_connect_attempts == 0U &&
+              routed.static_seed_refined_candidates == 0U &&
+              routed.static_seed_reprojection_searches == 0U,
+          "progressive preparation must hand allocation a complete first tree while deferring "
+          "expensive seed alternatives and geometry refinement");
+
+  std::stop_source cancelled;
+  cancelled.request_stop();
+  const auto cancelled_route = flux::route_global(two_pad_board(), config, cancelled.get_token());
+  require(cancelled_route.stop_reason == GlobalRouterStopReason::cancelled &&
+              cancelled_route.configured_preparation_mode ==
+                  flux::GlobalPreparationMode::progressive_seed &&
+              cancelled_route.configured_static_seed_preparation_timeout_ms == 1'000U,
+          "an external cancellation must remain distinct from a progressive preparation lease");
+
+  // Park at the first seed checkpoint, then let only its private lease expire. No external
+  // cancellation is requested: normal allocation must still account for the connection.
+  config.static_seed_preparation_timeout_ms = 50U;
+  std::optional<flux::GlobalRouteResult> resumed;
+  flux::RoutingKernel kernel([&](std::stop_token stop) {
+    resumed = flux::route_global(two_pad_board(), config, stop);
+  });
+  require(kernel.advance({.work_units = 1U, .time_slice = std::chrono::milliseconds{1000}}) ==
+              flux::RoutingKernelStatus::yielded,
+          "progressive preparation must expose a resumable kernel checkpoint");
+  std::this_thread::sleep_for(std::chrono::milliseconds{100});
+  while (kernel.advance({.work_units = 100000U, .time_slice = std::chrono::milliseconds{1000}}) !=
+         flux::RoutingKernelStatus::finished) {}
+  require(resumed && resumed->static_seed_preparation_timed_out &&
+              resumed->stop_reason != GlobalRouterStopReason::cancelled &&
+              (!resumed->paths.empty() || !resumed->unrouted_nets.empty()),
+          "private preparation expiry must return routing demand without cancelling the session");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -11703,6 +11758,8 @@ int main(int argc, char** argv) {
        integrated_placement_rejects_proxy_improvement_that_violates_copper_rules},
       {"cancellation_and_kicad_export_boundaries_fail_closed",
        cancellation_and_kicad_export_boundaries_fail_closed},
+      {"progressive_static_seed_preparation_retains_a_cheap_allocatable_tree",
+       progressive_static_seed_preparation_retains_a_cheap_allocatable_tree},
   };
 
   std::size_t passed = 0U;

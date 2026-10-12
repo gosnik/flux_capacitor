@@ -1,0 +1,1412 @@
+{
+  "runs": {
+    "tier2": {
+      "configuration": {
+        "date": "2026-10-12T12:55:12.778838+00:00",
+        "tier": 2,
+        "board": "ft2232h_jtag",
+        "krt_revision": "023d3f79027d5406e4ea8e68291f588c5c135673",
+        "command": [
+          "/usr/bin/python3",
+          "/home/adam/qtbits/flux_capacitor/reports/validation/krt-tier23-20261012/krt-source/py_router/route.py",
+          "/home/adam/qtbits/flux_capacitor/reports/validation/krt-tier23-20261012/tier2/ft2232h_jtag.kicad_pcb",
+          "/home/adam/qtbits/flux_capacitor/reports/validation/krt-tier23-20261012/tier2/ft2232h_jtag-krt.kicad_pcb",
+          "--escalation",
+          "off",
+          "--strict-sizes",
+          "--no-fix-drc-settings",
+          "--fab-tier",
+          "standard",
+          "--stats",
+          "--verbose",
+          "--debug-memory",
+          "--json-out",
+          "/home/adam/qtbits/flux_capacitor/reports/validation/krt-tier23-20261012/tier2/krt-summary.json"
+        ],
+        "source_sha256": "882c35ac781cf8fc292dc025b8d22944077cc54002c6c73cf2613056f8b8b95b",
+        "project_sha256": "00edffa7cc27d9c31b57714ce3a5cdff5f68a89425071f2b353672767939f237",
+        "krt_native_sha256": "652b67e266c58b1e373e503bcf9b5d0b0d3dd4756e1c306100f23edf3d3f989b",
+        "kicad_version": "10.0.6-10.0.6~ubuntu26.04.1",
+        "route_timeout_seconds": 900,
+        "telemetry": "KICAD_ROUTE_TRACE=1; stats; verbose; debug-memory",
+        "input_drc": {
+          "returncode": 5,
+          "available": true,
+          "violations": 41,
+          "categories": {
+            "lib_footprint_issues": 41
+          },
+          "unconnected_items": 117
+        },
+        "returncode": 0,
+        "wall_seconds": 15.841286281996872,
+        "written_project_sha256": "f631dd88da0105b194a817df6186ac5143b08302edb99a0c2d15a54781f129d1",
+        "output_drc": {
+          "returncode": 5,
+          "available": true,
+          "violations": 49,
+          "categories": {
+            "lib_footprint_issues": 41,
+            "track_dangling": 1,
+            "via_dangling": 7
+          },
+          "unconnected_items": 11
+        },
+        "copper": {
+          "tracks_and_arcs": 518,
+          "vias": 35,
+          "length_mm": 603.8768677287987,
+          "sha256": "20ae2658fe3ef01df0b4d249f72bdfb8bcd99e951dea8aeb9b31f040ef75ac16"
+        },
+        "flux_inspect_returncode": 0,
+        "render_returncode": 1,
+        "source_unchanged": true,
+        "telemetry_files": [
+          "ft2232h_jtag-krt_routetrace.json",
+          "krt-summary.json"
+        ]
+      },
+      "independent_open_connections": 11,
+      "independent_open_nets": [
+        {
+          "id": "kicad-net-1",
+          "name": "GND",
+          "pad_count": 42,
+          "connected_pad_groups": 3,
+          "open_connections": 2
+        },
+        {
+          "id": "kicad-net-8",
+          "name": "/TCK_TXD_A",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-11",
+          "name": "/TMS_A",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-16",
+          "name": "/USB_D+",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-17",
+          "name": "/USB_D-",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-19",
+          "name": "/TXLED_A",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-21",
+          "name": "/TXLED_B",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-26",
+          "name": "/OSCI",
+          "pad_count": 3,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-29",
+          "name": "/VPHY",
+          "pad_count": 4,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-31",
+          "name": "/~{RESET}",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        }
+      ],
+      "peak_rss_kib": 704096,
+      "krt_design_rules": {
+        "escalation_policy": "off",
+        "fab_tier": "standard",
+        "board_floors": {
+          "clearance": 0.09,
+          "track_width": 0.09,
+          "via_diameter": 0.39999999999999997,
+          "via_drill": 0.3,
+          "hole_to_hole": 0.25,
+          "annular": 0.049999999999999996
+        },
+        "count": 0,
+        "nets": [],
+        "narrowed": [],
+        "min_delivered": {},
+        "fab_tier_escalations": 0,
+        "fab_tier_contexts": [],
+        "unsupported_rules": []
+      },
+      "krt_reported_iterations": 154388,
+      "krt_reported_loop_seconds": 0.41000000000000003
+    },
+    "tier2-matched": {
+      "configuration": {
+        "date": "2026-10-12T12:59:52.080873+00:00",
+        "tier": 2,
+        "board": "ft2232h_jtag",
+        "dimension_mode": "matched",
+        "krt_revision": "023d3f79027d5406e4ea8e68291f588c5c135673",
+        "command": [
+          "/usr/bin/python3",
+          "/home/adam/qtbits/flux_capacitor/reports/validation/krt-tier23-20261012/krt-source/py_router/route.py",
+          "/home/adam/qtbits/flux_capacitor/reports/validation/krt-tier23-20261012/tier2-matched/ft2232h_jtag.kicad_pcb",
+          "/home/adam/qtbits/flux_capacitor/reports/validation/krt-tier23-20261012/tier2-matched/ft2232h_jtag-krt.kicad_pcb",
+          "--escalation",
+          "off",
+          "--strict-sizes",
+          "--no-fix-drc-settings",
+          "--fab-tier",
+          "standard",
+          "--stats",
+          "--verbose",
+          "--debug-memory",
+          "--json-out",
+          "/home/adam/qtbits/flux_capacitor/reports/validation/krt-tier23-20261012/tier2-matched/krt-summary.json",
+          "--track-width",
+          "0.25",
+          "--clearance",
+          "0.2",
+          "--via-size",
+          "0.6",
+          "--via-drill",
+          "0.3"
+        ],
+        "source_sha256": "882c35ac781cf8fc292dc025b8d22944077cc54002c6c73cf2613056f8b8b95b",
+        "project_sha256": "00edffa7cc27d9c31b57714ce3a5cdff5f68a89425071f2b353672767939f237",
+        "krt_native_sha256": "652b67e266c58b1e373e503bcf9b5d0b0d3dd4756e1c306100f23edf3d3f989b",
+        "kicad_version": "10.0.6-10.0.6~ubuntu26.04.1",
+        "route_timeout_seconds": 900,
+        "telemetry": "KICAD_ROUTE_TRACE=1; stats; verbose; debug-memory",
+        "input_drc": {
+          "returncode": 5,
+          "available": true,
+          "violations": 41,
+          "categories": {
+            "lib_footprint_issues": 41
+          },
+          "unconnected_items": 117
+        },
+        "returncode": 0,
+        "wall_seconds": 14.766379772976507,
+        "written_project_sha256": "f631dd88da0105b194a817df6186ac5143b08302edb99a0c2d15a54781f129d1",
+        "output_drc": {
+          "returncode": 5,
+          "available": true,
+          "violations": 48,
+          "categories": {
+            "lib_footprint_issues": 41,
+            "track_dangling": 1,
+            "via_dangling": 6
+          },
+          "unconnected_items": 10
+        },
+        "copper": {
+          "tracks_and_arcs": 528,
+          "vias": 36,
+          "length_mm": 602.9262692590729,
+          "sha256": "81d9fbc452fceaddcd76f49ca934e4e33cc70faf4a1c54aa82ba816cf17821b8"
+        },
+        "flux_inspect_returncode": 0,
+        "render_returncode": 0,
+        "source_unchanged": true,
+        "telemetry_files": [
+          "ft2232h_jtag-krt_routetrace.json",
+          "krt-summary.json"
+        ]
+      },
+      "independent_open_connections": 10,
+      "independent_open_nets": [
+        {
+          "id": "kicad-net-1",
+          "name": "GND",
+          "pad_count": 42,
+          "connected_pad_groups": 3,
+          "open_connections": 2
+        },
+        {
+          "id": "kicad-net-8",
+          "name": "/TCK_TXD_A",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-11",
+          "name": "/TMS_A",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-16",
+          "name": "/USB_D+",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-19",
+          "name": "/TXLED_A",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-21",
+          "name": "/TXLED_B",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-26",
+          "name": "/OSCI",
+          "pad_count": 3,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-29",
+          "name": "/VPHY",
+          "pad_count": 4,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-31",
+          "name": "/~{RESET}",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        }
+      ],
+      "peak_rss_kib": 653464,
+      "krt_design_rules": {
+        "escalation_policy": "off",
+        "fab_tier": "standard",
+        "board_floors": {
+          "clearance": 0.09,
+          "track_width": 0.09,
+          "via_diameter": 0.39999999999999997,
+          "via_drill": 0.3,
+          "hole_to_hole": 0.25,
+          "annular": 0.049999999999999996
+        },
+        "count": 0,
+        "nets": [],
+        "narrowed": [],
+        "min_delivered": {},
+        "fab_tier_escalations": 0,
+        "fab_tier_contexts": [],
+        "unsupported_rules": []
+      },
+      "krt_reported_iterations": 149443,
+      "krt_reported_loop_seconds": 0.28
+    },
+    "tier3": {
+      "configuration": {
+        "date": "2026-10-12T12:56:04.151918+00:00",
+        "tier": 3,
+        "board": "gb_nintendo_power",
+        "krt_revision": "023d3f79027d5406e4ea8e68291f588c5c135673",
+        "command": [
+          "/usr/bin/python3",
+          "/home/adam/qtbits/flux_capacitor/reports/validation/krt-tier23-20261012/krt-source/py_router/route.py",
+          "/home/adam/qtbits/flux_capacitor/reports/validation/krt-tier23-20261012/tier3/gb_nintendo_power.kicad_pcb",
+          "/home/adam/qtbits/flux_capacitor/reports/validation/krt-tier23-20261012/tier3/gb_nintendo_power-krt.kicad_pcb",
+          "--escalation",
+          "off",
+          "--strict-sizes",
+          "--no-fix-drc-settings",
+          "--fab-tier",
+          "standard",
+          "--stats",
+          "--verbose",
+          "--debug-memory",
+          "--json-out",
+          "/home/adam/qtbits/flux_capacitor/reports/validation/krt-tier23-20261012/tier3/krt-summary.json"
+        ],
+        "source_sha256": "068464af04d5e63c87b70fbebbd155c35bc64411c2cee683f7c96a10d900eb7d",
+        "project_sha256": "701eb343408e933b989365af667b0771ff37ed1b41dac99d6c69d3926f78b403",
+        "krt_native_sha256": "652b67e266c58b1e373e503bcf9b5d0b0d3dd4756e1c306100f23edf3d3f989b",
+        "kicad_version": "10.0.6-10.0.6~ubuntu26.04.1",
+        "route_timeout_seconds": 900,
+        "telemetry": "KICAD_ROUTE_TRACE=1; stats; verbose; debug-memory",
+        "input_drc": {
+          "returncode": 5,
+          "available": true,
+          "violations": 28,
+          "categories": {
+            "silk_overlap": 6,
+            "lib_footprint_issues": 22
+          },
+          "unconnected_items": 148
+        },
+        "returncode": 3,
+        "wall_seconds": 165.99495462403866,
+        "written_project_sha256": "5ce7b84244a5b717da520da991385b35f3a8de4d0b1e1e61282f1f3a6bb46050",
+        "output_drc": {
+          "returncode": 5,
+          "available": true,
+          "violations": 65,
+          "categories": {
+            "hole_clearance": 2,
+            "silk_overlap": 6,
+            "lib_footprint_issues": 22,
+            "track_dangling": 1,
+            "via_dangling": 34
+          },
+          "unconnected_items": 73
+        },
+        "copper": {
+          "tracks_and_arcs": 1203,
+          "vias": 150,
+          "length_mm": 1506.7406147295574,
+          "sha256": "d07973195631f96af75cf7a583c0f57a9ff3ea4c5d8a74f64b2f80a1f3dcc0b4"
+        },
+        "flux_inspect_returncode": 0,
+        "render_returncode": 1,
+        "source_unchanged": true,
+        "telemetry_files": [
+          "gb_nintendo_power-krt_routetrace.json",
+          "krt-summary.json"
+        ]
+      },
+      "independent_open_connections": 73,
+      "independent_open_nets": [
+        {
+          "id": "kicad-net-1",
+          "name": "/SRAM.VCC",
+          "pad_count": 4,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-2",
+          "name": "/A9.Out",
+          "pad_count": 3,
+          "connected_pad_groups": 3,
+          "open_connections": 2
+        },
+        {
+          "id": "kicad-net-3",
+          "name": "/D3",
+          "pad_count": 4,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-4",
+          "name": "/D4",
+          "pad_count": 4,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-5",
+          "name": "/A16.Out",
+          "pad_count": 3,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-6",
+          "name": "/~{OE}.Out",
+          "pad_count": 3,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-7",
+          "name": "/A11.Out",
+          "pad_count": 3,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-8",
+          "name": "/D5",
+          "pad_count": 4,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-9",
+          "name": "/A13.Out",
+          "pad_count": 3,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-10",
+          "name": "/A15.Out",
+          "pad_count": 3,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-12",
+          "name": "/A14.Out",
+          "pad_count": 3,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-13",
+          "name": "/~{WE}.Out",
+          "pad_count": 3,
+          "connected_pad_groups": 3,
+          "open_connections": 2
+        },
+        {
+          "id": "kicad-net-14",
+          "name": "/A6.Out",
+          "pad_count": 3,
+          "connected_pad_groups": 3,
+          "open_connections": 2
+        },
+        {
+          "id": "kicad-net-15",
+          "name": "/D1",
+          "pad_count": 4,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-16",
+          "name": "/A5.Out",
+          "pad_count": 3,
+          "connected_pad_groups": 3,
+          "open_connections": 2
+        },
+        {
+          "id": "kicad-net-17",
+          "name": "/A8.Out",
+          "pad_count": 3,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-18",
+          "name": "/D6",
+          "pad_count": 4,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-19",
+          "name": "/A4.Out",
+          "pad_count": 3,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-20",
+          "name": "/A7.Out",
+          "pad_count": 3,
+          "connected_pad_groups": 3,
+          "open_connections": 2
+        },
+        {
+          "id": "kicad-net-21",
+          "name": "/A0.Out",
+          "pad_count": 3,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-23",
+          "name": "/D2",
+          "pad_count": 4,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-24",
+          "name": "/D0",
+          "pad_count": 4,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-27",
+          "name": "/A10.Out",
+          "pad_count": 3,
+          "connected_pad_groups": 3,
+          "open_connections": 2
+        },
+        {
+          "id": "kicad-net-28",
+          "name": "/A12.Out",
+          "pad_count": 3,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-29",
+          "name": "/D7",
+          "pad_count": 4,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-30",
+          "name": "/GND",
+          "pad_count": 27,
+          "connected_pad_groups": 8,
+          "open_connections": 7
+        },
+        {
+          "id": "kicad-net-31",
+          "name": "/A3.Out",
+          "pad_count": 3,
+          "connected_pad_groups": 3,
+          "open_connections": 2
+        },
+        {
+          "id": "kicad-net-32",
+          "name": "/VCC",
+          "pad_count": 16,
+          "connected_pad_groups": 5,
+          "open_connections": 4
+        },
+        {
+          "id": "kicad-net-33",
+          "name": "Net-(C2-Pad1)",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-34",
+          "name": "/~{Flash.Reset}",
+          "pad_count": 4,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-36",
+          "name": "/Batt.VCC",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-38",
+          "name": "Net-(U1-Clk.Out)",
+          "pad_count": 3,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-39",
+          "name": "Net-(R4-Pad2)",
+          "pad_count": 3,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-41",
+          "name": "/~{Flash.WP}",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-43",
+          "name": "/A17.Out",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-44",
+          "name": "/A5.Sys",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-45",
+          "name": "/A14.Sys",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-46",
+          "name": "/A15.Sys",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-47",
+          "name": "/A18.Out",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-48",
+          "name": "/~{Write.Sys}",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-49",
+          "name": "Net-(U1-Pad54)",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-50",
+          "name": "/A3.Sys",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-51",
+          "name": "/A2.Sys",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-52",
+          "name": "/~{Flash.CE}",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-53",
+          "name": "/A4.Sys",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-54",
+          "name": "/A12.Sys",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-55",
+          "name": "/A6.Sys",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-56",
+          "name": "/A0.Sys",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-58",
+          "name": "/~{Read.Sys}",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-59",
+          "name": "/~{CS.Sys}",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-60",
+          "name": "/A8.Sys",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-61",
+          "name": "/A1.Sys",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-62",
+          "name": "/A7.Sys",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-63",
+          "name": "/A11.Sys",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-64",
+          "name": "/A19.Out",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-65",
+          "name": "/A9.Sys",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-66",
+          "name": "/A10.Sys",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        }
+      ],
+      "peak_rss_kib": 1888928,
+      "krt_design_rules": {
+        "escalation_policy": "off",
+        "fab_tier": "standard",
+        "board_floors": {
+          "via_diameter": 0.5,
+          "via_drill": 0.3,
+          "hole_to_hole": 0.25,
+          "annular": 0.1,
+          "board_edge": 0.5
+        },
+        "count": 2,
+        "nets": [
+          30,
+          32
+        ],
+        "narrowed": [
+          {
+            "net": 30,
+            "net_name": "/GND",
+            "kind": "track_width",
+            "requested": 0.5,
+            "delivered": 0.2,
+            "site": "net rescue",
+            "count": 1
+          },
+          {
+            "net": 32,
+            "net_name": "/VCC",
+            "kind": "track_width",
+            "requested": 0.5,
+            "delivered": 0.2,
+            "site": "net rescue",
+            "count": 1
+          }
+        ],
+        "min_delivered": {
+          "track_width": 0.2
+        },
+        "fab_tier_escalations": 0,
+        "fab_tier_contexts": [],
+        "unsupported_rules": []
+      },
+      "krt_reported_iterations": 759639,
+      "krt_reported_loop_seconds": 1.6900000000000002
+    },
+    "tier3-matched": {
+      "configuration": {
+        "date": "2026-10-12T13:00:42.242768+00:00",
+        "tier": 3,
+        "board": "gb_nintendo_power",
+        "dimension_mode": "matched",
+        "krt_revision": "023d3f79027d5406e4ea8e68291f588c5c135673",
+        "command": [
+          "/usr/bin/python3",
+          "/home/adam/qtbits/flux_capacitor/reports/validation/krt-tier23-20261012/krt-source/py_router/route.py",
+          "/home/adam/qtbits/flux_capacitor/reports/validation/krt-tier23-20261012/tier3-matched/gb_nintendo_power.kicad_pcb",
+          "/home/adam/qtbits/flux_capacitor/reports/validation/krt-tier23-20261012/tier3-matched/gb_nintendo_power-krt.kicad_pcb",
+          "--escalation",
+          "off",
+          "--strict-sizes",
+          "--no-fix-drc-settings",
+          "--fab-tier",
+          "standard",
+          "--stats",
+          "--verbose",
+          "--debug-memory",
+          "--json-out",
+          "/home/adam/qtbits/flux_capacitor/reports/validation/krt-tier23-20261012/tier3-matched/krt-summary.json",
+          "--track-width",
+          "0.25",
+          "--clearance",
+          "0.2",
+          "--via-size",
+          "0.6",
+          "--via-drill",
+          "0.3"
+        ],
+        "source_sha256": "068464af04d5e63c87b70fbebbd155c35bc64411c2cee683f7c96a10d900eb7d",
+        "project_sha256": "701eb343408e933b989365af667b0771ff37ed1b41dac99d6c69d3926f78b403",
+        "krt_native_sha256": "652b67e266c58b1e373e503bcf9b5d0b0d3dd4756e1c306100f23edf3d3f989b",
+        "kicad_version": "10.0.6-10.0.6~ubuntu26.04.1",
+        "route_timeout_seconds": 900,
+        "telemetry": "KICAD_ROUTE_TRACE=1; stats; verbose; debug-memory",
+        "input_drc": {
+          "returncode": 5,
+          "available": true,
+          "violations": 28,
+          "categories": {
+            "silk_overlap": 6,
+            "lib_footprint_issues": 22
+          },
+          "unconnected_items": 148
+        },
+        "returncode": 0,
+        "wall_seconds": 162.17203449102817,
+        "written_project_sha256": "5ce7b84244a5b717da520da991385b35f3a8de4d0b1e1e61282f1f3a6bb46050",
+        "output_drc": {
+          "returncode": 5,
+          "available": true,
+          "violations": 72,
+          "categories": {
+            "silk_overlap": 6,
+            "lib_footprint_issues": 22,
+            "via_dangling": 44
+          },
+          "unconnected_items": 83
+        },
+        "copper": {
+          "tracks_and_arcs": 939,
+          "vias": 143,
+          "length_mm": 1376.7214538006263,
+          "sha256": "298ecbd160ef97eec76a878b184268d174afeccd9374fb62e05d901109a388d6"
+        },
+        "flux_inspect_returncode": 0,
+        "render_returncode": 0,
+        "source_unchanged": true,
+        "telemetry_files": [
+          "gb_nintendo_power-krt_routetrace.json",
+          "krt-summary.json"
+        ]
+      },
+      "independent_open_connections": 83,
+      "independent_open_nets": [
+        {
+          "id": "kicad-net-1",
+          "name": "/SRAM.VCC",
+          "pad_count": 4,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-2",
+          "name": "/A9.Out",
+          "pad_count": 3,
+          "connected_pad_groups": 3,
+          "open_connections": 2
+        },
+        {
+          "id": "kicad-net-3",
+          "name": "/D3",
+          "pad_count": 4,
+          "connected_pad_groups": 3,
+          "open_connections": 2
+        },
+        {
+          "id": "kicad-net-4",
+          "name": "/D4",
+          "pad_count": 4,
+          "connected_pad_groups": 3,
+          "open_connections": 2
+        },
+        {
+          "id": "kicad-net-5",
+          "name": "/A16.Out",
+          "pad_count": 3,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-6",
+          "name": "/~{OE}.Out",
+          "pad_count": 3,
+          "connected_pad_groups": 3,
+          "open_connections": 2
+        },
+        {
+          "id": "kicad-net-7",
+          "name": "/A11.Out",
+          "pad_count": 3,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-8",
+          "name": "/D5",
+          "pad_count": 4,
+          "connected_pad_groups": 3,
+          "open_connections": 2
+        },
+        {
+          "id": "kicad-net-9",
+          "name": "/A13.Out",
+          "pad_count": 3,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-10",
+          "name": "/A15.Out",
+          "pad_count": 3,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-12",
+          "name": "/A14.Out",
+          "pad_count": 3,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-13",
+          "name": "/~{WE}.Out",
+          "pad_count": 3,
+          "connected_pad_groups": 3,
+          "open_connections": 2
+        },
+        {
+          "id": "kicad-net-14",
+          "name": "/A6.Out",
+          "pad_count": 3,
+          "connected_pad_groups": 3,
+          "open_connections": 2
+        },
+        {
+          "id": "kicad-net-15",
+          "name": "/D1",
+          "pad_count": 4,
+          "connected_pad_groups": 3,
+          "open_connections": 2
+        },
+        {
+          "id": "kicad-net-16",
+          "name": "/A5.Out",
+          "pad_count": 3,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-17",
+          "name": "/A8.Out",
+          "pad_count": 3,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-18",
+          "name": "/D6",
+          "pad_count": 4,
+          "connected_pad_groups": 4,
+          "open_connections": 3
+        },
+        {
+          "id": "kicad-net-19",
+          "name": "/A4.Out",
+          "pad_count": 3,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-20",
+          "name": "/A7.Out",
+          "pad_count": 3,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-21",
+          "name": "/A0.Out",
+          "pad_count": 3,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-23",
+          "name": "/D2",
+          "pad_count": 4,
+          "connected_pad_groups": 3,
+          "open_connections": 2
+        },
+        {
+          "id": "kicad-net-24",
+          "name": "/D0",
+          "pad_count": 4,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-27",
+          "name": "/A10.Out",
+          "pad_count": 3,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-28",
+          "name": "/A12.Out",
+          "pad_count": 3,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-29",
+          "name": "/D7",
+          "pad_count": 4,
+          "connected_pad_groups": 4,
+          "open_connections": 3
+        },
+        {
+          "id": "kicad-net-30",
+          "name": "/GND",
+          "pad_count": 27,
+          "connected_pad_groups": 9,
+          "open_connections": 8
+        },
+        {
+          "id": "kicad-net-31",
+          "name": "/A3.Out",
+          "pad_count": 3,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-32",
+          "name": "/VCC",
+          "pad_count": 16,
+          "connected_pad_groups": 6,
+          "open_connections": 5
+        },
+        {
+          "id": "kicad-net-33",
+          "name": "Net-(C2-Pad1)",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-34",
+          "name": "/~{Flash.Reset}",
+          "pad_count": 4,
+          "connected_pad_groups": 3,
+          "open_connections": 2
+        },
+        {
+          "id": "kicad-net-36",
+          "name": "/Batt.VCC",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-38",
+          "name": "Net-(U1-Clk.Out)",
+          "pad_count": 3,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-39",
+          "name": "Net-(R4-Pad2)",
+          "pad_count": 3,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-41",
+          "name": "/~{Flash.WP}",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-42",
+          "name": "/~{Reset.Sys}",
+          "pad_count": 3,
+          "connected_pad_groups": 3,
+          "open_connections": 2
+        },
+        {
+          "id": "kicad-net-43",
+          "name": "/A17.Out",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-44",
+          "name": "/A5.Sys",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-46",
+          "name": "/A15.Sys",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-47",
+          "name": "/A18.Out",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-48",
+          "name": "/~{Write.Sys}",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-49",
+          "name": "Net-(U1-Pad54)",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-50",
+          "name": "/A3.Sys",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-51",
+          "name": "/A2.Sys",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-52",
+          "name": "/~{Flash.CE}",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-53",
+          "name": "/A4.Sys",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-54",
+          "name": "/A12.Sys",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-55",
+          "name": "/A6.Sys",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-56",
+          "name": "/A0.Sys",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-58",
+          "name": "/~{Read.Sys}",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-59",
+          "name": "/~{CS.Sys}",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-60",
+          "name": "/A8.Sys",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-61",
+          "name": "/A1.Sys",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-62",
+          "name": "/A7.Sys",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-63",
+          "name": "/A11.Sys",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-64",
+          "name": "/A19.Out",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-65",
+          "name": "/A9.Sys",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        },
+        {
+          "id": "kicad-net-66",
+          "name": "/A10.Sys",
+          "pad_count": 2,
+          "connected_pad_groups": 2,
+          "open_connections": 1
+        }
+      ],
+      "peak_rss_kib": 1465164,
+      "krt_design_rules": {
+        "escalation_policy": "off",
+        "fab_tier": "standard",
+        "board_floors": {
+          "via_diameter": 0.5,
+          "via_drill": 0.3,
+          "hole_to_hole": 0.25,
+          "annular": 0.1,
+          "board_edge": 0.5
+        },
+        "count": 0,
+        "nets": [],
+        "narrowed": [],
+        "min_delivered": {},
+        "fab_tier_escalations": 0,
+        "fab_tier_contexts": [],
+        "unsupported_rules": []
+      },
+      "krt_reported_iterations": 963713,
+      "krt_reported_loop_seconds": 2.64
+    }
+  },
+  "flux_reference": "../residual-frontier-round27-20261012/summary.json",
+  "limitations": [
+    "KRT straight copper versus Flux provisional scaffold; no completed curved Tier2/3 output",
+    "KRT project-default and explicit dimension-matched modes are retained separately",
+    "Original project rules restored before independent KiCad DRC",
+    "KRT standard fab floor raises Tier2 board-edge clearance to0.2mm; Flux sourcefloor0mm",
+    "Routing wall times exclude independent post-run DRC/rendering",
+    "KRT returncode0 and merged routed tally do not imply physical connectivity"
+  ],
+  "flux_source_revision": "a24444c",
+  "flux_export_validation": {
+    "helper_compile": "PASS",
+    "helper_command": "c++ -std=c++20 -O2 -Iinclude export_scaffold.cpp build/release/libflux_core.a -lvulkan -lboost_json -lboost_container -lcrypto build/release/libflux_telemetry.a -o export_scaffold",
+    "exports": {
+      "tier2_ft2232h_jtag": "PASS",
+      "tier3_gb_nintendo_power": "PASS"
+    },
+    "kicad_drc": {
+      "tier2_ft2232h_jtag": {
+        "exit": 5,
+        "violations": 62,
+        "unconnected_items": 1,
+        "categories": {
+          "lib_footprint_issues": 41,
+          "track_dangling": 21
+        }
+      },
+      "tier3_gb_nintendo_power": {
+        "exit": 5,
+        "violations": 28,
+        "unconnected_items": 97,
+        "categories": {
+          "silk_overlap": 6,
+          "lib_footprint_issues": 22
+        }
+      }
+    },
+    "flux_inspect_kicad": {
+      "tier2_ft2232h_jtag": {
+        "exit": 0,
+        "open_connections": 1,
+        "tracks": 1322,
+        "vias": 74
+      },
+      "tier3_gb_nintendo_power": {
+        "exit": 0,
+        "open_connections": 97,
+        "tracks": 279,
+        "vias": 20
+      }
+    },
+    "provenance": {
+      "tier2": {
+        "source": "tests/fixtures/routing-corpus/ft2232h_jtag.kicad_pcb",
+        "telemetry": "reports/validation/residual-frontier-round27-20261012/tier2/telemetry/ft2232h_jtag-global.jsonl",
+        "output": "reports/validation/residual-frontier-round27-20261012/tier2/diagnostic-scaffold/ft2232h_jtag.kicad_pcb"
+      },
+      "tier3": {
+        "source": "tests/fixtures/routing-corpus/gb_nintendo_power.kicad_pcb",
+        "telemetry": "reports/validation/residual-frontier-round27-20261012/tier3/telemetry/gb_nintendo_power-global.jsonl",
+        "output": "reports/validation/residual-frontier-round27-20261012/tier3/diagnostic-scaffold/gb_nintendo_power.kicad_pcb"
+      }
+    },
+    "provisional_straight_scaffold": true
+  }
+}

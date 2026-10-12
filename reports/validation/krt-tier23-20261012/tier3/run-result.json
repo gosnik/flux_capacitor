@@ -1,0 +1,68 @@
+{
+  "date": "2026-10-12T12:56:04.151918+00:00",
+  "tier": 3,
+  "board": "gb_nintendo_power",
+  "krt_revision": "023d3f79027d5406e4ea8e68291f588c5c135673",
+  "command": [
+    "/usr/bin/python3",
+    "/home/adam/qtbits/flux_capacitor/reports/validation/krt-tier23-20261012/krt-source/py_router/route.py",
+    "/home/adam/qtbits/flux_capacitor/reports/validation/krt-tier23-20261012/tier3/gb_nintendo_power.kicad_pcb",
+    "/home/adam/qtbits/flux_capacitor/reports/validation/krt-tier23-20261012/tier3/gb_nintendo_power-krt.kicad_pcb",
+    "--escalation",
+    "off",
+    "--strict-sizes",
+    "--no-fix-drc-settings",
+    "--fab-tier",
+    "standard",
+    "--stats",
+    "--verbose",
+    "--debug-memory",
+    "--json-out",
+    "/home/adam/qtbits/flux_capacitor/reports/validation/krt-tier23-20261012/tier3/krt-summary.json"
+  ],
+  "source_sha256": "068464af04d5e63c87b70fbebbd155c35bc64411c2cee683f7c96a10d900eb7d",
+  "project_sha256": "701eb343408e933b989365af667b0771ff37ed1b41dac99d6c69d3926f78b403",
+  "krt_native_sha256": "652b67e266c58b1e373e503bcf9b5d0b0d3dd4756e1c306100f23edf3d3f989b",
+  "kicad_version": "10.0.6-10.0.6~ubuntu26.04.1",
+  "route_timeout_seconds": 900,
+  "telemetry": "KICAD_ROUTE_TRACE=1; stats; verbose; debug-memory",
+  "input_drc": {
+    "returncode": 5,
+    "available": true,
+    "violations": 28,
+    "categories": {
+      "silk_overlap": 6,
+      "lib_footprint_issues": 22
+    },
+    "unconnected_items": 148
+  },
+  "returncode": 3,
+  "wall_seconds": 165.99495462403866,
+  "written_project_sha256": "5ce7b84244a5b717da520da991385b35f3a8de4d0b1e1e61282f1f3a6bb46050",
+  "output_drc": {
+    "returncode": 5,
+    "available": true,
+    "violations": 65,
+    "categories": {
+      "hole_clearance": 2,
+      "silk_overlap": 6,
+      "lib_footprint_issues": 22,
+      "track_dangling": 1,
+      "via_dangling": 34
+    },
+    "unconnected_items": 73
+  },
+  "copper": {
+    "tracks_and_arcs": 1203,
+    "vias": 150,
+    "length_mm": 1506.7406147295574,
+    "sha256": "d07973195631f96af75cf7a583c0f57a9ff3ea4c5d8a74f64b2f80a1f3dcc0b4"
+  },
+  "flux_inspect_returncode": 0,
+  "render_returncode": 1,
+  "source_unchanged": true,
+  "telemetry_files": [
+    "gb_nintendo_power-krt_routetrace.json",
+    "krt-summary.json"
+  ]
+}

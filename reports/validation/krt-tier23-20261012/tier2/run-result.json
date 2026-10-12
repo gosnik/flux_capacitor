@@ -1,0 +1,65 @@
+{
+  "date": "2026-10-12T12:55:12.778838+00:00",
+  "tier": 2,
+  "board": "ft2232h_jtag",
+  "krt_revision": "023d3f79027d5406e4ea8e68291f588c5c135673",
+  "command": [
+    "/usr/bin/python3",
+    "/home/adam/qtbits/flux_capacitor/reports/validation/krt-tier23-20261012/krt-source/py_router/route.py",
+    "/home/adam/qtbits/flux_capacitor/reports/validation/krt-tier23-20261012/tier2/ft2232h_jtag.kicad_pcb",
+    "/home/adam/qtbits/flux_capacitor/reports/validation/krt-tier23-20261012/tier2/ft2232h_jtag-krt.kicad_pcb",
+    "--escalation",
+    "off",
+    "--strict-sizes",
+    "--no-fix-drc-settings",
+    "--fab-tier",
+    "standard",
+    "--stats",
+    "--verbose",
+    "--debug-memory",
+    "--json-out",
+    "/home/adam/qtbits/flux_capacitor/reports/validation/krt-tier23-20261012/tier2/krt-summary.json"
+  ],
+  "source_sha256": "882c35ac781cf8fc292dc025b8d22944077cc54002c6c73cf2613056f8b8b95b",
+  "project_sha256": "00edffa7cc27d9c31b57714ce3a5cdff5f68a89425071f2b353672767939f237",
+  "krt_native_sha256": "652b67e266c58b1e373e503bcf9b5d0b0d3dd4756e1c306100f23edf3d3f989b",
+  "kicad_version": "10.0.6-10.0.6~ubuntu26.04.1",
+  "route_timeout_seconds": 900,
+  "telemetry": "KICAD_ROUTE_TRACE=1; stats; verbose; debug-memory",
+  "input_drc": {
+    "returncode": 5,
+    "available": true,
+    "violations": 41,
+    "categories": {
+      "lib_footprint_issues": 41
+    },
+    "unconnected_items": 117
+  },
+  "returncode": 0,
+  "wall_seconds": 15.841286281996872,
+  "written_project_sha256": "f631dd88da0105b194a817df6186ac5143b08302edb99a0c2d15a54781f129d1",
+  "output_drc": {
+    "returncode": 5,
+    "available": true,
+    "violations": 49,
+    "categories": {
+      "lib_footprint_issues": 41,
+      "track_dangling": 1,
+      "via_dangling": 7
+    },
+    "unconnected_items": 11
+  },
+  "copper": {
+    "tracks_and_arcs": 518,
+    "vias": 35,
+    "length_mm": 603.8768677287987,
+    "sha256": "20ae2658fe3ef01df0b4d249f72bdfb8bcd99e951dea8aeb9b31f040ef75ac16"
+  },
+  "flux_inspect_returncode": 0,
+  "render_returncode": 1,
+  "source_unchanged": true,
+  "telemetry_files": [
+    "ft2232h_jtag-krt_routetrace.json",
+    "krt-summary.json"
+  ]
+}

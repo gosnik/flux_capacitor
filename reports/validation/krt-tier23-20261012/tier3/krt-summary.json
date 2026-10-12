@@ -1,0 +1,2486 @@
+{
+ "routed_single": [],
+ "failed_single": [
+  "Net-(U1-Pad54)",
+  "Net-(C2-Pad1)",
+  "Net-(U1-Clk.Out)",
+  "Net-(R4-Pad2)",
+  "/A11.Out",
+  "/A6.Sys",
+  "/A5.Sys",
+  "/A7.Sys",
+  "/A4.Sys",
+  "/A8.Sys",
+  "/A3.Sys",
+  "/A9.Sys",
+  "/A2.Sys",
+  "/A10.Sys",
+  "/A1.Sys",
+  "/A11.Sys",
+  "/A0.Sys",
+  "/A12.Sys",
+  "/~{CS.Sys}",
+  "/~{Read.Sys}",
+  "/A18.Out",
+  "/~{Write.Sys}",
+  "/A14.Sys",
+  "/A15.Sys",
+  "/~{OE}.Out",
+  "/A9.Out",
+  "/D3",
+  "/D7",
+  "/A13.Out",
+  "/D5",
+  "/D4",
+  "/A12.Out",
+  "/A8.Out",
+  "/A16.Out",
+  "/D2",
+  "/~{WE}.Out",
+  "/~{Flash.Reset}",
+  "/A14.Out",
+  "/Batt.VCC",
+  "/~{Flash.CE}",
+  "/A19.Out",
+  "/A17.Out",
+  "/~{Flash.WP}",
+  "/A0.Out",
+  "/A7.Out",
+  "/A6.Out",
+  "/A10.Out",
+  "/A5.Out"
+ ],
+ "open_single": [],
+ "failed_multipoint": [
+  {
+   "net_name": "/SRAM.VCC",
+   "failed_pads": [
+    {
+     "component_ref": "U1",
+     "pad_number": "?",
+     "x": 112.005,
+     "y": 91.4
+    }
+   ]
+  },
+  {
+   "net_name": "/A15.Out",
+   "failed_pads": [
+    {
+     "component_ref": "U1",
+     "pad_number": "?",
+     "x": 120.88,
+     "y": 88.125
+    }
+   ]
+  },
+  {
+   "net_name": "/D1",
+   "failed_pads": [
+    {
+     "component_ref": "U1",
+     "pad_number": "?",
+     "x": 112.005,
+     "y": 96.2
+    }
+   ]
+  },
+  {
+   "net_name": "/D0",
+   "failed_pads": [
+    {
+     "component_ref": "U1",
+     "pad_number": "?",
+     "x": 112.005,
+     "y": 95.8
+    }
+   ]
+  },
+  {
+   "net_name": "/D6",
+   "failed_pads": [
+    {
+     "component_ref": "U1",
+     "pad_number": "?",
+     "x": 112.005,
+     "y": 94.2
+    }
+   ]
+  },
+  {
+   "net_name": "/A3.Out",
+   "failed_pads": [
+    {
+     "component_ref": "U2",
+     "pad_number": "?",
+     "x": 136.02,
+     "y": 89.095
+    },
+    {
+     "component_ref": "U1",
+     "pad_number": "?",
+     "x": 123.755,
+     "y": 90.6
+    }
+   ]
+  },
+  {
+   "net_name": "/A4.Out",
+   "failed_pads": [
+    {
+     "component_ref": "U1",
+     "pad_number": "?",
+     "x": 123.755,
+     "y": 91.8
+    }
+   ]
+  },
+  {
+   "net_name": "/GND",
+   "failed_pads": [
+    {
+     "component_ref": "U1",
+     "pad_number": "?",
+     "x": 114.48,
+     "y": 99.875
+    },
+    {
+     "component_ref": "U1",
+     "pad_number": "?",
+     "x": 118.48,
+     "y": 99.875
+    },
+    {
+     "component_ref": "U1",
+     "pad_number": "?",
+     "x": 123.755,
+     "y": 95.0
+    },
+    {
+     "component_ref": "U1",
+     "pad_number": "?",
+     "x": 123.755,
+     "y": 91.0
+    },
+    {
+     "component_ref": "U1",
+     "pad_number": "?",
+     "x": 118.88,
+     "y": 88.125
+    },
+    {
+     "component_ref": "U1",
+     "pad_number": "?",
+     "x": 112.005,
+     "y": 93.0
+    },
+    {
+     "component_ref": "U1",
+     "pad_number": "?",
+     "x": 112.005,
+     "y": 97.0
+    }
+   ]
+  },
+  {
+   "net_name": "/VCC",
+   "failed_pads": [
+    {
+     "component_ref": "U1",
+     "pad_number": "?",
+     "x": 123.755,
+     "y": 93.0
+    },
+    {
+     "component_ref": "U1",
+     "pad_number": "?",
+     "x": 116.88,
+     "y": 88.125
+    },
+    {
+     "component_ref": "U1",
+     "pad_number": "?",
+     "x": 112.005,
+     "y": 91.0
+    },
+    {
+     "component_ref": "U1",
+     "pad_number": "?",
+     "x": 112.005,
+     "y": 93.4
+    }
+   ]
+  }
+ ],
+ "multipoint_nets": 9,
+ "multipoint_pads_connected": 49,
+ "multipoint_pads_total": 68,
+ "multipoint_edges_routed": 1,
+ "multipoint_edges_failed": 20,
+ "ripup_success_pairs": [],
+ "rerouted_pairs": [],
+ "single_ended_target_swaps": [],
+ "layer_swaps": 0,
+ "successful": 0,
+ "failed": 57,
+ "total_time": 1.6900000000000002,
+ "total_iterations": 759639,
+ "total_vias": 150,
+ "cleanup_disconnected": [],
+ "min_clearance_used": 0.2,
+ "design_rules": {
+  "escalation_policy": "off",
+  "fab_tier": "standard",
+  "board_floors": {
+   "via_diameter": 0.5,
+   "via_drill": 0.3,
+   "hole_to_hole": 0.25,
+   "annular": 0.1,
+   "board_edge": 0.5
+  },
+  "count": 2,
+  "nets": [
+   30,
+   32
+  ],
+  "narrowed": [
+   {
+    "net": 30,
+    "net_name": "/GND",
+    "kind": "track_width",
+    "requested": 0.5,
+    "delivered": 0.2,
+    "site": "net rescue",
+    "count": 1
+   },
+   {
+    "net": 32,
+    "net_name": "/VCC",
+    "kind": "track_width",
+    "requested": 0.5,
+    "delivered": 0.2,
+    "site": "net rescue",
+    "count": 1
+   }
+  ],
+  "min_delivered": {
+   "track_width": 0.2
+  },
+  "fab_tier_escalations": 0,
+  "fab_tier_contexts": [],
+  "unsupported_rules": []
+ },
+ "plane_fragility": {
+  "source": "none",
+  "islands": 0,
+  "refill_status": null,
+  "why": "the board has no zones",
+  "machine_dependent": false
+ },
+ "rescue": {
+  "attempted": 57,
+  "recovered": [],
+  "improved": [],
+  "unchanged": [
+   "/A0.Out",
+   "/A0.Sys",
+   "/A1.Sys",
+   "/A10.Out",
+   "/A10.Sys",
+   "/A11.Out",
+   "/A11.Sys",
+   "/A12.Out",
+   "/A12.Sys",
+   "/A13.Out",
+   "/A14.Out",
+   "/A14.Sys",
+   "/A15.Out",
+   "/A15.Sys",
+   "/A16.Out",
+   "/A17.Out",
+   "/A18.Out",
+   "/A19.Out",
+   "/A2.Sys",
+   "/A3.Out",
+   "/A3.Sys",
+   "/A4.Out",
+   "/A4.Sys",
+   "/A5.Out",
+   "/A5.Sys",
+   "/A6.Out",
+   "/A6.Sys",
+   "/A7.Out",
+   "/A7.Sys",
+   "/A8.Out",
+   "/A8.Sys",
+   "/A9.Out",
+   "/A9.Sys",
+   "/Batt.VCC",
+   "/D0",
+   "/D1",
+   "/D2",
+   "/D3",
+   "/D4",
+   "/D5",
+   "/D6",
+   "/D7",
+   "/GND",
+   "/SRAM.VCC",
+   "/VCC",
+   "/~{CS.Sys}",
+   "/~{Flash.CE}",
+   "/~{Flash.Reset}",
+   "/~{Flash.WP}",
+   "/~{OE}.Out",
+   "/~{Read.Sys}",
+   "/~{WE}.Out",
+   "/~{Write.Sys}",
+   "Net-(C2-Pad1)",
+   "Net-(R4-Pad2)",
+   "Net-(U1-Clk.Out)",
+   "Net-(U1-Pad54)"
+  ],
+  "pads_reconnected": 0,
+  "widths": {},
+  "time": 59.81
+ },
+ "oracle_check": "disabled",
+ "blockers": [
+  {
+   "net": "Net-(U1-Pad54)",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/GND",
+     "preexisting": true
+    },
+    {
+     "net": "/P10.R6",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "Net-(C2-Pad1)",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/~{OE}.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/GND",
+     "preexisting": true
+    },
+    {
+     "net": "/SRAM.~{CE1}",
+     "preexisting": true
+    },
+    {
+     "net": "/VCC",
+     "preexisting": true
+    },
+    {
+     "net": "/D6",
+     "preexisting": true
+    },
+    {
+     "net": "/P10.R6",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "Net-(U1-Clk.Out)",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/D1",
+     "preexisting": true
+    },
+    {
+     "net": "/GND",
+     "preexisting": true
+    },
+    {
+     "net": "/A0.Out",
+     "preexisting": true
+    },
+    {
+     "net": "Net-(U1-Clk.In)",
+     "preexisting": true
+    },
+    {
+     "net": "/VCC",
+     "preexisting": true
+    },
+    {
+     "net": "/~{OE}.Out",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "Net-(R4-Pad2)",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/GND",
+     "preexisting": true
+    },
+    {
+     "net": "/~{OE}.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/VCC",
+     "preexisting": true
+    },
+    {
+     "net": "/A0.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/SRAM.~{CE1}",
+     "preexisting": true
+    },
+    {
+     "net": "/D4",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/A11.Out",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/A13.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/A8.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/A1.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/A2.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/~{OE}.Out",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/A6.Sys",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/VCC",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/A5.Sys",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/VCC",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/A7.Sys",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/VCC",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/A4.Sys",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/VCC",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/A8.Sys",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/VCC",
+     "preexisting": true
+    },
+    {
+     "net": "/A13.Sys",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/A3.Sys",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/VCC",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/A9.Sys",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/VCC",
+     "preexisting": true
+    },
+    {
+     "net": "/A13.Sys",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/A2.Sys",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/VCC",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/A10.Sys",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/VCC",
+     "preexisting": true
+    },
+    {
+     "net": "/A13.Sys",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/A1.Sys",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/VCC",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/A11.Sys",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/A13.Sys",
+     "preexisting": true
+    },
+    {
+     "net": "/VCC",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/A0.Sys",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/VCC",
+     "preexisting": true
+    },
+    {
+     "net": "/A0.Out",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/A12.Sys",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/A13.Sys",
+     "preexisting": true
+    },
+    {
+     "net": "/VCC",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/~{CS.Sys}",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/VCC",
+     "preexisting": true
+    },
+    {
+     "net": "/A0.Out",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/~{Read.Sys}",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/VCC",
+     "preexisting": true
+    },
+    {
+     "net": "/A0.Out",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/A18.Out",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/A11.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/~{Flash.Reset}",
+     "preexisting": true
+    },
+    {
+     "net": "/VCC",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/~{Write.Sys}",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/VCC",
+     "preexisting": true
+    },
+    {
+     "net": "/A0.Out",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/A14.Sys",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/D6",
+     "preexisting": true
+    },
+    {
+     "net": "/VCC",
+     "preexisting": true
+    },
+    {
+     "net": "/A13.Sys",
+     "preexisting": true
+    },
+    {
+     "net": "/D0",
+     "preexisting": true
+    },
+    {
+     "net": "/D4",
+     "preexisting": true
+    },
+    {
+     "net": "/~{Reset.Sys}",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/A15.Sys",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/~{Reset.Sys}",
+     "preexisting": true
+    },
+    {
+     "net": "/VCC",
+     "preexisting": true
+    },
+    {
+     "net": "/A13.Sys",
+     "preexisting": true
+    },
+    {
+     "net": "/D0",
+     "preexisting": true
+    },
+    {
+     "net": "/D6",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/~{OE}.Out",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/D5",
+     "preexisting": true
+    },
+    {
+     "net": "/D7",
+     "preexisting": true
+    },
+    {
+     "net": "/VCC",
+     "preexisting": true
+    },
+    {
+     "net": "/A0.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/D1",
+     "preexisting": true
+    },
+    {
+     "net": "/D4",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/A9.Out",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/A11.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/A8.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/GND",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/D3",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/D0",
+     "preexisting": true
+    },
+    {
+     "net": "/VCC",
+     "preexisting": true
+    },
+    {
+     "net": "Net-(U1-Clk.In)",
+     "preexisting": true
+    },
+    {
+     "net": "/GND",
+     "preexisting": true
+    },
+    {
+     "net": "/~{OE}.Out",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/D7",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/~{OE}.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/A0.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/D6",
+     "preexisting": true
+    },
+    {
+     "net": "/SRAM.~{CE1}",
+     "preexisting": true
+    },
+    {
+     "net": "/P10.R6",
+     "preexisting": true
+    },
+    {
+     "net": "/GND",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/A13.Out",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/A8.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/D7",
+     "preexisting": true
+    },
+    {
+     "net": "/GND",
+     "preexisting": true
+    },
+    {
+     "net": "/A11.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/A2.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/~{Reset.Sys}",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/D5",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/D4",
+     "preexisting": true
+    },
+    {
+     "net": "/~{OE}.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/D6",
+     "preexisting": true
+    },
+    {
+     "net": "/D7",
+     "preexisting": true
+    },
+    {
+     "net": "/D2",
+     "preexisting": true
+    },
+    {
+     "net": "/P10.R6",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/D4",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/~{OE}.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/D6",
+     "preexisting": true
+    },
+    {
+     "net": "/D0",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/A12.Out",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/A2.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/A13.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/A11.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/GND",
+     "preexisting": true
+    },
+    {
+     "net": "/A1.Out",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/A8.Out",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/A1.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/A11.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/A2.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/D7",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/A16.Out",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/GND",
+     "preexisting": true
+    },
+    {
+     "net": "/VCC",
+     "preexisting": true
+    },
+    {
+     "net": "/A14.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/A12.Out",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/D2",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/~{OE}.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/D5",
+     "preexisting": true
+    },
+    {
+     "net": "/GND",
+     "preexisting": true
+    },
+    {
+     "net": "/~{Reset.Sys}",
+     "preexisting": true
+    },
+    {
+     "net": "/D7",
+     "preexisting": true
+    },
+    {
+     "net": "/VCC",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/~{WE}.Out",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/D5",
+     "preexisting": true
+    },
+    {
+     "net": "/A13.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/A11.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/A8.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/D2",
+     "preexisting": true
+    },
+    {
+     "net": "/~{Flash.Reset}",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/~{Flash.Reset}",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/GND",
+     "preexisting": true
+    },
+    {
+     "net": "/P10.R6",
+     "preexisting": true
+    },
+    {
+     "net": "/A2.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/A8.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/D7",
+     "preexisting": true
+    },
+    {
+     "net": "/A11.Out",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/A14.Out",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/A12.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/GND",
+     "preexisting": true
+    },
+    {
+     "net": "/VCC",
+     "preexisting": true
+    },
+    {
+     "net": "/A1.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/A16.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/A13.Out",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/Batt.VCC",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/A2.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/A12.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/SRAM.~{CE1}",
+     "preexisting": true
+    },
+    {
+     "net": "/A1.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/~{OE}.Out",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/~{Flash.CE}",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/GND",
+     "preexisting": true
+    },
+    {
+     "net": "/A0.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/D4",
+     "preexisting": true
+    },
+    {
+     "net": "/~{OE}.Out",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/A19.Out",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/~{Reset.Sys}",
+     "preexisting": true
+    },
+    {
+     "net": "/D7",
+     "preexisting": true
+    },
+    {
+     "net": "/GND",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/A17.Out",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/GND",
+     "preexisting": true
+    },
+    {
+     "net": "/~{Reset.Sys}",
+     "preexisting": true
+    },
+    {
+     "net": "/D7",
+     "preexisting": true
+    },
+    {
+     "net": "/VCC",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/~{Flash.WP}",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/A11.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/~{Flash.Reset}",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/A0.Out",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/~{Reset.Sys}",
+     "preexisting": true
+    },
+    {
+     "net": "/~{OE}.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/VCC",
+     "preexisting": true
+    },
+    {
+     "net": "/A13.Sys",
+     "preexisting": true
+    },
+    {
+     "net": "Net-(U1-Clk.In)",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/A7.Out",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/A11.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/~{Flash.Reset}",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/A6.Out",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/P10.R6",
+     "preexisting": true
+    },
+    {
+     "net": "/A11.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/~{Flash.Reset}",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/A10.Out",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/D7",
+     "preexisting": true
+    },
+    {
+     "net": "/D5",
+     "preexisting": true
+    },
+    {
+     "net": "/SRAM.~{CE1}",
+     "preexisting": true
+    },
+    {
+     "net": "/A2.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/~{OE}.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/D2",
+     "preexisting": true
+    },
+    {
+     "net": "/P10.R6",
+     "preexisting": true
+    },
+    {
+     "net": "/~{Reset.Sys}",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/A5.Out",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/P10.R6",
+     "preexisting": true
+    },
+    {
+     "net": "/A11.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/~{Flash.Reset}",
+     "preexisting": true
+    },
+    {
+     "net": "/A2.Out",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/SRAM.VCC",
+   "stage": "phase3",
+   "blocked_by": [
+    {
+     "net": "/GND",
+     "blocked_count": 1,
+     "unique_cells": 1,
+     "track_cells": 1,
+     "via_cells": 0,
+     "near_target_cells": 1,
+     "near_source_cells": 0
+    }
+   ]
+  },
+  {
+   "net": "/SRAM.VCC",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/A11.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/A13.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/D5",
+     "preexisting": true
+    },
+    {
+     "net": "/D2",
+     "preexisting": true
+    },
+    {
+     "net": "/A1.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/A8.Out",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/A15.Out",
+   "stage": "phase3",
+   "blocked_by": [
+    {
+     "net": "/VCC",
+     "blocked_count": 1,
+     "unique_cells": 1,
+     "track_cells": 1,
+     "via_cells": 0,
+     "near_target_cells": 1,
+     "near_source_cells": 0
+    }
+   ]
+  },
+  {
+   "net": "/A15.Out",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/A11.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/D5",
+     "preexisting": true
+    },
+    {
+     "net": "/A13.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/A2.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/A1.Out",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/A3.Out",
+   "stage": "phase3",
+   "blocked_by": [
+    {
+     "net": "/A2.Out",
+     "blocked_count": 1,
+     "unique_cells": 1,
+     "track_cells": 1,
+     "via_cells": 0,
+     "near_target_cells": 1,
+     "near_source_cells": 0
+    },
+    {
+     "net": "/VCC",
+     "blocked_count": 1,
+     "unique_cells": 1,
+     "track_cells": 1,
+     "via_cells": 0,
+     "near_target_cells": 1,
+     "near_source_cells": 0
+    }
+   ]
+  },
+  {
+   "net": "/A3.Out",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/A2.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/A8.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/A1.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/~{Flash.Reset}",
+     "preexisting": true
+    },
+    {
+     "net": "/D2",
+     "preexisting": true
+    },
+    {
+     "net": "/A11.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/D7",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/A4.Out",
+   "stage": "phase3",
+   "blocked_by": [
+    {
+     "net": "/A2.Out",
+     "blocked_count": 1,
+     "unique_cells": 1,
+     "track_cells": 1,
+     "via_cells": 0,
+     "near_target_cells": 1,
+     "near_source_cells": 0
+    }
+   ]
+  },
+  {
+   "net": "/GND",
+   "stage": "phase3",
+   "blocked_by": [
+    {
+     "net": "/VCC",
+     "blocked_count": 1,
+     "unique_cells": 1,
+     "track_cells": 1,
+     "via_cells": 0,
+     "near_target_cells": 1,
+     "near_source_cells": 0
+    }
+   ]
+  },
+  {
+   "net": "/GND",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/A1.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/A8.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/D7",
+     "preexisting": true
+    },
+    {
+     "net": "/A2.Out",
+     "preexisting": true
+    },
+    {
+     "net": "/P10.R6",
+     "preexisting": true
+    },
+    {
+     "net": "/~{OE}.Out",
+     "preexisting": true
+    }
+   ]
+  }
+ ],
+ "boxed_in": [
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 2,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "Net-(U1-Pad54)"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5001,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "Net-(C2-Pad1)"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5001,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "Net-(U1-Clk.Out)"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5010,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "Net-(R4-Pad2)"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5010,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/A11.Out"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5001,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/A6.Sys"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5001,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/A5.Sys"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5001,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/A7.Sys"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5001,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/A4.Sys"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5001,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/A8.Sys"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5001,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/A3.Sys"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5001,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/A9.Sys"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5001,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/A2.Sys"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5001,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/A10.Sys"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5001,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/A1.Sys"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5001,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/A11.Sys"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5001,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/A0.Sys"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5001,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/A12.Sys"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5001,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/~{CS.Sys}"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5001,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/~{Read.Sys}"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 13,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/A18.Out"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5001,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/~{Write.Sys}"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5027,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/A14.Sys"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5001,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/A15.Sys"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5001,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/~{OE}.Out"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 13,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/A9.Out"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5001,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/D3"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5010,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/D7"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5010,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/A13.Out"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5010,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/D5"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5010,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/D4"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5001,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/A12.Out"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5010,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/A8.Out"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5001,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/A16.Out"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5010,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/D2"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5001,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/~{WE}.Out"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5001,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/~{Flash.Reset}"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5001,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/A14.Out"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5001,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/Batt.VCC"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 2,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/~{Flash.CE}"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5001,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/A19.Out"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5001,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/A17.Out"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 13,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/~{Flash.WP}"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5001,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/A0.Out"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 13,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/A7.Out"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 22,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/A6.Out"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5001,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/A10.Out"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 13,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.2,
+    "via_diameter": null
+   },
+   "net": "/A5.Out"
+  }
+ ],
+ "pad_pairs_connected": 75,
+ "pad_pairs_total": 148,
+ "pad_pairs_open": [
+  {
+   "net": "/A0.Out",
+   "pairs_connected": 1,
+   "pairs_total": 2,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/A0.Sys",
+   "pairs_connected": 0,
+   "pairs_total": 1,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/A1.Sys",
+   "pairs_connected": 0,
+   "pairs_total": 1,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/A10.Out",
+   "pairs_connected": 0,
+   "pairs_total": 2,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/A10.Sys",
+   "pairs_connected": 0,
+   "pairs_total": 1,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/A11.Out",
+   "pairs_connected": 1,
+   "pairs_total": 2,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/A11.Sys",
+   "pairs_connected": 0,
+   "pairs_total": 1,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/A12.Out",
+   "pairs_connected": 1,
+   "pairs_total": 2,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/A12.Sys",
+   "pairs_connected": 0,
+   "pairs_total": 1,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/A13.Out",
+   "pairs_connected": 1,
+   "pairs_total": 2,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/A14.Out",
+   "pairs_connected": 1,
+   "pairs_total": 2,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/A14.Sys",
+   "pairs_connected": 0,
+   "pairs_total": 1,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/A15.Out",
+   "pairs_connected": 1,
+   "pairs_total": 2,
+   "outcome": "open",
+   "open_subtype": "partial"
+  },
+  {
+   "net": "/A15.Sys",
+   "pairs_connected": 0,
+   "pairs_total": 1,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/A16.Out",
+   "pairs_connected": 1,
+   "pairs_total": 2,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/A17.Out",
+   "pairs_connected": 0,
+   "pairs_total": 1,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/A18.Out",
+   "pairs_connected": 0,
+   "pairs_total": 1,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/A19.Out",
+   "pairs_connected": 0,
+   "pairs_total": 1,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/A2.Sys",
+   "pairs_connected": 0,
+   "pairs_total": 1,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/A3.Out",
+   "pairs_connected": 0,
+   "pairs_total": 2,
+   "outcome": "open",
+   "open_subtype": "partial"
+  },
+  {
+   "net": "/A3.Sys",
+   "pairs_connected": 0,
+   "pairs_total": 1,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/A4.Out",
+   "pairs_connected": 1,
+   "pairs_total": 2,
+   "outcome": "open",
+   "open_subtype": "partial"
+  },
+  {
+   "net": "/A4.Sys",
+   "pairs_connected": 0,
+   "pairs_total": 1,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/A5.Out",
+   "pairs_connected": 0,
+   "pairs_total": 2,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/A5.Sys",
+   "pairs_connected": 0,
+   "pairs_total": 1,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/A6.Out",
+   "pairs_connected": 0,
+   "pairs_total": 2,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/A6.Sys",
+   "pairs_connected": 0,
+   "pairs_total": 1,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/A7.Out",
+   "pairs_connected": 0,
+   "pairs_total": 2,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/A7.Sys",
+   "pairs_connected": 0,
+   "pairs_total": 1,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/A8.Out",
+   "pairs_connected": 1,
+   "pairs_total": 2,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/A8.Sys",
+   "pairs_connected": 0,
+   "pairs_total": 1,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/A9.Out",
+   "pairs_connected": 0,
+   "pairs_total": 2,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/A9.Sys",
+   "pairs_connected": 0,
+   "pairs_total": 1,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/Batt.VCC",
+   "pairs_connected": 0,
+   "pairs_total": 1,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/D0",
+   "pairs_connected": 2,
+   "pairs_total": 3,
+   "outcome": "open",
+   "open_subtype": "partial"
+  },
+  {
+   "net": "/D1",
+   "pairs_connected": 2,
+   "pairs_total": 3,
+   "outcome": "open",
+   "open_subtype": "partial"
+  },
+  {
+   "net": "/D2",
+   "pairs_connected": 2,
+   "pairs_total": 3,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/D3",
+   "pairs_connected": 2,
+   "pairs_total": 3,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/D4",
+   "pairs_connected": 2,
+   "pairs_total": 3,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/D5",
+   "pairs_connected": 2,
+   "pairs_total": 3,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/D6",
+   "pairs_connected": 2,
+   "pairs_total": 3,
+   "outcome": "open",
+   "open_subtype": "partial"
+  },
+  {
+   "net": "/D7",
+   "pairs_connected": 2,
+   "pairs_total": 3,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/GND",
+   "pairs_connected": 19,
+   "pairs_total": 26,
+   "outcome": "open",
+   "open_subtype": "partial"
+  },
+  {
+   "net": "/SRAM.VCC",
+   "pairs_connected": 2,
+   "pairs_total": 3,
+   "outcome": "open",
+   "open_subtype": "partial"
+  },
+  {
+   "net": "/VCC",
+   "pairs_connected": 11,
+   "pairs_total": 15,
+   "outcome": "open",
+   "open_subtype": "partial"
+  },
+  {
+   "net": "/~{CS.Sys}",
+   "pairs_connected": 0,
+   "pairs_total": 1,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/~{Flash.CE}",
+   "pairs_connected": 0,
+   "pairs_total": 1,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/~{Flash.Reset}",
+   "pairs_connected": 2,
+   "pairs_total": 3,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/~{Flash.WP}",
+   "pairs_connected": 0,
+   "pairs_total": 1,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/~{OE}.Out",
+   "pairs_connected": 1,
+   "pairs_total": 2,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/~{Read.Sys}",
+   "pairs_connected": 0,
+   "pairs_total": 1,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/~{WE}.Out",
+   "pairs_connected": 0,
+   "pairs_total": 2,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/~{Write.Sys}",
+   "pairs_connected": 0,
+   "pairs_total": 1,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "Net-(C2-Pad1)",
+   "pairs_connected": 0,
+   "pairs_total": 1,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "Net-(R4-Pad2)",
+   "pairs_connected": 1,
+   "pairs_total": 2,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "Net-(U1-Clk.Out)",
+   "pairs_connected": 1,
+   "pairs_total": 2,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "Net-(U1-Pad54)",
+   "pairs_connected": 0,
+   "pairs_total": 1,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  }
+ ],
+ "scope": "reconciliation-subset",
+ "board_scoped_keys": [
+  "min_clearance_used"
+ ],
+ "env_knobs": {
+  "KICAD_ROUTE_TRACE": "1"
+ }
+}

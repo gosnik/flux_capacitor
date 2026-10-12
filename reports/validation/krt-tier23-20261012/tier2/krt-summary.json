@@ -1,0 +1,519 @@
+{
+ "routed_single": [],
+ "failed_single": [
+  "/VPHY",
+  "/~{RESET}",
+  "/OSCI",
+  "/TMS_A",
+  "/TXLED_B",
+  "/USB_D+",
+  "/USB_D-",
+  "/TCK_TXD_A",
+  "/TXLED_A"
+ ],
+ "open_single": [],
+ "failed_multipoint": [
+  {
+   "net_name": "GND",
+   "failed_pads": [
+    {
+     "component_ref": "U4",
+     "pad_number": "?",
+     "x": 121.25,
+     "y": 101.325
+    },
+    {
+     "component_ref": "U4",
+     "pad_number": "?",
+     "x": 121.75,
+     "y": 112.675
+    }
+   ]
+  }
+ ],
+ "multipoint_nets": 1,
+ "multipoint_pads_connected": 40,
+ "multipoint_pads_total": 42,
+ "multipoint_edges_routed": 0,
+ "multipoint_edges_failed": 4,
+ "ripup_success_pairs": [],
+ "rerouted_pairs": [],
+ "single_ended_target_swaps": [],
+ "layer_swaps": 0,
+ "successful": 0,
+ "failed": 10,
+ "total_time": 0.41000000000000003,
+ "total_iterations": 154388,
+ "total_vias": 35,
+ "cleanup_disconnected": [],
+ "min_clearance_used": 0.2,
+ "design_rules": {
+  "escalation_policy": "off",
+  "fab_tier": "standard",
+  "board_floors": {
+   "clearance": 0.09,
+   "track_width": 0.09,
+   "via_diameter": 0.39999999999999997,
+   "via_drill": 0.3,
+   "hole_to_hole": 0.25,
+   "annular": 0.049999999999999996
+  },
+  "count": 0,
+  "nets": [],
+  "narrowed": [],
+  "min_delivered": {},
+  "fab_tier_escalations": 0,
+  "fab_tier_contexts": [],
+  "unsupported_rules": []
+ },
+ "plane_fragility": {
+  "source": "none",
+  "islands": 0,
+  "refill_status": null,
+  "why": "the board has no zones",
+  "machine_dependent": false
+ },
+ "rescue": {
+  "attempted": 10,
+  "recovered": [],
+  "improved": [
+   "GND"
+  ],
+  "unchanged": [
+   "/OSCI",
+   "/TCK_TXD_A",
+   "/TMS_A",
+   "/TXLED_A",
+   "/TXLED_B",
+   "/USB_D+",
+   "/USB_D-",
+   "/VPHY",
+   "/~{RESET}"
+  ],
+  "pads_reconnected": 2,
+  "widths": {
+   "GND": {
+    "requested_mm": 0.25,
+    "delivered_mm": 0.25,
+    "rescue_min_mm": 0.25,
+    "rescue_max_mm": 0.25,
+    "rescue_segments_emitted": 17,
+    "rescue_by_width": {
+     "0.25": 17
+    },
+    "scope": "THIS RESCUE ONLY -- not the net. Counts are as EMITTED, before cycle-prune drops redundant loop segments, so the board can carry fewer. For the net's whole width profile, measure the board."
+   }
+  },
+  "time": 2.43
+ },
+ "oracle_check": "disabled",
+ "blockers": [
+  {
+   "net": "/VPHY",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/OSCO",
+     "preexisting": true
+    },
+    {
+     "net": "+1V8",
+     "preexisting": true
+    },
+    {
+     "net": "GND",
+     "preexisting": true
+    },
+    {
+     "net": "/REF",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/~{RESET}",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "+1V8",
+     "preexisting": true
+    },
+    {
+     "net": "+3.3V",
+     "preexisting": true
+    },
+    {
+     "net": "/TDI_RXD_A",
+     "preexisting": true
+    },
+    {
+     "net": "GND",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/OSCI",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "+3.3V",
+     "preexisting": true
+    },
+    {
+     "net": "GND",
+     "preexisting": true
+    },
+    {
+     "net": "/OSCO",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/TMS_A",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "+3.3V",
+     "preexisting": true
+    },
+    {
+     "net": "/TDO_A",
+     "preexisting": true
+    },
+    {
+     "net": "/TDI_RXD_A",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/TXLED_B",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/RXLED_B",
+     "preexisting": true
+    },
+    {
+     "net": "+3.3V",
+     "preexisting": true
+    },
+    {
+     "net": "GND",
+     "preexisting": true
+    },
+    {
+     "net": "Net-(D5-K)",
+     "preexisting": true
+    },
+    {
+     "net": "Net-(D3-K)",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/USB_D+",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "/USB_CONN_D-",
+     "preexisting": true
+    },
+    {
+     "net": "GND",
+     "preexisting": true
+    },
+    {
+     "net": "/VPLL",
+     "preexisting": true
+    },
+    {
+     "net": "/REF",
+     "preexisting": true
+    },
+    {
+     "net": "VBUS",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/USB_D-",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "VBUS",
+     "preexisting": true
+    },
+    {
+     "net": "/USB_CONN_D-",
+     "preexisting": true
+    },
+    {
+     "net": "GND",
+     "preexisting": true
+    },
+    {
+     "net": "Net-(U1-CC1)",
+     "preexisting": true
+    },
+    {
+     "net": "/USB_CONN_D+",
+     "preexisting": true
+    },
+    {
+     "net": "/VPHY",
+     "preexisting": true
+    },
+    {
+     "net": "/VPLL",
+     "preexisting": true
+    },
+    {
+     "net": "/REF",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/TCK_TXD_A",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "+3.3V",
+     "preexisting": true
+    },
+    {
+     "net": "+1V8",
+     "preexisting": true
+    },
+    {
+     "net": "/TDI_RXD_A",
+     "preexisting": true
+    },
+    {
+     "net": "GND",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "/TXLED_A",
+   "stage": "preexisting",
+   "blocked_by": [
+    {
+     "net": "+3.3V",
+     "preexisting": true
+    },
+    {
+     "net": "/RXLED_A",
+     "preexisting": true
+    },
+    {
+     "net": "/TMS_B",
+     "preexisting": true
+    }
+   ]
+  },
+  {
+   "net": "GND",
+   "stage": "phase3",
+   "blocked_by": [
+    {
+     "net": "+3.3V",
+     "blocked_count": 1,
+     "unique_cells": 1,
+     "track_cells": 1,
+     "via_cells": 0,
+     "near_target_cells": 1,
+     "near_source_cells": 0
+    }
+   ]
+  }
+ ],
+ "boxed_in": [
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5001,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.25,
+    "via_diameter": null
+   },
+   "net": "/VPHY"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5001,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.25,
+    "via_diameter": null
+   },
+   "net": "/~{RESET}"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 787,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.25,
+    "via_diameter": null
+   },
+   "net": "/OSCI"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5001,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.25,
+    "via_diameter": null
+   },
+   "net": "/TMS_A"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5001,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.25,
+    "via_diameter": null
+   },
+   "net": "/TXLED_B"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5001,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.25,
+    "via_diameter": null
+   },
+   "net": "/USB_D+"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5001,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.25,
+    "via_diameter": null
+   },
+   "net": "/USB_D-"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5013,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.25,
+    "via_diameter": null
+   },
+   "net": "/TCK_TXD_A"
+  },
+  {
+   "verdict": "boxed_in_static",
+   "iterations": 5001,
+   "geometry": {
+    "grid_step": 0.1,
+    "clearance": 0.2,
+    "track_width": 0.25,
+    "via_diameter": null
+   },
+   "net": "/TXLED_A"
+  }
+ ],
+ "pad_pairs_connected": 106,
+ "pad_pairs_total": 117,
+ "pad_pairs_open": [
+  {
+   "net": "/OSCI",
+   "pairs_connected": 1,
+   "pairs_total": 2,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/TCK_TXD_A",
+   "pairs_connected": 0,
+   "pairs_total": 1,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/TMS_A",
+   "pairs_connected": 0,
+   "pairs_total": 1,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/TXLED_A",
+   "pairs_connected": 0,
+   "pairs_total": 1,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/TXLED_B",
+   "pairs_connected": 0,
+   "pairs_total": 1,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/USB_D+",
+   "pairs_connected": 0,
+   "pairs_total": 1,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/USB_D-",
+   "pairs_connected": 0,
+   "pairs_total": 1,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/VPHY",
+   "pairs_connected": 2,
+   "pairs_total": 3,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "/~{RESET}",
+   "pairs_connected": 0,
+   "pairs_total": 1,
+   "outcome": "open",
+   "open_subtype": "unrouted"
+  },
+  {
+   "net": "GND",
+   "pairs_connected": 39,
+   "pairs_total": 41,
+   "outcome": "open",
+   "open_subtype": "partial"
+  }
+ ],
+ "scope": "reconciliation-subset",
+ "board_scoped_keys": [
+  "min_clearance_used"
+ ],
+ "env_knobs": {
+  "KICAD_ROUTE_TRACE": "1"
+ }
+}

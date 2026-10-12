@@ -15,7 +15,11 @@ public:
   [[nodiscard]] CopperDrcReport check_via(const Via& via) const;
 private:
   enum class Kind { track, arc, via, footprint };
-  struct Owner { Kind kind; std::size_t index; };
+  struct Owner {
+    Kind kind;
+    std::size_t index;
+    std::size_t pad_index{0U};
+  };
   Board source_;
   Board context_;
   std::vector<Owner> owners_;

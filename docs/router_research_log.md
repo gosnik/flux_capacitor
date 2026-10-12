@@ -9917,3 +9917,18 @@ Tier3 `gb_nintendo_power` timed out at900.111s. Its global checkpoint has only1 
 Both engine outcomes are `timed-out`; their global result field still says `iteration_limit`, so use the engine outcome and measured runtime when classifying the stop. Neither reached detailed curved materialization, produced accepted final copper, or ran final external KiCad DRC. Harness exit0 means the expected incomplete diagnostic was recorded, not that routing passed. Front/back Tier2 and front Tier3 diagnostic PNGs were inspected; they reconstruct global checkpoint geometry and do not constitute final copper or a complete scaffold rendering.
 
 No source changes. Keep both failure records. Next investigation should target Tier2 attachment/fallback search cost and victim recovery, while Tier3 additionally requires diagnosing initial global access/topology coverage. Evidence: `reports/benchmark_history/2026-10-12-tier23-round17.json`; raw telemetry and previews remain under `reports/validation/tier23-round17-20261012/`.
+
+## Round18 — Item-level scaffold collision pruning (2026-10-12)
+
+### Failure and hypothesis
+Tier2 Round17 retained85/117 connections and46 physical opens after900s. Edge validation consumed826.387s, attachment generation61.102s and search768.260s (overlapping timers). Only two unresolved requests were reached; net12 had128 source attachments and zero target attachments.
+
+Inspection found that the spatial index maps a pad to its entire footprint. Near the64-pin IC, every edge check reconstructs all64 pads and invokes the dynamic checker's GPU broadphase threshold, repeatedly. Rank1 is individual-pad pruning; rank2 is fairer bounded repair scheduling only if starvation persists after removing query overhead; rank3 is targeted terminal/via escape generation once evidence is affordable to obtain.
+
+### Research and experiment
+KiCad's [PNS node collision query](https://raw.githubusercontent.com/KiCad/kicad-source-mirror/master/pcbnew/router/pns_node.cpp) queries indexed items and refines individual candidates. Apply that concept using Flux's existing exact checker: preserve board/footprint keepouts, rules and transforms while copying only nearby pad owners, including independent drill bounds. No external implementation copied. Test exact indexed/full-board DRC parity before sequential Tier0/1/2 curved benchmarks.
+
+### Results and decision
+Keep. All11 regression targets passed and independent review found no material issue. Frozen sequential Tier0/1 curved telemetry runs pass51/51 and90/90 connections with zero opens/internal/external KiCad violations or unconnected items. Both copper boards are byte-identical to Round16. Detail runtimes31.476s and130.463s (baseline31.178s and135.310s); unchanged lengths441.263mm and904.299mm.
+
+Tier2 reaches112/117 scaffold requests (baseline85/117),19 physical opens (baseline46),8 physically unrouted nets,1258 tracks and51 vias. It stops exhausted at442.613s instead of timing out at900.178s. Missing requests43,44,91,95,115 remain. The result's abstract `complete=true` is not physical success: `routing_plan_complete=false`, no materialization or final KiCad DRC. Final retained-checkpoint rebuilding resets search counters, so detailed failure analysis must use earlier telemetry snapshots. PeakRSS1205660KiB versus643056KiB; faster search explores substantially more states, increasing memory. No lower-tier regression. Next experiment must address the remaining physical access/search failures. Evidence: `reports/benchmark_history/2026-10-12-scaffold-pad-index-round18.json`.

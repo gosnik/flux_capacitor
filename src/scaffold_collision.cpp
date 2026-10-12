@@ -8,6 +8,7 @@
 #include <cmath>
 #include <map>
 #include <set>
+#include <tuple>
 
 namespace flux {
 
@@ -65,16 +66,16 @@ ScaffoldCollisionIndex::ScaffoldCollisionIndex(const Board& board) : source_(boa
     append(via.position, via.position, std::max(via.diameter.value(), via.drill.value()) / 2.0L,
            {Kind::via, i});
   }
-  std::map<std::string, std::size_t> pad_owners;
+  std::map<std::string, Owner> pad_owners;
   for (std::size_t i = 0; i < source_.footprints.size(); ++i)
-    for (const auto& pad : source_.footprints[i].pads) pad_owners.emplace(pad.id.value(), i);
+    for (std::size_t j = 0; j < source_.footprints[i].pads.size(); ++j)
+      pad_owners.emplace(source_.footprints[i].pads[j].id.value(), Owner{Kind::footprint, i, j});
   for (const auto& pad : copper_pad_shapes(source_))
-    append(pad.position, pad.position, pad.conservative_radius_nm,
-           {Kind::footprint, pad_owners.at(pad.id.value())});
+    append(pad.position, pad.position, pad.conservative_radius_nm, pad_owners.at(pad.id.value()));
   for (const auto& drill : drill_shapes(source_)) {
     if (drill.owner_kind != DrillOwnerKind::pad) continue;
     append(drill.position, drill.position, std::max(drill.width.value(), drill.height.value()) / 2.0L,
-           {Kind::footprint, pad_owners.at(drill.id.value())});
+           pad_owners.at(drill.id.value()));
   }
   IndexedClearanceMapConfig config;
   config.width = config.height = 1U;
@@ -86,17 +87,20 @@ ScaffoldCollisionIndex::ScaffoldCollisionIndex(const Board& board) : source_(boa
 Board ScaffoldCollisionIndex::nearby(Point a, Point b, long double radius) const {
   if (!index_) return source_; // exact slow fallback; never interpret index failure as free
   Board result = context_;
-  std::set<std::pair<Kind, std::size_t>> copied;
+  std::set<std::tuple<Kind, std::size_t, std::size_t>> copied;
   for (const auto primitive : index_->segment_candidates(a.x.value(), a.y.value(), b.x.value(),
                                                         b.y.value(), radius, clearance_)) {
     const auto& owner = owners_[index_->primitives()[primitive].owner_id];
-    if (!copied.emplace(owner.kind, owner.index).second) continue;
-    switch (owner.kind) {
-    case Kind::track: result.tracks.push_back(source_.tracks[owner.index]); break;
-    case Kind::arc: result.track_arcs.push_back(source_.track_arcs[owner.index]); break;
-    case Kind::via: result.vias.push_back(source_.vias[owner.index]); break;
+    copied.emplace(owner.kind, owner.index, owner.pad_index);
+  }
+  for (const auto& [kind, index, pad_index] : copied) {
+    switch (kind) {
+    case Kind::track: result.tracks.push_back(source_.tracks[index]); break;
+    case Kind::arc: result.track_arcs.push_back(source_.track_arcs[index]); break;
+    case Kind::via: result.vias.push_back(source_.vias[index]); break;
     case Kind::footprint:
-      result.footprints[owner.index].pads = source_.footprints[owner.index].pads; break;
+      result.footprints[index].pads.push_back(source_.footprints[index].pads[pad_index]);
+      break;
     }
   }
   return result;

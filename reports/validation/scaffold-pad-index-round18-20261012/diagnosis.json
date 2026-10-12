@@ -1,0 +1,43 @@
+{
+  "board": "ft2232h_jtag",
+  "tier": 2,
+  "failing_stage": "scaffold edge validation and terminal attachment",
+  "evidence": {
+    "runtime_seconds": 900.177824,
+    "edge_validation_seconds": 826.386642,
+    "search_seconds": 768.259765,
+    "attachment_generation_seconds": 61.102063,
+    "searched_connections": 2,
+    "satisfied_requests": 85,
+    "request_count": 117,
+    "physical_opens": 46,
+    "first_exhausted_request_net": "kicad-net-12",
+    "source_attachments": 128,
+    "target_attachments": 0
+  },
+  "ranked_hypotheses": [
+    {
+      "rank": 1,
+      "mechanism": "Pad broadphase selects an entire footprint, expanding one nearby pad to64 and triggering GPU all-pairs broadphase per search edge.",
+      "experiment": "Index and copy individual pads into the exact-check context, preserving all rules/transforms/keepouts/drills.",
+      "success": "DRC parity and dramatically less edge-validation time permit more unresolved requests to be searched."
+    },
+    {
+      "rank": 2,
+      "mechanism": "Blocked terminal escape is starved by expensive repair of earlier requests.",
+      "experiment": "After removing measured collision cost, inspect newly reachable request failures before changing search topology."
+    },
+    {
+      "rank": 3,
+      "mechanism": "Via/terminal access candidates cannot represent legal fine-pitch escapes.",
+      "experiment": "Construct isolated microcase for remaining attachment-exhausted request if it persists."
+    }
+  ],
+  "research": [
+    {
+      "source": "https://raw.githubusercontent.com/KiCad/kicad-source-mirror/master/pcbnew/router/pns_node.cpp",
+      "finding": "QueryColliding queries an item index and refines individual candidates; node branches preserve a root scene with overrides. Use the item-level query principle, not copied implementation."
+    }
+  ],
+  "acceptance": "Exact differential DRC microtests, lower-tier regressions, sequential curved telemetry runs; no relaxed rules or benchmark-specific conditions."
+}

@@ -1,5 +1,6 @@
 #include "flux/core/detailed_router.hpp"
 #include "flux/core/geometry.hpp"
+#include "flux/core/navmesh_route.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -599,6 +600,36 @@ void spline_navigation_cache_preserves_parallel_copper() {
               unique.spline_navigation_preparation_builds == 3U,
           "single-consumer keys must not retain cached geometry or share across nets");
 }
+void navmesh_screening_preparation_cache_is_exact_and_bounded() {
+  OffsetFreeSpaceRegion region;
+  region.area = Polygon{{mm(0, 0), mm(12, 0), mm(12, 12), mm(0, 12)}};
+  NavMeshConfig first;
+  first.cell_pitch = Nanometres::from_mm(1.0);
+  first.maximum_cells = 1'000U;
+  first.topology_guide = {mm(1, 1), mm(11, 1)};
+  first.maximum_guide_distance = Nanometres::from_mm(2.0);
+  NavMeshScreeningContext context(20'000U, 1U, 500U);
+  const auto initial = context.prepare(region, first);
+  const auto repeated = context.prepare(region, first);
+  const auto after_repeat = context.stats();
+  require(initial && initial == repeated && after_repeat.prepared_domain_misses == 1U &&
+              after_repeat.prepared_domain_hits == 1U && after_repeat.geometry_misses == 1U,
+          "identical preparation must reuse the exact immutable lattice and its geometry base");
+  auto guided = first;
+  guided.topology_guide = {mm(1, 1), mm(11, 11)};
+  const auto changed_guide = context.prepare(region, guided);
+  const auto after_guide = context.stats();
+  require(changed_guide && changed_guide != initial && after_guide.prepared_domain_misses == 2U &&
+              after_guide.geometry_hits >= 1U && after_guide.prepared_domain_evictions == 1U &&
+              after_guide.retained_prepared_cells <= 500U,
+          "guide changes must rebuild the lattice while reusing bounded static geometry");
+  auto changed_region = region;
+  changed_region.holes.push_back(Polygon{{mm(5, 5), mm(7, 5), mm(7, 7), mm(5, 7)}});
+  const auto changed = context.prepare(changed_region, first);
+  require(changed && changed != changed_guide && !query_prepared_navmesh_point(*changed, mm(6, 6)).inside &&
+              query_prepared_navmesh_point(*initial, mm(6, 6)).inside,
+          "region identity must invalidate both prepared lattice and static geometry caches");
+}
 
 } // namespace
-int main() { spline_navigation_cache_preserves_parallel_copper(); generated_tail_cleanup_preserves_finite_width_via_contact(); generated_tail_cleanup_retains_required_interior_t_and_other_layer(); generated_tail_cleanup_preserves_via_attachment_and_budget(); generated_tail_cleanup_preserves_source_curve_net(); materializes_complete_scaffold_without_regional_plan(); explicit_nominal_widths_match_implicit_certified_scaffold(); malformed_certified_width_metadata_is_rejected(); unbacked_neck_down_metadata_is_rejected(); invalid_certified_layer_transition_is_rejected(); failed_curve_fit_retains_scaffold_and_unrelated_copper(); residual_bend_repair_uses_exact_fillet_after_ph_rejection(); residual_bend_batches_resume_without_charging_collinear_points(); residual_bend_batches_resume_across_chains(); residual_bend_repair_rejects_blocked_corner_without_mutating_copper(); residual_bend_repair_preserves_existing_routing(); residual_bend_repair_handles_pad_anchored_closed_chain(); residual_bend_repair_skips_floating_closed_chain(); generated_tail_cleanup_prunes_pad_rooted_interior_spur(); generated_tail_cleanup_preserves_padless_component(); return EXIT_SUCCESS; }
+int main() { navmesh_screening_preparation_cache_is_exact_and_bounded(); spline_navigation_cache_preserves_parallel_copper(); generated_tail_cleanup_preserves_finite_width_via_contact(); generated_tail_cleanup_retains_required_interior_t_and_other_layer(); generated_tail_cleanup_preserves_via_attachment_and_budget(); generated_tail_cleanup_preserves_source_curve_net(); materializes_complete_scaffold_without_regional_plan(); explicit_nominal_widths_match_implicit_certified_scaffold(); malformed_certified_width_metadata_is_rejected(); unbacked_neck_down_metadata_is_rejected(); invalid_certified_layer_transition_is_rejected(); failed_curve_fit_retains_scaffold_and_unrelated_copper(); residual_bend_repair_uses_exact_fillet_after_ph_rejection(); residual_bend_batches_resume_without_charging_collinear_points(); residual_bend_batches_resume_across_chains(); residual_bend_repair_rejects_blocked_corner_without_mutating_copper(); residual_bend_repair_preserves_existing_routing(); residual_bend_repair_handles_pad_anchored_closed_chain(); generated_tail_cleanup_prunes_pad_rooted_interior_spur(); generated_tail_cleanup_preserves_padless_component(); return EXIT_SUCCESS; }

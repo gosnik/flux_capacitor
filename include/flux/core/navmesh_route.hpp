@@ -310,16 +310,29 @@ public:
     std::size_t batched_chord_requests{0U};
     std::size_t gpu_dispatches{0U};
     std::size_t gpu_work_items{0U};
+    std::size_t gpu_pruned_work_items{0U};
     std::size_t resident_boundary_uploads{0U};
     std::size_t resident_boundary_reuses{0U};
+    std::size_t prepared_domain_hits{0U};
+    std::size_t prepared_domain_misses{0U};
+    std::size_t geometry_hits{0U};
+    std::size_t geometry_misses{0U};
+    std::size_t retained_geometry_points{0U};
+    std::size_t geometry_evictions{0U};
+    std::size_t coalesced_preparation_waits{0U};
+    std::size_t retained_prepared_cells{0U};
+    std::size_t prepared_domain_evictions{0U};
     std::uint64_t classifier_elapsed_us{0U};
   };
 
   explicit NavMeshScreeningContext(std::size_t maximum_chords = 262'144U,
-                                   std::size_t maximum_domains = 8U);
+                                   std::size_t maximum_domains = 8U,
+                                   std::size_t maximum_prepared_cells = 500'000U,
+                                   std::size_t maximum_geometry_points = 500'000U);
 
-  // Returns an independently prepared lattice.  Geometry-equivalent calls share boundary
-  // screening even when topology guides, search bounds, or cell budgets differ.
+  // Returns an immutable lattice. Exact region/configuration/validation calls reuse the same
+  // bounded prepared domain; geometry-equivalent calls with different guides share the bounded
+  // static polygon preparation and boundary screening only.
   [[nodiscard]] std::shared_ptr<const PreparedNavMeshDomain>
   prepare(const OffsetFreeSpaceRegion& region, const NavMeshConfig& config,
           bool validate_source_topology = true);

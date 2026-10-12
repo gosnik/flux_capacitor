@@ -224,6 +224,13 @@ struct DetailedRouteResult {
   std::size_t spline_screening_batches{0U};
   std::size_t spline_screening_gpu_dispatches{0U};
   std::size_t spline_screening_gpu_work_items{0U};
+  std::size_t spline_screening_gpu_pruned_work_items{0U};
+  std::size_t spline_navmesh_prepared_hits{0U};
+  std::size_t spline_navmesh_prepared_builds{0U};
+  std::size_t spline_navmesh_prepared_waits{0U};
+  std::size_t spline_navmesh_prepared_evictions{0U};
+  std::size_t spline_navmesh_geometry_hits{0U};
+  std::size_t spline_navmesh_geometry_builds{0U};
   std::uint64_t spline_screening_microseconds{0U};
   std::size_t spline_envelope_queries{0U};
   std::size_t spline_envelope_proven_clear{0U};

@@ -55,6 +55,14 @@ float segment_distance(vec2 a, vec2 b, vec2 c, vec2 d) {
              min(point_segment_distance(c, a, b), point_segment_distance(d, a, b)));
 }
 
+float chord_box_aabb_lower_bound(vec2 chord_minimum, vec2 chord_maximum,
+                                 vec2 minimum, vec2 maximum) {
+  // Distance between AABBs is a cheap lower bound on segment-to-box distance. It deliberately
+  // admits diagonal false positives, which is safe for this conservative broad phase.
+  vec2 gap = max(vec2(0.0), max(minimum - chord_maximum, chord_minimum - maximum));
+  return length(gap);
+}
+
 int64_t orientation_i64(ivec2 a, ivec2 b, ivec2 c) {
   return (int64_t(b.x) - int64_t(a.x)) * (int64_t(c.y) - int64_t(a.y)) -
          (int64_t(b.y) - int64_t(a.y)) * (int64_t(c.x) - int64_t(a.x));
@@ -247,18 +255,86 @@ void main() {
     float best = 3.402823466e+38;
     uint closest = 0xffffffffu;
     bool intersects = false;
-    for (uint index = 0u; index < push.count_b; ++index) {
+    uint visited = 0u;
+    bool fallback = push.weights[0] == 0u;
+    const uint node_base = push.count_b * 7u;
+    const uint leaf_base = node_base + push.weights[0] * 6u;
+    const float reject_guard = max(float(push.guard_nm), 4096.0);
+    const vec2 chord_minimum = min(first, second);
+    const vec2 chord_maximum = max(first, second);
+    uint stack[64];
+    uint stack_count = 0u;
+    if (!fallback) stack[stack_count++] = 0u;
+    while (!fallback && stack_count != 0u) {
+      uint node_index = stack[--stack_count];
+      if (node_index >= push.weights[0]) { fallback = true; break; }
+      uint node = node_base + node_index * 6u;
+      vec2 minimum = vec2(int(input_b[node]), int(input_b[node + 1u]));
+      vec2 maximum = vec2(int(input_b[node + 2u]), int(input_b[node + 3u]));
+      // Node bounds are expanded outward by the host.  The guard makes the floating point
+      // broad phase one-sided: uncertain nodes are visited, never rejected.
+      if (chord_box_aabb_lower_bound(chord_minimum, chord_maximum, minimum, maximum) >
+          best + reject_guard) continue;
+      uint first_or_left = input_b[node + 4u];
+      uint count_or_right = input_b[node + 5u];
+      if ((first_or_left & 0x80000000u) != 0u) {
+        uint begin = first_or_left & 0x7fffffffu;
+        if (begin > push.count_b || count_or_right > push.count_b - begin) { fallback = true; break; }
+        for (uint offset = 0u; offset < count_or_right; ++offset) {
+          uint index = input_b[leaf_base + begin + offset];
+          if (index >= push.count_b) { fallback = true; break; }
+          uint boundary = index * 7u;
+          float distance = segment_distance(
+              first, second, vec2(int(input_b[boundary]), int(input_b[boundary + 1u])),
+              vec2(int(input_b[boundary + 2u]), int(input_b[boundary + 3u])));
+          ++visited;
+          if (distance <= 0.0) intersects = true;
+          if (distance < best || (distance == best && index < closest)) { best = distance; closest = index; }
+        }
+        if (fallback) break;
+      } else {
+        if (stack_count + 2u > 64u || first_or_left >= push.weights[0] ||
+            count_or_right >= push.weights[0]) { fallback = true; break; }
+        uint left_node = node_base + first_or_left * 6u;
+        uint right_node = node_base + count_or_right * 6u;
+        float left_distance = chord_box_aabb_lower_bound(chord_minimum, chord_maximum,
+            vec2(int(input_b[left_node]), int(input_b[left_node + 1u])),
+            vec2(int(input_b[left_node + 2u]), int(input_b[left_node + 3u])));
+        float right_distance = chord_box_aabb_lower_bound(chord_minimum, chord_maximum,
+            vec2(int(input_b[right_node]), int(input_b[right_node + 1u])),
+            vec2(int(input_b[right_node + 2u]), int(input_b[right_node + 3u])));
+        // Push the farther child first so the closer bound tightens best before its sibling is
+        // considered. Equal bounds use node order for deterministic traversal.
+        uint near_child = left_distance <= right_distance ? first_or_left : count_or_right;
+        uint far_child = left_distance <= right_distance ? count_or_right : first_or_left;
+        float near_distance = min(left_distance, right_distance);
+        float far_distance = max(left_distance, right_distance);
+        if (far_distance <= best + reject_guard) stack[stack_count++] = far_child;
+        if (near_distance <= best + reject_guard) stack[stack_count++] = near_child;
+      }
+    }
+    if (fallback) {
+      // Defensive recovery for malformed/too-deep index data. The conservative classifier may
+      // lose pruning, but never a boundary or closest-owner result.
+      best = 3.402823466e+38;
+      closest = 0xffffffffu;
+      intersects = false;
+      visited = 0u;
+      for (uint index = 0u; index < push.count_b; ++index) {
       uint boundary = index * 7u;
       float distance = segment_distance(
           first, second, vec2(int(input_b[boundary]), int(input_b[boundary + 1u])),
           vec2(int(input_b[boundary + 2u]), int(input_b[boundary + 3u])));
+      ++visited;
       if (distance <= 0.0) intersects = true;
-      if (distance < best) { best = distance; closest = index; }
+      if (distance < best || (distance == best && index < closest)) { best = distance; closest = index; }
+      }
     }
-    uint out_index = invocation * 3u;
+    uint out_index = invocation * 4u;
     output_data[out_index] = floatBitsToUint(best);
     output_data[out_index + 1u] = closest;
     output_data[out_index + 2u] = intersects ? 1u : 0u;
+    output_data[out_index + 3u] = visited;
     return;
   }
   if (push.mode == 7u) {

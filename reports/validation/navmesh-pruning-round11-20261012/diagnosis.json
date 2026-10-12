@@ -1,0 +1,9 @@
+{
+  "baseline_commit": "f092643",
+  "tier": 1,
+  "board": "bm_svf",
+  "failure": "Materialization still 213.199s of 310.183s detailed runtime; NavMesh screening 8,578,197,318 boundary comparisons and repeated prepared-domain construction.",
+  "hypothesis": "Spatial boundary pruning and immutable prepared-domain reuse eliminate redundant work while preserving certificates, routing quality and exact validation.",
+  "success_criterion": "Lower measured comparison/build counts and detailed runtime with Tier0/Tier1 curved outputs, zero opens and external DRC pass.",
+  "scope": "GPU chord screening and NavMesh preparation reuse; no incremental DRC or scaffold search changes."
+}

@@ -7338,6 +7338,13 @@ materialize_impl(const Board& source, const GlobalRouteResult& global,
       result.spline_screening_batches += screening.classifier_batches;
       result.spline_screening_gpu_dispatches += screening.gpu_dispatches;
       result.spline_screening_gpu_work_items += screening.gpu_work_items;
+      result.spline_screening_gpu_pruned_work_items += screening.gpu_pruned_work_items;
+      result.spline_navmesh_prepared_hits += screening.prepared_domain_hits;
+      result.spline_navmesh_prepared_builds += screening.prepared_domain_misses;
+      result.spline_navmesh_prepared_waits += screening.coalesced_preparation_waits;
+      result.spline_navmesh_prepared_evictions += screening.prepared_domain_evictions;
+      result.spline_navmesh_geometry_hits += screening.geometry_hits;
+      result.spline_navmesh_geometry_builds += screening.geometry_misses;
       result.spline_screening_microseconds += screening.classifier_elapsed_us;
     }
     result.spline_parallel_route_tasks += board_level_spline_runs.size();
@@ -7591,6 +7598,13 @@ materialize_impl(const Board& source, const GlobalRouteResult& global,
     fallback.spline_screening_batches += result.spline_screening_batches;
     fallback.spline_screening_gpu_dispatches += result.spline_screening_gpu_dispatches;
     fallback.spline_screening_gpu_work_items += result.spline_screening_gpu_work_items;
+    fallback.spline_screening_gpu_pruned_work_items += result.spline_screening_gpu_pruned_work_items;
+    fallback.spline_navmesh_prepared_hits += result.spline_navmesh_prepared_hits;
+    fallback.spline_navmesh_prepared_builds += result.spline_navmesh_prepared_builds;
+    fallback.spline_navmesh_prepared_waits += result.spline_navmesh_prepared_waits;
+    fallback.spline_navmesh_prepared_evictions += result.spline_navmesh_prepared_evictions;
+    fallback.spline_navmesh_geometry_hits += result.spline_navmesh_geometry_hits;
+    fallback.spline_navmesh_geometry_builds += result.spline_navmesh_geometry_builds;
     fallback.spline_screening_microseconds += result.spline_screening_microseconds;
     fallback.spline_envelope_queries += result.spline_envelope_queries;
     fallback.spline_envelope_proven_clear += result.spline_envelope_proven_clear;

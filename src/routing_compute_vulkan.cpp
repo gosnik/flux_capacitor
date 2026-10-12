@@ -12,6 +12,7 @@
 #include <cstring>
 #include <fstream>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -461,6 +462,144 @@ struct PackedGeometry {
   std::string diagnostic;
 };
 
+// The first boundary_count * 7 words always remain the canonical segment representation used by
+// modes 6 and 18.  The tail is a deterministic BVH: six words per node followed by the original
+// segment indices in leaf order.  Keeping the canonical prefix and shared tail lets exact-content
+// resident-buffer caching safely span the chord and domain pipelines.
+struct IndexedBoundaryGeometry {
+  std::vector<std::uint32_t> words;
+  std::uint32_t node_count{0U};
+};
+
+struct BoundaryBvhNode {
+  std::int32_t minimum_x{0};
+  std::int32_t minimum_y{0};
+  std::int32_t maximum_x{0};
+  std::int32_t maximum_y{0};
+  std::uint32_t first_or_left{0U};
+  std::uint32_t count_or_right{0U};
+};
+
+[[nodiscard]] std::int32_t saturating_add(std::int32_t value, std::int64_t amount) {
+  const auto widened = static_cast<std::int64_t>(value) + amount;
+  return static_cast<std::int32_t>(std::clamp(widened,
+      static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::min()),
+      static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::max())));
+}
+
+[[nodiscard]] IndexedBoundaryGeometry build_indexed_boundary_geometry(
+    const std::vector<std::uint32_t>& canonical_segments) {
+  constexpr std::size_t leaf_size = 8U;
+  constexpr std::int64_t float_prune_padding_nm = 4'096;
+  struct Item {
+    std::int32_t minimum_x, minimum_y, maximum_x, maximum_y;
+    std::uint32_t segment;
+  };
+  IndexedBoundaryGeometry result;
+  const auto boundary_count = canonical_segments.size() / 7U;
+  std::vector<Item> items;
+  items.reserve(boundary_count);
+  // The shader adds its per-request numerical guard during rejection. This fixed outward padding
+  // keeps the resident representation independent of that request and shareable with mode 18.
+  const auto padding = float_prune_padding_nm;
+  for (std::size_t index = 0U; index < boundary_count; ++index) {
+    const auto offset = index * 7U;
+    const auto x0 = static_cast<std::int32_t>(canonical_segments[offset]);
+    const auto y0 = static_cast<std::int32_t>(canonical_segments[offset + 1U]);
+    const auto x1 = static_cast<std::int32_t>(canonical_segments[offset + 2U]);
+    const auto y1 = static_cast<std::int32_t>(canonical_segments[offset + 3U]);
+    items.push_back({saturating_add(std::min(x0, x1), -padding),
+                     saturating_add(std::min(y0, y1), -padding),
+                     saturating_add(std::max(x0, x1), padding),
+                     saturating_add(std::max(y0, y1), padding),
+                     static_cast<std::uint32_t>(index)});
+  }
+  std::vector<BoundaryBvhNode> nodes;
+  std::vector<std::uint32_t> leaf_indices;
+  nodes.reserve(boundary_count * 2U);
+  leaf_indices.reserve(boundary_count);
+  const auto build = [&](auto&& self, std::size_t begin, std::size_t end) -> std::uint32_t {
+    BoundaryBvhNode node;
+    node.minimum_x = node.minimum_y = std::numeric_limits<std::int32_t>::max();
+    node.maximum_x = node.maximum_y = std::numeric_limits<std::int32_t>::min();
+    for (std::size_t item = begin; item < end; ++item) {
+      node.minimum_x = std::min(node.minimum_x, items[item].minimum_x);
+      node.minimum_y = std::min(node.minimum_y, items[item].minimum_y);
+      node.maximum_x = std::max(node.maximum_x, items[item].maximum_x);
+      node.maximum_y = std::max(node.maximum_y, items[item].maximum_y);
+    }
+    const auto node_index = static_cast<std::uint32_t>(nodes.size());
+    nodes.push_back(node);
+    const auto count = end - begin;
+    if (count <= leaf_size) {
+      nodes[node_index].first_or_left = static_cast<std::uint32_t>(leaf_indices.size()) | 0x80000000U;
+      nodes[node_index].count_or_right = static_cast<std::uint32_t>(count);
+      for (std::size_t item = begin; item < end; ++item) leaf_indices.push_back(items[item].segment);
+      return node_index;
+    }
+    const auto extent_x = static_cast<std::int64_t>(node.maximum_x) - node.minimum_x;
+    const auto extent_y = static_cast<std::int64_t>(node.maximum_y) - node.minimum_y;
+    const bool x_axis = extent_x >= extent_y;
+    std::stable_sort(items.begin() + static_cast<std::ptrdiff_t>(begin),
+                     items.begin() + static_cast<std::ptrdiff_t>(end),
+                     [x_axis](const Item& first, const Item& second) {
+      const auto first_center = x_axis
+          ? static_cast<std::int64_t>(first.minimum_x) + first.maximum_x
+          : static_cast<std::int64_t>(first.minimum_y) + first.maximum_y;
+      const auto second_center = x_axis
+          ? static_cast<std::int64_t>(second.minimum_x) + second.maximum_x
+          : static_cast<std::int64_t>(second.minimum_y) + second.maximum_y;
+      return first_center == second_center ? first.segment < second.segment : first_center < second_center;
+    });
+    const auto middle = begin + count / 2U;
+    nodes[node_index].first_or_left = self(self, begin, middle);
+    nodes[node_index].count_or_right = self(self, middle, end);
+    return node_index;
+  };
+  if (!items.empty()) (void)build(build, 0U, items.size());
+  result.node_count = static_cast<std::uint32_t>(nodes.size());
+  result.words = canonical_segments;
+  result.words.reserve(canonical_segments.size() + nodes.size() * 6U + leaf_indices.size());
+  for (const auto& node : nodes) {
+    result.words.insert(result.words.end(), {static_cast<std::uint32_t>(node.minimum_x),
+        static_cast<std::uint32_t>(node.minimum_y), static_cast<std::uint32_t>(node.maximum_x),
+        static_cast<std::uint32_t>(node.maximum_y), node.first_or_left, node.count_or_right});
+  }
+  result.words.insert(result.words.end(), leaf_indices.begin(), leaf_indices.end());
+  return result;
+}
+
+[[nodiscard]] std::shared_ptr<const IndexedBoundaryGeometry> indexed_boundary_geometry(
+    const std::vector<std::uint32_t>& canonical_segments) {
+  // Host-side construction is bounded and cached by the exact normalized representation, just
+  // like the device-resident buffer. This avoids rebuilding/sorting the same BVH for every chord
+  // sub-batch while retaining safe invalidation when any boundary word changes.
+  struct Entry {
+    std::vector<std::uint32_t> segments;
+    std::shared_ptr<const IndexedBoundaryGeometry> geometry;
+  };
+  static std::mutex mutex;
+  static std::vector<Entry> entries;
+  static std::size_t cached_words{0U};
+  constexpr std::size_t cache_word_budget = 32U * 1024U * 1024U / sizeof(std::uint32_t);
+  std::lock_guard lock(mutex);
+  const auto found = std::find_if(entries.begin(), entries.end(), [&](const Entry& entry) {
+    return entry.segments == canonical_segments;
+  });
+  if (found != entries.end()) return found->geometry;
+  auto geometry = std::make_shared<IndexedBoundaryGeometry>(
+      build_indexed_boundary_geometry(canonical_segments));
+  if (geometry->words.size() > cache_word_budget) return geometry;
+  while (!entries.empty() && (entries.size() >= 16U ||
+                              cached_words + geometry->words.size() > cache_word_budget)) {
+    cached_words -= entries.front().geometry->words.size();
+    entries.erase(entries.begin());
+  }
+  cached_words += geometry->words.size();
+  entries.push_back({canonical_segments, geometry});
+  return geometry;
+}
+
 [[nodiscard]] PackedGeometry pack_geometry(const std::vector<RoutingComputePoint>& points,
                                            const std::vector<RoutingComputeSegment>& segments,
                                            std::optional<std::pair<std::int64_t, std::int64_t>> origin = {}) {
@@ -586,6 +725,10 @@ RoutingComputeDomainPointResult probe_routing_domain_points_gpu(
   // same resident geometry to be shared despite caller-specific owner/layer annotations.
   for (std::size_t edge = 0U; edge < boundaries.size(); ++edge)
     for (std::size_t word = 4U; word < 7U; ++word) packed.segments[edge * 7U + word] = 0U;
+  // Large domain probes do not consume the BVH. Avoid a host-side sort that cannot be shared
+  // with bounded mode-6 chunks; small canonical boundary sets retain cross-mode residency.
+  const auto indexed_boundaries = boundaries.size() <= 1'024U
+      ? indexed_boundary_geometry(packed.segments) : std::shared_ptr<const IndexedBoundaryGeometry>{};
   constexpr std::size_t maximum_pairs_per_dispatch = 4'194'304U;
   const auto batch_size = std::max<std::size_t>(1U,
       maximum_pairs_per_dispatch / std::max<std::size_t>(1U, boundaries.size()));
@@ -603,7 +746,8 @@ RoutingComputeDomainPointResult probe_routing_domain_points_gpu(
     bool final_state = false;
     {
       std::lock_guard lock(context_mutex());
-      if (!context().dispatch(packed_points, packed.segments, {}, count, push, count, 1U,
+      const auto& geometry_words = indexed_boundaries ? indexed_boundaries->words : packed.segments;
+      if (!context().dispatch(packed_points, geometry_words, {}, count, push, count, 1U,
                               raw, final_state, result.diagnostic,
                               &result.resident_geometry_uploads,
                               &result.resident_geometry_reuses)) return result;
@@ -710,16 +854,19 @@ classify_routing_chords_gpu(const std::vector<RoutingComputeSegment>& chords,
       std::vector<std::uint32_t> packed_boundaries(chord_end, packed.segments.end());
       for (std::size_t edge = 0U; edge < boundary_count; ++edge)
         for (std::size_t word = 4U; word < 7U; ++word) packed_boundaries[edge * 7U + word] = 0U;
+      const auto indexed_boundaries = indexed_boundary_geometry(packed_boundaries);
       Push push;
       push.mode = 6U;
       push.count_a = static_cast<std::uint32_t>(this_chord_count);
       push.count_b = static_cast<std::uint32_t>(boundary_count);
+      push.guard_nm = static_cast<std::uint32_t>(guard);
+      push.weights[0] = indexed_boundaries->node_count;
       std::vector<std::uint32_t> raw;
       bool final_state = false;
       bool dispatched = false;
       {
         std::lock_guard lock(context_mutex());
-        dispatched = context().dispatch(packed_chords, packed_boundaries, {}, this_chord_count * 3U,
+        dispatched = context().dispatch(packed_chords, indexed_boundaries->words, {}, this_chord_count * 4U,
                                         push, this_chord_count, 1U, raw, final_state,
                                         result.diagnostic, &result.resident_boundary_uploads,
                                         &result.resident_boundary_reuses);
@@ -727,17 +874,19 @@ classify_routing_chords_gpu(const std::vector<RoutingComputeSegment>& chords,
       if (!dispatched)
         return result;
       ++result.gpu_batch_count;
-      result.gpu_work_items += this_chord_count * boundary_count;
       for (std::size_t local_chord = 0U; local_chord < this_chord_count; ++local_chord) {
         float clearance = 0.0F;
-        std::memcpy(&clearance, &raw[local_chord * 3U], sizeof(clearance));
+        std::memcpy(&clearance, &raw[local_chord * 4U], sizeof(clearance));
         const auto chord = chord_begin + local_chord;
+        const auto tested = static_cast<std::size_t>(raw[local_chord * 4U + 3U]);
+        result.gpu_work_items += tested;
+        result.gpu_pruned_work_items += boundary_count - std::min(boundary_count, tested);
         if (clearance < best_clearance[chord]) {
           best_clearance[chord] = clearance;
           result.chords[chord].closest_boundary =
-              boundary_begin + raw[local_chord * 3U + 1U];
+              boundary_begin + raw[local_chord * 4U + 1U];
         }
-        any_intersection[chord] = any_intersection[chord] || raw[local_chord * 3U + 2U] != 0U;
+        any_intersection[chord] = any_intersection[chord] || raw[local_chord * 4U + 2U] != 0U;
         all_chunks_clear[chord] = all_chunks_clear[chord] && std::isfinite(clearance) &&
                                   clearance >= static_cast<float>(required + guard);
       }

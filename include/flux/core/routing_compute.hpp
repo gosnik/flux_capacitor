@@ -168,10 +168,13 @@ struct RoutingComputeChordBatchResult {
   bool used_gpu{false};
   bool cpu_fallback{false};
   std::string diagnostic;
-  // Number of bounded GPU launches and pairwise chord/boundary checks completed by them.
-  // These remain zero for CPU-only classification and are advisory telemetry only.
+  // Number of bounded GPU launches and exact chord/boundary checks completed by them. These
+  // remain zero for CPU-only classification and are advisory telemetry only.
   std::size_t gpu_batch_count{0U};
   std::size_t gpu_work_items{0U};
+  // Cartesian chord/boundary checks rejected by the GPU spatial index before exact distance
+  // evaluation. This is advisory only; CPU remains authoritative for non-clear chords.
+  std::size_t gpu_pruned_work_items{0U};
   std::size_t resident_boundary_uploads{0U};
   std::size_t resident_boundary_reuses{0U};
 

@@ -528,21 +528,70 @@ struct NavMeshScreeningContext::Impl {
     std::vector<QueuedChord> queued;
     bool servicing{false};
   };
+  // This cache intentionally keys the complete lattice input, unlike Domain above: guides,
+  // bounds and every configuration member affect the lattice even though they do not affect a
+  // boundary-chord certificate.  Pending entries are separate from retained entries so a builder
+  // can call assess() without holding this mutex and identical callers can join it safely.
+  struct PreparedPending {
+    bool ready{false};
+    std::shared_ptr<const PreparedNavMeshDomain> domain;
+    std::exception_ptr error;
+  };
+  struct PreparedEntry {
+    OffsetFreeSpaceRegion region;
+    NavMeshConfig config;
+    bool validate_source_topology{true};
+    std::shared_ptr<const PreparedNavMeshDomain> domain;
+    std::size_t cells{0U};
+  };
+  struct PreparedInflight {
+    OffsetFreeSpaceRegion region;
+    NavMeshConfig config;
+    bool validate_source_topology{true};
+    std::shared_ptr<PreparedPending> pending;
+  };
+  struct GeometryPending {
+    bool ready{false};
+    std::shared_ptr<const PreparedNavMeshDomain> domain;
+    std::exception_ptr error;
+  };
+  struct GeometryEntry {
+    OffsetFreeSpaceRegion region;
+    bool validate_source_topology{true};
+    std::shared_ptr<const PreparedNavMeshDomain> domain;
+    std::size_t points{0U};
+  };
+  struct GeometryInflight {
+    OffsetFreeSpaceRegion region;
+    bool validate_source_topology{true};
+    std::shared_ptr<GeometryPending> pending;
+  };
 
-  explicit Impl(std::size_t chords, std::size_t domains)
-      : maximum_chords(chords), maximum_domains(domains) {}
+  explicit Impl(std::size_t chords, std::size_t domains, std::size_t prepared_cells,
+                std::size_t geometry_points)
+      : maximum_chords(chords), maximum_domains(domains), maximum_prepared_cells(prepared_cells),
+        maximum_geometry_points(geometry_points) {}
 
   std::size_t maximum_chords;
   std::size_t maximum_domains;
+  std::size_t maximum_prepared_cells;
+  std::size_t maximum_geometry_points;
   mutable std::mutex mutex;
   std::condition_variable ready;
   std::vector<std::shared_ptr<Domain>> domains;
+  std::vector<PreparedEntry> prepared_entries;
+  std::vector<PreparedInflight> prepared_inflight;
+  std::vector<GeometryEntry> geometry_entries;
+  std::vector<GeometryInflight> geometry_inflight;
   NavMeshScreeningContext::Stats stats;
 };
 
 NavMeshScreeningContext::NavMeshScreeningContext(std::size_t maximum_chords,
-                                                 std::size_t maximum_domains)
-    : impl_(std::make_shared<Impl>(maximum_chords, maximum_domains)) {}
+                                                 std::size_t maximum_domains,
+                                                 std::size_t maximum_prepared_cells,
+                                                 std::size_t maximum_geometry_points)
+    : impl_(std::make_shared<Impl>(maximum_chords, maximum_domains, maximum_prepared_cells,
+                                   maximum_geometry_points)) {}
 
 std::vector<std::optional<Nanometres>> NavMeshScreeningContext::assess(
     const OffsetFreeSpaceRegion& region, const PreparedNavMeshDomain& prepared,
@@ -669,6 +718,7 @@ std::vector<std::optional<Nanometres>> NavMeshScreeningContext::assess(
         impl_->stats.batched_chord_requests += batch_requests.size();
         impl_->stats.gpu_dispatches += compute_stats.gpu_batch_count;
         impl_->stats.gpu_work_items += compute_stats.gpu_work_items;
+        impl_->stats.gpu_pruned_work_items += compute_stats.gpu_pruned_work_items;
         impl_->stats.resident_boundary_uploads += compute_stats.resident_boundary_uploads;
         impl_->stats.resident_boundary_reuses += compute_stats.resident_boundary_reuses;
         impl_->stats.classifier_elapsed_us += elapsed;
@@ -719,10 +769,31 @@ NavMeshScreeningContext::Stats NavMeshScreeningContext::stats() const {
 
 namespace {
 
+PreparedNavMeshDomain prepare_navmesh_geometry_impl(const OffsetFreeSpaceRegion& region,
+                                                    bool validate_source_topology) {
+  PreparedNavMeshDomain result;
+  if (region.area.vertices.size() < 3U) {
+    result.diagnostic = "invalid NavMesh configuration or free-space region";
+    return result;
+  }
+  result.free_space.outline = region.area;
+  result.free_space.cutouts = region.holes;
+  result.prepared_outline = geometry::prepare_polygon(region.area);
+  result.prepared_cutouts.reserve(region.holes.size());
+  for (const auto& hole : region.holes)
+    result.prepared_cutouts.push_back(geometry::prepare_polygon(hole));
+  build_cutout_bvh(result);
+  if (validate_source_topology &&
+      !validate_free_space_chord_domain(result.free_space, &result.diagnostic))
+    return result;
+  return result;
+}
+
 PreparedNavMeshDomain prepare_navmesh_domain_impl(const OffsetFreeSpaceRegion& region,
                                                   const NavMeshConfig& config,
                                                   bool validate_source_topology,
-                                                  NavMeshScreeningContext* screening_context = nullptr) {
+                                                  NavMeshScreeningContext* screening_context = nullptr,
+                                                  const PreparedNavMeshDomain* prepared_geometry = nullptr) {
   PreparedNavMeshDomain result;
   if (config.cell_pitch.value() <= 0 || config.maximum_cells == 0U ||
       config.maximum_guide_distance.value() < 0 || config.minimum_boundary_clearance.value() < 0 ||
@@ -736,16 +807,17 @@ PreparedNavMeshDomain prepare_navmesh_domain_impl(const OffsetFreeSpaceRegion& r
     result.diagnostic = "invalid NavMesh configuration or free-space region";
     return result;
   }
-  result.free_space.outline = region.area;
-  result.free_space.cutouts = region.holes;
-  result.prepared_outline = geometry::prepare_polygon(region.area);
-  result.prepared_cutouts.reserve(region.holes.size());
-  for (const auto& hole : region.holes) {
-    result.prepared_cutouts.push_back(geometry::prepare_polygon(hole));
+  if (prepared_geometry != nullptr) {
+    result.free_space = prepared_geometry->free_space;
+    result.prepared_outline = prepared_geometry->prepared_outline;
+    result.prepared_cutouts = prepared_geometry->prepared_cutouts;
+    result.cutout_order = prepared_geometry->cutout_order;
+    result.cutout_bvh = prepared_geometry->cutout_bvh;
+    result.diagnostic = prepared_geometry->diagnostic;
+  } else {
+    result = prepare_navmesh_geometry_impl(region, validate_source_topology);
   }
-  build_cutout_bvh(result);
-  if (validate_source_topology &&
-      !validate_free_space_chord_domain(result.free_space, &result.diagnostic)) {
+  if (!result.diagnostic.empty()) {
     return result;
   }
   result.minimum = result.prepared_outline.bounds.minimum;
@@ -1006,8 +1078,205 @@ PreparedNavMeshDomain prepare_navmesh_domain(const OffsetFreeSpaceRegion& region
 std::shared_ptr<const PreparedNavMeshDomain>
 NavMeshScreeningContext::prepare(const OffsetFreeSpaceRegion& region, const NavMeshConfig& config,
                                  bool validate_source_topology) {
-  return std::make_shared<const PreparedNavMeshDomain>(
-      prepare_navmesh_domain_impl(region, config, validate_source_topology, this));
+  const auto matches = [&](const auto& entry) {
+    return entry.region == region && entry.config == config &&
+           entry.validate_source_topology == validate_source_topology;
+  };
+  // A zero entry or cell budget explicitly disables retained reuse.  Preserve the ordinary
+  // builder contract in that case rather than retaining an unbounded in-flight registry.
+  if (impl_->maximum_domains == 0U || impl_->maximum_prepared_cells == 0U) {
+    return std::make_shared<const PreparedNavMeshDomain>(
+        prepare_navmesh_domain_impl(region, config, validate_source_topology, this));
+  }
+
+  std::shared_ptr<Impl::PreparedPending> pending;
+  bool build = false;
+  {
+    std::lock_guard lock(impl_->mutex);
+    for (const auto& entry : impl_->prepared_entries) {
+      if (matches(entry)) {
+        ++impl_->stats.prepared_domain_hits;
+        return entry.domain;
+      }
+    }
+    for (const auto& entry : impl_->prepared_inflight) {
+      if (matches(entry)) {
+        ++impl_->stats.coalesced_preparation_waits;
+        pending = entry.pending;
+        break;
+      }
+    }
+    if (!pending) {
+      ++impl_->stats.prepared_domain_misses;
+      pending = std::make_shared<Impl::PreparedPending>();
+      impl_->prepared_inflight.push_back(
+          {region, config, validate_source_topology, pending});
+      build = true;
+    }
+  }
+  if (!build) {
+    std::unique_lock lock(impl_->mutex);
+    impl_->ready.wait(lock, [&] { return pending->ready; });
+    if (pending->error) std::rethrow_exception(pending->error);
+    return pending->domain;
+  }
+
+  // Reuse the invariant outline/cutout/BVH preparation across guide-specific lattices.  The
+  // result is copied into each independent PreparedNavMeshDomain because its public fields are
+  // value types, but rebuilding polygon BVHs and validating source topology is avoided.
+  std::shared_ptr<const PreparedNavMeshDomain> geometry;
+  std::shared_ptr<Impl::GeometryPending> geometry_pending;
+  std::exception_ptr error;
+  bool build_geometry = false;
+  try {
+  {
+    std::lock_guard lock(impl_->mutex);
+    const auto geometry_matches = [&](const auto& entry) {
+      return entry.region == region && entry.validate_source_topology == validate_source_topology;
+    };
+    for (const auto& entry : impl_->geometry_entries) {
+      if (geometry_matches(entry)) {
+        ++impl_->stats.geometry_hits;
+        geometry = entry.domain;
+        break;
+      }
+    }
+    if (!geometry) {
+      for (const auto& entry : impl_->geometry_inflight) {
+        if (geometry_matches(entry)) {
+          geometry_pending = entry.pending;
+          break;
+        }
+      }
+      if (!geometry_pending) {
+        ++impl_->stats.geometry_misses;
+        geometry_pending = std::make_shared<Impl::GeometryPending>();
+        impl_->geometry_inflight.push_back({region, validate_source_topology, geometry_pending});
+        build_geometry = true;
+      }
+    }
+  }
+  if (!geometry && !build_geometry) {
+    std::unique_lock lock(impl_->mutex);
+    impl_->ready.wait(lock, [&] { return geometry_pending->ready; });
+    if (geometry_pending->error) {
+      error = geometry_pending->error;
+    } else {
+      geometry = geometry_pending->domain;
+      ++impl_->stats.geometry_hits;
+    }
+  }
+  if (build_geometry) {
+    std::exception_ptr geometry_error;
+    try {
+      geometry = std::make_shared<const PreparedNavMeshDomain>(
+          prepare_navmesh_geometry_impl(region, validate_source_topology));
+    } catch (...) {
+      geometry_error = std::current_exception();
+    }
+    {
+      std::lock_guard lock(impl_->mutex);
+      geometry_pending->error = geometry_error;
+      geometry_pending->domain = geometry;
+      geometry_pending->ready = true;
+      const auto inflight = std::find_if(impl_->geometry_inflight.begin(),
+                                         impl_->geometry_inflight.end(),
+                                         [&](const auto& entry) { return entry.pending == geometry_pending; });
+      if (inflight != impl_->geometry_inflight.end()) impl_->geometry_inflight.erase(inflight);
+      if (!geometry_error && geometry && impl_->maximum_domains != 0U) {
+        const auto geometry_weight = [](const PreparedNavMeshDomain& domain) {
+          std::size_t result = domain.prepared_outline.polygon.vertices.size() +
+                               domain.prepared_outline.boundary_segments.size() +
+                               domain.prepared_outline.boundary_bvh.size() + domain.cutout_bvh.size();
+          for (const auto& cutout : domain.prepared_cutouts)
+            result += cutout.polygon.vertices.size() + cutout.boundary_segments.size() +
+                      cutout.boundary_bvh.size();
+          return result;
+        };
+        const auto points = geometry_weight(*geometry);
+        if (points <= impl_->maximum_geometry_points) {
+          while (!impl_->geometry_entries.empty() &&
+                 (impl_->geometry_entries.size() >= impl_->maximum_domains ||
+                  impl_->stats.retained_geometry_points >
+                      impl_->maximum_geometry_points - points)) {
+            impl_->stats.retained_geometry_points -= impl_->geometry_entries.front().points;
+            impl_->geometry_entries.erase(impl_->geometry_entries.begin());
+            ++impl_->stats.geometry_evictions;
+          }
+          // Retention is optional; allocation failure must not strand registered waiters.
+          try {
+            impl_->geometry_entries.push_back({region, validate_source_topology, geometry, points});
+            impl_->stats.retained_geometry_points += points;
+          } catch (...) {
+            // Publish the prepared value without caching it.
+          }
+        }
+      }
+    }
+    impl_->ready.notify_all();
+    if (geometry_error) error = geometry_error;
+  }
+
+  } catch (...) {
+    // Includes allocations while registering the guide-independent geometry request.
+    // The owning full-key pending entry is always completed below.
+    error = std::current_exception();
+  }
+
+  std::shared_ptr<const PreparedNavMeshDomain> prepared;
+  if (!error) {
+    try {
+      prepared = std::make_shared<const PreparedNavMeshDomain>(
+          prepare_navmesh_domain_impl(region, config, validate_source_topology, this, geometry.get()));
+    } catch (...) {
+      error = std::current_exception();
+    }
+  }
+  const auto weight = [](const PreparedNavMeshDomain& domain) {
+    // Value-owned geometry is duplicated in a retained lattice; include it in the budget.
+    std::size_t units = domain.cells.size() + domain.cell_by_coordinate.size() +
+                        domain.usped_field.height.size() + domain.cutout_bvh.size() +
+                        domain.prepared_outline.polygon.vertices.size() +
+                        domain.prepared_outline.boundary_segments.size() +
+                        domain.prepared_outline.boundary_bvh.size();
+    for (const auto& cutout : domain.prepared_cutouts)
+      units += cutout.polygon.vertices.size() + cutout.boundary_segments.size() +
+               cutout.boundary_bvh.size();
+    return units;
+  };
+  {
+    std::lock_guard lock(impl_->mutex);
+    pending->error = error;
+    pending->domain = prepared;
+    pending->ready = true;
+    const auto inflight = std::find_if(impl_->prepared_inflight.begin(),
+                                       impl_->prepared_inflight.end(),
+                                       [&](const auto& entry) { return entry.pending == pending; });
+    if (inflight != impl_->prepared_inflight.end()) impl_->prepared_inflight.erase(inflight);
+    if (!error && prepared) {
+      const auto retained = weight(*prepared);
+      if (prepared->ok() && retained <= impl_->maximum_prepared_cells) {
+        while (!impl_->prepared_entries.empty() &&
+               (impl_->prepared_entries.size() >= impl_->maximum_domains ||
+                impl_->stats.retained_prepared_cells >
+                    impl_->maximum_prepared_cells - retained)) {
+          impl_->stats.retained_prepared_cells -= impl_->prepared_entries.front().cells;
+          impl_->prepared_entries.erase(impl_->prepared_entries.begin());
+          ++impl_->stats.prepared_domain_evictions;
+        }
+        try {
+          impl_->prepared_entries.push_back(
+              {region, config, validate_source_topology, prepared, retained});
+          impl_->stats.retained_prepared_cells += retained;
+        } catch (...) {
+          // Cache admission is best-effort; completed waiters must still be notified.
+        }
+      }
+    }
+  }
+  impl_->ready.notify_all();
+  if (error) std::rethrow_exception(error);
+  return prepared;
 }
 
 std::shared_ptr<const PreparedNavMeshDomain>

@@ -1,0 +1,19 @@
+{
+  "status": "passed",
+  "release_build": "passed",
+  "binary_sha256": "940adf0d52c3ebc0945b792d61e825f5e45b2a644ac2c213c0efb9011b834080",
+  "core_suite": {
+    "passed": 72,
+    "total": 72
+  },
+  "focused_passed": 6,
+  "regression_suites": [
+    "flux_layered_navmesh_tests",
+    "flux_ph_tightening_tests",
+    "flux_copper_scaffold_tests",
+    "flux_scaffold_curve_tests",
+    "flux_scaffold_collision_tests",
+    "flux_routing_engine_experiment_tests"
+  ],
+  "independent_review": "Allocation-failure publication issue fixed; reviewer found no remaining material blocker. Minor retained-geometry/eviction CLI telemetry omission remains; direct Stats and bound tests cover it."
+}

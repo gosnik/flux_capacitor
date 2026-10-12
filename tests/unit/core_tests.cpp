@@ -9375,9 +9375,11 @@ void navmesh_screening_context_coalesces_snapshot_chords_without_stale_domains()
   flux::NavMeshScreeningContext context(40'000U, 2U);
   std::shared_ptr<const flux::PreparedNavMeshDomain> concurrent_first;
   std::shared_ptr<const flux::PreparedNavMeshDomain> concurrent_second;
+  std::shared_ptr<const flux::PreparedNavMeshDomain> duplicate_first;
+  std::exception_ptr duplicate_error;
   std::exception_ptr first_error;
   std::exception_ptr second_error;
-  std::barrier gate{3};
+  std::barrier gate{4};
   const auto prepare = [&](const flux::NavMeshConfig& config,
                            std::shared_ptr<const flux::PreparedNavMeshDomain>& output,
                            std::exception_ptr& error) {
@@ -9392,13 +9394,20 @@ void navmesh_screening_context_coalesces_snapshot_chords_without_stale_domains()
                     std::ref(first_error));
   std::thread second(prepare, std::cref(second_config), std::ref(concurrent_second),
                      std::ref(second_error));
+  std::thread duplicate(prepare, std::cref(first_config), std::ref(duplicate_first),
+                        std::ref(duplicate_error));
   gate.arrive_and_wait();
   first.join();
   second.join();
+  duplicate.join();
+  if (duplicate_error) std::rethrow_exception(duplicate_error);
   if (first_error) std::rethrow_exception(first_error);
   if (second_error) std::rethrow_exception(second_error);
   const auto shared_stats = context.stats();
-  require(concurrent_first && concurrent_second && serial_first.ok() && serial_second.ok() &&
+  require(concurrent_first && concurrent_second && duplicate_first == concurrent_first &&
+              shared_stats.prepared_domain_misses == 2U && shared_stats.geometry_misses == 1U &&
+              shared_stats.prepared_domain_hits + shared_stats.coalesced_preparation_waits == 1U &&
+              serial_first.ok() && serial_second.ok() &&
               concurrent_first->cells == serial_first.cells &&
               concurrent_second->cells == serial_second.cells &&
               concurrent_first->adjacency_by_cell == serial_first.adjacency_by_cell &&
@@ -9730,10 +9739,57 @@ void routing_compute_chord_batches_are_bounded_and_conservative() {
               gpu.chords.back().classification != flux::RoutingComputeChordClass::definitely_clear &&
               !invalid.ok() &&
               (!gpu.used_gpu ||
-               (gpu.gpu_batch_count == 3U && gpu.gpu_work_items == chords.size() * boundaries.size())) &&
+               (gpu.gpu_batch_count > 0U && gpu.gpu_work_items <= chords.size() * boundaries.size())) &&
               (!gpu.used_gpu || gpu.chords.front().closest_boundary == 0U),
           "bounded translated chord screening must retain exact survivors and aggregate every "
           "resident boundary chunk");
+}
+
+void routing_compute_spatial_chords_preserve_nearest_and_uncertainty() {
+  constexpr std::int64_t origin = 8'000'000'000'000'000LL;
+  std::vector<flux::RoutingComputeSegment> boundaries;
+  std::vector<flux::RoutingComputeSegment> chords;
+  for (std::int64_t y = 0; y < 32; ++y) {
+    for (std::int64_t x = 0; x < 32; ++x) {
+      const auto px = origin + x * 2'000'000;
+      const auto py = origin + y * 2'000'000;
+      boundaries.push_back({px, py, px + 400'000, py});
+      // Crossings, near-threshold survivors, and comfortably clear chords all occupy
+      // different spatial leaves. A distant leaf may still contain the true nearest edge.
+      const auto dy = (x + y) % 3 == 0 ? 0 : (x + y) % 3 == 1 ? 101'000 : 300'000;
+      chords.push_back({px + 100'000, py + dy, px + 300'000, py + dy});
+    }
+  }
+  const auto cpu = flux::classify_routing_chords(chords, boundaries, 100'000, 2'048, false);
+  const auto gpu = flux::classify_routing_chords(chords, boundaries, 100'000, 2'048, true);
+  require(cpu.ok() && gpu.ok() && gpu.chords.size() == cpu.chords.size(),
+          "spatial chord screening must return every translated query");
+  for (std::size_t i = 0; i < chords.size(); ++i) {
+    const auto& exact = cpu.chords[i];
+    const auto& screened = gpu.chords[i];
+    require(screened.closest_boundary == exact.closest_boundary &&
+                screened.conservative_clearance_nm <= exact.conservative_clearance_nm &&
+                exact.conservative_clearance_nm - screened.conservative_clearance_nm <= 2'080 &&
+                ((screened.classification == flux::RoutingComputeChordClass::definitely_clear) ==
+                 (exact.classification == flux::RoutingComputeChordClass::definitely_clear)),
+            "spatial pruning must preserve nearest owners, conservative distance and survivors");
+  }
+  if (gpu.used_gpu) {
+    require(gpu.gpu_work_items < chords.size() * boundaries.size() / 2U,
+            "separated boundary clusters must prune most Cartesian GPU pair tests");
+    const auto reused = flux::classify_routing_chords(chords, boundaries, 100'000, 2'048, true);
+    require(reused.ok() && reused.used_gpu && reused.resident_boundary_reuses > 0U,
+            "repeated indexed chord queries must reuse resident geometry");
+  }
+  // Changed geometry must invalidate residency by content, even with unchanged counts.
+  boundaries.front().first_y_nm += 300'000;
+  boundaries.front().second_y_nm += 300'000;
+  chords.front().first_y_nm += 300'000;
+  chords.front().second_y_nm += 300'000;
+  const auto changed = flux::classify_routing_chords(chords, boundaries, 100'000, 2'048, true);
+  require(changed.ok() && changed.chords.front().classification !=
+                             flux::RoutingComputeChordClass::definitely_clear,
+          "spatial boundary residency must never retain stale geometry");
 }
 
 void ph_envelope_capsules_preserve_ambiguous_exact_fallback() {
@@ -11319,6 +11375,8 @@ int main(int argc, char** argv) {
        navmesh_screening_context_coalesces_snapshot_chords_without_stale_domains},
       {"advanced_routing_compute_shortlists_preserve_cpu_authority",
        advanced_routing_compute_shortlists_preserve_cpu_authority},
+      {"routing_compute_spatial_chords_preserve_nearest_and_uncertainty",
+       routing_compute_spatial_chords_preserve_nearest_and_uncertainty},
       {"routing_compute_chord_batches_are_bounded_and_conservative",
        routing_compute_chord_batches_are_bounded_and_conservative},
       {"ph_envelope_capsules_preserve_ambiguous_exact_fallback",

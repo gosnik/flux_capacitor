@@ -10151,3 +10151,24 @@ Tier2 now passes:131/131 scaffold requests, zero physical opens, zero internal c
 The original harness exit1 is solely its intentional promotion guard; independent review confirms a final, non-preview, exported candidate passed all qualification gates. Promote Tier2 to qualified with30 iterations and unlock Tier3. The original exit/result remain unchanged as evidence.
 
 Fresh sequential Tier3 remains51/148 with97 physical opens,279 tracks/20 vias,140.707s, peakRSS559696KiB, iteration limit. No final curved materialization. KRT's matched Tier3 run leaves83 opens in162.172s. Keep this general geometry correction and the Tier2 promotion; Tier3 is the next frontier.
+
+## Round34 — Bounded physical terminal width recovery (2026-10-13)
+
+### Failure and ranking
+Tier3 baseline51/148 has97 physical opens. All97 missing requests terminate attachment_exhausted before maze search;41 lack source access,65 target access,9 both. No outward attachment succeeds. The80-pad device has0.2mm pads on0.4mm pitch:0.25mm nominal trace and0.2mm clearance require0.425mm centre separation. Static neighbouring pads alone prevent escape. Fifteen regional actions spend roughly88s without physical progress, downstream of this failure.
+
+Ranked explanations are recorded in diagnosis.json: nominal terminal width, missing optional effective netclass policy, attachment geometry, and ineffective regional retries. The projectDefault nominal width is0.2mm, but current standalone import only applies minimum rules without an explicit authoritative netclass snapshot. Broad policy import would alter already successful lower-tier choices and still leave power pads needing local width transitions.
+
+### Research and smallest experiment
+KiCad's [routing documentation](https://github.com/KiCad/kicad-doc/blob/master/src/pcbnew/pcbnew_routing.adoc) distinguishes netclass default widths from explicit selected routing widths; [PCB rules](https://docs.kicad.org/10.0/en/pcbnew/pcbnew.html) distinguish preferred dimensions from hard minima. Flux already represents authorized terminal neckdown segments. Test a bounded pad-width escape only after nominal direct/outward attachment exhaustion. The narrow segment must be tied to an actual same-net pad, respect fabrication minima and a bounded length, then return to nominal width before maze routing. Coupled nets remain excluded. Exact assembled-copper and component-preservation validation remain mandatory, and successful nominal access is unchanged.
+
+Success requires attachments actually reaching maze search and fewer physical opens, with all qualified tiers remaining green. Effective netclass import and regional retry policy are separate issues, deferred rather than mixed into this experiment.
+
+Exact imported-board probes confirm six horizontal escapes at0.20mm pass dynamic DRC; matching0.25mm escapes fail at300000nm measured versus325000nm required centreline-to-pad clearance. The source reference uses822 segments at0.20mm and143 at0.50mm; power nets include both widths. Reference evidence motivates a bounded transition but is not itself a clean whole-board oracle.
+
+Validation correction: the saved Round33 curve-test log contains a failure despite the prior all-tests-pass summary. Its invented footprint defaulted to an explicit courtyard without courtyard geometry, so materialization returned invalid_input before exercising DRC tolerance. The Round34 test fixture now declares its absent placement envelope explicitly. Preserve the original failed log; qualify this round from fresh test output. The exported Tier2 KiCad result remains independently valid.
+The same assertion also required circular arcs specifically, while the valid curved result contains10 native Beziers and no arcs. It now accepts either curved representation while retaining all completion, strict/parity DRC, and no-polyline-fallback assertions.
+
+
+### Round34 results
+All 11 regression targets passed after the fixture corrections. Sequential telemetry Tier0/1/2 retained byte-identical clean copper (31.044s/106.314s/223.759s detailed). Tier3 reached88/148 physical requests,60 opens at its900s limit, versus51/148 previously; it remains incomplete. Retain the general terminal escape improvement; expensive repair remains the frontier. Evidence: `reports/validation/terminal-neckdown-round34-20261013/`.

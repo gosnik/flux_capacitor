@@ -61,6 +61,7 @@ void final_drc_epsilon_preserves_strict_materialization_by_default() {
   source.nets.push_back({NetId{"near-right"}, "near-right", 3U});
   Footprint footprint;
   footprint.id = ObjectId{"near-threshold-source"};
+  footprint.placement_envelope_source = PlacementEnvelopeSource::absent;
   footprint.position = mm(20, 20);
   Pad left;
   left.id = ObjectId{"near-left-pad"};
@@ -92,7 +93,8 @@ void final_drc_epsilon_preserves_strict_materialization_by_default() {
   const auto parity_result = materialize_detailed_route(source, plan, parity);
   require(strict_result.stop_reason == DetailedRouterStopReason::copper_violations &&
               !strict_result.complete() && parity_result.complete() && parity_result.candidate &&
-              parity_result.copper_drc.ok() && !parity_result.candidate->track_arcs.empty() &&
+              parity_result.copper_drc.ok() &&
+              (!parity_result.candidate->track_arcs.empty() || !parity_result.candidate->track_beziers.empty()) &&
               !parity_result.fallback_polyline_materialization,
           "only explicit final KiCad DRC parity may retain curved materialization across a bounded "
           "immutable pad shortfall");

@@ -53,6 +53,11 @@ struct CopperScaffoldConfig {
   std::size_t maximum_component_access_points{32U};
   std::size_t maximum_attachment_states{128U};
   std::size_t attachment_radius_cells{2U};
+  // After every nominal direct and outward attachment fails, a single-pad terminal may use its
+  // physical minor dimension for a short, exact-DRC-checked escape.  The maze itself remains at
+  // the net's nominal width.  Coupled nets are excluded.
+  bool enable_terminal_neckdown{true};
+  Nanometres maximum_terminal_neckdown_length{Nanometres::from_mm(2.0)};
   // Start attachment search from small, stable prefixes and widen only after a bounded search
   // fails.  The raw probe cap bounds each cursor advance when few grid candidates are legal.
   // Opt-in until progressive choices preserve benchmark completion and performance.
@@ -231,6 +236,8 @@ struct CopperScaffoldCounters {
   std::size_t attachment_search_probes{0U};
   std::size_t outward_attachment_probes{0U};
   std::size_t outward_attachments{0U};
+  std::size_t terminal_neckdown_probes{0U};
+  std::size_t terminal_neckdown_attachments{0U};
   std::size_t attachment_search_early_successes{0U};
   std::uint64_t access_generation_microseconds{0U};
   std::uint64_t domain_build_microseconds{0U};

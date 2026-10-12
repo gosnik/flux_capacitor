@@ -4260,6 +4260,8 @@ void print_route_result(const flux::GlobalRouteResult& result,
                 << ", \"preservation_demands_accepted\": " << scaffold.counters.preservation_demands_accepted
                 << ", \"preservation_repair_rollbacks\": " << scaffold.counters.preservation_repair_rollbacks
                 << ", \"outward_attachments\": " << scaffold.counters.outward_attachments
+                << ", \"terminal_neckdown_probes\": " << scaffold.counters.terminal_neckdown_probes
+                << ", \"terminal_neckdown_attachments\": " << scaffold.counters.terminal_neckdown_attachments
                 << ", \"attachment_search_early_successes\": " << scaffold.counters.attachment_search_early_successes
                 << ", \"duplicate_rejected_assemblies\": " << scaffold.counters.duplicate_rejected_assemblies
                 << ", \"access_generation_microseconds\": " << scaffold.counters.access_generation_microseconds
@@ -5569,6 +5571,8 @@ void print_detailed_result(const flux::DetailedRouteResult& result,
       std::cout << ", \"preservation_demands_accepted\": " << counters.preservation_demands_accepted;
       std::cout << ", \"preservation_repair_rollbacks\": " << counters.preservation_repair_rollbacks;
       std::cout << ", \"outward_attachments\": " << counters.outward_attachments;
+      std::cout << ", \"terminal_neckdown_probes\": " << counters.terminal_neckdown_probes;
+      std::cout << ", \"terminal_neckdown_attachments\": " << counters.terminal_neckdown_attachments;
       std::cout << ", \"attachment_search_early_successes\": " << counters.attachment_search_early_successes;
       std::cout << ", \"duplicate_rejected_assemblies\": " << counters.duplicate_rejected_assemblies;
       std::cout << ", \"access_generation_microseconds\": " << counters.access_generation_microseconds;

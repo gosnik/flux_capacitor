@@ -647,6 +647,14 @@ are excluded, and detailed output retains the width transition as separately che
 segments. This does not authorize arbitrary corridor neck-downs or override unrepresented custom
 fabrication rules.
 
+The physical scaffold also has an independent pad-derived escape fallback, enabled by default.
+After nominal direct and outward attachments fail, an uncoupled net may use a pad's minor
+dimension (subject to the board minimum width) for its first or last escape segment, limited
+to 2 mm. The next segment and maze routing retain nominal width. Exact copper checks still
+apply. Library callers can disable this through `CopperScaffoldConfig::enable_terminal_neckdown`
+or change `maximum_terminal_neckdown_length`; the global width options above govern the
+separate coarse-routing policy.
+
 `--medial-neck-down-width-nm N` and `--max-medial-neck-down-length-nm N` must be supplied together
 with `--direct-medial`. They authorize an ordinary, uncoupled net to cross only a certified direct
 medial chord whose nominal width-plus-clearance demand does not fit, whose narrower demand does fit,

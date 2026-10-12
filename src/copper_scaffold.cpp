@@ -57,6 +57,7 @@ struct Attachment {
   Node node;
   GlobalRoutePoint anchor;
   std::optional<GlobalRoutePoint> outward_stub;
+  Nanometres stub_width{Nanometres{0}};
   std::uint64_t cost{0U};
 };
 
@@ -87,6 +88,17 @@ struct Attachment {
   return (request.segment_widths.empty() || request.segment_widths.size() + 1U == request.points.size()) &&
          (request.segment_width_kinds.empty() ||
           request.segment_width_kinds.size() == request.segment_widths.size());
+}
+[[nodiscard]] std::uint64_t ceil_segment_length_nm(Point a, Point b) {
+  const auto length = std::ceil(std::hypotl(static_cast<long double>(a.x.value() - b.x.value()),
+                                             static_cast<long double>(a.y.value() - b.y.value())));
+  return !std::isfinite(length) || length >= static_cast<long double>(std::numeric_limits<std::uint64_t>::max())
+             ? std::numeric_limits<std::uint64_t>::max()
+             : static_cast<std::uint64_t>(length);
+}
+[[nodiscard]] std::uint64_t saturating_add_length(std::uint64_t total, std::uint64_t amount) {
+  return amount > std::numeric_limits<std::uint64_t>::max() - total
+             ? std::numeric_limits<std::uint64_t>::max() : total + amount;
 }
 void clear_coarse_metadata(GlobalRoutePath& path) {
   path.medial_resource_sequence.clear(); path.medial_transition_portals.clear();
@@ -258,14 +270,56 @@ struct CounterTimer {
   return result;
 }
 [[nodiscard]] bool retained_matches_request(const Board& board, const GlobalRoutePath& retained,
-                                            const GlobalRoutePath& request) {
+                                            const GlobalRoutePath& request,
+                                            const CopperScaffoldConfig& config) {
   if (retained.net != request.net || retained.connection_index != request.connection_index ||
       retained.points.size() < 2U || request.points.size() < 2U || !valid_widths(retained)) return false;
   // Retained geometry may attach through an existing same-net component rather than terminate at
   // the current request's exact anchors. Its dynamic DRC reconstruction and the component proof
   // below are authoritative; endpoint-coordinate equality would reject valid tree attachments.
-  static_cast<void>(board);
-  return true;
+  // An exact supplied request keeps its existing global-width authorization.  Only a rewritten
+  // retained/proposal path can claim the scaffold's pad-derived terminal policy.
+  if (retained.points == request.points && retained.segment_widths == request.segment_widths &&
+      retained.segment_width_kinds == request.segment_width_kinds &&
+      retained.terminal_neck_down_segments == request.terminal_neck_down_segments &&
+      retained.terminal_neck_down_length_nm == request.terminal_neck_down_length_nm) return true;
+  const auto rules = resolve_net_routing_rules(board, retained.net);
+  bool has_terminal_reduction = false;
+  for (std::size_t i = 0U; i < retained.segment_widths.size(); ++i)
+    has_terminal_reduction |= retained.segment_widths[i].value() > 0 &&
+        retained.segment_widths[i] < rules.track_width && !retained.segment_width_kinds.empty() &&
+        retained.segment_width_kinds[i] == GlobalRouteSegmentWidthKind::terminal_neck_down;
+  if (!has_terminal_reduction)
+    return retained.terminal_neck_down_segments == 0U && retained.terminal_neck_down_length_nm == 0U;
+  if (!config.enable_terminal_neckdown || config.maximum_terminal_neckdown_length.value() <= 0) return false;
+  const auto pads = copper_pad_shapes(board);
+  const bool coupled = std::any_of(board.differential_pairs.begin(), board.differential_pairs.end(),
+      [&](const auto& pair) { return pair.positive_net == retained.net || pair.negative_net == retained.net; }) ||
+      std::any_of(board.routing_buses.begin(), board.routing_buses.end(), [&](const auto& bus) {
+        return std::find(bus.ordered_nets.begin(), bus.ordered_nets.end(), retained.net) != bus.ordered_nets.end(); });
+  std::size_t terminal_segments = 0U;
+  std::uint64_t terminal_length = 0U;
+  for (std::size_t i = 0; i < retained.segment_widths.size(); ++i) {
+    if (retained.segment_widths[i] >= rules.track_width || retained.segment_width_kinds.empty() ||
+        retained.segment_width_kinds[i] != GlobalRouteSegmentWidthKind::terminal_neck_down) continue;
+    if (!config.enable_terminal_neckdown || coupled || (i != 0U && i + 1U != retained.segment_widths.size())) return false;
+    const auto& endpoint = i == 0U ? retained.points.front() : retained.points.back();
+    const auto& adjacent = i == 0U ? retained.points[1U] : retained.points[retained.points.size() - 2U];
+    if (endpoint.layer != adjacent.layer || endpoint.position == adjacent.position) return false;
+    const auto length = ceil_segment_length_nm(endpoint.position, adjacent.position);
+    if (length >
+        static_cast<std::uint64_t>(config.maximum_terminal_neckdown_length.value())) return false;
+    const bool pad_ok = std::any_of(pads.begin(), pads.end(), [&](const auto& pad) {
+      return pad.net == retained.net && std::find(pad.layers.begin(), pad.layers.end(), endpoint.layer) != pad.layers.end() &&
+          point_to_pad_copper_distance_nm(endpoint.position, pad) <= 0.0L &&
+          std::max(board.rules.minimum_track_width, std::min(pad.width, pad.height)) == retained.segment_widths[i];
+    });
+    if (!pad_ok) return false;
+    ++terminal_segments;
+    terminal_length = saturating_add_length(terminal_length, length);
+  }
+  return terminal_segments == retained.terminal_neck_down_segments &&
+         terminal_length == retained.terminal_neck_down_length_nm;
 }
 [[nodiscard]] std::string canonical_request_identity(const GlobalRoutePath& request) {
   std::ostringstream identity;
@@ -468,14 +522,16 @@ struct PassageSearch {
     return penalty;
   };
   const auto rules = resolve_net_routing_rules(base, request.net);
-  const auto edge_is_legal = [&](Point a, LayerId al, Point b, LayerId bl, std::size_t serial) {
+  const auto edge_is_legal = [&](Point a, LayerId al, Point b, LayerId bl, std::size_t serial,
+                                 Nanometres width = Nanometres{0}) {
+    const auto selected_width = width.value() > 0 ? width : rules.track_width;
     CounterTimer edge_timer{counters.edge_validation_microseconds};
     std::string id_text = "__flux-copper-scaffold-probe-" + std::to_string(index) + "-" +
                           std::to_string(serial);
     while (has_id(base, id_text)) id_text += "_";
     const ObjectId id{std::move(id_text)};
     if (al == bl) {
-      TrackSegment track{id, request.net, al, a, b, rules.track_width, false};
+      TrackSegment track{id, request.net, al, a, b, selected_width, false};
       if (collision.ready()) {
         const auto report = collision.check_track(track);
         if (!report.ok() && frontier_blockers != nullptr) for (const auto& violation : report.violations)
@@ -484,6 +540,12 @@ struct PassageSearch {
         return spatially_legal(report);
       }
       GlobalRoutePath edge; edge.net = request.net; edge.points = {{a, al}, {b, bl}};
+      if (selected_width < rules.track_width) {
+        edge.segment_widths = {selected_width};
+        edge.segment_width_kinds = {GlobalRouteSegmentWidthKind::terminal_neck_down};
+        edge.terminal_neck_down_segments = 1U;
+        edge.terminal_neck_down_length_nm = ceil_segment_length_nm(a, b);
+      }
       Trial fallback; return legal_trial(base, edge, index, fallback);
     }
     if (reusable_transition(base, request.net, a, al, bl)) return true;
@@ -508,6 +570,8 @@ struct PassageSearch {
   std::optional<std::vector<CopperPadShape>> pad_shapes;
   std::map<std::pair<Point, LayerId>, std::optional<Point>> outward_stubs;
   std::map<std::pair<Point, LayerId>, bool> outward_stub_legs;
+  std::map<std::pair<Point, LayerId>, std::optional<std::pair<Point, Nanometres>>> terminal_neckdown_stubs;
+  std::map<std::pair<Point, LayerId>, bool> terminal_neckdown_stub_legs;
   const auto outward_stub_for = [&](const GlobalRoutePoint& anchor) -> std::optional<Point> {
     const auto key = std::pair{anchor.position, anchor.layer};
     if (const auto found = outward_stubs.find(key); found != outward_stubs.end())
@@ -534,11 +598,35 @@ struct PassageSearch {
     outward_stubs.emplace(key, result);
     return result;
   };
+  const auto terminal_neckdown_stub_for = [&](const GlobalRoutePoint& anchor)
+      -> std::optional<std::pair<Point, Nanometres>> {
+    const auto key = std::pair{anchor.position, anchor.layer};
+    if (const auto found = terminal_neckdown_stubs.find(key); found != terminal_neckdown_stubs.end()) return found->second;
+    if (!config.enable_terminal_neckdown || config.maximum_terminal_neckdown_length.value() <= 0 ||
+        rules.track_width <= base.rules.minimum_track_width ||
+        std::any_of(base.differential_pairs.begin(), base.differential_pairs.end(), [&](const auto& pair) {
+          return pair.positive_net == request.net || pair.negative_net == request.net; }) ||
+        std::any_of(base.routing_buses.begin(), base.routing_buses.end(), [&](const auto& bus) {
+          return std::find(bus.ordered_nets.begin(), bus.ordered_nets.end(), request.net) != bus.ordered_nets.end(); })) return terminal_neckdown_stubs[key] = std::nullopt;
+    // Reuse only the already-established outward geometry; this phase changes width, never direction.
+    const auto stub = outward_stub_for(anchor); if (!stub) return terminal_neckdown_stubs[key] = std::nullopt;
+    const auto length = std::hypotl(static_cast<long double>(stub->x.value() - anchor.position.x.value()),
+                                    static_cast<long double>(stub->y.value() - anchor.position.y.value()));
+    if (length > config.maximum_terminal_neckdown_length.value()) return terminal_neckdown_stubs[key] = std::nullopt;
+    if (!pad_shapes) pad_shapes = copper_pad_shapes(base);
+    for (const auto& pad : *pad_shapes)
+      if (pad.net == request.net && std::find(pad.layers.begin(), pad.layers.end(), anchor.layer) != pad.layers.end() &&
+          point_to_pad_copper_distance_nm(anchor.position, pad) <= 0.0L) {
+        const auto width = std::max(base.rules.minimum_track_width, std::min(pad.width, pad.height));
+        if (width > Nanometres{0} && width < rules.track_width) return terminal_neckdown_stubs[key] = std::pair{*stub, width};
+      }
+    return terminal_neckdown_stubs[key] = std::nullopt;
+  };
   // Iterate rings before anchors, so the bounded set covers different copper owners/layers
   // before spending the allowance on distant attachments of its first owner.
   struct AttachmentCursor {
     std::int64_t ring{0U}, anchor{0U}, dy{0U}, dx{0U};
-    bool initialized{false}, outward_phase{false}, exhausted{false};
+    bool initialized{false}, outward_phase{false}, neckdown_phase{false}, exhausted{false};
     std::vector<Attachment> result;
   };
   // This is deliberately a cursor rather than a filtered precomputation.  Boards with many
@@ -555,10 +643,12 @@ struct PassageSearch {
            (raw_probe_limit == 0U || probes < raw_probe_limit)) {
       if (cursor.ring > radius || anchors.empty()) {
         if (!cursor.outward_phase && !anchors.empty() && cursor.result.empty()) {
-          // Preserve the complete old attachment set whenever direct access exists. Mixing
-          // new exits into that set can change an already successful route and strand later
-          // nets. This fallback repairs the specific zero-direct-attachment failure only.
           cursor.outward_phase = true;
+          cursor.ring = 0U; cursor.anchor = 0U; cursor.dy = 0U; cursor.dx = 0U;
+          continue;
+        }
+        if (cursor.outward_phase && !cursor.neckdown_phase && !anchors.empty() && cursor.result.empty()) {
+          cursor.neckdown_phase = true;
           cursor.ring = 0U; cursor.anchor = 0U; cursor.dy = 0U; cursor.dx = 0U;
           continue;
         }
@@ -580,10 +670,14 @@ struct PassageSearch {
       routing_kernel_checkpoint();
       if (token.stop_requested()) { counters.cancelled = true; break; }
       const auto layer = find_layer(endpoint.layer); if (!layer) continue;
-      const auto stub = cursor.outward_phase ? outward_stub_for(endpoint) : std::nullopt;
-      if (cursor.outward_phase && !stub) continue;
+      const auto stub = cursor.neckdown_phase ? std::optional<Point>{} :
+                        (cursor.outward_phase ? outward_stub_for(endpoint) : std::nullopt);
+      const auto neckdown = cursor.neckdown_phase ? terminal_neckdown_stub_for(endpoint) : std::nullopt;
+      if (cursor.neckdown_phase && !neckdown) continue;
+      if (cursor.outward_phase && !cursor.neckdown_phase && !stub) continue;
       if (stub) ++counters.outward_attachment_probes;
-      const auto origin = stub.value_or(endpoint.position);
+      if (neckdown) ++counters.terminal_neckdown_probes;
+      const auto origin = neckdown ? neckdown->first : stub.value_or(endpoint.position);
       if (!domain.map->exact_query(origin.x.value(), origin.y.value()).inside) continue;
       const auto x = floor_grid(origin.x.value(), minimum.x.value());
       const auto y = floor_grid(origin.y.value(), minimum.y.value());
@@ -600,21 +694,29 @@ struct PassageSearch {
               edge_is_legal(endpoint.position, endpoint.layer, *stub, endpoint.layer,
                             cursor.result.size());
         if (!found->second) continue;
+      } else if (neckdown) {
+        auto [found, inserted] = terminal_neckdown_stub_legs.emplace(
+            std::pair{endpoint.position, endpoint.layer}, false);
+        if (inserted)
+          found->second = geometry::segment_inside_board_area(endpoint.position, neckdown->first, base) &&
+              edge_is_legal(endpoint.position, endpoint.layer, neckdown->first, endpoint.layer,
+                            cursor.result.size(), neckdown->second);
+        if (!found->second) continue;
       }
       // The exact grid node is an attachment candidate too.  Even though it produces a
       // degenerate probe, it must be checked so a foreign copper object at the endpoint
       // cannot be admitted as a free attachment.
-      if (!edge_is_legal(origin, endpoint.layer, point, endpoint.layer, cursor.result.size()))
-        continue;
+      if (!edge_is_legal(origin, endpoint.layer, point, endpoint.layer, cursor.result.size())) continue;
       if (std::none_of(cursor.result.begin(), cursor.result.end(), [&](const auto& old) {
             return old.node == node && old.anchor == endpoint && old.outward_stub ==
-                (stub ? std::optional<GlobalRoutePoint>{{*stub, endpoint.layer}} : std::nullopt);
+                ((stub || neckdown) ? std::optional<GlobalRoutePoint>{{origin, endpoint.layer}} : std::nullopt);
           })) {
-        const auto attachment_stub = stub ? std::optional<GlobalRoutePoint>{{*stub, endpoint.layer}}
-                                          : std::nullopt;
-        cursor.result.push_back({node, endpoint, attachment_stub,
+        const auto attachment_stub = (stub || neckdown) ? std::optional<GlobalRoutePoint>{{origin, endpoint.layer}}
+                                                        : std::nullopt;
+        cursor.result.push_back({node, endpoint, attachment_stub, neckdown ? neckdown->second : Nanometres{0},
                                  attachment_cost(endpoint.position, origin) + attachment_cost(origin, point)});
         if (stub) ++counters.outward_attachments;
+        if (neckdown) ++counters.terminal_neckdown_attachments;
       }
     }
     counters.attachment_generation_microseconds += static_cast<std::uint64_t>(
@@ -654,6 +756,22 @@ struct PassageSearch {
                                CopperScaffoldSearchTermination::attachment_exhausted);
     return std::nullopt;
   }
+  const auto apply_terminal_neckdown_widths = [&](GlobalRoutePath& path, const Attachment& source,
+                                                   const Attachment& goal) {
+    path.segment_widths.assign(path.points.size() - 1U, rules.track_width);
+    path.segment_width_kinds.assign(path.segment_widths.size(), GlobalRouteSegmentWidthKind::nominal);
+    path.terminal_neck_down_segments = 0U; path.terminal_neck_down_length_nm = 0U;
+    const auto mark = [&](std::size_t segment, Nanometres width) {
+      if (width.value() <= 0 || segment >= path.segment_widths.size()) return;
+      path.segment_widths[segment] = width; path.segment_width_kinds[segment] = GlobalRouteSegmentWidthKind::terminal_neck_down;
+      ++path.terminal_neck_down_segments;
+      const auto& a = path.points[segment].position; const auto& b = path.points[segment + 1U].position;
+      path.terminal_neck_down_length_nm = saturating_add_length(
+          path.terminal_neck_down_length_nm, ceil_segment_length_nm(a, b));
+    };
+    mark(0U, source.stub_width);
+    if (!path.segment_widths.empty()) mark(path.segment_widths.size() - 1U, goal.stub_width);
+  };
   std::map<Node, std::vector<std::size_t>> goals_at;
   for (std::size_t i = 0U; i < goals.size(); ++i) goals_at[goals[i].node].push_back(i);
   std::map<Node, std::uint64_t> estimates;
@@ -743,8 +861,7 @@ struct PassageSearch {
           path.points.push_back(*goals[goal_id].outward_stub);
         if (path.points.back() != goals[goal_id].anchor) path.points.push_back(goals[goal_id].anchor);
         clear_coarse_metadata(path); compress_collinear_grid_runs(path);
-        path.segment_widths.assign(path.points.size() - 1U, rules.track_width);
-        path.segment_width_kinds.assign(path.points.size() - 1U, GlobalRouteSegmentWidthKind::nominal);
+        apply_terminal_neckdown_widths(path, source, goals[goal_id]);
         if (!rejected_assemblies.emplace(assembled_path_identity(path)).second) {
           ++counters.duplicate_rejected_assemblies;
           continue;
@@ -910,8 +1027,7 @@ struct PassageSearch {
       path.points.push_back(*goals[goal_id].outward_stub);
     if (path.points.back() != goals[goal_id].anchor) path.points.push_back(goals[goal_id].anchor);
     clear_coarse_metadata(path); compress_collinear_grid_runs(path);
-    path.segment_widths.assign(path.points.size() - 1U, rules.track_width);
-    path.segment_width_kinds.assign(path.points.size() - 1U, GlobalRouteSegmentWidthKind::nominal);
+    apply_terminal_neckdown_widths(path, source, goals[goal_id]);
     if (!rejected_assemblies.emplace(assembled_path_identity(path)).second) {
       ++counters.duplicate_rejected_assemblies;
       return std::nullopt;
@@ -1141,7 +1257,7 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
     const auto found = std::find_if(requests.begin(), requests.end(), [&](const auto& request) {
       return request.net == prior.net && request.connection_index == prior.connection_index; });
     if (found == requests.end() || duplicate_request[static_cast<std::size_t>(found - requests.begin())] ||
-        !retained_matches_request(board, prior, *found)) continue;
+        !retained_matches_request(board, prior, *found, config)) continue;
     const auto index = static_cast<std::size_t>(found - requests.begin()); Trial trial;
     if (!complete[index] && legal_trial(result.copper, prior, index, trial) &&
         scaffold_request_connected(trial.board, *found)) {
@@ -1364,7 +1480,7 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
         if (retained) for (const auto& previous : retained->blocked_passages)
           if (previous.request_index == index && previous.path.net == requests[index].net &&
               previous.path.connection_index == requests[index].connection_index &&
-              retained_matches_request(board, previous.path, requests[index])) retain_proposal(previous.path);
+              retained_matches_request(board, previous.path, requests[index], config)) retain_proposal(previous.path);
         if (search.candidates.size() < search.maximum_candidates && config.maximum_joint_search_expansions > 0U) {
           auto bounded = config; bounded.maximum_expansions_per_connection = config.maximum_joint_search_expansions;
           const auto before = result.counters.expansions;

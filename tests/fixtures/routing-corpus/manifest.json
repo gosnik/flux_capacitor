@@ -135,7 +135,8 @@
         "zones": 0,
         "open_connections": 117,
         "max_core_validation_errors": 0,
-        "max_track_arcs": 0
+        "max_track_arcs": 0,
+        "global_paths": 117
       },
       "curved_expected": {
         "min_track_arcs": 1,

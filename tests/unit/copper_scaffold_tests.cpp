@@ -2,11 +2,13 @@
 #include "flux/core/connectivity.hpp"
 #include "flux/core/drc.hpp"
 #include "flux/core/routing_kernel.hpp"
+#include "flux/core/routing_rules.hpp"
 #include "../../src/scaffold_via_history.hpp"
 #include "../../src/scaffold_access.hpp"
 #include "../../src/scaffold_collision.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <stdexcept>
 #include <string>
 
@@ -970,6 +972,81 @@ void exact_grid_attachment_checks_coincident_copper() {
               check_copper_rules(routed.copper).ok(),
           "a same-net exact grid contact must remain a legal searched attachment");
 }
+void synthetic_terminal_neckdown_preserves_widths_and_rejects_stale_provenance() {
+  for (const bool diagonal : {false, true}) {
+    auto board = fixture(); board.layers.resize(1U);
+    board.rules.default_track_width = Nanometres::from_mm(0.25);
+    board.rules.minimum_track_width = Nanometres::from_mm(0.1);
+    const auto position = [&](double x, double y) {
+      const auto c = diagonal ? std::sqrt(0.5) : 1.0;
+      const auto s = diagonal ? c : 0.0;
+      return mm(10 + x*c - y*s, 10 + x*s + y*c);
+    };
+    for (int i = -1; i <= 1; ++i) {
+      Footprint fp; fp.id = ObjectId{"escape-fp" + std::to_string(i)};
+      fp.placement_envelope_source = PlacementEnvelopeSource::absent;
+      fp.position = position(0.41*i, 0);
+      Pad pad; pad.id = ObjectId{"escape-pad" + std::to_string(i)};
+      pad.net = NetId{i == 0 ? "a" : "b"}; pad.layers = {LayerId{"F.Cu"}};
+      pad.shape = PadShape::rectangle; pad.width = Nanometres::from_mm(0.2);
+      pad.height = Nanometres::from_mm(1.2); pad.plated = false;
+      pad.rotation = Microdegrees{diagonal ? -45'000'000 : 0};
+      fp.pads.push_back(pad); board.footprints.push_back(fp);
+    }
+    const auto demand = request(NetId{"a"}, position(0,0), LayerId{"F.Cu"},
+                               position(0,5), LayerId{"F.Cu"});
+    CopperScaffoldConfig config; config.grid_pitch = Nanometres::from_mm(0.5);
+    config.maximum_victim_exchanges = 0U; config.maximum_joint_passage_candidates = 0U;
+    config.maximum_displacement_attempts = 0U;
+    auto disabled = config; disabled.enable_terminal_neckdown = false;
+    require(!construct_copper_scaffold(board, {demand}, disabled).complete,
+            "nominal width must fail at a synthetic fine-pitch escape");
+    auto short_cap = config; short_cap.maximum_terminal_neckdown_length = Nanometres::from_mm(0.01);
+    require(!construct_copper_scaffold(board, {demand}, short_cap).complete,
+            "a short cap must refuse an overlong terminal escape");
+    auto floored = board; floored.rules.minimum_track_width = floored.rules.default_track_width;
+    require(!construct_copper_scaffold(floored, {demand}, config).complete,
+            "terminal escape must respect the fabrication minimum width");
+    const auto result = construct_copper_scaffold(board, {demand}, config);
+    if (!result.complete || result.paths.size() != 1U || !check_copper_rules(result.copper).ok())
+      throw std::runtime_error("synthetic diagonal=" + std::to_string(diagonal) + " " + result.diagnostic +
+          " paths=" + std::to_string(result.paths.size()) + " drc=" +
+          std::to_string(check_copper_rules(result.copper).violations.size()) + " neck=" +
+          std::to_string(result.counters.terminal_neckdown_attachments) + " termination=" +
+          std::string(to_string(result.request_evidence.front().termination)));
+    require(result.complete && result.paths.size() == 1U && check_copper_rules(result.copper).ok(),
+            "pad-derived neckdown must enable a legal synthetic escape");
+    const auto& path = result.paths.front();
+    require(path.terminal_neck_down_segments == 1U && path.segment_widths.front() == Nanometres::from_mm(0.2),
+            "only the source pad escape must be narrowed");
+    for (std::size_t i = 1U; i < path.segment_widths.size(); ++i)
+      require(path.segment_widths[i] == board.rules.default_track_width &&
+                  path.segment_width_kinds[i] == GlobalRouteSegmentWidthKind::nominal,
+              "maze and destination attachments must retain nominal widths");
+    const auto& a = path.points[0].position; const auto& b = path.points[1].position;
+    const auto length = std::hypotl(static_cast<long double>(a.x.value()) - b.x.value(),
+                                    static_cast<long double>(a.y.value()) - b.y.value());
+    require(path.terminal_neck_down_length_nm == static_cast<std::uint64_t>(std::ceil(length)),
+            "terminal length metadata must use conservative ceil, including diagonal escapes");
+    auto reuse_only = config; reuse_only.maximum_attachment_states = 0U;
+    require(construct_copper_scaffold(board, {demand}, reuse_only, {}, &result).complete,
+            "valid terminal provenance must survive retained-only replay");
+    for (int mutation = 0; mutation < 4; ++mutation) {
+      auto corrupt = result; auto& changed = corrupt.paths.front();
+      if (mutation == 0) changed.terminal_neck_down_length_nm = 0U;
+      if (mutation == 1) {
+        changed.segment_widths[1] = Nanometres::from_mm(0.2);
+        changed.segment_width_kinds[1] = GlobalRouteSegmentWidthKind::terminal_neck_down;
+        ++changed.terminal_neck_down_segments;
+      }
+      if (mutation == 2) changed.points[1].layer = LayerId{"B.Cu"};
+      auto bounded = reuse_only;
+      if (mutation == 3) bounded.maximum_terminal_neckdown_length = Nanometres{-1};
+      require(!construct_copper_scaffold(board, {demand}, bounded, {}, &corrupt).complete,
+              "stale length, interior narrowing, layer transitions and invalid caps must fail retained admission");
+    }
+  }
+}
 
 } // namespace
 int main() {
@@ -989,6 +1066,7 @@ int main() {
   progressive_attachment_search_avoids_eager_attachment_probes();
   progressive_attachment_limits_fail_closed_and_clamp_zero_initial_prefix();
   exact_grid_attachment_checks_coincident_copper();
+  synthetic_terminal_neckdown_preserves_widths_and_rejects_stale_provenance();
   accepts_legal_supplied_topology();
   finds_a_legal_detour_when_the_supplied_line_is_blocked();
   terminal_pocket_probe_preserves_forward_success_and_bounds_failure_work();

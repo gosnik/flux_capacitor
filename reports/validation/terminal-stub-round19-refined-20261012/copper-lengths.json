@@ -1,0 +1,30 @@
+{
+  "method": "KiCad GetLength on track/arc copper plus net-assigned copper Bezier shapes; excludes via barrels",
+  "kicad_version": "10.0.6-10.0.6~ubuntu26.04.1",
+  "runs": {
+    "scaffold-pad-index-round18-20261012": {
+      "tier0": {
+        "length_mm": 441.2632611961762,
+        "tracks_and_arcs": 186,
+        "net_assigned_copper_beziers": 396
+      },
+      "tier1": {
+        "length_mm": 904.2989845543588,
+        "tracks_and_arcs": 614,
+        "net_assigned_copper_beziers": 355
+      }
+    },
+    "terminal-stub-round19-refined-20261012": {
+      "tier0": {
+        "length_mm": 441.2632611961762,
+        "tracks_and_arcs": 186,
+        "net_assigned_copper_beziers": 396
+      },
+      "tier1": {
+        "length_mm": 904.2989845543588,
+        "tracks_and_arcs": 614,
+        "net_assigned_copper_beziers": 355
+      }
+    }
+  }
+}

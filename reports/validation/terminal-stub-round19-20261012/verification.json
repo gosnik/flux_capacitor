@@ -1,0 +1,16 @@
+{
+  "build_command": "cmake --build build/release -j4 --target flux-cli flux_unit_tests flux_copper_transaction_tests flux_span_certificate_tests flux_board_free_space_cache_tests flux_ph_tightening_tests flux_layered_navmesh_tests flux_copper_scaffold_tests flux_scaffold_curve_tests flux_scaffold_collision_tests flux_routing_engine_experiment_tests flux_scaffold_joint_displacement_tests",
+  "build_status": "PASS",
+  "focused_command": "./build/release/tests/flux_copper_scaffold_tests",
+  "focused_status": "PASS",
+  "ctest_command": "ctest --test-dir build/release -j1 --output-on-failure -R '^(flux_unit_tests|flux_copper_transaction_tests|flux_span_certificate_tests|flux_board_free_space_cache_tests|flux_ph_tightening_tests|flux_layered_navmesh_tests|flux_copper_scaffold_tests|flux_scaffold_curve_tests|flux_scaffold_collision_tests|flux_routing_engine_experiment_tests|flux_scaffold_joint_displacement_tests)$'",
+  "ctest_status": "PASS",
+  "ctest_passed": 11,
+  "ctest_failed": 0,
+  "build_log": "reports/validation/terminal-stub-round19-20261012/build.log",
+  "focused_log": "reports/validation/terminal-stub-round19-20261012/focused.log",
+  "ctest_log": "reports/validation/terminal-stub-round19-20261012/ctest.log",
+  "noop_build_log": "reports/validation/terminal-stub-round19-20261012/noop-build.log",
+  "noop_build_status": "PASS",
+  "cli_sha256": "399a2dd537938dc6aa5d8b937bee381fd5a52c87a0e6e2b44b5b482129bc5559"
+}

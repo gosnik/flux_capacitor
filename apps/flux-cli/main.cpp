@@ -4253,6 +4253,8 @@ void print_route_result(const flux::GlobalRouteResult& result,
                 << ", \"compact_search_fallbacks\": " << scaffold.counters.compact_search_fallbacks
                 << ", \"attachment_search_rounds\": " << scaffold.counters.attachment_search_rounds
                 << ", \"attachment_search_probes\": " << scaffold.counters.attachment_search_probes
+                << ", \"outward_attachment_probes\": " << scaffold.counters.outward_attachment_probes
+                << ", \"outward_attachments\": " << scaffold.counters.outward_attachments
                 << ", \"attachment_search_early_successes\": " << scaffold.counters.attachment_search_early_successes
                 << ", \"duplicate_rejected_assemblies\": " << scaffold.counters.duplicate_rejected_assemblies
                 << ", \"access_generation_microseconds\": " << scaffold.counters.access_generation_microseconds
@@ -5541,6 +5543,8 @@ void print_detailed_result(const flux::DetailedRouteResult& result,
       std::cout << ", \"target_attachments\": " << counters.target_attachments;
       std::cout << ", \"attachment_search_rounds\": " << counters.attachment_search_rounds;
       std::cout << ", \"attachment_search_probes\": " << counters.attachment_search_probes;
+      std::cout << ", \"outward_attachment_probes\": " << counters.outward_attachment_probes;
+      std::cout << ", \"outward_attachments\": " << counters.outward_attachments;
       std::cout << ", \"attachment_search_early_successes\": " << counters.attachment_search_early_successes;
       std::cout << ", \"duplicate_rejected_assemblies\": " << counters.duplicate_rejected_assemblies;
       std::cout << ", \"access_generation_microseconds\": " << counters.access_generation_microseconds;

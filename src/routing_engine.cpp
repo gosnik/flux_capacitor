@@ -2047,6 +2047,35 @@ RoutingEngineStepResult RoutingEngine::advance(RoutingEngineStepBudget budget,
                   "; satisfied=" + std::to_string(checkpoint.satisfied_indices.size()) +
                   "; missing=" + std::to_string(checkpoint.missing_indices.size()));
             }));
+        // Regional proposal admission can subsequently rebuild this checkpoint with no
+        // search. Persist this pass's evidence now, rather than reporting those zeroed
+        // counters as if they described the search that produced the retained copper.
+        if (telemetry) {
+          const auto& result = *tx->scaffold;
+          const auto& c = result.counters;
+          emit_engine_event(telemetry, "scaffold-search-result", action, tx->ordinal, c.expansions,
+              "satisfied=" + std::to_string(result.satisfied_indices.size()) +
+              "; missing=" + std::to_string(result.missing_indices.size()) +
+              "; search_us=" + std::to_string(c.search_microseconds) +
+              "; edge_validation_us=" + std::to_string(c.edge_validation_microseconds) +
+              "; attachment_us=" + std::to_string(c.attachment_generation_microseconds) +
+              "; outward_probes=" + std::to_string(c.outward_attachment_probes) +
+              "; outward_attachments=" + std::to_string(c.outward_attachments) +
+              "; goal_rejections=" + std::to_string(c.goal_rejections));
+          for (const auto index : result.missing_indices) {
+            if (index >= result.request_evidence.size()) continue;
+            const auto& evidence = result.request_evidence[index];
+            emit_engine_event(telemetry, "scaffold-request-result", action, tx->ordinal, 0U,
+                "request=" + std::to_string(index) + "; net=" + evidence.net.value() +
+                "; connection=" + std::to_string(evidence.connection_index) +
+                "; termination=" + std::string(to_string(evidence.termination)) +
+                "; source_anchors=" + std::to_string(evidence.source_component_anchors) +
+                "; target_anchors=" + std::to_string(evidence.target_component_anchors) +
+                "; source_attachments=" + std::to_string(evidence.source_legal_attachments) +
+                "; target_attachments=" + std::to_string(evidence.target_legal_attachments) +
+                "; blocker_objects=" + std::to_string(evidence.blocker_objects.size()));
+          }
+        }
         tx->plan = certified_scaffold_plan(*scaffold, *prior, *tx->scaffold,
                                            planner.quantized_copper_oracle, token, tx->scaffold_oracle);
         return;

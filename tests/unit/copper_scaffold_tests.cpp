@@ -673,6 +673,46 @@ void fine_pitch_rotated_pad_edge_access_reaches_the_scaffold_grid() {
               result.counters.expansions <= config.maximum_expansions_per_connection,
           "a failed center-only prefix must widen to a DRC-clean searched pad-edge escape without "
           "multiplying the connection expansion budget");
+
+  auto eager_direct = config;
+  eager_direct.progressive_attachment_search = false;
+  const auto unchanged_access = construct_copper_scaffold(board, {demand}, eager_direct);
+  require(unchanged_access.complete && unchanged_access.counters.outward_attachment_probes == 0U,
+          "legal direct attachment sets must not compete with new outward exits in eager search");
+
+  // Tighten the fixture so every old attachment (including pad-edge anchors) is
+  // blocked. The only new freedom is an outward stub and its shifted local lattice.
+  auto narrow = board;
+  for (auto& p : narrow.footprints.front().pads) p.height = Nanometres::from_mm(1.55);
+  const auto narrow_access = scaffold_connection_access(narrow, demand, 32U);
+  const ScaffoldCollisionIndex narrow_collision(narrow);
+  for (const auto& anchor : narrow_access.goals) {
+    const auto gx = anchor.position.x.value() / 100'000;
+    const auto gy = anchor.position.y.value() / 100'000;
+    for (int dx = -1; dx <= 1; ++dx) for (int dy = -1; dy <= 1; ++dy) {
+      const Point point{Nanometres{(gx + dx) * 100'000}, Nanometres{(gy + dy) * 100'000}};
+      TrackSegment probe{ObjectId{"old-attachment-probe"}, NetId{"a"}, anchor.layer,
+                         anchor.position, point, narrow.rules.default_track_width, false};
+      require(!narrow_collision.check_track(probe).ok(),
+              "every direct pad-anchor attachment must fail in the shifted-lattice microcase");
+    }
+  }
+  for (const bool compact : {true, false}) for (const bool reverse : {false, true}) {
+    auto stub_config = config;
+    stub_config.attachment_radius_cells = 1U;
+    stub_config.progressive_attachment_search = false;
+    stub_config.maximum_attachment_states = 128U;
+    stub_config.compact_search_expansions = compact ? 2'048U : 0U;
+    auto stub_demand = demand;
+    if (reverse) std::reverse(stub_demand.points.begin(), stub_demand.points.end());
+    const auto escaped = construct_copper_scaffold(narrow, {stub_demand}, stub_config);
+    require(escaped.complete && escaped.counters.outward_attachment_probes > 0U &&
+                escaped.counters.outward_attachments > 0U &&
+                check_copper_rules(escaped.copper).ok(),
+            "source and target outward stubs must survive compact and rich reconstruction "
+            "when all original attachments are blocked");
+  }
+
 }
 void progressive_attachment_search_avoids_eager_attachment_probes() {
   auto board = fixture();

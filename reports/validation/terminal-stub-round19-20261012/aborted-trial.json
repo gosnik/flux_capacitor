@@ -1,0 +1,8 @@
+{
+  "timestamp": "2026-10-12T09:47:52.689774+00:00",
+  "pids": [
+    2808148
+  ],
+  "reason": "Eager outward candidates changed successful direct attachment sets; Tier1 stagnated at77/78 original requests after three scaffold passes. Stop early, preserve trial, narrow generation to zero-direct-attachment terminals before rerun.",
+  "tier1_promoted": false
+}

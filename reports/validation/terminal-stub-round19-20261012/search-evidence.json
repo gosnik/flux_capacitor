@@ -1,0 +1,144 @@
+{
+  "tier0": [
+    {
+      "file": "pt2399_delay-detail.jsonl",
+      "sequence": 752,
+      "monotonic_time_us": 13129122,
+      "message": "action=copper-scaffold, generation=1, work=3980; satisfied=50; missing=0; search_us=203548; edge_validation_us=129422; attachment_us=3073; outward_probes=0; outward_attachments=0; goal_rejections=0"
+    },
+    {
+      "file": "pt2399_delay-detail.jsonl",
+      "sequence": 814,
+      "monotonic_time_us": 15465656,
+      "message": "action=copper-scaffold, generation=2, work=24; satisfied=51; missing=0; search_us=31967; edge_validation_us=4618; attachment_us=5193; outward_probes=0; outward_attachments=0; goal_rejections=0"
+    },
+    {
+      "file": "pt2399_delay-detail.jsonl",
+      "sequence": 815,
+      "monotonic_time_us": 15554169,
+      "message": "Routing snapshot"
+    },
+    {
+      "file": "pt2399_delay-global.jsonl",
+      "sequence": 752,
+      "monotonic_time_us": 12806912,
+      "message": "action=copper-scaffold, generation=1, work=3980; satisfied=50; missing=0; search_us=205898; edge_validation_us=126847; attachment_us=3489; outward_probes=0; outward_attachments=0; goal_rejections=0"
+    },
+    {
+      "file": "pt2399_delay-global.jsonl",
+      "sequence": 753,
+      "monotonic_time_us": 12872922,
+      "message": "Routing snapshot"
+    },
+    {
+      "file": "pt2399_delay-global.jsonl",
+      "sequence": 813,
+      "monotonic_time_us": 15001780,
+      "message": "action=copper-scaffold, generation=2, work=24; satisfied=51; missing=0; search_us=30148; edge_validation_us=4051; attachment_us=3955; outward_probes=0; outward_attachments=0; goal_rejections=0"
+    },
+    {
+      "file": "pt2399_delay-global.jsonl",
+      "sequence": 814,
+      "monotonic_time_us": 15097144,
+      "message": "Routing snapshot"
+    }
+  ],
+  "tier1": [
+    {
+      "file": "bm_svf-global.jsonl",
+      "sequence": 1300,
+      "monotonic_time_us": 81544629,
+      "message": "action=copper-scaffold, generation=1, work=2379576; satisfied=73; missing=5; search_us=42027848; edge_validation_us=26014372; attachment_us=391299; outward_probes=4900; outward_attachments=753; goal_rejections=0"
+    },
+    {
+      "file": "bm_svf-global.jsonl",
+      "sequence": 1301,
+      "monotonic_time_us": 81544638,
+      "message": "action=copper-scaffold, generation=1, work=0; request=48; net=kicad-net-13; connection=1; termination=attachment_exhausted; source_anchors=5; target_anchors=1; source_attachments=82; target_attachments=0; blocker_objects=32"
+    },
+    {
+      "file": "bm_svf-global.jsonl",
+      "sequence": 1302,
+      "monotonic_time_us": 81544642,
+      "message": "action=copper-scaffold, generation=1, work=0; request=60; net=kicad-net-12; connection=9; termination=expansion_budget_exhausted; source_anchors=32; target_anchors=1; source_attachments=128; target_attachments=1; blocker_objects=32"
+    },
+    {
+      "file": "bm_svf-global.jsonl",
+      "sequence": 1303,
+      "monotonic_time_us": 81544645,
+      "message": "action=copper-scaffold, generation=1, work=0; request=66; net=kicad-net-1; connection=3; termination=attachment_exhausted; source_anchors=5; target_anchors=1; source_attachments=128; target_attachments=0; blocker_objects=32"
+    },
+    {
+      "file": "bm_svf-global.jsonl",
+      "sequence": 1304,
+      "monotonic_time_us": 81544649,
+      "message": "action=copper-scaffold, generation=1, work=0; request=69; net=kicad-net-1; connection=6; termination=expansion_budget_exhausted; source_anchors=5; target_anchors=1; source_attachments=128; target_attachments=1; blocker_objects=32"
+    },
+    {
+      "file": "bm_svf-global.jsonl",
+      "sequence": 1305,
+      "monotonic_time_us": 81544651,
+      "message": "action=copper-scaffold, generation=1, work=0; request=73; net=kicad-net-1; connection=10; termination=attachment_exhausted; source_anchors=32; target_anchors=1; source_attachments=128; target_attachments=0; blocker_objects=32"
+    },
+    {
+      "file": "bm_svf-global.jsonl",
+      "sequence": 1306,
+      "monotonic_time_us": 81546194,
+      "message": "Routing snapshot"
+    },
+    {
+      "file": "bm_svf-global.jsonl",
+      "sequence": 1418,
+      "monotonic_time_us": 95621937,
+      "message": "action=copper-scaffold, generation=2, work=716409; satisfied=77; missing=1; search_us=11083194; edge_validation_us=6789720; attachment_us=136956; outward_probes=1112; outward_attachments=103; goal_rejections=0"
+    },
+    {
+      "file": "bm_svf-global.jsonl",
+      "sequence": 1419,
+      "monotonic_time_us": 95621944,
+      "message": "action=copper-scaffold, generation=2, work=0; request=66; net=kicad-net-1; connection=3; termination=expansion_budget_exhausted; source_anchors=5; target_anchors=32; source_attachments=128; target_attachments=128; blocker_objects=32"
+    },
+    {
+      "file": "bm_svf-global.jsonl",
+      "sequence": 1420,
+      "monotonic_time_us": 95626613,
+      "message": "Routing snapshot"
+    },
+    {
+      "file": "bm_svf-global.jsonl",
+      "sequence": 1525,
+      "monotonic_time_us": 106829191,
+      "message": "action=copper-scaffold, generation=3, work=594889; satisfied=77; missing=1; search_us=9119142; edge_validation_us=5774206; attachment_us=91912; outward_probes=591; outward_attachments=61; goal_rejections=0"
+    },
+    {
+      "file": "bm_svf-global.jsonl",
+      "sequence": 1526,
+      "monotonic_time_us": 106829199,
+      "message": "action=copper-scaffold, generation=3, work=0; request=66; net=kicad-net-1; connection=3; termination=expansion_budget_exhausted; source_anchors=5; target_anchors=32; source_attachments=128; target_attachments=128; blocker_objects=32"
+    },
+    {
+      "file": "bm_svf-global.jsonl",
+      "sequence": 1527,
+      "monotonic_time_us": 106831441,
+      "message": "Routing snapshot"
+    },
+    {
+      "file": "bm_svf-global.jsonl",
+      "sequence": 4020,
+      "monotonic_time_us": 202710096,
+      "message": "action=copper-scaffold, generation=6, work=594889; satisfied=77; missing=1; search_us=9179076; edge_validation_us=5721715; attachment_us=90106; outward_probes=591; outward_attachments=61; goal_rejections=0"
+    },
+    {
+      "file": "bm_svf-global.jsonl",
+      "sequence": 4021,
+      "monotonic_time_us": 202710208,
+      "message": "action=copper-scaffold, generation=6, work=0; request=66; net=kicad-net-1; connection=3; termination=expansion_budget_exhausted; source_anchors=5; target_anchors=32; source_attachments=128; target_attachments=128; blocker_objects=32"
+    },
+    {
+      "file": "bm_svf-global.jsonl",
+      "sequence": 4022,
+      "monotonic_time_us": 202713490,
+      "message": "Routing snapshot"
+    }
+  ]
+}

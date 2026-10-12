@@ -207,6 +207,8 @@ struct CopperScaffoldCounters {
   std::size_t target_attachments{0U};
   std::size_t attachment_search_rounds{0U};
   std::size_t attachment_search_probes{0U};
+  std::size_t outward_attachment_probes{0U};
+  std::size_t outward_attachments{0U};
   std::size_t attachment_search_early_successes{0U};
   std::uint64_t access_generation_microseconds{0U};
   std::uint64_t domain_build_microseconds{0U};

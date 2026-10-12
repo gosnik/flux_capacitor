@@ -1,0 +1,79 @@
+{
+  "board": "tier-2-ft2232h_jtag",
+  "evidence_origin": {
+    "result": "tier2/tier-2-ft2232h_jtag/global-result.json",
+    "telemetry": "tier2/telemetry/ft2232h_jtag-global.jsonl",
+    "accepted_checkpoint": {
+      "telemetry_sequence": 2308,
+      "monotonic_time_us": 303090755,
+      "scaffold_generation": 2,
+      "satisfied_requests": 112,
+      "request_count": 117
+    },
+    "note": "The final persisted copper_scaffold was reconstructed from retained paths after later engine work. Its search counters and request evidence are zero/not_attempted, so attachment outcomes are deliberately recorded as unavailable rather than inferred."
+  },
+  "outcome": {
+    "duration_seconds": 442.6125849040109,
+    "retained_requests": 112,
+    "missing_request_indices": [43, 44, 91, 95, 115],
+    "physical_open_connections": 19,
+    "physical_unrouted_nets": 8
+  },
+  "remaining_requests": [
+    {
+      "index": 43,
+      "net": "kicad-net-12",
+      "connection_index": 0,
+      "name": "/TCK_TXD_B",
+      "terminals": ["J2 pin 3 (112.000, 109.730) B.Cu", "U4 BDBUS0 (123.250, 112.675) F.Cu"],
+      "attachment_evidence": "unavailable in retained result"
+    },
+    {
+      "index": 44,
+      "net": "kicad-net-13",
+      "connection_index": 0,
+      "name": "/TDI_RXD_B",
+      "terminals": ["J2 pin 4 (112.000, 112.270) F.Cu", "U4 BDBUS1 (123.750, 112.675) F.Cu"],
+      "attachment_evidence": "unavailable in retained result"
+    },
+    {
+      "index": 91,
+      "net": "kicad-net-3",
+      "connection_index": 1,
+      "name": "+1V8",
+      "terminals": ["(122.750, 112.675) F.Cu", "(132.8625, 110.750) F.Cu"],
+      "attachment_evidence": "unavailable in retained result"
+    },
+    {
+      "index": 95,
+      "net": "kicad-net-3",
+      "connection_index": 5,
+      "name": "+1V8",
+      "terminals": ["(121.8625, 115.000) F.Cu", "(124.500, 111.000) F.Cu via B.Cu"],
+      "attachment_evidence": "unavailable in retained result"
+    },
+    {
+      "index": 115,
+      "net": "kicad-net-8",
+      "connection_index": 0,
+      "name": "/TCK_TXD_A",
+      "terminals": ["J1 pin 3 (112.000, 91.730) F.Cu", "(120.750, 101.325) F.Cu"],
+      "attachment_evidence": "unavailable in retained result"
+    }
+  ],
+  "action_timing": [
+    {"generation": 1, "accepted": true, "elapsed_microseconds": 183120612, "work_units": 13755290, "satisfied": 109, "missing": 8, "domain": "reconstructed"},
+    {"generation": 2, "accepted": true, "elapsed_microseconds": 65828568, "work_units": 2326190, "satisfied": 112, "missing": 5, "domain": "reconstructed"},
+    {"generation": 3, "accepted": false, "elapsed_microseconds": 66726103, "work_units": 2320178, "satisfied": 112, "missing": 5, "domain": "compatible"},
+    {"action": "regional", "accepted": false, "elapsed_microseconds": 15901266, "work_units": 8284054, "satisfied": 112, "missing": 5}
+  ],
+  "regional_repair": {
+    "request_indices": [43, 44, 91, 95, 115],
+    "candidate_available": false,
+    "scene_evaluated": false,
+    "blocker_objects": 160,
+    "fragments": 33,
+    "windows": 2,
+    "bundle_searches": 4
+  }
+}

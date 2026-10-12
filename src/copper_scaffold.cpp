@@ -51,7 +51,12 @@ struct QueueOrder { bool operator()(const QueueEntry& a, const QueueEntry& b) co
   // at the shallowest depth first. State ordering keeps the result deterministic.
   if (a.g != b.g) return a.g < b.g;
   return a.state > b.state; } };
-struct Attachment { Node node; GlobalRoutePoint anchor; std::uint64_t cost{0U}; };
+struct Attachment {
+  Node node;
+  GlobalRoutePoint anchor;
+  std::optional<GlobalRoutePoint> outward_stub;
+  std::uint64_t cost{0U};
+};
 
 
 [[nodiscard]] std::string id_for(std::size_t request, std::size_t ordinal, const char* kind) {
@@ -498,11 +503,40 @@ struct PassageSearch {
     const auto dy = static_cast<long double>(a.y.value()) - b.y.value();
     return static_cast<std::uint64_t>(std::ceil(std::hypotl(dx, dy) / pitch * config.planar_step_cost));
   };
+  std::optional<std::vector<CopperPadShape>> pad_shapes;
+  std::map<std::pair<Point, LayerId>, std::optional<Point>> outward_stubs;
+  std::map<std::pair<Point, LayerId>, bool> outward_stub_legs;
+  const auto outward_stub_for = [&](const GlobalRoutePoint& anchor) -> std::optional<Point> {
+    const auto key = std::pair{anchor.position, anchor.layer};
+    if (const auto found = outward_stubs.find(key); found != outward_stubs.end())
+      return found->second;
+    if (!pad_shapes) pad_shapes = copper_pad_shapes(base);
+    std::optional<Point> result;
+    for (const auto& pad : *pad_shapes) {
+      if (pad.net != request.net ||
+          std::find(pad.layers.begin(), pad.layers.end(), anchor.layer) == pad.layers.end() ||
+          point_to_pad_copper_distance_nm(anchor.position, pad) > 0.0L)
+        continue;
+      const auto dx = static_cast<long double>(anchor.position.x.value() - pad.position.x.value());
+      const auto dy = static_cast<long double>(anchor.position.y.value() - pad.position.y.value());
+      const auto length = std::hypotl(dx, dy);
+      if (length <= 0.0L) continue; // Center anchors have no outward pad normal.
+      const auto extension = pad.conservative_radius_nm + rules.clearance.value() +
+                             static_cast<long double>(rules.track_width.value()) / 2.0L + pitch;
+      result = Point{Nanometres{static_cast<std::int64_t>(std::llround(
+                         static_cast<long double>(pad.position.x.value()) + dx / length * extension))},
+                     Nanometres{static_cast<std::int64_t>(std::llround(
+                         static_cast<long double>(pad.position.y.value()) + dy / length * extension))}};
+      break;
+    }
+    outward_stubs.emplace(key, result);
+    return result;
+  };
   // Iterate rings before anchors, so the bounded set covers different copper owners/layers
   // before spending the allowance on distant attachments of its first owner.
   struct AttachmentCursor {
     std::int64_t ring{0U}, anchor{0U}, dy{0U}, dx{0U};
-    bool initialized{false}, exhausted{false};
+    bool initialized{false}, outward_phase{false}, exhausted{false};
     std::vector<Attachment> result;
   };
   // This is deliberately a cursor rather than a filtered precomputation.  Boards with many
@@ -518,6 +552,14 @@ struct PassageSearch {
     while (!cursor.exhausted && cursor.result.size() < wanted &&
            (raw_probe_limit == 0U || probes < raw_probe_limit)) {
       if (cursor.ring > radius || anchors.empty()) {
+        if (!cursor.outward_phase && !anchors.empty() && cursor.result.empty()) {
+          // Preserve the complete old attachment set whenever direct access exists. Mixing
+          // new exits into that set can change an already successful route and strand later
+          // nets. This fallback repairs the specific zero-direct-attachment failure only.
+          cursor.outward_phase = true;
+          cursor.ring = 0U; cursor.anchor = 0U; cursor.dy = 0U; cursor.dx = 0U;
+          continue;
+        }
         cursor.exhausted = true; break;
       }
       if (cursor.anchor >= static_cast<std::int64_t>(anchors.size())) {
@@ -536,21 +578,40 @@ struct PassageSearch {
       routing_kernel_checkpoint();
       if (token.stop_requested()) { counters.cancelled = true; break; }
       const auto layer = find_layer(endpoint.layer); if (!layer) continue;
-      const auto x = floor_grid(endpoint.position.x.value(), minimum.x.value());
-      const auto y = floor_grid(endpoint.position.y.value(), minimum.y.value());
+      const auto stub = cursor.outward_phase ? outward_stub_for(endpoint) : std::nullopt;
+      if (cursor.outward_phase && !stub) continue;
+      if (stub) ++counters.outward_attachment_probes;
+      const auto origin = stub.value_or(endpoint.position);
+      if (!domain.map->exact_query(origin.x.value(), origin.y.value()).inside) continue;
+      const auto x = floor_grid(origin.x.value(), minimum.x.value());
+      const auto y = floor_grid(origin.y.value(), minimum.y.value());
       const Node node{x + dx, y + dy, *layer};
       if (node.x < 0 || node.y < 0 || node.x > xmax || node.y > ymax) continue;
       const auto point = point_for(node, minimum, config.grid_pitch);
-      if (!domain.map->exact_query(point.x.value(), point.y.value()).inside) continue;
-      if (point != endpoint.position) {
-        if (!geometry::segment_inside_board_area(endpoint.position, point, base)) continue;
-        const bool legal = edge_is_legal(endpoint.position, endpoint.layer, point, endpoint.layer,
-                                         cursor.result.size());
-        if (!legal) continue;
+      if (!domain.map->exact_query(point.x.value(), point.y.value()).inside ||
+          !geometry::segment_inside_board_area(origin, point, base)) continue;
+      if (stub) {
+        auto [found, inserted] = outward_stub_legs.emplace(
+            std::pair{endpoint.position, endpoint.layer}, false);
+        if (inserted)
+          found->second = geometry::segment_inside_board_area(endpoint.position, *stub, base) &&
+              edge_is_legal(endpoint.position, endpoint.layer, *stub, endpoint.layer,
+                            cursor.result.size());
+        if (!found->second) continue;
       }
+      if (point != origin && !edge_is_legal(origin, endpoint.layer, point, endpoint.layer,
+                                             cursor.result.size()))
+        continue;
       if (std::none_of(cursor.result.begin(), cursor.result.end(), [&](const auto& old) {
-            return old.node == node && old.anchor == endpoint;
-          })) cursor.result.push_back({node, endpoint, attachment_cost(point, endpoint.position)});
+            return old.node == node && old.anchor == endpoint && old.outward_stub ==
+                (stub ? std::optional<GlobalRoutePoint>{{*stub, endpoint.layer}} : std::nullopt);
+          })) {
+        const auto attachment_stub = stub ? std::optional<GlobalRoutePoint>{{*stub, endpoint.layer}}
+                                          : std::nullopt;
+        cursor.result.push_back({node, endpoint, attachment_stub,
+                                 attachment_cost(endpoint.position, origin) + attachment_cost(origin, point)});
+        if (stub) ++counters.outward_attachments;
+      }
     }
     counters.attachment_generation_microseconds += static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count());
@@ -666,11 +727,16 @@ struct PassageSearch {
         }
         std::reverse(chain.begin(), chain.end());
         GlobalRoutePath path; path.net = request.net; path.connection_index = request.connection_index;
-        path.points.push_back(starts[compact_source.at(chain.front())].anchor);
+        const auto& source = starts[compact_source.at(chain.front())];
+        path.points.push_back(source.anchor);
+        if (source.outward_stub && path.points.back() != *source.outward_stub)
+          path.points.push_back(*source.outward_stub);
         for (const auto& node : chain) {
           const GlobalRoutePoint point{point_for(node, minimum, config.grid_pitch), layers[node.layer]};
           if (path.points.back() != point) path.points.push_back(point);
         }
+        if (goals[goal_id].outward_stub && path.points.back() != *goals[goal_id].outward_stub)
+          path.points.push_back(*goals[goal_id].outward_stub);
         if (path.points.back() != goals[goal_id].anchor) path.points.push_back(goals[goal_id].anchor);
         clear_coarse_metadata(path); compress_collinear_grid_runs(path);
         path.segment_widths.assign(path.points.size() - 1U, rules.track_width);
@@ -827,12 +893,17 @@ struct PassageSearch {
       chain.push_back(previous.at(state).node);
     std::reverse(chain.begin(), chain.end());
     GlobalRoutePath path; path.net = request.net; path.connection_index = request.connection_index;
-    path.points.reserve(chain.size() + 2U);
-    path.points.push_back(starts[current.state.source].anchor);
+    path.points.reserve(chain.size() + 4U);
+    const auto& source = starts[current.state.source];
+    path.points.push_back(source.anchor);
+    if (source.outward_stub && path.points.back() != *source.outward_stub)
+      path.points.push_back(*source.outward_stub);
     for (const auto& node : chain) {
       const GlobalRoutePoint point{point_for(node, minimum, config.grid_pitch), layers[node.layer]};
       if (path.points.back() != point) path.points.push_back(point);
     }
+    if (goals[goal_id].outward_stub && path.points.back() != *goals[goal_id].outward_stub)
+      path.points.push_back(*goals[goal_id].outward_stub);
     if (path.points.back() != goals[goal_id].anchor) path.points.push_back(goals[goal_id].anchor);
     clear_coarse_metadata(path); compress_collinear_grid_runs(path);
     path.segment_widths.assign(path.points.size() - 1U, rules.track_width);

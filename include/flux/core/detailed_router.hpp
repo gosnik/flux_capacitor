@@ -21,6 +21,8 @@ struct DetailedRouterConfig {
   // bypassed so a candidate can be materialized for inspection; final validation, connectivity,
   // and copper DRC are still measured and prevent the result from becoming complete.
   bool allow_invalid_source_for_diagnostic_preview{false};
+  // Applied only to final whole-board copper validation after materialization.
+  CopperDrcConfig final_copper_drc{};
   Nanometres track_width{Nanometres{0}};
   Nanometres via_diameter{Nanometres{0}};
   Nanometres via_drill{Nanometres{0}};
@@ -178,6 +180,7 @@ struct DetailedRouteResult {
   ValidationReport validation;
   ConnectivityReport connectivity;
   CopperDrcReport copper_drc;
+  Nanometres final_copper_clearance_epsilon{0};
   std::vector<RoutabilityDiagnosis> routability_diagnoses;
   bool final_routability_feedback_attempted{false};
   bool final_routability_feedback_selected{false};

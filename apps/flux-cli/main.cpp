@@ -5465,6 +5465,8 @@ void print_detailed_result(const flux::DetailedRouteResult& result,
   std::cout << "],\n"
             << "  \"validation_errors\": " << result.validation.error_count() << ",\n"
             << "  \"open_connections\": " << result.connectivity.open_connections << ",\n"
+            << "  \"final_copper_clearance_epsilon_nm\": "
+            << result.final_copper_clearance_epsilon.value() << ",\n"
             << "  \"copper_violations\": " << result.copper_drc.violation_count() << ",\n"
             << "  \"open_net_details\": [";
   bool first_open_net = true;
@@ -10702,6 +10704,8 @@ int main(int argc, char** argv) {
     auto routing_plan = flux::plan_routes(*source, planner_config, {}, telemetry.get());
     auto global = routing_plan.coarse_global;
     auto detailed_config = autoroute.detailed;
+    // KiCad electrical DRC epsilon; route construction retains nominal clearances.
+    detailed_config.final_copper_drc.clearance_epsilon = Nanometres{500};
     detailed_config.existing_routing =
         flux::ExistingRoutingPolicy::replace_unlocked_for_routed_nets;
     auto detailed = flux::materialize_detailed_route(*source, routing_plan, detailed_config);
@@ -10988,6 +10992,8 @@ int main(int argc, char** argv) {
     planner_config.full_strength_first_pass = !tail->no_full_strength_first_pass &&
         !tail->oracle_first_feedback && tail->xpbd_relaxation && tail->xpbd_feedback;
     flux::DetailedRouterConfig detailed_config;
+    // KiCad electrical DRC epsilon; route construction retains nominal clearances.
+    detailed_config.final_copper_drc.clearance_epsilon = Nanometres{500};
     detailed_config.allow_invalid_source_for_diagnostic_preview = tail->diagnostic_lossy_preview;
     detailed_config.existing_routing =
         flux::ExistingRoutingPolicy::replace_unlocked_for_routed_nets;

@@ -1824,6 +1824,76 @@ void physical_probe_preserves_native_coordinate_clearance() {
   }
 }
 
+void kicad_clearance_epsilon_is_final_validation_only() {
+  const auto board_with_gap = [](std::int64_t gap_nm) {
+    Board board;
+    board.outline = Polygon{{mm(0, 0), mm(20, 0), mm(20, 20), mm(0, 20)}};
+    board.layers = {{LayerId{"F.Cu"}, "F.Cu", LayerKind::copper, 0U}};
+    board.nets = {{NetId{"left"}, "left"}, {NetId{"right"}, "right"}};
+    board.rules.default_clearance = Nanometres{200'000};
+    Footprint footprint;
+    footprint.id = ObjectId{"near-threshold-pads"};
+    footprint.position = mm(5, 5);
+    Pad left;
+    left.id = ObjectId{"left-pad"};
+    left.net = NetId{"left"};
+    left.layers = {LayerId{"F.Cu"}};
+    left.shape = flux::PadShape::circle;
+    left.width = left.height = Nanometres{650'000};
+    Pad right = left;
+    right.id = ObjectId{"right-pad"};
+    right.net = NetId{"right"};
+    right.local_position = {Nanometres{650'000 + gap_nm}, Nanometres{0}};
+    footprint.pads = {left, right};
+    board.footprints.push_back(std::move(footprint));
+    return board;
+  };
+  const flux::CopperDrcConfig kicad_parity{Nanometres{500}};
+  const auto has_pad_clearance = [](const flux::CopperDrcReport& report) {
+    return std::any_of(report.violations.begin(), report.violations.end(), [](const auto& item) {
+      return item.kind == flux::CopperViolationKind::pad_clearance;
+    });
+  };
+  const auto near = board_with_gap(199'872);
+  require(has_pad_clearance(flux::check_copper_rules(near)) &&
+              !has_pad_clearance(flux::check_copper_rules(near, kicad_parity)),
+          "the strict default must retain a sub-rule pad clearance while the explicit KiCad "
+          "epsilon accepts only its bounded positive deficit");
+  require(!has_pad_clearance(flux::check_copper_rules(board_with_gap(199'500), kicad_parity)) &&
+              has_pad_clearance(flux::check_copper_rules(board_with_gap(199'499), kicad_parity)),
+          "the KiCad parity epsilon must preserve its exact 500 nm electrical-clearance boundary");
+  require(has_pad_clearance(flux::check_copper_rules(board_with_gap(0), kicad_parity)) &&
+              has_pad_clearance(flux::check_copper_rules(
+                  board_with_gap(0), flux::CopperDrcConfig{Nanometres{1'000'000}})),
+          "the KiCad parity epsilon must never accept touching foreign-net pads");
+  const flux::CopperDrcConfig negative_epsilon{Nanometres{-500}};
+  require(has_pad_clearance(flux::check_copper_rules(near, negative_epsilon)),
+          "a negative KiCad parity epsilon must clamp to the strict clearance rule");
+  auto overlapping_tracks = board_with_gap(1'000'000);
+  overlapping_tracks.tracks = {
+      {ObjectId{"left-track"}, NetId{"left"}, LayerId{"F.Cu"}, mm(1, 1), mm(3, 1),
+       Nanometres{200'000}, false},
+      {ObjectId{"right-track"}, NetId{"right"}, LayerId{"F.Cu"}, mm(1, 1.1), mm(3, 1.1),
+       Nanometres{200'000}, false}};
+  overlapping_tracks.vias = {{ObjectId{"right-via"},
+                              NetId{"right"},
+                              mm(2, 1),
+                              Nanometres{600'000},
+                              Nanometres{300'000},
+                              {LayerId{"F.Cu"}},
+                              false}};
+  const auto large_epsilon_report =
+      flux::check_copper_rules(overlapping_tracks, flux::CopperDrcConfig{Nanometres{1'000'000}});
+  const auto has_violation = [&large_epsilon_report](flux::CopperViolationKind kind) {
+    return std::any_of(large_epsilon_report.violations.begin(),
+                       large_epsilon_report.violations.end(),
+                       [kind](const auto& item) { return item.kind == kind; });
+  };
+  require(has_violation(flux::CopperViolationKind::track_clearance) &&
+              has_violation(flux::CopperViolationKind::track_via_clearance),
+          "a large epsilon must not hide track or via copper overlap behind centreline distance");
+}
+
 void source_bound_board_rules_control_geometry_and_hole_clearance() {
   auto source = two_pad_board();
   const std::string snapshot = R"((flux_kicad_netclass_snapshot
@@ -11343,6 +11413,8 @@ int main(int argc, char** argv) {
       {"default_planar_pitch_uses_scoped_source_rules", default_planar_pitch_uses_scoped_source_rules},
       {"regional_candidate_ranker_is_schema_bound_and_deterministic",
        regional_candidate_ranker_is_schema_bound_and_deterministic},
+      {"kicad_clearance_epsilon_is_final_validation_only",
+       kicad_clearance_epsilon_is_final_validation_only},
       {"source_bound_board_rules_control_geometry_and_hole_clearance",
        source_bound_board_rules_control_geometry_and_hole_clearance},
       {"file_import_preserves_project_minimum_rules", file_import_preserves_project_minimum_rules},

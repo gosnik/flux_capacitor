@@ -1,0 +1,35 @@
+{
+  "round": 32,
+  "experiment": "Explicit final KiCad electrical clearance epsilon",
+  "decision": "keep",
+  "source_manifest": "reports/validation/final-drc-parity-round32-20261013/source-build.json",
+  "validation": {
+    "tests_passed": 11,
+    "review": "pass after physical contact guard correction",
+    "source_drift": []
+  },
+  "tier0": {
+    "pass": true,
+    "detail_seconds": 29.7319898600108,
+    "byte_identical": true
+  },
+  "tier1": {
+    "pass": true,
+    "detail_seconds": 107.98514171503484,
+    "byte_identical": true
+  },
+  "tier2": {
+    "pass": false,
+    "global_seconds": 166.0742709400365,
+    "detail_seconds": 225.25310402701143,
+    "physical_opens": 0,
+    "internal_copper_violations": 0,
+    "kicad_diagnostic_errors": 0,
+    "unrounded_bends": 1,
+    "beziers": 421,
+    "arcs": 163,
+    "tracks": 889,
+    "vias": 75
+  },
+  "reports": "reports/validation/final-drc-parity-round32-20261013"
+}

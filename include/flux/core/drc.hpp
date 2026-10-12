@@ -41,6 +41,14 @@ struct CopperViolation {
   long double actual_distance_nm{0.0L};
 };
 
+struct CopperDrcConfig {
+  // Optional final-validation allowance matching KiCad electrical-clearance DRC semantics.
+  // Planning and dynamic proposal checks remain exact unless this is explicitly supplied.
+  Nanometres clearance_epsilon{Nanometres{0}};
+
+  bool operator==(const CopperDrcConfig&) const = default;
+};
+
 struct CopperDrcReport {
   std::vector<CopperViolation> violations;
 
@@ -50,7 +58,8 @@ struct CopperDrcReport {
 
 // Checks currently represented copper using exact supported-pad geometry and keepout
 // constraints. KiCad DRC is still the final external oracle for generated KiCad output.
-[[nodiscard]] CopperDrcReport check_copper_rules(const Board& board);
+[[nodiscard]] CopperDrcReport check_copper_rules(
+    const Board& board, const CopperDrcConfig& config = {});
 
 // Exact bounded DRC for dynamic copper proposal objects. Every reported violation involves at
 // least one selected track, arc, or via, so callers can cheaply reject a local geometry proposal

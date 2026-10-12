@@ -6348,7 +6348,7 @@ void validate_materialized_candidate(const Board& source, const GlobalRouteResul
     for (auto& zone : refill_planning_candidate.zones) {
       zone.fills.clear();
     }
-    result.copper_drc = check_copper_rules(refill_planning_candidate);
+    result.copper_drc = check_copper_rules(refill_planning_candidate, config.final_copper_drc);
     std::set<std::string> source_copper_ids;
     for (const auto& track : source.tracks) {
       source_copper_ids.insert(track.id.value());
@@ -6373,7 +6373,7 @@ void validate_materialized_candidate(const Board& source, const GlobalRouteResul
           [&source_copper_ids](const auto& id) { return source_copper_ids.contains(id); });
     });
   } else {
-    result.copper_drc = check_copper_rules(candidate);
+    result.copper_drc = check_copper_rules(candidate, config.final_copper_drc);
   }
   const auto unrounded = count_unrounded_non_junction_bends(candidate);
   result.unrounded_non_junction_bends = unrounded.total();
@@ -6435,6 +6435,8 @@ materialize_impl(const Board& source, const GlobalRouteResult& global,
                  const std::vector<RegionalSplineRealization>* regional_splines = nullptr,
                  const Board* validated_regional_scene = nullptr) {
   DetailedRouteResult result;
+  result.final_copper_clearance_epsilon = Nanometres{
+      std::max<std::int64_t>(0, config.final_copper_drc.clearance_epsilon.value())};
   if (config.restrict_straight_track_angles && config.circular_arc_refinement) {
     result.stop_reason = DetailedRouterStopReason::invalid_input;
     result.diagnostic = "ordinary straight-track angles and curved refinement are incompatible";

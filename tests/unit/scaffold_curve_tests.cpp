@@ -55,6 +55,49 @@ void materializes_complete_scaffold_without_regional_plan() {
   require(detailed.candidate->vias.size() == 1U && detailed.candidate->vias.front().position == mm(12, 8), "certified scaffold must retain exact via site");
   require(detailed.candidate->tracks.size() == 4U && detailed.candidate->tracks.front().start == mm(2, 2) && detailed.candidate->tracks.front().end == mm(2, 8) && detailed.candidate->tracks.back().start == mm(12, 18) && detailed.candidate->tracks.back().end == mm(24, 18), "certified scaffold must retain terminal approach directions and planar topology");
 }
+void final_drc_epsilon_preserves_strict_materialization_by_default() {
+  auto source = board();
+  source.nets.push_back({NetId{"near-left"}, "near-left", 2U});
+  source.nets.push_back({NetId{"near-right"}, "near-right", 3U});
+  Footprint footprint;
+  footprint.id = ObjectId{"near-threshold-source"};
+  footprint.position = mm(20, 20);
+  Pad left;
+  left.id = ObjectId{"near-left-pad"};
+  left.net = NetId{"near-left"};
+  left.layers = {LayerId{"F.Cu"}};
+  left.shape = PadShape::circle;
+  left.width = left.height = Nanometres{650'000};
+  Pad right = left;
+  right.id = ObjectId{"near-right-pad"};
+  right.net = NetId{"near-right"};
+  right.local_position = {Nanometres{849'872}, Nanometres{0}};
+  footprint.pads = {left, right};
+  source.footprints.push_back(std::move(footprint));
+  GlobalRoutePath path;
+  path.net = NetId{"scaffold"};
+  path.legal_scaffold = true;
+  path.points = {{mm(2, 2), LayerId{"F.Cu"}}, {mm(2, 8), LayerId{"F.Cu"}},
+                 {mm(12, 8), LayerId{"F.Cu"}}};
+  RoutingPlanResult plan;
+  plan.legal_scaffold_complete = true;
+  plan.paths = {path};
+  plan.coarse_global.stop_reason = GlobalRouterStopReason::complete;
+  DetailedRouterConfig strict;
+  strict.circular_arc_refinement = true;
+  strict.residual_bend_repair = false;
+  const auto strict_result = materialize_detailed_route(source, plan, strict);
+  DetailedRouterConfig parity = strict;
+  parity.final_copper_drc.clearance_epsilon = Nanometres{500};
+  const auto parity_result = materialize_detailed_route(source, plan, parity);
+  require(strict_result.stop_reason == DetailedRouterStopReason::copper_violations &&
+              !strict_result.complete() && parity_result.complete() && parity_result.candidate &&
+              parity_result.copper_drc.ok() && !parity_result.candidate->track_arcs.empty() &&
+              !parity_result.fallback_polyline_materialization,
+          "only explicit final KiCad DRC parity may retain curved materialization across a bounded "
+          "immutable pad shortfall");
+}
+
 void explicit_nominal_widths_match_implicit_certified_scaffold() {
   const auto source = board();
   GlobalRoutePath implicit;
@@ -632,4 +675,4 @@ void navmesh_screening_preparation_cache_is_exact_and_bounded() {
 }
 
 } // namespace
-int main() { navmesh_screening_preparation_cache_is_exact_and_bounded(); spline_navigation_cache_preserves_parallel_copper(); generated_tail_cleanup_preserves_finite_width_via_contact(); generated_tail_cleanup_retains_required_interior_t_and_other_layer(); generated_tail_cleanup_preserves_via_attachment_and_budget(); generated_tail_cleanup_preserves_source_curve_net(); materializes_complete_scaffold_without_regional_plan(); explicit_nominal_widths_match_implicit_certified_scaffold(); malformed_certified_width_metadata_is_rejected(); unbacked_neck_down_metadata_is_rejected(); invalid_certified_layer_transition_is_rejected(); failed_curve_fit_retains_scaffold_and_unrelated_copper(); residual_bend_repair_uses_exact_fillet_after_ph_rejection(); residual_bend_batches_resume_without_charging_collinear_points(); residual_bend_batches_resume_across_chains(); residual_bend_repair_rejects_blocked_corner_without_mutating_copper(); residual_bend_repair_preserves_existing_routing(); residual_bend_repair_handles_pad_anchored_closed_chain(); generated_tail_cleanup_prunes_pad_rooted_interior_spur(); generated_tail_cleanup_preserves_padless_component(); return EXIT_SUCCESS; }
+int main() { final_drc_epsilon_preserves_strict_materialization_by_default(); navmesh_screening_preparation_cache_is_exact_and_bounded(); spline_navigation_cache_preserves_parallel_copper(); generated_tail_cleanup_preserves_finite_width_via_contact(); generated_tail_cleanup_retains_required_interior_t_and_other_layer(); generated_tail_cleanup_preserves_via_attachment_and_budget(); generated_tail_cleanup_preserves_source_curve_net(); materializes_complete_scaffold_without_regional_plan(); explicit_nominal_widths_match_implicit_certified_scaffold(); malformed_certified_width_metadata_is_rejected(); unbacked_neck_down_metadata_is_rejected(); invalid_certified_layer_transition_is_rejected(); failed_curve_fit_retains_scaffold_and_unrelated_copper(); residual_bend_repair_uses_exact_fillet_after_ph_rejection(); residual_bend_batches_resume_without_charging_collinear_points(); residual_bend_batches_resume_across_chains(); residual_bend_repair_rejects_blocked_corner_without_mutating_copper(); residual_bend_repair_preserves_existing_routing(); residual_bend_repair_handles_pad_anchored_closed_chain(); generated_tail_cleanup_prunes_pad_rooted_interior_spur(); generated_tail_cleanup_preserves_padless_component(); return EXIT_SUCCESS; }

@@ -80,6 +80,18 @@ void add_violation(CopperDrcReport& report, CopperViolationKind kind, std::strin
                       Nanometres{static_cast<std::int64_t>(std::ceil(bounded_required))}, actual});
 }
 
+[[nodiscard]] bool violates_electrical_clearance(long double actual, long double copper_extent,
+                                                   long double required,
+                                                   const CopperDrcConfig& config) {
+  const auto epsilon = std::max<std::int64_t>(0, config.clearance_epsilon.value());
+  const auto clearance = std::max(0.0L, required - copper_extent);
+  const auto threshold = copper_extent +
+                         std::max(0.0L, clearance - static_cast<long double>(epsilon));
+  // The epsilon applies only to the rule clearance. Copper extent remains exact, so a large
+  // epsilon cannot turn touching or overlap into a passing centreline-distance comparison.
+  return (clearance > 0.0L && actual <= copper_extent) || actual < threshold;
+}
+
 [[nodiscard]] bool selected_for_dynamic_check(const std::set<std::string>* selected,
                                               const ObjectId& first,
                                               const ObjectId* second = nullptr);
@@ -404,10 +416,10 @@ void check_board_edge(const Board& board, const std::vector<CopperPadShape>& pad
 
 } // namespace
 
-CopperDrcReport check_copper_rules(const Board& board) {
+CopperDrcReport check_copper_rules(const Board& board, const CopperDrcConfig& config) {
   if (!board.track_beziers.empty()) {
     const auto flattened = flatten_board_beziers_conservatively(board);
-    CopperDrcReport report = check_copper_rules(flattened.board);
+    CopperDrcReport report = check_copper_rules(flattened.board, config);
     remap_bezier_proxy_ids(report, flattened.proxy_sources);
     check_bezier_fabrication_minimums(board, report);
     check_bezier_skew(board, report);
@@ -445,7 +457,9 @@ CopperDrcReport check_copper_rules(const Board& board) {
                              static_cast<long double>(rhs.width.value())) /
                                 2.0L +
                             clearance(lhs.net, rhs.net);
-      if (actual < required) {
+      if (violates_electrical_clearance(actual, (static_cast<long double>(lhs.width.value()) +
+                             static_cast<long double>(rhs.width.value())) /
+                            2.0L, required, config)) {
         add_violation(report, CopperViolationKind::track_clearance, "track_clearance",
                       {lhs.id.value(), rhs.id.value()}, required, actual);
       }
@@ -460,7 +474,9 @@ CopperDrcReport check_copper_rules(const Board& board) {
                              static_cast<long double>(arc.width.value())) /
                                 2.0L +
                             clearance(lhs.net, arc.net);
-      if (actual < required) {
+      if (violates_electrical_clearance(actual, (static_cast<long double>(lhs.width.value()) +
+                             static_cast<long double>(arc.width.value())) /
+                            2.0L, required, config)) {
         add_violation(report, CopperViolationKind::track_clearance, "track_track_arc_clearance",
                       {lhs.id.value(), arc.id.value()}, required, actual);
       }
@@ -474,7 +490,9 @@ CopperDrcReport check_copper_rules(const Board& board) {
                              static_cast<long double>(via.diameter.value())) /
                                 2.0L +
                             clearance(lhs.net, via.net);
-      if (actual < required) {
+      if (violates_electrical_clearance(actual, (static_cast<long double>(lhs.width.value()) +
+                             static_cast<long double>(via.diameter.value())) /
+                            2.0L, required, config)) {
         add_violation(report, CopperViolationKind::track_via_clearance, "track_via_clearance",
                       {lhs.id.value(), via.id.value()}, required, actual);
       }
@@ -486,7 +504,7 @@ CopperDrcReport check_copper_rules(const Board& board) {
       const auto actual = segment_to_pad_copper_distance_nm(lhs.start, lhs.end, pad);
       const auto required =
           static_cast<long double>(lhs.width.value()) / 2.0L + clearance(lhs.net, pad.net);
-      if (actual < required) {
+      if (violates_electrical_clearance(actual, static_cast<long double>(lhs.width.value()) / 2.0L, required, config)) {
         add_violation(report, CopperViolationKind::track_pad_clearance, "track_pad_clearance",
                       {lhs.id.value(), pad.id.value()}, required, actual);
       }
@@ -504,7 +522,7 @@ CopperDrcReport check_copper_rules(const Board& board) {
       }
       const auto required =
           static_cast<long double>(lhs.width.value()) / 2.0L + clearance(lhs.net, zone.net);
-      if (actual < required) {
+      if (violates_electrical_clearance(actual, static_cast<long double>(lhs.width.value()) / 2.0L, required, config)) {
         add_violation(report, CopperViolationKind::track_zone_clearance, "track_zone_clearance",
                       {lhs.id.value(), zone.id.value()}, required, actual);
       }
@@ -524,7 +542,9 @@ CopperDrcReport check_copper_rules(const Board& board) {
                              static_cast<long double>(rhs.width.value())) /
                                 2.0L +
                             clearance(lhs.net, rhs.net);
-      if (actual < required) {
+      if (violates_electrical_clearance(actual, (static_cast<long double>(lhs.width.value()) +
+                             static_cast<long double>(rhs.width.value())) /
+                            2.0L, required, config)) {
         add_violation(report, CopperViolationKind::track_clearance, "track_arc_clearance",
                       {lhs.id.value(), rhs.id.value()}, required, actual);
       }
@@ -539,7 +559,9 @@ CopperDrcReport check_copper_rules(const Board& board) {
                              static_cast<long double>(via.diameter.value())) /
                                 2.0L +
                             clearance(lhs.net, via.net);
-      if (actual < required) {
+      if (violates_electrical_clearance(actual, (static_cast<long double>(lhs.width.value()) +
+                             static_cast<long double>(via.diameter.value())) /
+                            2.0L, required, config)) {
         add_violation(report, CopperViolationKind::track_via_clearance, "track_arc_via_clearance",
                       {lhs.id.value(), via.id.value()}, required, actual);
       }
@@ -552,7 +574,7 @@ CopperDrcReport check_copper_rules(const Board& board) {
           circular_arc_to_pad_copper_distance_nm(lhs.start, lhs.middle, lhs.end, pad);
       const auto required =
           static_cast<long double>(lhs.width.value()) / 2.0L + clearance(lhs.net, pad.net);
-      if (actual < required) {
+      if (violates_electrical_clearance(actual, static_cast<long double>(lhs.width.value()) / 2.0L, required, config)) {
         add_violation(report, CopperViolationKind::track_pad_clearance, "track_arc_pad_clearance",
                       {lhs.id.value(), pad.id.value()}, required, actual);
       }
@@ -570,7 +592,7 @@ CopperDrcReport check_copper_rules(const Board& board) {
       }
       const auto required =
           static_cast<long double>(lhs.width.value()) / 2.0L + clearance(lhs.net, zone.net);
-      if (actual < required) {
+      if (violates_electrical_clearance(actual, static_cast<long double>(lhs.width.value()) / 2.0L, required, config)) {
         add_violation(report, CopperViolationKind::track_zone_clearance, "track_arc_zone_clearance",
                       {lhs.id.value(), zone.id.value()}, required, actual);
       }
@@ -589,7 +611,9 @@ CopperDrcReport check_copper_rules(const Board& board) {
                              static_cast<long double>(rhs.diameter.value())) /
                                 2.0L +
                             clearance(lhs.net, rhs.net);
-      if (actual < required) {
+      if (violates_electrical_clearance(actual, (static_cast<long double>(lhs.diameter.value()) +
+                             static_cast<long double>(rhs.diameter.value())) /
+                            2.0L, required, config)) {
         add_violation(report, CopperViolationKind::via_clearance, "via_clearance",
                       {lhs.id.value(), rhs.id.value()}, required, actual);
       }
@@ -601,7 +625,7 @@ CopperDrcReport check_copper_rules(const Board& board) {
       const auto actual = point_to_pad_copper_distance_nm(lhs.position, pad);
       const auto required =
           static_cast<long double>(lhs.diameter.value()) / 2.0L + clearance(lhs.net, pad.net);
-      if (actual < required) {
+      if (violates_electrical_clearance(actual, static_cast<long double>(lhs.diameter.value()) / 2.0L, required, config)) {
         add_violation(report, CopperViolationKind::via_pad_clearance, "via_pad_clearance",
                       {lhs.id.value(), pad.id.value()}, required, actual);
       }
@@ -619,7 +643,7 @@ CopperDrcReport check_copper_rules(const Board& board) {
       }
       const auto required =
           static_cast<long double>(lhs.diameter.value()) / 2.0L + clearance(lhs.net, zone.net);
-      if (actual < required) {
+      if (violates_electrical_clearance(actual, static_cast<long double>(lhs.diameter.value()) / 2.0L, required, config)) {
         add_violation(report, CopperViolationKind::via_zone_clearance, "via_zone_clearance",
                       {lhs.id.value(), zone.id.value()}, required, actual);
       }
@@ -633,7 +657,8 @@ CopperDrcReport check_copper_rules(const Board& board) {
       }
       const auto actual = pad_to_pad_copper_distance_nm(pads[i], pads[j]);
       const auto required = clearance(pads[i].net, pads[j].net);
-      if (actual < required || (required == 0.0L && pad_copper_intersects(pads[i], pads[j]))) {
+      if (violates_electrical_clearance(actual, 0.0L, required, config) ||
+          (required == 0.0L && pad_copper_intersects(pads[i], pads[j]))) {
         add_violation(report, CopperViolationKind::pad_clearance, "pad_clearance",
                       {pads[i].id.value(), pads[j].id.value()}, required, actual);
       }
@@ -650,7 +675,8 @@ CopperDrcReport check_copper_rules(const Board& board) {
         actual = std::min(actual, pad_to_filled_region_copper_distance_nm(pads[i], fill));
       }
       const auto required = clearance(pads[i].net, zone.net);
-      if (actual < required || (required == 0.0L && actual == 0.0L)) {
+      if (violates_electrical_clearance(actual, 0.0L, required, config) ||
+          (required == 0.0L && actual == 0.0L)) {
         add_violation(report, CopperViolationKind::pad_zone_clearance, "pad_zone_clearance",
                       {pads[i].id.value(), zone.id.value()}, required, actual);
       }
@@ -674,7 +700,8 @@ CopperDrcReport check_copper_rules(const Board& board) {
         }
       }
       const auto required = clearance(lhs.net, rhs.net);
-      if (actual < required || (required == 0.0L && actual == 0.0L)) {
+      if (violates_electrical_clearance(actual, 0.0L, required, config) ||
+          (required == 0.0L && actual == 0.0L)) {
         add_violation(report, CopperViolationKind::zone_clearance, "zone_clearance",
                       {lhs.id.value(), rhs.id.value()}, required, actual);
       }

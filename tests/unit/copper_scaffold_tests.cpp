@@ -778,6 +778,39 @@ void progressive_attachment_limits_fail_closed_and_clamp_zero_initial_prefix() {
               check_copper_rules(clamped.copper).ok(),
           "a zero initial prefix must clamp to a bounded first probe and retain total search limits");
 }
+void exact_grid_attachment_checks_coincident_copper() {
+  CopperScaffoldConfig exact_only;
+  exact_only.grid_pitch = Nanometres::from_mm(0.5);
+  exact_only.attachment_radius_cells = 0U;
+  exact_only.maximum_attachment_states = 1U;
+  exact_only.maximum_expansions_per_connection = 20'000U;
+  exact_only.maximum_victim_exchanges = 0U;
+  exact_only.maximum_joint_passage_candidates = 0U;
+  exact_only.maximum_displacement_attempts = 0U;
+
+  auto foreign = fixture();
+  foreign.layers.resize(1U);
+  foreign.tracks.push_back({ObjectId{"foreign-endpoint"}, NetId{"b"}, LayerId{"F.Cu"},
+                            mm(18,9), mm(18,11), Nanometres::from_mm(0.2), false});
+  const auto demand = request(NetId{"a"}, mm(2,10), LayerId{"F.Cu"}, mm(18,10), LayerId{"F.Cu"});
+  const auto blocked = construct_copper_scaffold(foreign, {demand}, exact_only);
+  require(!blocked.complete && blocked.paths.empty() && blocked.request_evidence.size() == 1U &&
+              blocked.request_evidence.front().target_legal_attachments == 0U &&
+              blocked.request_evidence.front().termination == CopperScaffoldSearchTermination::attachment_exhausted,
+          "a foreign copper object at an exact grid endpoint must not become a legal attachment");
+
+  auto same_net = fixture();
+  same_net.layers.resize(1U);
+  same_net.tracks.push_back({ObjectId{"same-net-endpoint"}, NetId{"a"}, LayerId{"F.Cu"},
+                             mm(18,10), mm(18,11), Nanometres::from_mm(0.2), false});
+  same_net.tracks.push_back({ObjectId{"middle-blocker"}, NetId{"b"}, LayerId{"F.Cu"},
+                             mm(10,9), mm(10,11), Nanometres::from_mm(0.8), false});
+  const auto routed = construct_copper_scaffold(same_net, {demand}, exact_only);
+  require(routed.complete && routed.request_evidence.size() == 1U &&
+              routed.request_evidence.front().target_legal_attachments == 1U &&
+              check_copper_rules(routed.copper).ok(),
+          "a same-net exact grid contact must remain a legal searched attachment");
+}
 
 } // namespace
 int main() {
@@ -796,6 +829,7 @@ int main() {
   fine_pitch_rotated_pad_edge_access_reaches_the_scaffold_grid();
   progressive_attachment_search_avoids_eager_attachment_probes();
   progressive_attachment_limits_fail_closed_and_clamp_zero_initial_prefix();
+  exact_grid_attachment_checks_coincident_copper();
   accepts_legal_supplied_topology();
   finds_a_legal_detour_when_the_supplied_line_is_blocked();
   supplies_a_legal_via_transition();

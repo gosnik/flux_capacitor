@@ -599,8 +599,10 @@ struct PassageSearch {
                             cursor.result.size());
         if (!found->second) continue;
       }
-      if (point != origin && !edge_is_legal(origin, endpoint.layer, point, endpoint.layer,
-                                             cursor.result.size()))
+      // The exact grid node is an attachment candidate too.  Even though it produces a
+      // degenerate probe, it must be checked so a foreign copper object at the endpoint
+      // cannot be admitted as a free attachment.
+      if (!edge_is_legal(origin, endpoint.layer, point, endpoint.layer, cursor.result.size()))
         continue;
       if (std::none_of(cursor.result.begin(), cursor.result.end(), [&](const auto& old) {
             return old.node == node && old.anchor == endpoint && old.outward_stub ==

@@ -1,0 +1,17 @@
+{
+  "build_status": "PASS",
+  "build_log": "reports/validation/grid-contact-round21-20261012/build.log",
+  "focused_initial_status": "PASS",
+  "focused_initial_log": "reports/validation/grid-contact-round21-20261012/focused.log",
+  "ctest_status": "PASS",
+  "ctest_passed": 11,
+  "ctest_failed": 0,
+  "ctest_log": "reports/validation/grid-contact-round21-20261012/ctest.log",
+  "focused_final_status": "PASS",
+  "focused_final_log": "reports/validation/grid-contact-round21-20261012/focused-final.log",
+  "focused_final_note": "Test-only strengthening: exact_only configuration retained; target_legal_attachments required to equal 1; source behavior unchanged.",
+  "noop_build_status": "PASS",
+  "noop_build_log": "reports/validation/grid-contact-round21-20261012/noop-build.log",
+  "probe_status": "PASS",
+  "probe_output": "reports/validation/grid-contact-round21-20261012/probe-access.json"
+}

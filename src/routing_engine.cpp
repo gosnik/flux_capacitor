@@ -1994,6 +1994,8 @@ RoutingEngineStepResult RoutingEngine::advance(RoutingEngineStepBudget budget,
                 "incoming=" + telemetry_evidence_list({rollback.request_identity}) +
                 "; reason=" + std::string(to_string(rollback.reason)) +
                 "; victims=" + telemetry_evidence_list(rollback.victim_request_identities, true) +
+                "; disconnected_requests=" + telemetry_evidence_list(rollback.disconnected_request_identities) +
+                "; pad_components_split=" + (rollback.pad_components_split ? "true" : "false") +
                 "; blocker_ids=" + object_list(rollback.blocker_objects) +
                 "; blocker_nets=" + net_list(rollback.blocker_nets));
           }

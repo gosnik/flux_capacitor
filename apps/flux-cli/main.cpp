@@ -4349,7 +4349,11 @@ void print_route_result(const flux::GlobalRouteResult& result,
                   << ",\"victim_request_identities\":[";
         for (std::size_t j = 0; j < rollback.victim_request_identities.size(); ++j)
           std::cout << (j ? "," : "") << json_quote(rollback.victim_request_identities[j]);
-        std::cout << "],\"blocker_objects\":"; print_ids(rollback.blocker_objects);
+        std::cout << "],\"disconnected_request_identities\":[";
+        for (std::size_t j = 0; j < rollback.disconnected_request_identities.size(); ++j)
+          std::cout << (j ? "," : "") << json_quote(rollback.disconnected_request_identities[j]);
+        std::cout << "],\"pad_components_split\":" << (rollback.pad_components_split ? "true" : "false");
+        std::cout << ",\"blocker_objects\":"; print_ids(rollback.blocker_objects);
         std::cout << ",\"blocker_nets\":"; print_ids(rollback.blocker_nets);
         std::cout << '}';
       }

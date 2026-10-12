@@ -1790,12 +1790,16 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
     if (result.counters.cancelled || displaced) continue;
     bool exchanged = false;
     const auto record_rollback = [&](CopperScaffoldExchangeRollbackReason reason,
-                                     const std::vector<std::size_t>& victims) {
+                                     const std::vector<std::size_t>& victims,
+                                     std::optional<std::size_t> disconnected = std::nullopt,
+                                     bool pad_components_split = false) {
       count_exchange_rollback(result.counters, reason);
       if (result.exchange_rollbacks.size() >= config.maximum_failure_evidence) return;
       CopperScaffoldExchangeRollback record;
       record.request_identity = result.request_identities[index];
       record.reason = reason;
+      if (disconnected) record.disconnected_request_identities.push_back(result.request_identities[*disconnected]);
+      record.pad_components_split = pad_components_split;
       for (const auto victim : victims) record.victim_request_identities.push_back(result.request_identities[victim]);
       record_blocker_evidence(result.request_evidence[index], result.copper, frontier_blockers,
                               config.maximum_failure_evidence);
@@ -1908,20 +1912,22 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
       candidate_complete[index] = true;
       candidate_complete[victim] = true;
       bool preserved_connectivity = true;
+      std::optional<std::size_t> disconnected;
       for (std::size_t request = 0U; request < candidate_complete.size(); ++request)
         if (candidate_complete[request] &&
             !scaffold_request_connected(rebuilt, request == victim && rebound_victim
                                                       ? *rebound_victim : requests[request])) {
+          disconnected = request;
           preserved_connectivity = false;
           break;
         }
       if (!preserved_connectivity) {
-        record_rollback(CopperScaffoldExchangeRollbackReason::connectivity_not_preserved, {victim});
+        record_rollback(CopperScaffoldExchangeRollbackReason::connectivity_not_preserved, {victim}, disconnected);
         continue;
       }
       if (rebound_victim && !preserves_existing_pad_components(analyze_connectivity(result.copper),
                                                                  analyze_connectivity(rebuilt))) {
-        record_rollback(CopperScaffoldExchangeRollbackReason::connectivity_not_preserved, {victim});
+        record_rollback(CopperScaffoldExchangeRollbackReason::connectivity_not_preserved, {victim}, std::nullopt, true);
         continue;
       }
       std::erase_if(result.paths, [&](const auto& path) {
@@ -2125,18 +2131,20 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
         candidate_complete[index] = true;
         for (const auto victim : victims) candidate_complete[victim] = true;
         bool preserved = true;
+        std::optional<std::size_t> disconnected;
         for (std::size_t request = 0U; request < candidate_complete.size(); ++request)
           if (candidate_complete[request] && !scaffold_request_connected(
               rebuilt, rebound_victims.contains(request) ? rebound_victims.at(request) : requests[request])) {
+            disconnected = request;
             preserved = false; break;
         }
         if (!preserved) {
-          record_rollback(CopperScaffoldExchangeRollbackReason::connectivity_not_preserved, victims);
+          record_rollback(CopperScaffoldExchangeRollbackReason::connectivity_not_preserved, victims, disconnected);
           return;
         }
         if (!rebound_victims.empty() &&
             !preserves_existing_pad_components(analyze_connectivity(result.copper), analyze_connectivity(rebuilt))) {
-          record_rollback(CopperScaffoldExchangeRollbackReason::connectivity_not_preserved, victims);
+          record_rollback(CopperScaffoldExchangeRollbackReason::connectivity_not_preserved, victims, std::nullopt, true);
           return;
         }
         std::erase_if(result.paths, [&](const auto& path) {

@@ -1,0 +1,20 @@
+{
+  "round": 25,
+  "date": "2026-10-12",
+  "build": {
+    "command": "cmake --build build/release -j4 --target flux-cli flux_copper_scaffold_tests flux_routing_engine_experiment_tests",
+    "result": "PASS"
+  },
+  "tests": [
+    {
+      "command": "ctest --output-on-failure -R '^flux_copper_scaffold_tests$'",
+      "result": "PASS",
+      "duration_seconds": 2.78
+    },
+    {
+      "command": "ctest --output-on-failure -R '^flux_routing_engine_experiment_tests$'",
+      "result": "PASS",
+      "duration_seconds": 0.72
+    }
+  ]
+}

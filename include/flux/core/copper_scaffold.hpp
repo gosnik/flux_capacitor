@@ -150,6 +150,9 @@ struct CopperScaffoldExchangeRollback {
   std::vector<ObjectId> blocker_objects;
   std::vector<NetId> blocker_nets;
 
+  std::vector<std::string> disconnected_request_identities;
+  bool pad_components_split{false};
+
   bool operator==(const CopperScaffoldExchangeRollback&) const = default;
 };
 

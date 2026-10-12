@@ -10074,3 +10074,12 @@ At the user's explicit request, fresh Tier3 comparison runs on the same frozen b
 Next hypothesis: remaining /TCK_TXD_A is searched at0.25mm nominal width, while the known-good reference uses0.20mm with one0.60/0.30 via. Legal attachment counts do not prove a reachable free-space corridor, and final-reset via counters cannot exclude via-state growth. Test width feasibility with a controlled offline replay before implementing local width alternatives; do not simply increase global budgets or lower clearances.
 
 Independent post-run provisional scaffold export confirms KiCad unconnected items1/97 onTier2/3 and no clearance/hole violations. Tier2 has21 track_dangling warnings plus41 inherited footprint warnings; Tier3 has only22 footprint/6silk warnings. This is straight scaffold evidence, not final curved certification.
+
+## Round28 — Width and search-direction diagnosis (2026-10-12)
+
+### Result and decision
+At retained Round27 copper,0.25 and0.20mm both exhaust50k expansions and leave1 open;0.20mm also exhausts200k. Removing only generated copper makes both widths accept the original coarse path directly at0 expansions. Therefore narrower width alone does not solve the dynamic interaction; do not promote a width heuristic or larger global budget.
+
+Reversing the request at0.25mm reaches search_exhausted after479 expansions versus50k forward;0.20mm reverse exhausts after5528. It attributes a compact target-side grid pocket to dynamic owners9,90,97,98 and one static pad. This does not prove continuous infeasibility outside sampled attachment/grid states, but sharply improves repair evidence compared with a forward budget exhaustion. Next test connected repair against those actual target-side blockers before changing routing policy.
+
+Research: [Holte et al., Bidirectional Search That Is Guaranteed to Meet in the Middle](https://ojs.aaai.org/index.php/AAAI/article/view/10436) demonstrates that search direction/frontier scheduling materially affects explored work and provides a framework for comparing bidirectional/A* searches. This experiment only reverses a bounded existing search; no MM optimality/completeness guarantee is claimed for Flux's sampled, history-bearing routing states.

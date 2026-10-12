@@ -1,0 +1,15 @@
+{
+  "compile": "PASS",
+  "control_width_mm": 0.25,
+  "candidate_width_mm": 0.20,
+  "control": {"complete": false, "termination": "expansion_budget_exhausted", "expansions": 50000, "new_exact_drc": 0, "open_connections": 1, "unrouted_nets": 1, "target_legal_attachments": 16},
+  "candidate": {"complete": false, "termination": "expansion_budget_exhausted", "expansions": 50000, "new_exact_drc": 0, "open_connections": 1, "unrouted_nets": 1, "target_legal_attachments": 35},
+  "interpretation": "Candidate increases target legal attachments but does not complete request 115 within budget; clearance and via inputs remain unchanged.",
+  "static_control": {"width_mm": 0.25, "complete": true, "termination": "direct_route_accepted", "expansions": 0, "exact_drc": 6, "physical_opens": "not_comparable_static_board", "source_legal_attachments": 0, "target_legal_attachments": 0},
+  "static_candidate": {"width_mm": 0.20, "complete": true, "termination": "direct_route_accepted", "expansions": 0, "exact_drc": 6, "physical_opens": "not_comparable_static_board", "source_legal_attachments": 0, "target_legal_attachments": 0},
+  "candidate_200k": {"width_mm": 0.20, "complete": false, "termination": "expansion_budget_exhausted", "expansions": 200000, "exact_drc": 6, "physical_opens": 1, "unrouted_nets": 1, "source_legal_attachments": 10, "target_legal_attachments": 35},
+  "reverse_control": {"width_mm": 0.25, "complete": false, "termination": "search_exhausted", "expansions": 479, "exact_drc": 6, "physical_opens": 1, "source_legal_attachments": 16, "target_legal_attachments": 128},
+  "reverse_candidate": {"width_mm": 0.20, "complete": false, "termination": "search_exhausted", "expansions": 5528, "exact_drc": 6, "physical_opens": 1, "source_legal_attachments": 35, "target_legal_attachments": 128},
+  "reverse_goal_rejections": "not emitted by utility; both runs exhausted search without completion",
+  "logs": ["build-static.log", "build-reverse.log", "static025.log", "static020.log", "width020-200k.log", "reverse025.log", "reverse020.log"]
+}

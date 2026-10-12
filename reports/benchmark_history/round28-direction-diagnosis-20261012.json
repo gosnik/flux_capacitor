@@ -1,0 +1,370 @@
+{
+  "round": 28,
+  "production_change": false,
+  "source_revision": "a24444c",
+  "verification": {
+    "compile": "PASS",
+    "control_width_mm": 0.25,
+    "candidate_width_mm": 0.2,
+    "control": {
+      "complete": false,
+      "termination": "expansion_budget_exhausted",
+      "expansions": 50000,
+      "new_exact_drc": 0,
+      "open_connections": 1,
+      "unrouted_nets": 1,
+      "target_legal_attachments": 16
+    },
+    "candidate": {
+      "complete": false,
+      "termination": "expansion_budget_exhausted",
+      "expansions": 50000,
+      "new_exact_drc": 0,
+      "open_connections": 1,
+      "unrouted_nets": 1,
+      "target_legal_attachments": 35
+    },
+    "interpretation": "Candidate increases target legal attachments but does not complete request 115 within budget; clearance and via inputs remain unchanged.",
+    "static_control": {
+      "width_mm": 0.25,
+      "complete": true,
+      "termination": "direct_route_accepted",
+      "expansions": 0,
+      "exact_drc": 6,
+      "physical_opens": "not_comparable_static_board",
+      "source_legal_attachments": 0,
+      "target_legal_attachments": 0
+    },
+    "static_candidate": {
+      "width_mm": 0.2,
+      "complete": true,
+      "termination": "direct_route_accepted",
+      "expansions": 0,
+      "exact_drc": 6,
+      "physical_opens": "not_comparable_static_board",
+      "source_legal_attachments": 0,
+      "target_legal_attachments": 0
+    },
+    "candidate_200k": {
+      "width_mm": 0.2,
+      "complete": false,
+      "termination": "expansion_budget_exhausted",
+      "expansions": 200000,
+      "exact_drc": 6,
+      "physical_opens": 1,
+      "unrouted_nets": 1,
+      "source_legal_attachments": 10,
+      "target_legal_attachments": 35
+    },
+    "reverse_control": {
+      "width_mm": 0.25,
+      "complete": false,
+      "termination": "search_exhausted",
+      "expansions": 479,
+      "exact_drc": 6,
+      "physical_opens": 1,
+      "source_legal_attachments": 16,
+      "target_legal_attachments": 128
+    },
+    "reverse_candidate": {
+      "width_mm": 0.2,
+      "complete": false,
+      "termination": "search_exhausted",
+      "expansions": 5528,
+      "exact_drc": 6,
+      "physical_opens": 1,
+      "source_legal_attachments": 35,
+      "target_legal_attachments": 128
+    },
+    "reverse_goal_rejections": "not emitted by utility; both runs exhausted search without completion",
+    "logs": [
+      "build-static.log",
+      "build-reverse.log",
+      "static025.log",
+      "static020.log",
+      "width020-200k.log",
+      "reverse025.log",
+      "reverse020.log"
+    ]
+  },
+  "cases": {
+    "control": {
+      "complete": false,
+      "expansions": 50000,
+      "runtime_ms": 2703,
+      "whole_board_open_connections": 1,
+      "new_exact_drc_violations": [],
+      "requests": [
+        {
+          "index": 115,
+          "termination": "expansion_budget_exhausted",
+          "blockers": [
+            "05356f89-ac23-44a8-b1e8-c636243c00e8",
+            "0831de56-e97c-4858-b6ba-915a02484383",
+            "0cea5184-da49-4d4d-89ee-e28fa96d33ae",
+            "0cfbb42d-85c6-4a8f-a846-236cf63bee0a",
+            "1208bc5a-0797-4f25-8526-921a7b3641e1",
+            "4a7b874d-be13-46d0-bda2-309a30e821e3",
+            "4de0c1cd-1496-4a70-9440-0fd1566d9423",
+            "4fc9b87a-0928-4f4d-87e7-9a68d1839af1",
+            "57535c20-cc18-4c42-9b8a-3b2829f11433",
+            "6568fcb4-7df3-4634-ae09-cca50235bbfa",
+            "76153fcd-ace1-4f64-bb8a-df53bbe1811e",
+            "7651ace3-1268-42ea-a0e1-c3ee8bd574c1",
+            "7ee47c3d-c540-4992-8a81-75a97d03d2c7",
+            "8db3fe42-d8c5-4dd5-a080-adef56c8a180",
+            "9b107c9e-8dbe-47d3-97b2-4694a1eb99d7",
+            "__flux-copper-scaffold-102-track-1",
+            "__flux-copper-scaffold-102-track-2",
+            "__flux-copper-scaffold-102-track-3",
+            "__flux-copper-scaffold-116-track-1",
+            "__flux-copper-scaffold-116-track-3",
+            "__flux-copper-scaffold-116-track-4",
+            "__flux-copper-scaffold-116-track-5",
+            "__flux-copper-scaffold-116-via-2",
+            "__flux-copper-scaffold-121-track-10",
+            "__flux-copper-scaffold-121-track-12",
+            "__flux-copper-scaffold-121-track-13",
+            "__flux-copper-scaffold-121-track-9",
+            "__flux-copper-scaffold-121-via-11",
+            "__flux-copper-scaffold-121-via-8",
+            "__flux-copper-scaffold-123-track-0",
+            "__flux-copper-scaffold-124-track-1",
+            "__flux-copper-scaffold-124-track-4"
+          ],
+          "attachments": {
+            "source_component_anchors": 10,
+            "target_component_anchors": 5,
+            "source_legal_attachments": 128,
+            "target_legal_attachments": 16
+          }
+        }
+      ]
+    },
+    "width020": {
+      "complete": false,
+      "expansions": 50000,
+      "runtime_ms": 2197,
+      "whole_board_open_connections": 1,
+      "new_exact_drc_violations": [],
+      "requests": [
+        {
+          "index": 115,
+          "termination": "expansion_budget_exhausted",
+          "blockers": [
+            "05356f89-ac23-44a8-b1e8-c636243c00e8",
+            "0831de56-e97c-4858-b6ba-915a02484383",
+            "0cea5184-da49-4d4d-89ee-e28fa96d33ae",
+            "0cfbb42d-85c6-4a8f-a846-236cf63bee0a",
+            "1208bc5a-0797-4f25-8526-921a7b3641e1",
+            "4a7b874d-be13-46d0-bda2-309a30e821e3",
+            "4de0c1cd-1496-4a70-9440-0fd1566d9423",
+            "4fc9b87a-0928-4f4d-87e7-9a68d1839af1",
+            "57535c20-cc18-4c42-9b8a-3b2829f11433",
+            "6568fcb4-7df3-4634-ae09-cca50235bbfa",
+            "76153fcd-ace1-4f64-bb8a-df53bbe1811e",
+            "7651ace3-1268-42ea-a0e1-c3ee8bd574c1",
+            "7ee47c3d-c540-4992-8a81-75a97d03d2c7",
+            "8db3fe42-d8c5-4dd5-a080-adef56c8a180",
+            "9b107c9e-8dbe-47d3-97b2-4694a1eb99d7",
+            "__flux-copper-scaffold-10-track-9",
+            "__flux-copper-scaffold-102-track-1",
+            "__flux-copper-scaffold-102-track-2",
+            "__flux-copper-scaffold-102-track-3",
+            "__flux-copper-scaffold-116-track-1",
+            "__flux-copper-scaffold-116-track-3",
+            "__flux-copper-scaffold-116-track-4",
+            "__flux-copper-scaffold-116-track-5",
+            "__flux-copper-scaffold-116-via-2",
+            "__flux-copper-scaffold-121-track-10",
+            "__flux-copper-scaffold-121-track-12",
+            "__flux-copper-scaffold-121-track-13",
+            "__flux-copper-scaffold-121-track-7",
+            "__flux-copper-scaffold-121-track-9",
+            "__flux-copper-scaffold-121-via-11",
+            "__flux-copper-scaffold-121-via-8",
+            "__flux-copper-scaffold-123-track-0"
+          ],
+          "attachments": {
+            "source_component_anchors": 10,
+            "target_component_anchors": 5,
+            "source_legal_attachments": 128,
+            "target_legal_attachments": 35
+          }
+        }
+      ]
+    },
+    "width020-200k": {
+      "complete": false,
+      "expansions": 200000,
+      "runtime_ms": 9550,
+      "whole_board_open_connections": 1,
+      "new_exact_drc_violations": [],
+      "requests": [
+        {
+          "index": 115,
+          "termination": "expansion_budget_exhausted",
+          "blockers": [
+            "0044953b-f390-4cd8-b6df-d81b94baa00d",
+            "0144e524-27b7-474b-8cb6-007677d0b1bf",
+            "05356f89-ac23-44a8-b1e8-c636243c00e8",
+            "0781e1b3-fc08-4244-9ca5-9f47da9b4b48",
+            "0831de56-e97c-4858-b6ba-915a02484383",
+            "0b8e7ced-0282-4965-b9ea-de4a21f5fb5c",
+            "0cea5184-da49-4d4d-89ee-e28fa96d33ae",
+            "0cfbb42d-85c6-4a8f-a846-236cf63bee0a",
+            "0d5a39e0-2421-4b16-b13b-bb0dc80f34b5",
+            "10912663-4c5b-47a3-b640-3b356680e8a6",
+            "1208bc5a-0797-4f25-8526-921a7b3641e1",
+            "1367b901-3436-4f6f-a128-f32ea2ddb415",
+            "1920ee39-a36c-431c-bed2-e479b37ef21f",
+            "1d767ccc-83f5-48eb-b515-26d277ff587f",
+            "1ef227e4-4dc0-4883-873d-367447902634",
+            "25a699bd-7a00-4eeb-965c-582db9192b8c",
+            "2a9c0f16-1c55-468e-b4a5-605432d07768",
+            "2e04ac3d-0ac8-48eb-b02c-209f963b8169",
+            "2e3a7125-7069-4195-8fc4-2949a256e99a",
+            "2f22251c-da13-4c14-8d57-e7c260e99d83",
+            "2fe3ed3e-e8ab-4927-aa95-7c6d4f60d722",
+            "3402e949-efdc-4dc1-bf91-c4c48d2834ea",
+            "35fb76ea-713c-479e-8e3a-4a65414c36e7",
+            "3651eebc-f1c8-434a-b440-ffce10854865",
+            "39bf30ff-0fa8-47d2-8f1b-0aea82ee49c3",
+            "3a01946e-60d5-4b41-8ca4-7ad628cde955",
+            "3addd7ca-2634-499a-be13-c0af004afadf",
+            "45330c97-d2b1-453a-bb40-da3904eace48",
+            "4a7b874d-be13-46d0-bda2-309a30e821e3",
+            "4c6f518a-e8dc-4cb7-b738-4c37537397f0",
+            "4de0c1cd-1496-4a70-9440-0fd1566d9423",
+            "4fc9b87a-0928-4f4d-87e7-9a68d1839af1"
+          ],
+          "attachments": {
+            "source_component_anchors": 10,
+            "target_component_anchors": 5,
+            "source_legal_attachments": 128,
+            "target_legal_attachments": 35
+          }
+        }
+      ]
+    },
+    "static025": {
+      "complete": true,
+      "expansions": 0,
+      "runtime_ms": 202,
+      "whole_board_open_connections": 116,
+      "new_exact_drc_violations": [],
+      "requests": [
+        {
+          "index": 115,
+          "termination": "direct_route_accepted",
+          "blockers": [],
+          "attachments": {
+            "source_component_anchors": 0,
+            "target_component_anchors": 0,
+            "source_legal_attachments": 0,
+            "target_legal_attachments": 0
+          }
+        }
+      ]
+    },
+    "static020": {
+      "complete": true,
+      "expansions": 0,
+      "runtime_ms": 165,
+      "whole_board_open_connections": 116,
+      "new_exact_drc_violations": [],
+      "requests": [
+        {
+          "index": 115,
+          "termination": "direct_route_accepted",
+          "blockers": [],
+          "attachments": {
+            "source_component_anchors": 0,
+            "target_component_anchors": 0,
+            "source_legal_attachments": 0,
+            "target_legal_attachments": 0
+          }
+        }
+      ]
+    },
+    "reverse025": {
+      "complete": false,
+      "expansions": 479,
+      "runtime_ms": 234,
+      "whole_board_open_connections": 1,
+      "new_exact_drc_violations": [],
+      "requests": [
+        {
+          "index": 115,
+          "termination": "search_exhausted",
+          "blockers": [
+            "4de0c1cd-1496-4a70-9440-0fd1566d9423",
+            "__flux-copper-scaffold-9-track-0",
+            "__flux-copper-scaffold-90-track-4",
+            "__flux-copper-scaffold-90-via-5",
+            "__flux-copper-scaffold-97-track-22",
+            "__flux-copper-scaffold-97-track-23",
+            "__flux-copper-scaffold-97-track-24",
+            "__flux-copper-scaffold-97-track-25",
+            "__flux-copper-scaffold-97-via-26",
+            "__flux-copper-scaffold-98-track-10",
+            "__flux-copper-scaffold-98-track-11",
+            "__flux-copper-scaffold-98-track-12",
+            "__flux-copper-scaffold-98-track-13",
+            "__flux-copper-scaffold-98-track-14",
+            "__flux-copper-scaffold-98-track-7",
+            "__flux-copper-scaffold-98-track-8",
+            "__flux-copper-scaffold-98-track-9"
+          ],
+          "attachments": {
+            "source_component_anchors": 5,
+            "target_component_anchors": 10,
+            "source_legal_attachments": 16,
+            "target_legal_attachments": 128
+          }
+        }
+      ]
+    },
+    "reverse020": {
+      "complete": false,
+      "expansions": 5528,
+      "runtime_ms": 202,
+      "whole_board_open_connections": 1,
+      "new_exact_drc_violations": [],
+      "requests": [
+        {
+          "index": 115,
+          "termination": "search_exhausted",
+          "blockers": [
+            "4de0c1cd-1496-4a70-9440-0fd1566d9423",
+            "__flux-copper-scaffold-9-track-0",
+            "__flux-copper-scaffold-9-track-1",
+            "__flux-copper-scaffold-90-track-4",
+            "__flux-copper-scaffold-90-track-6",
+            "__flux-copper-scaffold-90-via-5",
+            "__flux-copper-scaffold-97-track-22",
+            "__flux-copper-scaffold-97-track-23",
+            "__flux-copper-scaffold-97-track-24",
+            "__flux-copper-scaffold-97-track-25",
+            "__flux-copper-scaffold-97-via-26",
+            "__flux-copper-scaffold-98-track-10",
+            "__flux-copper-scaffold-98-track-11",
+            "__flux-copper-scaffold-98-track-12",
+            "__flux-copper-scaffold-98-track-13",
+            "__flux-copper-scaffold-98-track-14",
+            "__flux-copper-scaffold-98-track-15",
+            "__flux-copper-scaffold-98-track-7",
+            "__flux-copper-scaffold-98-track-8",
+            "__flux-copper-scaffold-98-track-9"
+          ],
+          "attachments": {
+            "source_component_anchors": 5,
+            "target_component_anchors": 10,
+            "source_legal_attachments": 35,
+            "target_legal_attachments": 128
+          }
+        }
+      ]
+    }
+  }
+}

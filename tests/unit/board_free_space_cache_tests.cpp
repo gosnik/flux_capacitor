@@ -2,8 +2,10 @@
 #include "flux/core/free_space_offset.hpp"
 
 #include <atomic>
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <thread>
 #include <vector>
 
@@ -76,6 +78,42 @@ int main() {
   require(removed_cached.domain.obstacles == changed_uncached.domain.obstacles &&
               removed_cached.obstacle_ids == changed_uncached.obstacle_ids,
           "removed copper must not survive in a cached extraction");
+  const auto outline_stats_before_mutation = extraction_cache.stats();
+  auto changed_outline = changed;
+  changed_outline.outline = rectangle(-500, -500, 10500, 10500);
+  const auto changed_outline_reference =
+      flux::extract_polygonal_board_free_space(changed_outline, for_a);
+  const auto changed_outline_cached =
+      flux::extract_polygonal_board_free_space(changed_outline, for_a, &extraction_cache);
+  require(changed_outline_cached.domain.outline == changed_outline_reference.domain.outline &&
+              changed_outline_cached.domain.obstacles == changed_outline_reference.domain.obstacles,
+          "an outline mutation must not reuse stale Boolean-ready board geometry");
+  auto changed_board_cutout = changed_outline;
+  changed_board_cutout.cutouts.push_back(rectangle(7000, 7000, 8000, 8000));
+  const auto changed_board_cutout_reference =
+      flux::extract_polygonal_board_free_space(changed_board_cutout, for_a);
+  const auto changed_board_cutout_cached =
+      flux::extract_polygonal_board_free_space(changed_board_cutout, for_a, &extraction_cache);
+  require(changed_board_cutout_cached.domain.cutouts == changed_board_cutout_reference.domain.cutouts &&
+              changed_board_cutout_cached.domain.obstacles == changed_board_cutout_reference.domain.obstacles &&
+              extraction_cache.stats().misses >= outline_stats_before_mutation.misses + 2U,
+          "outline and cutout mutations must invalidate Boolean-ready board geometry");
+
+  // Foreign copper must remain blocked when its overlapping same-net neighbour is excluded.
+  auto overlapping_copper = board;
+  overlapping_copper.tracks = {
+      {ObjectId{"same-net-overlap"}, NetId{"a"}, LayerId{"F.Cu"}, point(2500, 3000),
+       point(6500, 3000), Nanometres{400}, false},
+      {ObjectId{"foreign-overlap"}, NetId{"b"}, LayerId{"F.Cu"}, point(4500, 3000),
+       point(8500, 3000), Nanometres{400}, false}};
+  const auto overlap_uncached = flux::extract_polygonal_board_free_space(overlapping_copper, for_a);
+  const auto overlap_cached =
+      flux::extract_polygonal_board_free_space(overlapping_copper, for_a, &extraction_cache);
+  require(overlap_cached.domain.obstacles == overlap_uncached.domain.obstacles &&
+              overlap_cached.obstacle_ids == overlap_uncached.obstacle_ids &&
+              overlap_cached.domain.obstacles.size() == 1U &&
+              overlap_cached.obstacle_ids.front() == ObjectId{"foreign-overlap"},
+          "excluding overlapping same-net copper must never subtract the foreign copper union");
 
   flux::FreeSpaceDomain domain;
   domain.outline = rectangle(0, 0, 10000, 10000);
@@ -88,6 +126,8 @@ int main() {
           "cached obstacle expansion must preserve complete free-space geometry");
   require(offset_cache.stats().hits == 1U && offset_cache.stats().misses == 1U,
           "identical obstacle and exact clearance must reuse its expansion");
+  require(offset_cache.stats().outline_hits == 1U && offset_cache.stats().outline_misses == 1U,
+          "identical Boolean context must reuse the eroded outline");
   const auto repeated_context_stats = offset_cache.stats();
   require(repeated_context_stats.input_validation_hits > 0U &&
               repeated_context_stats.prepared_domain_hits > 0U &&
@@ -141,6 +181,16 @@ int main() {
               stats_after_context_change.clearance_certificate_misses >
                   stats_before_context_change.clearance_certificate_misses,
           "changed cutout geometry must invalidate validation, preparation, and clearance context");
+  const auto outline_stats_before_clearance_change = offset_cache.stats();
+  auto changed_outer_clearance = offset;
+  changed_outer_clearance.clearance = Nanometres{275};
+  const auto changed_outer_clearance_reference =
+      flux::offset_polygonal_free_space(domain, changed_outer_clearance);
+  const auto changed_outer_clearance_cached =
+      flux::offset_polygonal_free_space(domain, changed_outer_clearance, &offset_cache);
+  require(same_offset_result(changed_outer_clearance_cached, changed_outer_clearance_reference) &&
+              offset_cache.stats().outline_misses > outline_stats_before_clearance_change.outline_misses,
+          "a board-clearance change must invalidate the eroded-outline cache");
   // Boolean reconstruction must preserve islands and holes, including holes closed by dilation.
   domain.obstacles.push_back(rectangle(4700, 4500, 6500, 6000));
   domain.filled_obstacles.push_back({LayerId{"F.Cu"}, rectangle(2000, 2000, 8000, 8000),
@@ -173,6 +223,64 @@ int main() {
           "the combined validation, prepared-source, and certificate stores must remain bounded");
   require(offset_cache.stats().entries <= 2U, "offset cache must retain its capacity bound");
 
+  // A filled ring leaves its hole as a separate free-space island until dilation closes it.
+  flux::FreeSpaceDomain filled_ring_domain;
+  filled_ring_domain.outline = rectangle(-2000, -2000, 12000, 12000);
+  filled_ring_domain.filled_obstacles.push_back(
+      {LayerId{"F.Cu"}, rectangle(2000, 2000, 8000, 8000), {rectangle(4000, 4000, 6000, 6000)}});
+  flux::FreeSpaceOffsetCache filled_ring_cache{4U};
+  const flux::FreeSpaceOffsetConfig hole_survives{Nanometres{250}, 1000U};
+  const flux::FreeSpaceOffsetConfig hole_closes{Nanometres{1100}, 1000U};
+  const auto surviving_reference =
+      flux::offset_polygonal_free_space(filled_ring_domain, hole_survives);
+  const auto surviving_cached =
+      flux::offset_polygonal_free_space(filled_ring_domain, hole_survives, &filled_ring_cache);
+  const auto closed_reference = flux::offset_polygonal_free_space(filled_ring_domain, hole_closes);
+  const auto closed_cached =
+      flux::offset_polygonal_free_space(filled_ring_domain, hole_closes, &filled_ring_cache);
+  require(surviving_reference.ok() && surviving_reference.regions.size() == 2U &&
+              same_offset_result(surviving_cached, surviving_reference),
+          "a filled-obstacle hole that survives dilation must remain a cached free-space island");
+  require(closed_reference.ok() && closed_reference.regions.size() == 1U &&
+              same_offset_result(closed_cached, closed_reference),
+          "a filled-obstacle hole closed by dilation must not survive cached Boolean subtraction");
+
+  // Stable spatial partitioning must preserve unaffected union subtrees across local views and
+  // local copper changes.  The four blockers deliberately occupy separate Morton quadrants.
+  flux::FreeSpaceDomain union_domain;
+  union_domain.outline = rectangle(0, 0, 20000, 20000);
+  union_domain.obstacles = {rectangle(1500, 1500, 2500, 2500),
+                            rectangle(11500, 1500, 12500, 2500),
+                            rectangle(1500, 11500, 2500, 12500),
+                            rectangle(11500, 11500, 12500, 12500)};
+  const flux::FreeSpaceOffsetConfig union_rule{Nanometres{200}, 1000U};
+  flux::FreeSpaceOffsetCache union_cache{16U};
+  const auto union_reference = flux::offset_polygonal_free_space(union_domain, union_rule);
+  const auto union_cached = flux::offset_polygonal_free_space(union_domain, union_rule, &union_cache);
+  require(same_offset_result(union_cached, union_reference),
+          "cached deterministic obstacle union must match uncached free-space geometry");
+  auto removed_union_obstacle = union_domain;
+  removed_union_obstacle.obstacles.pop_back();
+  const auto union_stats_before_removal = union_cache.stats();
+  const auto removed_union_reference =
+      flux::offset_polygonal_free_space(removed_union_obstacle, union_rule);
+  const auto removed_union_cached =
+      flux::offset_polygonal_free_space(removed_union_obstacle, union_rule, &union_cache);
+  require(same_offset_result(removed_union_cached, removed_union_reference) &&
+              union_cache.stats().union_cache_hits > union_stats_before_removal.union_cache_hits,
+          "removing one distant blocker must reuse an unchanged deterministic union subtree");
+  auto moved_union_obstacle = union_domain;
+  moved_union_obstacle.obstacles.back() = rectangle(14000, 14000, 15000, 15000);
+  const auto union_stats_before_move = union_cache.stats();
+  const auto moved_union_reference =
+      flux::offset_polygonal_free_space(moved_union_obstacle, union_rule);
+  const auto moved_union_cached =
+      flux::offset_polygonal_free_space(moved_union_obstacle, union_rule, &union_cache);
+  require(same_offset_result(moved_union_cached, moved_union_reference) &&
+              union_cache.stats().union_cache_hits > union_stats_before_move.union_cache_hits &&
+              union_cache.stats().boolean_retained_units <= 3U * 1'048'576U,
+          "moving one distant blocker must reuse unchanged union subtrees within the Boolean bound");
+
   // A net/domain view may exclude a remote blocker while retaining the same source polygons.
   flux::FreeSpaceDomain source_domain;
   source_domain.outline = rectangle(0, 0, 20000, 20000);
@@ -188,8 +296,9 @@ int main() {
   const auto local_view_cached =
       flux::offset_polygonal_free_space(local_view, local_rule, &source_view_cache);
   require(same_offset_result(local_view_cached, local_view_reference) &&
-              source_view_cache.stats().prepared_source_hits > source_stats_before_view.prepared_source_hits,
-          "a domain view excluding a far blocker must reuse its prepared shared sources");
+              source_view_cache.stats().prepared_source_hits > source_stats_before_view.prepared_source_hits &&
+              source_view_cache.stats().outline_hits > source_stats_before_view.outline_hits,
+          "a domain view excluding a far blocker must reuse its prepared sources and eroded outline");
 
   // The local obstacle hole is unchanged when a remote blocker is introduced. Its certificate
   // should therefore remain reusable even though the domain-level preparation changes.
@@ -244,6 +353,42 @@ int main() {
   require(same_offset_result(valid_after_rejection, valid_reference),
           "invalid geometry must not poison a previously valid expansion");
 
+  // Clearance expansion adds a two-nanometre guard in int32 Boost coordinates.  Values above
+  // INT32_MAX - 2 must reject before Boolean conversion, including after valid cache reuse.
+  const auto unsafe_clearance =
+      Nanometres{static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::max()) - 1};
+  auto invalid_uniform_clearance = rejection_rule;
+  invalid_uniform_clearance.clearance = unsafe_clearance;
+  const auto invalid_uniform_reference =
+      flux::offset_polygonal_free_space(domain, invalid_uniform_clearance);
+  const auto invalid_uniform_cached =
+      flux::offset_polygonal_free_space(domain, invalid_uniform_clearance, &rejection_cache);
+  require(!invalid_uniform_reference.ok() &&
+              same_offset_result(invalid_uniform_cached, invalid_uniform_reference),
+          "an unsafe uniform clearance must fail identically before cached Boolean expansion");
+  auto invalid_heterogeneous_clearance = rejection_rule;
+  invalid_heterogeneous_clearance.obstacle_clearances = {unsafe_clearance, Nanometres{250}};
+  const auto invalid_heterogeneous_reference =
+      flux::offset_polygonal_free_space(domain, invalid_heterogeneous_clearance);
+  const auto invalid_heterogeneous_cached = flux::offset_polygonal_free_space(
+      domain, invalid_heterogeneous_clearance, &rejection_cache);
+  require(!invalid_heterogeneous_reference.ok() &&
+              same_offset_result(invalid_heterogeneous_cached, invalid_heterogeneous_reference),
+          "an unsafe heterogeneous int32 clearance must fail before cached Boolean expansion");
+  invalid_heterogeneous_clearance.obstacle_clearances = {
+      Nanometres{std::numeric_limits<std::int64_t>::max()}, Nanometres{250}};
+  const auto invalid_int64_clearance_reference =
+      flux::offset_polygonal_free_space(domain, invalid_heterogeneous_clearance);
+  const auto invalid_int64_clearance_cached = flux::offset_polygonal_free_space(
+      domain, invalid_heterogeneous_clearance, &rejection_cache);
+  require(!invalid_int64_clearance_reference.ok() &&
+              same_offset_result(invalid_int64_clearance_cached, invalid_int64_clearance_reference),
+          "an unsafe heterogeneous int64 clearance must fail before cached Boolean expansion");
+  require(same_offset_result(
+              flux::offset_polygonal_free_space(domain, rejection_rule, &rejection_cache),
+              valid_reference),
+          "unsafe clearance rejection must not poison a previously valid cache entry");
+
   flux::FreeSpaceOffsetCache budget_cache{4U};
   const auto budget_reference = flux::offset_polygonal_free_space(domain, rejection_rule);
   require(budget_reference.ok() && budget_reference.output_vertices > 0U,
@@ -277,5 +422,19 @@ int main() {
   for (auto& worker : workers) worker.join();
   require(concurrent_parity.load() && concurrent_cache.stats().entries <= 8U,
           "bounded concurrent expansion reuse must preserve uncached geometry");
+
+  const auto entries_before_clear = concurrent_cache.stats().entries;
+  require(entries_before_clear > 0U, "cache-clear test requires retained Boolean-ready entries");
+  concurrent_cache.clear();
+  const auto cleared_stats = concurrent_cache.stats();
+  require(cleared_stats.entries == 0U && cleared_stats.hits == 0U && cleared_stats.misses == 0U &&
+              cleared_stats.outline_hits == 0U && cleared_stats.outline_misses == 0U &&
+              cleared_stats.union_cache_hits == 0U && cleared_stats.union_cache_misses == 0U &&
+              cleared_stats.boolean_retained_units == 0U,
+          "clearing the cache must release all bounded Boolean-ready stores and reset statistics");
+  const auto after_clear = flux::offset_polygonal_free_space(domain, rejection_rule, &concurrent_cache);
+  require(same_offset_result(after_clear, concurrent_reference) &&
+              concurrent_cache.stats().outline_misses == 1U,
+          "a request after clear must rebuild rather than reuse stale Boolean geometry");
 
 }

@@ -43,8 +43,10 @@ struct FreeSpaceOffsetResult {
 // effective clearance. Validated source BVHs are shared across domain/net views; positive
 // contour clearance certificates include the complete nearby boundary/rule context. Each
 // validation store is bounded by entry count and 262144 retained/referenced vertices.
-// The cache never stores a final free-space result: Boolean construction and exact containment
-// and overlap validation still run for each call.
+// Boolean-ready obstacles, eroded board boundaries, and stable spatial union groups are reused.
+// Each Boolean store is additionally bounded by 1048576 source/edge units, including retained
+// operands. No final free-space result is cached: subtraction and exact containment/overlap
+// validation still run for each call.
 class FreeSpaceOffsetCache {
  public:
   struct Stats {
@@ -52,6 +54,11 @@ class FreeSpaceOffsetCache {
     std::size_t hits{0};
     std::size_t misses{0};
     std::size_t entries{0};
+    // Eroded outline/cutout Boolean-set cache metrics.
+    std::size_t outline_hits{0};
+    std::size_t outline_misses{0};
+    std::size_t union_cache_hits{0};
+    std::size_t union_cache_misses{0};
     // Validation/preparation and positive clearance-certificate reuse.
     std::size_t input_validation_hits{0};
     std::size_t input_validation_misses{0};
@@ -64,9 +71,16 @@ class FreeSpaceOffsetCache {
     double input_validation_seconds{0.0};
     double preparation_seconds{0.0};
     double boolean_operations_seconds{0.0};
+    // Non-overlapping subsets of Boolean wall time; the aggregate also includes cache/copy overhead.
+    double boolean_conversion_seconds{0.0};
+    double boolean_offset_preparation_seconds{0.0};
+    double boolean_union_seconds{0.0};
+    double boolean_subtraction_seconds{0.0};
+    double boolean_contour_extraction_seconds{0.0};
     double output_validation_seconds{0.0};
     std::size_t prepared_source_hits{0};
     std::size_t prepared_source_misses{0};
+    std::size_t boolean_retained_units{0};
   };
 
   explicit FreeSpaceOffsetCache(std::size_t capacity = 256U);

@@ -1,0 +1,27 @@
+{
+  "decision": "keep",
+  "reason": "Both sequential curved tiers pass exact internal and external KiCad validation; Boolean assembly and routing wall time decrease substantially.",
+  "single_run_comparison": true,
+  "tier0_copper": "Byte-identical to Round14",
+  "tier1_copper": {
+    "byte_identical": false,
+    "length_before_mm": 902.7475942226876,
+    "length_after_mm": 904.2989845543588,
+    "length_change_percent": 0.1718520593795736,
+    "vias": 57,
+    "visual_review": "Viewed front and back copper renders. Long runs remain direct with rounded turns; no obvious new loops. Some short segmented transitions remain. Exact validation reports zero violations and zero unrounded non-junction bends.",
+    "difference_cause": "Not isolated; changed deterministic Boolean grouping and runtime-sensitive candidate processing can affect materialization. No claim of byte-preserving Tier1 output."
+  },
+  "memory_tradeoff": {
+    "tier0": {
+      "before_kib": 621592,
+      "after_kib": 636288
+    },
+    "tier1": {
+      "before_kib": 621960,
+      "after_kib": 639648
+    }
+  },
+  "next_bottleneck": "Tier1 global/scaffold work totals approximately87 seconds; materialization45 seconds. Within materialization NavMesh construction and trajectory work now outweigh Boolean preparation.",
+  "tier2": "Not rerun; no claim of advancing its search frontier."
+}

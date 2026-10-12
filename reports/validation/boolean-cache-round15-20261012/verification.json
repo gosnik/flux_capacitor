@@ -1,0 +1,19 @@
+{
+  "build_command": "cmake --build build/release -j4 --target flux-cli flux_unit_tests flux_copper_transaction_tests flux_span_certificate_tests flux_board_free_space_cache_tests flux_ph_tightening_tests flux_layered_navmesh_tests flux_copper_scaffold_tests flux_scaffold_curve_tests flux_scaffold_collision_tests flux_routing_engine_experiment_tests flux_scaffold_joint_displacement_tests",
+  "build_status": "PASS",
+  "focused_command": "./build/release/tests/flux_board_free_space_cache_tests",
+  "focused_status": "PASS",
+  "ctest_command": "ctest --test-dir build/release -j1 --output-on-failure -R '^(flux_unit_tests|flux_copper_transaction_tests|flux_span_certificate_tests|flux_board_free_space_cache_tests|flux_ph_tightening_tests|flux_layered_navmesh_tests|flux_copper_scaffold_tests|flux_scaffold_curve_tests|flux_scaffold_collision_tests|flux_routing_engine_experiment_tests|flux_scaffold_joint_displacement_tests)$'",
+  "ctest_status": "PASS",
+  "ctest_passed": 11,
+  "ctest_failed": 0,
+  "build_log": "reports/validation/boolean-cache-round15-20261012/build.log",
+  "noop_build_log": "reports/validation/boolean-cache-round15-20261012/noop-build.log",
+  "cli_sha256": "2c53bfb1864ea1f20a5b71995269a045191d9be19673991eabaddaa2f13cc098",
+  "independent_review": "No material outstanding findings after integer clearance guard fix; immutable Boost usage, operand lifetime, radix partitioning, exclusions, holes, and bounded retention reviewed.",
+  "freeze_verify": {
+    "status": "PASS",
+    "drift": []
+  },
+  "test_fixture_correction": "New ring-hole fixture initially expected an exterior region although uniform erosion/dilation removed all free space. Enlarged only the fixture outline; retained hole-closure assertions."
+}

@@ -4581,6 +4581,15 @@ void accumulate_spline_route_attempt_metrics(DetailedRouteResult& target,
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_free_space_prepared_source_hits);
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_free_space_prepared_domain_misses);
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_free_space_prepared_source_misses);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_free_space_outline_cache_hits);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_free_space_union_cache_hits);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_free_space_outline_cache_misses);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_free_space_union_cache_misses);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_free_space_boolean_conversion_microseconds);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_free_space_boolean_offset_preparation_microseconds);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_free_space_boolean_union_microseconds);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_free_space_boolean_subtraction_microseconds);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_free_space_boolean_contour_extraction_microseconds);
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_free_space_clearance_certificate_hits);
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_free_space_clearance_certificate_misses);
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_free_space_input_validation_microseconds);
@@ -7418,6 +7427,20 @@ materialize_impl(const Board& source, const GlobalRouteResult& global,
       result.spline_free_space_prepared_source_hits += offsets.prepared_source_hits;
       result.spline_free_space_prepared_domain_misses += offsets.prepared_domain_misses;
       result.spline_free_space_prepared_source_misses += offsets.prepared_source_misses;
+      result.spline_free_space_outline_cache_hits += offsets.outline_hits;
+      result.spline_free_space_union_cache_hits += offsets.union_cache_hits;
+      result.spline_free_space_outline_cache_misses += offsets.outline_misses;
+      result.spline_free_space_union_cache_misses += offsets.union_cache_misses;
+      result.spline_free_space_boolean_conversion_microseconds +=
+          static_cast<std::uint64_t>(offsets.boolean_conversion_seconds * 1'000'000.0);
+      result.spline_free_space_boolean_offset_preparation_microseconds +=
+          static_cast<std::uint64_t>(offsets.boolean_offset_preparation_seconds * 1'000'000.0);
+      result.spline_free_space_boolean_union_microseconds +=
+          static_cast<std::uint64_t>(offsets.boolean_union_seconds * 1'000'000.0);
+      result.spline_free_space_boolean_subtraction_microseconds +=
+          static_cast<std::uint64_t>(offsets.boolean_subtraction_seconds * 1'000'000.0);
+      result.spline_free_space_boolean_contour_extraction_microseconds +=
+          static_cast<std::uint64_t>(offsets.boolean_contour_extraction_seconds * 1'000'000.0);
       result.spline_free_space_clearance_certificate_hits += offsets.clearance_certificate_hits;
       result.spline_free_space_clearance_certificate_misses += offsets.clearance_certificate_misses;
       result.spline_free_space_input_validation_microseconds +=
@@ -7686,6 +7709,15 @@ materialize_impl(const Board& source, const GlobalRouteResult& global,
     fallback.spline_free_space_prepared_source_hits += result.spline_free_space_prepared_source_hits;
     fallback.spline_free_space_prepared_domain_misses += result.spline_free_space_prepared_domain_misses;
     fallback.spline_free_space_prepared_source_misses += result.spline_free_space_prepared_source_misses;
+    fallback.spline_free_space_outline_cache_hits += result.spline_free_space_outline_cache_hits;
+    fallback.spline_free_space_union_cache_hits += result.spline_free_space_union_cache_hits;
+    fallback.spline_free_space_outline_cache_misses += result.spline_free_space_outline_cache_misses;
+    fallback.spline_free_space_union_cache_misses += result.spline_free_space_union_cache_misses;
+    fallback.spline_free_space_boolean_conversion_microseconds += result.spline_free_space_boolean_conversion_microseconds;
+    fallback.spline_free_space_boolean_offset_preparation_microseconds += result.spline_free_space_boolean_offset_preparation_microseconds;
+    fallback.spline_free_space_boolean_union_microseconds += result.spline_free_space_boolean_union_microseconds;
+    fallback.spline_free_space_boolean_subtraction_microseconds += result.spline_free_space_boolean_subtraction_microseconds;
+    fallback.spline_free_space_boolean_contour_extraction_microseconds += result.spline_free_space_boolean_contour_extraction_microseconds;
     fallback.spline_free_space_clearance_certificate_hits += result.spline_free_space_clearance_certificate_hits;
     fallback.spline_free_space_clearance_certificate_misses += result.spline_free_space_clearance_certificate_misses;
     fallback.spline_free_space_input_validation_microseconds += result.spline_free_space_input_validation_microseconds;

@@ -1,0 +1,7 @@
+{
+  "baseline_revision": "510004b",
+  "failure": "Tier1 preparation spends86.834/87.475 summedworker seconds in repeated offset/Boolean work. Sourceinspection finds Boost->contour->Boost reconstruction and eager whole-accumulator union perobstacle.",
+  "hypothesis": "Store normalized immutable Boolean-ready obstacle sets and eroded outlines, then combine via deterministic spatial/hash radix groups so only changed groups recompute. Apply exclusions beforeunion and retain exact validation.",
+  "success": "Sequential curved Tier0/1 telemetry runs remaincomplete and externalDRCclean; reducepreparation and detailedwalltime without unboundedmemory.",
+  "measurement": "New timersconversion, offsetpreparation, union, subtraction, extraction are disjoint subsets of totalBooleanwalltime; workersoverlap."
+}

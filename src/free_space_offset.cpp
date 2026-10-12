@@ -1,6 +1,7 @@
 #include "flux/core/free_space_offset.hpp"
 
 #include "flux/core/geometry.hpp"
+#include "free_space_boolean_cache.hpp"
 
 #include <boost/polygon/polygon.hpp>
 #include <boost/polygon/polygon_set_concept.hpp>
@@ -24,6 +25,11 @@ namespace flux {
 namespace {
 struct ValidationEntry;
 using PreparedPtr = std::shared_ptr<const geometry::PreparedPolygon>;
+using Coordinate = std::int32_t;
+using BoostPoint = boost::polygon::point_data<Coordinate>;
+using BoostPolygon = boost::polygon::polygon_data<Coordinate>;
+using BoostPolygonWithHoles = boost::polygon::polygon_with_holes_data<Coordinate>;
+using BoostPolygonSet = boost::polygon::polygon_set_data<Coordinate>;
 struct BoundaryWitness {
   PreparedPtr source;
   Nanometres clearance;
@@ -38,17 +44,32 @@ struct FreeSpaceOffsetCache::Impl {
   struct Entry {
     OffsetFreeSpaceRegion source;
     Nanometres clearance;
-    std::vector<OffsetFreeSpaceRegion> expanded;
+    // Boost's const operations can clean mutable internal state. Cached sets are normalized
+    // before publication and callers always make a local copy before using one in a Boolean.
+    std::shared_ptr<const BoostPolygonSet> expanded;
+    std::size_t age{0U};
+  };
+  struct OutlineEntry {
+    OffsetFreeSpaceRegion source;
+    Nanometres clearance;
+    std::shared_ptr<const BoostPolygonSet> eroded;
     std::size_t age{0U};
   };
   explicit Impl(std::size_t requested_capacity)
-      : capacity(std::max<std::size_t>(1U, requested_capacity)) {}
+      : capacity(std::max<std::size_t>(1U, requested_capacity)), unions(capacity) {}
   std::size_t capacity;
+  detail::FreeSpaceBooleanUnionCache unions;
+  std::size_t expanded_units{0U};
+  std::size_t outline_units{0U};
   std::size_t clock{0U};
   std::size_t hits{0U};
   std::size_t misses{0U};
   std::unordered_map<std::uint64_t, std::vector<Entry>> entries;
   std::size_t entry_count{0U};
+  std::size_t outline_hits{0U};
+  std::size_t outline_misses{0U};
+  std::unordered_map<std::uint64_t, std::vector<OutlineEntry>> outline_entries;
+  std::size_t outline_entry_count{0U};
   std::vector<std::shared_ptr<ValidationEntry>> validation_entries;
   std::unordered_map<std::uint64_t, std::vector<PreparedPtr>> sources;
   std::deque<std::pair<std::uint64_t, PreparedPtr>> source_order;
@@ -68,6 +89,11 @@ struct FreeSpaceOffsetCache::Impl {
   double input_validation_seconds{0.0};
   double preparation_seconds{0.0};
   double boolean_operations_seconds{0.0};
+  double boolean_conversion_seconds{0.0};
+  double boolean_offset_preparation_seconds{0.0};
+  double boolean_union_seconds{0.0};
+  double boolean_subtraction_seconds{0.0};
+  double boolean_contour_extraction_seconds{0.0};
   double output_validation_seconds{0.0};
   mutable std::mutex mutex;
 };
@@ -79,19 +105,27 @@ FreeSpaceOffsetCache::FreeSpaceOffsetCache(FreeSpaceOffsetCache&&) noexcept = de
 FreeSpaceOffsetCache& FreeSpaceOffsetCache::operator=(FreeSpaceOffsetCache&&) noexcept = default;
 FreeSpaceOffsetCache::Stats FreeSpaceOffsetCache::stats() const {
   std::lock_guard lock(impl_->mutex);
+  const auto unions = impl_->unions.stats();
   return {impl_->hits, impl_->misses, impl_->entry_count,
+          impl_->outline_hits, impl_->outline_misses,
+          unions.hits, unions.misses,
           impl_->input_validation_hits, impl_->input_validation_misses,
           impl_->prepared_domain_hits, impl_->prepared_domain_misses,
           impl_->clearance_certificate_hits, impl_->clearance_certificate_misses,
           impl_->validation_entries.size(),
           impl_->retained_vertices + impl_->source_vertices + impl_->certificate_vertices,
           impl_->input_validation_seconds, impl_->preparation_seconds,
-          impl_->boolean_operations_seconds, impl_->output_validation_seconds,
-          impl_->prepared_source_hits, impl_->prepared_source_misses};
+          impl_->boolean_operations_seconds, impl_->boolean_conversion_seconds,
+          impl_->boolean_offset_preparation_seconds, impl_->boolean_union_seconds,
+          impl_->boolean_subtraction_seconds, impl_->boolean_contour_extraction_seconds,
+          impl_->output_validation_seconds,
+          impl_->prepared_source_hits, impl_->prepared_source_misses,
+          impl_->expanded_units + impl_->outline_units + unions.retained_units};
 }
 void FreeSpaceOffsetCache::clear() {
   std::lock_guard lock(impl_->mutex);
   impl_->entries.clear();
+  impl_->outline_entries.clear();
   impl_->validation_entries.clear();
   impl_->sources.clear();
   impl_->source_order.clear();
@@ -100,12 +134,18 @@ void FreeSpaceOffsetCache::clear() {
   impl_->certificate_vertices = 0U;
   impl_->source_vertices = impl_->prepared_source_hits = impl_->prepared_source_misses = 0U;
   impl_->hits = impl_->misses = impl_->clock = impl_->entry_count = 0U;
+  impl_->outline_hits = impl_->outline_misses = impl_->outline_entry_count = 0U;
+  impl_->unions.clear();
+  impl_->expanded_units = impl_->outline_units = 0U;
   impl_->input_validation_hits = impl_->input_validation_misses = 0U;
   impl_->prepared_domain_hits = impl_->prepared_domain_misses = 0U;
   impl_->clearance_certificate_hits = impl_->clearance_certificate_misses = 0U;
   impl_->retained_vertices = 0U;
   impl_->input_validation_seconds = impl_->preparation_seconds = 0.0;
   impl_->boolean_operations_seconds = impl_->output_validation_seconds = 0.0;
+  impl_->boolean_conversion_seconds = impl_->boolean_offset_preparation_seconds = 0.0;
+  impl_->boolean_union_seconds = impl_->boolean_subtraction_seconds = 0.0;
+  impl_->boolean_contour_extraction_seconds = 0.0;
 }
 
 namespace {
@@ -130,12 +170,6 @@ namespace {
   for (const auto& hole : region.holes) add_polygon(hole);
   return hash;
 }
-
-using Coordinate = std::int32_t;
-using BoostPoint = boost::polygon::point_data<Coordinate>;
-using BoostPolygon = boost::polygon::polygon_data<Coordinate>;
-using BoostPolygonWithHoles = boost::polygon::polygon_with_holes_data<Coordinate>;
-using BoostPolygonSet = boost::polygon::polygon_set_data<Coordinate>;
 
 struct PreparedFilledRegion {
   PreparedPtr area;
@@ -270,12 +304,17 @@ struct ValidationEntry {
                      });
 }
 
+[[nodiscard]] bool valid_offset_clearance(Nanometres clearance) {
+  // Reserve the two-nanometre conservative guard before conversion and erosion negation.
+  return clearance.value() >= 0 &&
+         clearance.value() <= static_cast<std::int64_t>(std::numeric_limits<Coordinate>::max()) - 2;
+}
+
 [[nodiscard]] bool validate_input(const FreeSpaceDomain& domain,
                                   const FreeSpaceOffsetConfig& config,
                                   FreeSpaceOffsetResult& result,
                                   const std::function<bool(const Polygon&)>& simple) {
-  if (config.clearance.value() < 0 || config.maximum_output_vertices == 0U ||
-      config.clearance.value() >= std::numeric_limits<Coordinate>::max()) {
+  if (!valid_offset_clearance(config.clearance) || config.maximum_output_vertices == 0U) {
     result.diagnostic = "free-space offset clearance and output budget are invalid";
     return false;
   }
@@ -285,10 +324,10 @@ struct ValidationEntry {
       (!config.filled_obstacle_clearances.empty() &&
        config.filled_obstacle_clearances.size() != domain.filled_obstacles.size()) ||
       std::any_of(config.obstacle_clearances.begin(), config.obstacle_clearances.end(),
-                  [](Nanometres value) { return value.value() < 0; }) ||
+                  [](Nanometres value) { return !valid_offset_clearance(value); }) ||
       std::any_of(config.filled_obstacle_clearances.begin(),
                   config.filled_obstacle_clearances.end(),
-                  [](Nanometres value) { return value.value() < 0; })) {
+                  [](Nanometres value) { return !valid_offset_clearance(value); })) {
     result.diagnostic = "free-space offset heterogeneous clearances are invalid or misaligned";
     return false;
   }
@@ -364,6 +403,30 @@ template <typename BoostPolygonLike>
   return result;
 }
 
+[[nodiscard]] std::size_t boolean_storage_units(const OffsetFreeSpaceRegion& source,
+                                                   const BoostPolygonSet& set) {
+  auto units = source.area.vertices.size() + set.value().size();
+  for (const auto& hole : source.holes) units += hole.vertices.size();
+  return units;
+}
+
+[[nodiscard]] std::uint64_t spatial_key(const Polygon& polygon) {
+  auto low = polygon.vertices.front();
+  auto high = low;
+  for (const auto point : polygon.vertices) {
+    low.x = std::min(low.x, point.x); low.y = std::min(low.y, point.y);
+    high.x = std::max(high.x, point.x); high.y = std::max(high.y, point.y);
+  }
+  const auto x = static_cast<std::uint32_t>(low.x.value() + (high.x.value() - low.x.value()) / 2) ^ 0x80000000U;
+  const auto y = static_cast<std::uint32_t>(low.y.value() + (high.y.value() - low.y.value()) / 2) ^ 0x80000000U;
+  std::uint64_t key = 0U;
+  for (unsigned bit = 0; bit < 32U; ++bit) {
+    key |= static_cast<std::uint64_t>((x >> bit) & 1U) << (2U * bit);
+    key |= static_cast<std::uint64_t>((y >> bit) & 1U) << (2U * bit + 1U);
+  }
+  return key;
+}
+
 [[nodiscard]] Nanometres obstacle_clearance(const FreeSpaceOffsetConfig& config,
                                             std::size_t index, bool filled) {
   const auto& clearances =
@@ -371,37 +434,21 @@ template <typename BoostPolygonLike>
   return clearances.empty() ? config.clearance : clearances[index];
 }
 
-[[nodiscard]] std::vector<OffsetFreeSpaceRegion> expand_solid_region(
-    const OffsetFreeSpaceRegion& source, Nanometres clearance) {
+[[nodiscard]] BoostPolygonSet solid_region_set(const OffsetFreeSpaceRegion& source) {
   using namespace boost::polygon::operators;
   BoostPolygonSet region;
   region.insert(to_boost_polygon(source.area));
   BoostPolygonSet holes;
   for (const auto& hole : source.holes) holes.insert(to_boost_polygon(hole));
   region -= holes;
-  region.resize(static_cast<Coordinate>(clearance.value() + 2), false);
-  std::list<BoostPolygonWithHoles> polygons;
-  region.get(polygons);
-  std::vector<OffsetFreeSpaceRegion> result;
-  result.reserve(polygons.size());
-  for (const auto& polygon : polygons) {
-    OffsetFreeSpaceRegion expanded;
-    expanded.area = from_boost_polygon(polygon);
-    for (auto hole = boost::polygon::begin_holes(polygon);
-         hole != boost::polygon::end_holes(polygon); ++hole) {
-      expanded.holes.push_back(from_boost_polygon(*hole));
-    }
-    result.push_back(std::move(expanded));
-  }
-  return result;
+  return region;
 }
 
-void insert_solid_region(BoostPolygonSet& destination, const OffsetFreeSpaceRegion& source) {
-  using namespace boost::polygon::operators;
-  destination.insert(to_boost_polygon(source.area));
-  BoostPolygonSet holes;
-  for (const auto& hole : source.holes) holes.insert(to_boost_polygon(hole));
-  destination -= holes;
+[[nodiscard]] BoostPolygonSet normalized_boolean_set(BoostPolygonSet set) {
+  // Force Boost to resolve lazy state before publication. Later consumers only operate on a
+  // local copy because even nominally const Boost access may update internal representation.
+  set.clean();
+  return set;
 }
 
 // Recompute this neighbourhood on every query. Added/moved boundaries and changed effective
@@ -608,17 +655,16 @@ FreeSpaceOffsetResult offset_polygonal_free_space(const FreeSpaceDomain& domain,
   for (const auto& obstacle : domain.filled_obstacles) hash_source({obstacle.area, obstacle.holes});
   std::shared_ptr<ValidationEntry> validation_entry;
   const auto config_compatible =
-      config.clearance.value() >= 0 && config.maximum_output_vertices != 0U &&
-      config.clearance.value() < std::numeric_limits<Coordinate>::max() &&
+      valid_offset_clearance(config.clearance) && config.maximum_output_vertices != 0U &&
       (config.obstacle_clearances.empty() ||
        config.obstacle_clearances.size() == domain.obstacles.size()) &&
       (config.filled_obstacle_clearances.empty() ||
        config.filled_obstacle_clearances.size() == domain.filled_obstacles.size()) &&
       std::none_of(config.obstacle_clearances.begin(), config.obstacle_clearances.end(),
-                   [](Nanometres value) { return value.value() < 0; }) &&
+                   [](Nanometres value) { return !valid_offset_clearance(value); }) &&
       std::none_of(config.filled_obstacle_clearances.begin(),
                    config.filled_obstacle_clearances.end(),
-                   [](Nanometres value) { return value.value() < 0; });
+                   [](Nanometres value) { return !valid_offset_clearance(value); });
   if (cache && config_compatible) {
     std::lock_guard lock(cache->impl_->mutex);
     for (const auto& entry : cache->impl_->validation_entries) {
@@ -693,21 +739,93 @@ FreeSpaceOffsetResult offset_polygonal_free_space(const FreeSpaceDomain& domain,
   const auto& prepared_domain = validation_entry->prepared;
 
   const auto boolean_started = std::chrono::steady_clock::now();
-
-  const auto guarded_clearance = static_cast<Coordinate>(config.clearance.value() + 2);
   using namespace boost::polygon::operators;
-  BoostPolygonSet free_space;
-  free_space.insert(to_boost_polygon(domain.outline));
-  BoostPolygonSet cutouts;
-  for (const auto& cutout : domain.cutouts) {
-    cutouts.insert(to_boost_polygon(cutout));
-  }
-  free_space -= cutouts;
-  free_space.resize(-guarded_clearance, false);
+  double conversion_seconds = 0.0;
+  double offset_preparation_seconds = 0.0;
+  double union_seconds = 0.0;
+  double subtraction_seconds = 0.0;
+  double contour_extraction_seconds = 0.0;
+  const auto build_expanded = [&](const OffsetFreeSpaceRegion& source, Nanometres clearance,
+                                  bool normalize) {
+    auto started = std::chrono::steady_clock::now();
+    auto set = solid_region_set(source);
+    conversion_seconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+    started = std::chrono::steady_clock::now();
+    set.resize(static_cast<Coordinate>(clearance.value() + 2), false);
+    if (normalize) set = normalized_boolean_set(std::move(set));
+    offset_preparation_seconds +=
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+    return set;
+  };
+  const auto build_eroded_outline = [&](const OffsetFreeSpaceRegion& source, Nanometres clearance,
+                                        bool normalize) {
+    auto started = std::chrono::steady_clock::now();
+    auto set = solid_region_set(source);
+    conversion_seconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+    started = std::chrono::steady_clock::now();
+    set.resize(-static_cast<Coordinate>(clearance.value() + 2), false);
+    if (normalize) set = normalized_boolean_set(std::move(set));
+    offset_preparation_seconds +=
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+    return set;
+  };
+  const auto cached_eroded_outline = [&](const OffsetFreeSpaceRegion& source,
+                                          Nanometres clearance) -> BoostPolygonSet {
+    if (!cache) return build_eroded_outline(source, clearance, false);
+    const auto key = expansion_key(source, clearance);
+    const auto lookup = [&]() -> std::shared_ptr<const BoostPolygonSet> {
+      const auto bucket = cache->impl_->outline_entries.find(key);
+      if (bucket == cache->impl_->outline_entries.end()) return {};
+      for (auto& entry : bucket->second) {
+        if (entry.clearance == clearance && entry.source == source) {
+          entry.age = ++cache->impl_->clock;
+          return entry.eroded;
+        }
+      }
+      return {};
+    };
+    {
+      std::lock_guard lock(cache->impl_->mutex);
+      if (auto found = lookup()) { ++cache->impl_->outline_hits; return *found; }
+    }
+    auto computed = std::make_shared<const BoostPolygonSet>(
+        build_eroded_outline(source, clearance, true));
+    std::lock_guard lock(cache->impl_->mutex);
+    if (auto found = lookup()) { ++cache->impl_->outline_hits; return *found; }
+    ++cache->impl_->outline_misses;
+    const auto units = boolean_storage_units(source, *computed);
+    constexpr std::size_t maximum_boolean_units = 1'048'576U;
+    if (units > maximum_boolean_units) return *computed;
+    while (cache->impl_->outline_entry_count >= cache->impl_->capacity ||
+           cache->impl_->outline_units + units > maximum_boolean_units) {
+      auto oldest_bucket = cache->impl_->outline_entries.end();
+      auto oldest = std::vector<FreeSpaceOffsetCache::Impl::OutlineEntry>::iterator{};
+      for (auto bucket = cache->impl_->outline_entries.begin();
+           bucket != cache->impl_->outline_entries.end(); ++bucket) {
+        for (auto entry = bucket->second.begin(); entry != bucket->second.end(); ++entry) {
+          if (oldest_bucket == cache->impl_->outline_entries.end() || entry->age < oldest->age) {
+            oldest_bucket = bucket;
+            oldest = entry;
+          }
+        }
+      }
+      cache->impl_->outline_units -= boolean_storage_units(oldest->source, *oldest->eroded);
+      oldest_bucket->second.erase(oldest);
+      if (oldest_bucket->second.empty()) cache->impl_->outline_entries.erase(oldest_bucket);
+      --cache->impl_->outline_entry_count;
+    }
+    cache->impl_->outline_entries[key].push_back(
+        {source, clearance, std::move(computed), ++cache->impl_->clock});
+    ++cache->impl_->outline_entry_count;
+    cache->impl_->outline_units += units;
+    return *cache->impl_->outline_entries[key].back().eroded;
+  };
+  const OffsetFreeSpaceRegion outline_source{domain.outline, domain.cutouts};
+  BoostPolygonSet free_space = cached_eroded_outline(outline_source, config.clearance);
 
-  BoostPolygonSet blocked;
-  const auto expanded = [&](const OffsetFreeSpaceRegion& source, Nanometres clearance) {
-    if (!cache) return expand_solid_region(source, clearance);
+  const auto expanded = [&](const OffsetFreeSpaceRegion& source, Nanometres clearance)
+      -> std::shared_ptr<const BoostPolygonSet> {
+    if (!cache) return std::make_shared<const BoostPolygonSet>(build_expanded(source, clearance, true));
     const auto key = expansion_key(source, clearance);
     {
       std::lock_guard lock(cache->impl_->mutex);
@@ -722,7 +840,7 @@ FreeSpaceOffsetResult offset_polygonal_free_space(const FreeSpaceDomain& domain,
         }
       }
     }
-    auto computed = expand_solid_region(source, clearance);
+    auto computed = std::make_shared<const BoostPolygonSet>(build_expanded(source, clearance, true));
     std::lock_guard lock(cache->impl_->mutex);
     if (const auto bucket = cache->impl_->entries.find(key);
         bucket != cache->impl_->entries.end()) {
@@ -735,7 +853,11 @@ FreeSpaceOffsetResult offset_polygonal_free_space(const FreeSpaceDomain& domain,
       }
     }
     ++cache->impl_->misses;
-    if (cache->impl_->entry_count == cache->impl_->capacity) {
+    const auto units = boolean_storage_units(source, *computed);
+    constexpr std::size_t maximum_boolean_units = 1'048'576U;
+    if (units > maximum_boolean_units) return computed;
+    while (cache->impl_->entry_count >= cache->impl_->capacity ||
+           cache->impl_->expanded_units + units > maximum_boolean_units) {
       auto oldest_bucket = cache->impl_->entries.end();
       auto oldest = std::vector<FreeSpaceOffsetCache::Impl::Entry>::iterator{};
       for (auto bucket = cache->impl_->entries.begin(); bucket != cache->impl_->entries.end(); ++bucket) {
@@ -746,6 +868,7 @@ FreeSpaceOffsetResult offset_polygonal_free_space(const FreeSpaceDomain& domain,
           }
         }
       }
+      cache->impl_->expanded_units -= boolean_storage_units(oldest->source, *oldest->expanded);
       oldest_bucket->second.erase(oldest);
       if (oldest_bucket->second.empty()) cache->impl_->entries.erase(oldest_bucket);
       --cache->impl_->entry_count;
@@ -753,51 +876,49 @@ FreeSpaceOffsetResult offset_polygonal_free_space(const FreeSpaceDomain& domain,
     auto& bucket = cache->impl_->entries[key];
     bucket.push_back({source, clearance, std::move(computed), ++cache->impl_->clock});
     ++cache->impl_->entry_count;
+    cache->impl_->expanded_units += units;
     return bucket.back().expanded;
   };
-  for (std::size_t index = 0U; index < domain.obstacles.size(); ++index) {
-    if (!cache) {
-      BoostPolygonSet expanded_set;
-      expanded_set.insert(to_boost_polygon(domain.obstacles[index]));
-      expanded_set.resize(static_cast<Coordinate>(obstacle_clearance(config, index, false).value() + 2), false);
-      blocked += expanded_set;
-      continue;
-    }
-    const OffsetFreeSpaceRegion source{domain.obstacles[index], {}};
-    BoostPolygonSet expanded_set;
-    for (const auto& obstacle : expanded(source, obstacle_clearance(config, index, false))) {
-      insert_solid_region(expanded_set, obstacle);
-    }
-    blocked += expanded_set;
-  }
+  std::vector<detail::FreeSpaceBooleanUnionCache::Input> inputs;
+  inputs.reserve(domain.obstacles.size() + domain.filled_obstacles.size());
+  const auto add_obstacle = [&](const OffsetFreeSpaceRegion& source, Nanometres clearance) {
+    auto shape = expanded(source, clearance);
+    inputs.push_back({std::move(shape), spatial_key(source.area), expansion_key(source, clearance)});
+  };
+  for (std::size_t index = 0U; index < domain.obstacles.size(); ++index)
+    add_obstacle({domain.obstacles[index], {}}, obstacle_clearance(config, index, false));
   for (std::size_t index = 0U; index < domain.filled_obstacles.size(); ++index) {
-    const auto& obstacle = domain.filled_obstacles[index];
-    if (!cache) {
-      BoostPolygonSet region;
-      region.insert(to_boost_polygon(obstacle.area));
-      BoostPolygonSet holes;
-      for (const auto& hole : obstacle.holes) holes.insert(to_boost_polygon(hole));
-      region -= holes;
-      region.resize(static_cast<Coordinate>(obstacle_clearance(config, index, true).value() + 2), false);
-      blocked += region;
-      continue;
-    }
-    const OffsetFreeSpaceRegion source{obstacle.area, obstacle.holes};
-    BoostPolygonSet expanded_set;
-    for (const auto& expanded_obstacle :
-         expanded(source, obstacle_clearance(config, index, true))) {
-      insert_solid_region(expanded_set, expanded_obstacle);
-    }
-    blocked += expanded_set;
+    const auto& source = domain.filled_obstacles[index];
+    add_obstacle({source.area, source.holes}, obstacle_clearance(config, index, true));
   }
+  // Inputs already apply net exclusions and actual rules. Never subtract excluded copper from
+  // a union: doing so would also erase intersecting foreign-net obstacles.
+  detail::FreeSpaceBooleanUnionCache uncached_unions{0U};
+  auto& unions = cache ? cache->impl_->unions : uncached_unions;
+  const auto union_started = std::chrono::steady_clock::now();
+  auto united = unions.unite(std::move(inputs));
+  union_seconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - union_started).count();
   if (!domain.obstacles.empty() || !domain.filled_obstacles.empty()) {
+    const auto started = std::chrono::steady_clock::now();
+    const BoostPolygonSet blocked = *united;
     free_space -= blocked;
+    subtraction_seconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
   }
 
   std::list<BoostPolygonWithHoles> polygons;
+  const auto contour_started = std::chrono::steady_clock::now();
   free_space.get(polygons);
+  contour_extraction_seconds +=
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - contour_started).count();
   if (cache) {
     std::lock_guard lock(cache->impl_->mutex);
+    // Detailed stages are non-overlapping. Preserve the aggregate's historical wall-clock
+    // meaning, including cache lookup, cache bookkeeping, and local copies.
+    cache->impl_->boolean_conversion_seconds += conversion_seconds;
+    cache->impl_->boolean_offset_preparation_seconds += offset_preparation_seconds;
+    cache->impl_->boolean_union_seconds += union_seconds;
+    cache->impl_->boolean_subtraction_seconds += subtraction_seconds;
+    cache->impl_->boolean_contour_extraction_seconds += contour_extraction_seconds;
     cache->impl_->boolean_operations_seconds +=
         std::chrono::duration<double>(std::chrono::steady_clock::now() - boolean_started).count();
   }

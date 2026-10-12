@@ -9861,3 +9861,29 @@ Detailed-command wall time fell 44.398→39.692 s (-10.60%) for Tier 0 and 238.5
 Summed worker navigation preparation fell 36.458→23.801 s (-34.72%) and 127.100→87.475 s (-31.18%). Tier 1 reused 42186 prepared source polygons (2641 misses) and 6361 contour clearance certificates (584 misses). The new Tier 1 stage timers report 0.015 s input validation, 0.011 s source preparation, 86.834 s offset/Boolean operations, and 0.584 s output validation. They are summed worker durations, not additive wall-time phases. The remaining preparation cost is overwhelmingly Boolean assembly; reuse of Boolean-ready obstacle sets/common unions is the next evidence-backed performance experiment.
 
 Tier 2 was not rerun: the known frontier failure precedes curved materialization. This round optimizes the passing curved pipeline without claiming that the search frontier has advanced. Verification, hashes, telemetry configuration, metrics and the keep decision are recorded in `reports/benchmark_history/2026-10-12-free-space-validation-round14.json`.
+
+## Round 15 — Boolean-ready geometry and reusable spatial unions (2026-10-12)
+
+### Failure and hypothesis
+Round 14 leaves Tier 1 preparation dominated by offset/Boolean work: 86.834 s of 87.475 s summed worker time. Cached offsets are reconstructed as Boost sets, and each obstacle eagerly unions against the complete accumulated set. Reusing Boolean-ready operands and eroded outline/cutout geometry removes reconstruction. A deterministic spatial/hash radix hierarchy limits union recomputation to changed groups across net views and geometry/rule updates.
+
+### Change
+Obstacle and board-boundary caches retain normalized immutable Boost sets keyed by full geometry and effective clearance. Every Boolean operation uses local copies to avoid Boost's mutable const normalization. Spatial union groups retain immutable operand identities, so hash collisions cannot substitute geometry; owned operands prevent address reuse while a cache key remains live. Net exclusions occur before grouping, never by subtraction from an already merged obstacle set. Cached and uncached paths use the same deterministic grouping.
+
+Each Boolean store has an entry-count limit and a 1048576 source/edge-unit retention limit. Union accounting includes its retained operand sets. Exact output containment, clearance, and final whole-board/KiCad checks remain enabled. Separate conversion, offset preparation, union, subtraction and contour-extraction timers are disjoint subsets of the aggregate Boolean wall timer, which also includes cache/copy overhead.
+
+### Verification
+All 11 selected regression targets passed, including cache/exclusion parity, hole survival and closure, changed source/rule invalidation, reusable union subtrees after removing/moving one blocker, concurrent reuse, and cache reset. Independent review found an existing clearance-plus-two overflow path; uniform and heterogeneous values now share a representable guarded-clearance check, including on warm caches. Added extreme-invalid-value regressions pass. The new ring fixture initially consumed all exterior free space as well as its hole; enlarging its board isolates hole closure without changing production semantics.
+
+The final build was a no-op and the frozen source/binary passed verification.
+
+### Frozen benchmark results and decision
+Keep. Sequential curved Tier0 and Tier1 runs with diagnostic telemetry pass 51/51 and 90/90 physical connections, respectively, with zero opens, internal copper violations, external KiCad violations/unconnected items, and unrounded non-junction bends. All11 regression targets passed and independent review found no outstanding material issues.
+
+Detailed-command wall time fell39.692→31.430s (-20.82%) and226.621→133.248s (-41.20%). Materialization fell23.996→15.888s and133.512→45.145s. Separate preliminary global commands took15.224s and92.920s; these are excluded from the detailed-command times. PeakRSS rose621592→636288KiB and621960→639648KiB. These are single-run measurements, with the desktop viewer remaining open and no overlapping builds/tests or tier runs.
+
+Summed worker Boolean time fell23.418→0.778s and86.834→2.903s; total navigation preparation fell23.801→1.370s and87.475→3.498s. Tier1 reused81221 union groups (12407 misses). Its individual Boolean timers were0.015s conversion,0.036s offset preparation,2.210s union,0.258s subtraction,0.352s extraction. Worker sums overlap and are not additive wall-time stages.
+
+Tier0 copper is byte-identical. Tier1 copper differs:490 tracks,124 arcs,355 Beziers and57 vias versus442/105/408/57. KiCad centreline length rises902.748→904.299mm (+0.172%). Front/back copper renders were inspected: long runs remain direct with rounded turns, without obvious new loops; short segmented transitions remain in places. Exact checks pass. The cause of the changed decomposition was not isolated; grouping and runtime-sensitive candidate processing changed, so this is not claimed as a byte-preserving optimization on Tier1.
+
+Tier1 global/scaffold actions now consume about87s and materialization45s. Summed NavMesh construction39.628s and trajectory35.754s outweigh Boolean preparation. Tier2 was not rerun because its known search failure precedes materialization. Detailed evidence is in `reports/benchmark_history/2026-10-12-boolean-cache-round15.json`.

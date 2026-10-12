@@ -221,6 +221,15 @@ struct DetailedRouteResult {
   std::size_t spline_free_space_prepared_source_hits{0};
   std::size_t spline_free_space_prepared_domain_misses{0};
   std::size_t spline_free_space_prepared_source_misses{0};
+  std::size_t spline_free_space_outline_cache_hits{0};
+  std::size_t spline_free_space_union_cache_hits{0};
+  std::size_t spline_free_space_outline_cache_misses{0};
+  std::size_t spline_free_space_union_cache_misses{0};
+  std::uint64_t spline_free_space_boolean_conversion_microseconds{0U};
+  std::uint64_t spline_free_space_boolean_offset_preparation_microseconds{0U};
+  std::uint64_t spline_free_space_boolean_union_microseconds{0U};
+  std::uint64_t spline_free_space_boolean_subtraction_microseconds{0U};
+  std::uint64_t spline_free_space_boolean_contour_extraction_microseconds{0U};
   std::size_t spline_free_space_clearance_certificate_hits{0};
   std::size_t spline_free_space_clearance_certificate_misses{0};
   std::uint64_t spline_free_space_input_validation_microseconds{0U};

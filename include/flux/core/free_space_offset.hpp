@@ -3,6 +3,7 @@
 #include "flux/core/free_space_skeleton.hpp"
 
 #include <cstddef>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -38,11 +39,36 @@ struct FreeSpaceOffsetResult {
   [[nodiscard]] bool ok() const { return diagnostic.empty(); }
 };
 
+// Reuses a single solid/filled obstacle expansion by its complete contour geometry and exact
+// effective clearance. The cache never stores a final free-space result: outer boundaries,
+// cutouts, exclusions, and all other obstacles are still combined for each call.
+class FreeSpaceOffsetCache {
+ public:
+  struct Stats { std::size_t hits{0}; std::size_t misses{0}; std::size_t entries{0}; };
+
+  explicit FreeSpaceOffsetCache(std::size_t capacity = 256U);
+  ~FreeSpaceOffsetCache();
+  FreeSpaceOffsetCache(FreeSpaceOffsetCache&&) noexcept;
+  FreeSpaceOffsetCache& operator=(FreeSpaceOffsetCache&&) noexcept;
+  FreeSpaceOffsetCache(const FreeSpaceOffsetCache&) = delete;
+  FreeSpaceOffsetCache& operator=(const FreeSpaceOffsetCache&) = delete;
+
+  [[nodiscard]] Stats stats() const;
+  void clear();
+
+ private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+  friend FreeSpaceOffsetResult offset_polygonal_free_space(
+      const FreeSpaceDomain&, const FreeSpaceOffsetConfig&, FreeSpaceOffsetCache*);
+};
+
 // Creates a conservative integer-miter free-space offset. The outer boundary is eroded and
 // obstacle solids are dilated by clearance plus a two-nanometre rounding guard, then subtracted.
 // Every resulting contour is revalidated against the unoffset domain and requested clearance.
 [[nodiscard]] FreeSpaceOffsetResult
 offset_polygonal_free_space(const FreeSpaceDomain& domain,
-                            const FreeSpaceOffsetConfig& config = {});
+                            const FreeSpaceOffsetConfig& config = {},
+                            FreeSpaceOffsetCache* cache = nullptr);
 
 } // namespace flux

@@ -4,6 +4,7 @@
 #include "flux/core/board_free_space.hpp"
 #include "flux/core/cpu_worker_budget.hpp"
 #include "flux/core/copper_geometry.hpp"
+#include "flux/core/copper_transaction.hpp"
 #include "flux/core/free_space_offset.hpp"
 #include "flux/core/geometry.hpp"
 #include "flux/core/navmesh_route.hpp"
@@ -39,6 +40,8 @@
 
 namespace flux {
 namespace {
+void record_transaction_metrics(DetailedRouteResult&, const CopperTransactionReport&);
+
 
 class MaterializationTimer {
 public:
@@ -1962,6 +1965,8 @@ struct SplineNavigationPreparationEntry {
 };
 
 struct SplineNavigationPreparationCache {
+  BoardFreeSpaceExtractionCache obstacle_geometry{16U};
+  FreeSpaceOffsetCache obstacle_offsets{4096U};
   using Key = std::tuple<NetId, LayerId, Nanometres>;
   std::mutex mutex;
   std::map<Key, std::shared_ptr<SplineNavigationPreparationEntry>> entries;
@@ -2979,7 +2984,7 @@ make_circular_fillet(Point previous, Point corner, Point next, Nanometres maximu
         Board connectivity_before = board;
         if (config.defer_saved_zone_fill_clearance_to_refill)
           for (auto& zone : connectivity_before.zones) zone.fills.clear();
-        const auto before_connectivity = analyze_connectivity(connectivity_before);
+        CopperTransactionValidator transaction_validator(connectivity_before);
         bool accepted = false;
         std::optional<std::tuple<Point, Point, Point>> previous_geometry;
         auto radius = config.maximum_circular_arc_radius;
@@ -3007,8 +3012,10 @@ make_circular_fillet(Point previous, Point corner, Point next, Nanometres maximu
           Board probe = board;
           if (config.defer_saved_zone_fill_clearance_to_refill)
             for (auto& zone : probe.zones) zone.fills.clear();
-          const auto validation = validate_board(probe);
-          const auto copper = check_copper_rules(probe);
+          const auto transaction_report = transaction_validator.validate(probe);
+          record_transaction_metrics(result, transaction_report);
+          const auto& validation = transaction_report.structural;
+          const auto& copper = transaction_report.copper;
           const std::array changed_ids{arc->id.value(), mutable_incoming.id.value(), mutable_outgoing.id.value()};
           const auto changed_copper_violation = std::any_of(copper.violations.begin(), copper.violations.end(),
               [&changed_ids](const auto& violation) {
@@ -3017,9 +3024,9 @@ make_circular_fillet(Point previous, Point corner, Point next, Nanometres maximu
                   return std::find(violation.object_ids.begin(), violation.object_ids.end(), id) != violation.object_ids.end();
                 });
               });
-          const auto after_connectivity = analyze_connectivity(probe);
-          if (validation.ok() && !changed_copper_violation &&
-              !per_net_connectivity_regressed(before_connectivity, after_connectivity)) {
+          if (validation.ok() && !changed_copper_violation && transaction_report.preserves_pad_components &&
+              !per_net_connectivity_regressed(transaction_report.before_connectivity,
+                                               transaction_report.after_connectivity)) {
             accepted = true;
             ++result.residual_bend_repair_accepted;
             ++result.added_track_arcs;
@@ -3379,6 +3386,15 @@ void assign_spline_net(SplineProbe& probe, const NetId& net) {
   }
 }
 
+void record_transaction_metrics(DetailedRouteResult& result, const CopperTransactionReport& report) {
+  ++result.incremental_transaction_checks;
+  result.incremental_transaction_changed_objects += report.changed_objects;
+  result.incremental_transaction_neighbours += report.neighbour_objects;
+  result.incremental_transaction_affected_nets += report.affected_nets;
+  result.incremental_transaction_connectivity_hits += report.connectivity_cache_hits;
+  result.incremental_transaction_full_fallbacks += report.used_full_fallback ? 1U : 0U;
+}
+
 [[nodiscard]] const CopperViolation*
 first_spline_collision(const CopperDrcReport& report,
                        const std::vector<std::string>& generated_ids) {
@@ -3462,11 +3478,12 @@ first_spline_collision(const CopperDrcReport& report,
 
 [[nodiscard]] SplineNavigationPreparation prepare_spline_navigation(
     const Board& navigation_board, const NetId& net, const SplineRun& run,
-    const DetailedRouterConfig& config) {
+    const DetailedRouterConfig& config, SplineNavigationPreparationCache* cache) {
   SplineNavigationPreparation preparation;
   const auto extracted = extract_polygonal_board_free_space(
       navigation_board, BoardFreeSpaceExtractionConfig{run.layer, net, true, true,
-                                                        !config.defer_saved_zone_fill_clearance_to_refill});
+                                                        !config.defer_saved_zone_fill_clearance_to_refill},
+      cache ? &cache->obstacle_geometry : nullptr);
   if (!extracted.complete()) {
     preparation.diagnostic = extracted.diagnostic.empty() ? "unrepresented detailed routing obstacle"
                                                           : extracted.diagnostic;
@@ -3490,7 +3507,8 @@ first_spline_collision(const CopperDrcReport& report,
                            resolve_pairwise_clearance(navigation_board, net, *owner).value()}
               : route_radius);
   }
-  const auto offset = offset_polygonal_free_space(extracted.domain, offset_config);
+  const auto offset = offset_polygonal_free_space(extracted.domain, offset_config,
+      cache ? &cache->obstacle_offsets : nullptr);
   preparation.regions_are_offset = offset.ok();
   if (offset.ok()) {
     preparation.regions = offset.regions;
@@ -3498,7 +3516,8 @@ first_spline_collision(const CopperDrcReport& report,
     return preparation;
   }
   const auto unioned = offset_polygonal_free_space(
-      extracted.domain, FreeSpaceOffsetConfig{Nanometres{0}, 1'000'000U});
+      extracted.domain, FreeSpaceOffsetConfig{Nanometres{0}, 1'000'000U},
+      cache ? &cache->obstacle_offsets : nullptr);
   if (!unioned.ok()) {
     preparation.diagnostic = offset.diagnostic + "; " + unioned.diagnostic;
     return preparation;
@@ -3535,7 +3554,7 @@ first_spline_collision(const CopperDrcReport& report,
   const auto build_preparation = [&] {
     const auto started = std::chrono::steady_clock::now();
     auto prepared = std::make_shared<const SplineNavigationPreparation>(
-        prepare_spline_navigation(navigation_board, net, run, config));
+        prepare_spline_navigation(navigation_board, net, run, config, preparation_cache));
     ++result.spline_navigation_preparation_builds;
     result.spline_navigation_preparation_microseconds +=
         static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
@@ -4057,6 +4076,10 @@ first_spline_collision(const CopperDrcReport& report,
           std::chrono::steady_clock::now() - trajectory_started).count());
   result.spline_trajectory_control_moves += optimized.accepted_control_moves;
   result.spline_trajectory_candidate_checks += optimized.candidate_checks;
+  result.spline_span_certificate_cache_hits += optimized.span_certificate_cache_hits;
+  result.spline_span_certificate_cache_misses += optimized.span_certificate_cache_misses;
+  result.spline_equivalent_candidates_skipped += optimized.equivalent_candidates_skipped;
+  result.spline_non_improving_candidates_skipped += optimized.non_improving_candidates_skipped;
   result.spline_paired_obstacle_support_recoveries += optimized.paired_obstacle_support_recoveries;
   result.spline_paired_obstacle_supports_inserted += optimized.paired_obstacle_supports_inserted;
   result.spline_paired_obstacle_support_attempts += optimized.paired_obstacle_support_attempts;
@@ -4176,7 +4199,7 @@ first_spline_collision(const CopperDrcReport& report,
   bool promotion_pending = unpromoted_spline.has_value();
   const auto materialize_selected_spline = [&]() -> bool {
     Board corridor_board = board;
-    const auto baseline_connectivity = analyze_connectivity(board);
+    CopperTransactionValidator transaction_validator(board, config.defer_saved_zone_fill_clearance_to_refill);
     std::size_t pending_pns_shoves = 0U;
     std::size_t pending_pns_tracks = 0U;
     std::size_t pending_pns_vias = 0U;
@@ -4218,14 +4241,10 @@ first_spline_collision(const CopperDrcReport& report,
         return false;
       }
       assign_spline_net(*probe, net);
-      Board checked = probe->board;
-      if (config.defer_saved_zone_fill_clearance_to_refill) {
-        for (auto& zone : checked.zones) {
-          zone.fills.clear();
-        }
-      }
-      const auto validation = validate_board(checked);
-      const auto copper = check_copper_rules(checked);
+      const auto transaction_report = transaction_validator.validate(probe->board);
+      record_transaction_metrics(result, transaction_report);
+      const auto& validation = transaction_report.structural;
+      const auto& copper = transaction_report.copper;
       const auto* collision = first_spline_collision(copper, probe->generated_ids);
       if (validation.ok() && collision == nullptr) {
         const std::set<std::string> original_ids(run.original_track_ids.begin(),
@@ -4238,14 +4257,18 @@ first_spline_collision(const CopperDrcReport& report,
             zone.fills.clear();
           }
         }
-        const auto final_validation = validate_board(final_checked);
-        const auto final_copper = check_copper_rules(final_checked);
-        const auto final_connectivity = analyze_connectivity(final_checked);
+        const auto final_report = transaction_validator.validate(final_checked);
+        record_transaction_metrics(result, final_report);
+        const auto& final_validation = final_report.structural;
+        const auto& final_copper = final_report.copper;
+        const auto& final_connectivity = final_report.after_connectivity;
+        const auto& baseline_connectivity = final_report.before_connectivity;
         const auto* final_collision = first_spline_collision(final_copper, probe->generated_ids);
         const auto connectivity_regressed =
             final_connectivity.open_connections > baseline_connectivity.open_connections ||
             final_connectivity.unrouted_nets > baseline_connectivity.unrouted_nets;
-        if (!final_validation.ok() || final_collision != nullptr || connectivity_regressed) {
+        if (!final_validation.ok() || final_collision != nullptr || connectivity_regressed ||
+            !final_report.preserves_pad_components) {
           if (!final_validation.ok()) {
             ++result.spline_final_validation_rejections;
             result.spline_last_materialization_diagnostic =
@@ -4365,6 +4388,10 @@ first_spline_collision(const CopperDrcReport& report,
                 std::chrono::steady_clock::now() - refit_started).count());
         result.spline_trajectory_control_moves += refitted.accepted_control_moves;
         result.spline_trajectory_candidate_checks += refitted.candidate_checks;
+        result.spline_span_certificate_cache_hits += refitted.span_certificate_cache_hits;
+        result.spline_span_certificate_cache_misses += refitted.span_certificate_cache_misses;
+        result.spline_equivalent_candidates_skipped += refitted.equivalent_candidates_skipped;
+        result.spline_non_improving_candidates_skipped += refitted.non_improving_candidates_skipped;
         result.spline_paired_obstacle_support_recoveries += refitted.paired_obstacle_support_recoveries;
         result.spline_paired_obstacle_supports_inserted += refitted.paired_obstacle_supports_inserted;
         result.spline_paired_obstacle_support_attempts += refitted.paired_obstacle_support_attempts;
@@ -4388,6 +4415,10 @@ first_spline_collision(const CopperDrcReport& report,
       result.spline_control_point_shoves += refitted.elastic_predeformed_controls;
       result.spline_trajectory_control_moves += refitted.accepted_control_moves;
       result.spline_trajectory_candidate_checks += refitted.candidate_checks;
+      result.spline_span_certificate_cache_hits += refitted.span_certificate_cache_hits;
+      result.spline_span_certificate_cache_misses += refitted.span_certificate_cache_misses;
+      result.spline_equivalent_candidates_skipped += refitted.equivalent_candidates_skipped;
+      result.spline_non_improving_candidates_skipped += refitted.non_improving_candidates_skipped;
       result.spline_paired_obstacle_support_recoveries += refitted.paired_obstacle_support_recoveries;
       result.spline_paired_obstacle_supports_inserted += refitted.paired_obstacle_supports_inserted;
       result.spline_paired_obstacle_support_attempts += refitted.paired_obstacle_support_attempts;
@@ -4532,8 +4563,19 @@ void accumulate_spline_route_attempt_metrics(DetailedRouteResult& target,
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_refits);
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_navmesh_routes);
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_navmesh_failures);
+  FLUX_ACCUMULATE_SPLINE_METRIC(incremental_transaction_checks);
+  FLUX_ACCUMULATE_SPLINE_METRIC(incremental_transaction_changed_objects);
+  FLUX_ACCUMULATE_SPLINE_METRIC(incremental_transaction_neighbours);
+  FLUX_ACCUMULATE_SPLINE_METRIC(incremental_transaction_affected_nets);
+  FLUX_ACCUMULATE_SPLINE_METRIC(incremental_transaction_connectivity_hits);
+  FLUX_ACCUMULATE_SPLINE_METRIC(incremental_transaction_full_fallbacks);
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_navigation_preparation_builds);
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_navigation_preparation_hits);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_obstacle_geometry_hits);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_obstacle_geometry_misses);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_obstacle_offset_hits);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_obstacle_offset_misses);
+
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_navigation_preparation_microseconds);
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_trajectory_microseconds);
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_envelope_queries);
@@ -4575,6 +4617,10 @@ void accumulate_spline_route_attempt_metrics(DetailedRouteResult& target,
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_paired_obstacle_supports_inserted);
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_paired_obstacle_support_recoveries);
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_trajectory_candidate_checks);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_span_certificate_cache_hits);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_span_certificate_cache_misses);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_equivalent_candidates_skipped);
+  FLUX_ACCUMULATE_SPLINE_METRIC(spline_non_improving_candidates_skipped);
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_multistart_attempts);
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_multistart_recoveries);
   FLUX_ACCUMULATE_SPLINE_METRIC(spline_gpu_precondition_attempts);
@@ -7347,8 +7393,17 @@ materialize_impl(const Board& source, const GlobalRouteResult& global,
       result.spline_navmesh_geometry_builds += screening.geometry_misses;
       result.spline_screening_microseconds += screening.classifier_elapsed_us;
     }
+    if (navigation_preparation_cache) {
+      const auto geometry = navigation_preparation_cache->obstacle_geometry.stats();
+      const auto offsets = navigation_preparation_cache->obstacle_offsets.stats();
+      result.spline_obstacle_geometry_hits += geometry.hits;
+      result.spline_obstacle_geometry_misses += geometry.misses;
+      result.spline_obstacle_offset_hits += offsets.hits;
+      result.spline_obstacle_offset_misses += offsets.misses;
+    }
     result.spline_parallel_route_tasks += board_level_spline_runs.size();
     result.spline_parallel_route_workers += worker_count;
+    std::unique_ptr<CopperTransactionValidator> merge_validator;
     for (std::size_t task = 0U; task < task_results.size(); ++task) {
       MaterializationTimer merge_timer(result.spline_exact_merge_microseconds);
       routing_kernel_checkpoint();
@@ -7439,21 +7494,22 @@ materialize_impl(const Board& source, const GlobalRouteResult& global,
       const auto additional_beziers = transaction.track_beziers.size() > candidate.track_beziers.size()
                                           ? transaction.track_beziers.size() - candidate.track_beziers.size()
                                           : 0U;
-      Board checked = transaction;
-      if (config.defer_saved_zone_fill_clearance_to_refill) {
-        for (auto& zone : checked.zones)
-          zone.fills.clear();
-      }
-      const auto validation = validate_board(checked);
-      const auto copper = check_copper_rules(checked);
+      if (!merge_validator)
+        merge_validator = std::make_unique<CopperTransactionValidator>(
+            candidate, config.defer_saved_zone_fill_clearance_to_refill);
+      const auto transaction_report = merge_validator->validate(transaction);
+      record_transaction_metrics(result, transaction_report);
+      const auto& validation = transaction_report.structural;
+      const auto& copper = transaction_report.copper;
       const auto touched_ids = spline_route_delta_touched_ids(*completed.delta);
       const auto* collision = first_spline_collision(copper, touched_ids);
-      const auto before_connectivity = analyze_connectivity(candidate);
-      const auto after_connectivity = analyze_connectivity(transaction);
+      const auto& before_connectivity = transaction_report.before_connectivity;
+      const auto& after_connectivity = transaction_report.after_connectivity;
       const bool connectivity_regressed =
           after_connectivity.open_connections > before_connectivity.open_connections ||
           after_connectivity.unrouted_nets > before_connectivity.unrouted_nets;
-      if (!validation.ok() || collision != nullptr || connectivity_regressed) {
+      if (!validation.ok() || collision != nullptr || connectivity_regressed ||
+          !transaction_report.preserves_pad_components) {
         ++result.spline_parallel_route_merge_rejections;
         result.withheld_circular_arc_corners += pending.run.points.size() - 2U;
         continue;
@@ -7463,6 +7519,7 @@ materialize_impl(const Board& source, const GlobalRouteResult& global,
       const auto old_bezier_count = candidate.track_beziers.size();
       const auto old_via_count = candidate.vias.size();
       candidate = std::move(transaction);
+      merge_validator.reset();
       const auto adjust_count = [](std::size_t& counter, std::size_t before, std::size_t after) {
         if (after >= before) {
           counter += after - before;
@@ -7583,8 +7640,19 @@ materialize_impl(const Board& source, const GlobalRouteResult& global,
     fallback.spline_g2_promotions = result.spline_g2_promotions;
     fallback.spline_g2_fallbacks = result.spline_g2_fallbacks;
     fallback.spline_g2_promotion_microseconds = result.spline_g2_promotion_microseconds;
+    fallback.incremental_transaction_checks += result.incremental_transaction_checks;
+    fallback.incremental_transaction_changed_objects += result.incremental_transaction_changed_objects;
+    fallback.incremental_transaction_neighbours += result.incremental_transaction_neighbours;
+    fallback.incremental_transaction_affected_nets += result.incremental_transaction_affected_nets;
+    fallback.incremental_transaction_connectivity_hits += result.incremental_transaction_connectivity_hits;
+    fallback.incremental_transaction_full_fallbacks += result.incremental_transaction_full_fallbacks;
     fallback.spline_navigation_preparation_builds += result.spline_navigation_preparation_builds;
     fallback.spline_navigation_preparation_hits += result.spline_navigation_preparation_hits;
+    fallback.spline_obstacle_geometry_hits += result.spline_obstacle_geometry_hits;
+    fallback.spline_obstacle_geometry_misses += result.spline_obstacle_geometry_misses;
+    fallback.spline_obstacle_offset_hits += result.spline_obstacle_offset_hits;
+    fallback.spline_obstacle_offset_misses += result.spline_obstacle_offset_misses;
+
     fallback.spline_navigation_preparation_microseconds += result.spline_navigation_preparation_microseconds;
     fallback.spline_trajectory_microseconds += result.spline_trajectory_microseconds;
     fallback.generated_tail_cleanup_microseconds += result.generated_tail_cleanup_microseconds;
@@ -7664,6 +7732,10 @@ materialize_impl(const Board& source, const GlobalRouteResult& global,
     fallback.spline_paired_obstacle_supports_inserted = result.spline_paired_obstacle_supports_inserted;
     fallback.spline_paired_obstacle_support_recoveries = result.spline_paired_obstacle_support_recoveries;
     fallback.spline_trajectory_candidate_checks = result.spline_trajectory_candidate_checks;
+    fallback.spline_span_certificate_cache_hits += result.spline_span_certificate_cache_hits;
+    fallback.spline_span_certificate_cache_misses += result.spline_span_certificate_cache_misses;
+    fallback.spline_equivalent_candidates_skipped += result.spline_equivalent_candidates_skipped;
+    fallback.spline_non_improving_candidates_skipped += result.spline_non_improving_candidates_skipped;
     fallback.spline_multistart_attempts = result.spline_multistart_attempts;
     fallback.spline_multistart_recoveries = result.spline_multistart_recoveries;
     fallback.spline_gpu_precondition_attempts = result.spline_gpu_precondition_attempts;

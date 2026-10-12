@@ -1,0 +1,35 @@
+{
+  "CACHE": {
+    "code": 0,
+    "result": "complete=0 drc=0 opens=0 unrounded=1 commits=1 proven=370 cachehits=0 cachemisses=0 equiv=83 nonimprove=63 rejectconn=0 diagnostic=materialized curved route retains 1 non-junction direction changes without quintic PH curve realization last=quantized PH replacement committed\n",
+    "stderr": ""
+  },
+  "DEDUP": {
+    "code": 0,
+    "result": "complete=1 drc=0 opens=0 unrounded=0 commits=2 proven=320 cachehits=111 cachemisses=675 equiv=0 nonimprove=108 rejectconn=0 diagnostic=global paths materialized as legal simplified copper last=quantized PH replacement committed\n",
+    "stderr": ""
+  },
+  "PRUNE": {
+    "code": 0,
+    "result": "complete=0 drc=0 opens=0 unrounded=1 commits=1 proven=358 cachehits=78 cachemisses=942 equiv=83 nonimprove=0 rejectconn=0 diagnostic=materialized curved route retains 1 non-junction direction changes without quintic PH curve realization last=quantized PH replacement committed\n",
+    "stderr": ""
+  },
+  "CACHE,DEDUP,PRUNE": {
+    "code": 0,
+    "result": "complete=1 drc=0 opens=0 unrounded=0 commits=2 proven=368 cachehits=0 cachemisses=0 equiv=0 nonimprove=0 rejectconn=0 diagnostic=global paths materialized as legal simplified copper last=quantized PH replacement committed\n",
+    "stderr": ""
+  },
+  "diagnosis": "Deduplication before GPU ranking changed population and shortlist, losing downstream realizability. Suppress duplicates only after stable shortlist selection.",
+  "fixed": {
+    "complete": true,
+    "copper_violations": 0,
+    "open_connections": 0,
+    "unrounded_bends": 0,
+    "spline_commits": 2,
+    "gpu_envelopes_proven": 282,
+    "span_cache_hits": 40,
+    "span_cache_misses": 675,
+    "equivalent_skips": 41,
+    "non_improving_skips": 92
+  }
+}

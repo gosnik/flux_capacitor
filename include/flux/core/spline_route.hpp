@@ -335,9 +335,15 @@ struct SplineTrajectoryOptimizationConfig {
   std::optional<SplineVector> preferred_end_tangent;
   SplineShapeCertificationConfig shape;
   SplineContinuousEnvelopeConfig continuous_envelope;
+  // Reuse complete legal span proofs only within this immutable-field optimization call.
+  bool reuse_span_certificates{true};
 };
 
 struct SplineTrajectoryOptimizationResult {
+  std::size_t span_certificate_cache_hits{0U};
+  std::size_t span_certificate_cache_misses{0U};
+  std::size_t equivalent_candidates_skipped{0U};
+  std::size_t non_improving_candidates_skipped{0U};
   bool accepted{false};
   bool legal{false};
   bool budget_exhausted{false};

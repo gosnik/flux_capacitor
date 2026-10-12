@@ -11,11 +11,68 @@
 #include <cstdint>
 #include <limits>
 #include <list>
+#include <memory>
+#include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace flux {
+struct FreeSpaceOffsetCache::Impl {
+  struct Entry {
+    OffsetFreeSpaceRegion source;
+    Nanometres clearance;
+    std::vector<OffsetFreeSpaceRegion> expanded;
+    std::size_t age{0U};
+  };
+  explicit Impl(std::size_t requested_capacity)
+      : capacity(std::max<std::size_t>(1U, requested_capacity)) {}
+  std::size_t capacity;
+  std::size_t clock{0U};
+  std::size_t hits{0U};
+  std::size_t misses{0U};
+  std::unordered_map<std::uint64_t, std::vector<Entry>> entries;
+  std::size_t entry_count{0U};
+  mutable std::mutex mutex;
+};
+
+FreeSpaceOffsetCache::FreeSpaceOffsetCache(std::size_t capacity)
+    : impl_(std::make_unique<Impl>(capacity)) {}
+FreeSpaceOffsetCache::~FreeSpaceOffsetCache() = default;
+FreeSpaceOffsetCache::FreeSpaceOffsetCache(FreeSpaceOffsetCache&&) noexcept = default;
+FreeSpaceOffsetCache& FreeSpaceOffsetCache::operator=(FreeSpaceOffsetCache&&) noexcept = default;
+FreeSpaceOffsetCache::Stats FreeSpaceOffsetCache::stats() const {
+  std::lock_guard lock(impl_->mutex);
+  return {impl_->hits, impl_->misses, impl_->entry_count};
+}
+void FreeSpaceOffsetCache::clear() {
+  std::lock_guard lock(impl_->mutex);
+  impl_->entries.clear();
+  impl_->hits = impl_->misses = impl_->clock = impl_->entry_count = 0U;
+}
+
 namespace {
+
+[[nodiscard]] std::uint64_t expansion_key(const OffsetFreeSpaceRegion& region,
+                                          Nanometres clearance) {
+  std::uint64_t hash = 1469598103934665603ULL;
+  const auto add = [&hash](std::uint64_t value) {
+    hash ^= value;
+    hash *= 1099511628211ULL;
+  };
+  const auto add_polygon = [&](const Polygon& polygon) {
+    add(polygon.vertices.size());
+    for (const auto& point : polygon.vertices) {
+      add(static_cast<std::uint64_t>(point.x.value()));
+      add(static_cast<std::uint64_t>(point.y.value()));
+    }
+  };
+  add(static_cast<std::uint64_t>(clearance.value()));
+  add_polygon(region.area);
+  add(region.holes.size());
+  for (const auto& hole : region.holes) add_polygon(hole);
+  return hash;
+}
 
 using Coordinate = std::int32_t;
 using BoostPoint = boost::polygon::point_data<Coordinate>;
@@ -234,6 +291,39 @@ template <typename BoostPolygonLike>
   return clearances.empty() ? config.clearance : clearances[index];
 }
 
+[[nodiscard]] std::vector<OffsetFreeSpaceRegion> expand_solid_region(
+    const OffsetFreeSpaceRegion& source, Nanometres clearance) {
+  using namespace boost::polygon::operators;
+  BoostPolygonSet region;
+  region.insert(to_boost_polygon(source.area));
+  BoostPolygonSet holes;
+  for (const auto& hole : source.holes) holes.insert(to_boost_polygon(hole));
+  region -= holes;
+  region.resize(static_cast<Coordinate>(clearance.value() + 2), false);
+  std::list<BoostPolygonWithHoles> polygons;
+  region.get(polygons);
+  std::vector<OffsetFreeSpaceRegion> result;
+  result.reserve(polygons.size());
+  for (const auto& polygon : polygons) {
+    OffsetFreeSpaceRegion expanded;
+    expanded.area = from_boost_polygon(polygon);
+    for (auto hole = boost::polygon::begin_holes(polygon);
+         hole != boost::polygon::end_holes(polygon); ++hole) {
+      expanded.holes.push_back(from_boost_polygon(*hole));
+    }
+    result.push_back(std::move(expanded));
+  }
+  return result;
+}
+
+void insert_solid_region(BoostPolygonSet& destination, const OffsetFreeSpaceRegion& source) {
+  using namespace boost::polygon::operators;
+  destination.insert(to_boost_polygon(source.area));
+  BoostPolygonSet holes;
+  for (const auto& hole : source.holes) holes.insert(to_boost_polygon(hole));
+  destination -= holes;
+}
+
 [[nodiscard]] bool contour_has_required_clearance(const Polygon& contour,
                                                   const FreeSpaceDomain& domain,
                                                   const FreeSpaceOffsetConfig& config) {
@@ -348,7 +438,8 @@ template <typename BoostPolygonLike>
 } // namespace
 
 FreeSpaceOffsetResult offset_polygonal_free_space(const FreeSpaceDomain& domain,
-                                                  const FreeSpaceOffsetConfig& config) {
+                                                  const FreeSpaceOffsetConfig& config,
+                                                  FreeSpaceOffsetCache* cache) {
   FreeSpaceOffsetResult result;
   if (!validate_input(domain, config, result)) {
     return result;
@@ -367,25 +458,89 @@ FreeSpaceOffsetResult offset_polygonal_free_space(const FreeSpaceDomain& domain,
   free_space.resize(-guarded_clearance, false);
 
   BoostPolygonSet blocked;
+  const auto expanded = [&](const OffsetFreeSpaceRegion& source, Nanometres clearance) {
+    if (!cache) return expand_solid_region(source, clearance);
+    const auto key = expansion_key(source, clearance);
+    {
+      std::lock_guard lock(cache->impl_->mutex);
+      if (const auto bucket = cache->impl_->entries.find(key);
+          bucket != cache->impl_->entries.end()) {
+        for (auto& entry : bucket->second) {
+          if (entry.clearance == clearance && entry.source == source) {
+            entry.age = ++cache->impl_->clock;
+            ++cache->impl_->hits;
+            return entry.expanded;
+          }
+        }
+      }
+    }
+    auto computed = expand_solid_region(source, clearance);
+    std::lock_guard lock(cache->impl_->mutex);
+    if (const auto bucket = cache->impl_->entries.find(key);
+        bucket != cache->impl_->entries.end()) {
+      for (auto& entry : bucket->second) {
+        if (entry.clearance == clearance && entry.source == source) {
+          entry.age = ++cache->impl_->clock;
+          ++cache->impl_->hits;
+          return entry.expanded;
+        }
+      }
+    }
+    ++cache->impl_->misses;
+    if (cache->impl_->entry_count == cache->impl_->capacity) {
+      auto oldest_bucket = cache->impl_->entries.end();
+      auto oldest = std::vector<FreeSpaceOffsetCache::Impl::Entry>::iterator{};
+      for (auto bucket = cache->impl_->entries.begin(); bucket != cache->impl_->entries.end(); ++bucket) {
+        for (auto entry = bucket->second.begin(); entry != bucket->second.end(); ++entry) {
+          if (oldest_bucket == cache->impl_->entries.end() || entry->age < oldest->age) {
+            oldest_bucket = bucket;
+            oldest = entry;
+          }
+        }
+      }
+      oldest_bucket->second.erase(oldest);
+      if (oldest_bucket->second.empty()) cache->impl_->entries.erase(oldest_bucket);
+      --cache->impl_->entry_count;
+    }
+    auto& bucket = cache->impl_->entries[key];
+    bucket.push_back({source, clearance, std::move(computed), ++cache->impl_->clock});
+    ++cache->impl_->entry_count;
+    return bucket.back().expanded;
+  };
   for (std::size_t index = 0U; index < domain.obstacles.size(); ++index) {
-    BoostPolygonSet expanded;
-    expanded.insert(to_boost_polygon(domain.obstacles[index]));
-    expanded.resize(static_cast<Coordinate>(obstacle_clearance(config, index, false).value() + 2),
-                    false);
-    blocked += expanded;
+    if (!cache) {
+      BoostPolygonSet expanded_set;
+      expanded_set.insert(to_boost_polygon(domain.obstacles[index]));
+      expanded_set.resize(static_cast<Coordinate>(obstacle_clearance(config, index, false).value() + 2), false);
+      blocked += expanded_set;
+      continue;
+    }
+    const OffsetFreeSpaceRegion source{domain.obstacles[index], {}};
+    BoostPolygonSet expanded_set;
+    for (const auto& obstacle : expanded(source, obstacle_clearance(config, index, false))) {
+      insert_solid_region(expanded_set, obstacle);
+    }
+    blocked += expanded_set;
   }
   for (std::size_t index = 0U; index < domain.filled_obstacles.size(); ++index) {
     const auto& obstacle = domain.filled_obstacles[index];
-    BoostPolygonSet region;
-    region.insert(to_boost_polygon(obstacle.area));
-    BoostPolygonSet holes;
-    for (const auto& hole : obstacle.holes) {
-      holes.insert(to_boost_polygon(hole));
+    if (!cache) {
+      BoostPolygonSet region;
+      region.insert(to_boost_polygon(obstacle.area));
+      BoostPolygonSet holes;
+      for (const auto& hole : obstacle.holes) holes.insert(to_boost_polygon(hole));
+      region -= holes;
+      region.resize(static_cast<Coordinate>(obstacle_clearance(config, index, true).value() + 2), false);
+      blocked += region;
+      continue;
     }
-    region -= holes;
-    region.resize(static_cast<Coordinate>(obstacle_clearance(config, index, true).value() + 2),
-                  false);
-    blocked += region;
+    const OffsetFreeSpaceRegion source{obstacle.area, obstacle.holes};
+    BoostPolygonSet expanded_set;
+    for (const auto& expanded_obstacle :
+         expanded(source, obstacle_clearance(config, index, true))) {
+      insert_solid_region(expanded_set, expanded_obstacle);
+    }
+    blocked += expanded_set;
   }
   if (!domain.obstacles.empty() || !domain.filled_obstacles.empty()) {
     free_space -= blocked;

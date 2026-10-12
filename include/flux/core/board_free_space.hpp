@@ -3,6 +3,7 @@
 #include "flux/core/free_space_skeleton.hpp"
 
 #include <string>
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -40,11 +41,37 @@ struct BoardFreeSpaceExtractionResult {
   }
 };
 
+// A caller-owned, bounded, thread-safe cache for immutable board snapshots.  Entries retain a
+// complete Board value and use Board::operator== on lookup, rather than trusting a revision
+// string or pointer identity.  This preserves correctness when a caller supplies a different
+// snapshot with the same source revision.
+class BoardFreeSpaceExtractionCache {
+ public:
+  struct Stats { std::size_t hits{0}; std::size_t misses{0}; std::size_t entries{0}; };
+
+  explicit BoardFreeSpaceExtractionCache(std::size_t capacity = 32U);
+  ~BoardFreeSpaceExtractionCache();
+  BoardFreeSpaceExtractionCache(BoardFreeSpaceExtractionCache&&) noexcept;
+  BoardFreeSpaceExtractionCache& operator=(BoardFreeSpaceExtractionCache&&) noexcept;
+  BoardFreeSpaceExtractionCache(const BoardFreeSpaceExtractionCache&) = delete;
+  BoardFreeSpaceExtractionCache& operator=(const BoardFreeSpaceExtractionCache&) = delete;
+
+  [[nodiscard]] Stats stats() const;
+  void clear();
+
+ private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+  friend BoardFreeSpaceExtractionResult extract_polygonal_board_free_space(
+      const Board&, const BoardFreeSpaceExtractionConfig&, BoardFreeSpaceExtractionCache*);
+};
+
 // Extracts polygonal foreign obstacles for one routed net/layer. Same-net copper is omitted.
 // Conservative curved-pad envelopes are identified separately; unsupported existing segment/via
 // copper remains an explicit blocker. Exact shape predicates remain authoritative for routing.
 [[nodiscard]] BoardFreeSpaceExtractionResult
 extract_polygonal_board_free_space(const Board& board,
-                                   const BoardFreeSpaceExtractionConfig& config);
+                                   const BoardFreeSpaceExtractionConfig& config,
+                                   BoardFreeSpaceExtractionCache* cache = nullptr);
 
 } // namespace flux

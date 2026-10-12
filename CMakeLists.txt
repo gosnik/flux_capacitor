@@ -109,6 +109,7 @@ add_library(flux_core
   src/scaffold_physical_demands.cpp
   src/copper_scaffold.cpp
   src/scaffold_joint_displacement.cpp
+  src/copper_transaction.cpp
   src/scaffold_collision.cpp
   src/hydraulic_path.cpp
   src/integrated_optimizer.cpp

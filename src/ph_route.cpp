@@ -18,6 +18,9 @@
 #include <functional>
 #include <limits>
 #include <mutex>
+#include <map>
+#include <set>
+#include <tuple>
 #include <numeric>
 #include <optional>
 #include <stop_token>
@@ -3205,6 +3208,114 @@ std::size_t shove_quintic_ph_interpolation_corridor(QuinticPHRoute& route, long 
   return moved;
 }
 
+namespace {
+// Scoped to one optimizer invocation: its clearance field/rules are immutable. Corridor identity
+// and the complete Bezier hull are part of each key. Keep corridor ownership to prevent address
+// reuse, and store parameters in local span coordinates so an unchanged span survives global
+// route reparameterization. Only complete legal certificates are reusable.
+class SpanCertificateCache {
+  using Key = std::tuple<std::array<long double, 12U>, std::uintptr_t, std::int64_t,
+                         std::int64_t, std::size_t, bool>;
+  struct Entry {
+    SplineContinuousEnvelopeCertificate certificate;
+    std::shared_ptr<const PreparedSplineCorridor> corridor;
+  };
+  std::map<Key, Entry> entries_;
+  std::mutex mutex_;
+  std::size_t hits_{0U}, misses_{0U};
+  static Key key_for(const QuinticPHRoute& route, const QuinticPHSegment& segment,
+                     Nanometres clearance, const SplineContinuousEnvelopeConfig& config) {
+    std::array<long double, 12U> hull{};
+    for (std::size_t c = 0U; c < segment.bezier.size(); ++c) {
+      hull[c * 2U] = segment.bezier[c].x; hull[c * 2U + 1U] = segment.bezier[c].y;
+    }
+    return {hull, reinterpret_cast<std::uintptr_t>(route.prepared_corridor.get()),
+            clearance.value(), config.hull_tolerance.value(), config.maximum_subdivision_depth,
+            config.corridor_certifies_clearance};
+  }
+public:
+  bool contains(const QuinticPHRoute& route, std::size_t index, Nanometres clearance,
+                const SplineContinuousEnvelopeConfig& config) {
+    std::scoped_lock lock(mutex_);
+    return entries_.contains(key_for(route, route.segments[index], clearance, config));
+  }
+  std::pair<std::size_t, std::size_t> counts() {
+    std::scoped_lock lock(mutex_); return {hits_, misses_};
+  }
+  SplineContinuousEnvelopeCertificate certify(
+      const QuinticPHRoute& route, Nanometres clearance, const SplineClearanceEvaluator& evaluator,
+      const SplineContinuousEnvelopeConfig& config,
+      const SplineEnvelopeScreenEvaluator& screen = {}) {
+    if (route.segments.empty()) return {};
+    for (const auto& segment : route.segments)
+      for (const auto point : segment.bezier)
+        if (!std::isfinite(point.x) || !std::isfinite(point.y) ||
+            point.x <= static_cast<long double>(std::numeric_limits<std::int64_t>::min()) ||
+            point.x >= static_cast<long double>(std::numeric_limits<std::int64_t>::max()) ||
+            point.y <= static_cast<long double>(std::numeric_limits<std::int64_t>::min()) ||
+            point.y >= static_cast<long double>(std::numeric_limits<std::int64_t>::max()))
+          return certify_quintic_ph_continuous_envelope(route, clearance, evaluator, config, screen);
+    std::vector<std::uint8_t> flags(route.segments.size(), 0U);
+    if (screen && evaluator) {
+      const auto capsules = make_quintic_ph_envelope_capsules(route, clearance);
+      if (capsules.size() == flags.size()) {
+        const auto screened = screen(capsules);
+        if (screened.definitely_clear.size() == flags.size()) flags = screened.definitely_clear;
+      }
+    }
+    const SplineEnvelopeScreenEvaluator retained_screen = [flags](const auto& capsules) {
+      SplineEnvelopeScreenResult result;
+      if (capsules.size() == flags.size()) result.definitely_clear = flags;
+      return result;
+    };
+    SplineContinuousEnvelopeCertificate result;
+    for (std::size_t i = 0U; i < route.segments.size(); ++i) {
+      const auto& segment = route.segments[i];
+      const auto key = key_for(route, segment, clearance, config);
+      std::optional<SplineContinuousEnvelopeCertificate> certificate;
+      {
+        std::scoped_lock lock(mutex_);
+        if (const auto found = entries_.find(key); found != entries_.end()) {
+          certificate = found->second.certificate; ++hits_;
+        } else ++misses_;
+      }
+      if (!certificate) {
+        QuinticPHRoute span; span.prepared_corridor = route.prepared_corridor;
+        span.segments.push_back(segment);
+        span.segments.front().route_parameter_start = 0.0L;
+        span.segments.front().route_parameter_end = 1.0L;
+        const SplineEnvelopeScreenEvaluator span_screen = [flag = flags[i]](const auto& capsules) {
+          SplineEnvelopeScreenResult result;
+          if (capsules.size() == 1U) result.definitely_clear = {flag};
+          return result;
+        };
+        certificate = certify_quintic_ph_continuous_envelope(span, clearance, evaluator, config, span_screen);
+        if (certificate->legal && !certificate->budget_exhausted) {
+          std::scoped_lock lock(mutex_);
+          constexpr std::size_t limit = 2048U;
+          if (entries_.size() >= limit) entries_.erase(entries_.begin());
+          entries_.insert_or_assign(key, Entry{*certificate, route.prepared_corridor});
+        }
+      }
+      // Preserve whole-route subdivision budgets and failure diagnostics exactly. Partial or
+      // rejected span evidence never licenses acceptance or changes recovery steering.
+      if (!certificate->legal || certificate->hulls_checked > config.maximum_hulls -
+          std::min(config.maximum_hulls, result.hulls_checked))
+        return certify_quintic_ph_continuous_envelope(route, clearance, evaluator, config, retained_screen);
+      result.hulls_checked += certificate->hulls_checked;
+      if (certificate->worst_clearance_nm < result.worst_clearance_nm) {
+        result.worst_clearance_nm = certificate->worst_clearance_nm;
+        result.worst_parameter = segment.route_parameter_start + certificate->worst_parameter *
+            (segment.route_parameter_end - segment.route_parameter_start);
+        result.worst_normal = certificate->worst_normal;
+      }
+    }
+    result.legal = true;
+    return result;
+  }
+};
+} // namespace
+
 SplineTrajectoryOptimizationResult
 optimize_quintic_ph_trajectory(QuinticPHRoute& route,
                                const SplineTrajectoryOptimizationConfig& config,
@@ -3216,6 +3327,15 @@ optimize_quintic_ph_trajectory(QuinticPHRoute& route,
   if (!rebuild_quintic_ph_route(route) || route.control_points.size() < 2U ||
       config.maximum_candidate_checks == 0U || (route_constraint && !route_constraint(route)))
     return result;
+  SpanCertificateCache span_cache;
+  const auto certify_envelope = [&](const QuinticPHRoute& candidate, Nanometres clearance,
+                                    const SplineClearanceEvaluator& evaluator,
+                                    const SplineContinuousEnvelopeConfig& envelope_config,
+                                    const SplineEnvelopeScreenEvaluator& screen = {}) {
+    return config.reuse_span_certificates
+        ? span_cache.certify(candidate, clearance, evaluator, envelope_config, screen)
+        : certify_quintic_ph_continuous_envelope(candidate, clearance, evaluator, envelope_config, screen);
+  };
   auto best = route;
   auto best_assessment = assess_trajectory(best, config, clearance_evaluator);
   const auto original_assessment = best_assessment;
@@ -3249,7 +3369,7 @@ optimize_quintic_ph_trajectory(QuinticPHRoute& route,
   result.initial_arc_length_nm = exact_route_arc_length(best);
   result.initial_regularity = best_assessment.regularity;
   result.initial_objective = best_assessment.objective;
-  const auto initial_envelope = certify_quintic_ph_continuous_envelope(
+  const auto initial_envelope = certify_envelope(
       best, config.minimum_clearance, clearance_evaluator, config.continuous_envelope);
   result.initial_continuous_violations = initial_envelope.violations();
   // A collision has two boundaries.  Before adding a single control at its worst sample (which
@@ -3275,9 +3395,9 @@ optimize_quintic_ph_trajectory(QuinticPHRoute& route,
       if (route_constraint && !route_constraint(candidate))
         continue;
       const auto assessment = assess_trajectory(candidate, config, clearance_evaluator);
-      const auto envelope = certify_quintic_ph_continuous_envelope(
+      const auto envelope = certify_envelope(
           candidate, config.minimum_clearance, clearance_evaluator, config.continuous_envelope);
-      const auto incumbent_envelope = certify_quintic_ph_continuous_envelope(
+      const auto incumbent_envelope = certify_envelope(
           best, config.minimum_clearance, clearance_evaluator, config.continuous_envelope);
       if (!better_candidate(candidate, assessment, envelope, incumbent_envelope))
         continue;
@@ -3353,7 +3473,7 @@ optimize_quintic_ph_trajectory(QuinticPHRoute& route,
       if (rebuild_quintic_ph_route(candidate) &&
           (!route_constraint || route_constraint(candidate))) {
         const auto assessment = assess_trajectory(candidate, config, clearance_evaluator);
-        const auto envelope = certify_quintic_ph_continuous_envelope(
+        const auto envelope = certify_envelope(
             candidate, config.minimum_clearance, clearance_evaluator, config.continuous_envelope);
         const auto candidate_violations = assessment.violations + envelope.violations();
         if (better_candidate(candidate, assessment, envelope, initial_envelope)) {
@@ -3395,10 +3515,10 @@ optimize_quintic_ph_trajectory(QuinticPHRoute& route,
     if (route_constraint && !route_constraint(candidate))
       continue;
     const auto assessment = assess_trajectory(candidate, config, clearance_evaluator);
-    const auto envelope = certify_quintic_ph_continuous_envelope(
+    const auto envelope = certify_envelope(
         candidate, config.minimum_clearance, clearance_evaluator, config.continuous_envelope);
     const auto candidate_violations = assessment.violations + envelope.violations();
-    const auto best_envelope = certify_quintic_ph_continuous_envelope(
+    const auto best_envelope = certify_envelope(
         best, config.minimum_clearance, clearance_evaluator, config.continuous_envelope);
     const auto best_violations = best_assessment.violations + best_envelope.violations();
     if (better_candidate(candidate, assessment, envelope, best_envelope)) {
@@ -3426,9 +3546,9 @@ optimize_quintic_ph_trajectory(QuinticPHRoute& route,
       break;
     const auto candidate_assessment = assess_trajectory(candidate, config, clearance_evaluator);
     ++result.adaptive_controls_inserted;
-    const auto envelope = certify_quintic_ph_continuous_envelope(
+    const auto envelope = certify_envelope(
         candidate, config.minimum_clearance, clearance_evaluator, config.continuous_envelope);
-    const auto incumbent_envelope = certify_quintic_ph_continuous_envelope(
+    const auto incumbent_envelope = certify_envelope(
         best, config.minimum_clearance, clearance_evaluator, config.continuous_envelope);
     if (better_candidate(candidate, candidate_assessment, envelope, incumbent_envelope)) {
       best = std::move(candidate);
@@ -3437,7 +3557,7 @@ optimize_quintic_ph_trajectory(QuinticPHRoute& route,
       break;
     }
   }
-  auto adaptive_envelope = certify_quintic_ph_continuous_envelope(
+  auto adaptive_envelope = certify_envelope(
       best, config.minimum_clearance, clearance_evaluator, config.continuous_envelope);
   while (adaptive_envelope.violations() > 0U &&
          result.adaptive_controls_inserted < config.maximum_adaptive_control_insertions) {
@@ -3453,7 +3573,7 @@ optimize_quintic_ph_trajectory(QuinticPHRoute& route,
       break;
     ++result.adaptive_controls_inserted;
     const auto assessment = assess_trajectory(candidate, config, clearance_evaluator);
-    const auto envelope = certify_quintic_ph_continuous_envelope(
+    const auto envelope = certify_envelope(
         candidate, config.minimum_clearance, clearance_evaluator, config.continuous_envelope);
     // An infeasible curve may need another interpolation degree of freedom before any
     // shortening/clearance move becomes available. This bounded recovery proposal is never
@@ -3743,34 +3863,56 @@ optimize_quintic_ph_trajectory(QuinticPHRoute& route,
     std::vector<std::uint8_t> exact_ready(exact_candidates.size(), 0U);
     std::vector<std::vector<std::uint8_t>> cached_span_clear(exact_candidates.size());
     std::vector<SplineEnvelopeChord> wave_capsules;
-    std::vector<std::pair<std::size_t, std::size_t>> capsule_slices(exact_candidates.size());
+    std::vector<std::pair<std::size_t, std::size_t>> capsule_owners;
+    std::set<std::tuple<std::size_t, long double, long double>> proposed_positions;
     for (std::size_t slot = 0U; slot < exact_candidates.size(); ++slot) {
       auto& candidate = candidate_routes[exact_candidates[slot]];
+      const auto node = candidate_control_nodes[exact_candidates[slot]];
+      const auto point = candidate.control_points[node];
+      // Preserve the advisory ranker's original population and shortlist. Removing duplicates
+      // before ranking changes which distinct candidates receive exact checks and can lose a
+      // downstream-realizable bend. Only suppress equivalent work after that stable selection.
+      if (point == best.control_points[node] ||
+          !proposed_positions.emplace(node, point.x, point.y).second) {
+        ++result.equivalent_candidates_skipped;
+        continue;
+      }
       if (!rebuild_quintic_ph_route_around_control(candidate,
                                                    candidate_control_nodes[exact_candidates[slot]]) ||
           (route_constraint && !route_constraint(candidate)))
         continue;
+      if (best_assessment.violations == 0U && best_continuous_envelope.legal &&
+          exact_route_arc_length(candidate) > exact_route_arc_length(best) + 1.0e-9L) {
+        ++result.non_improving_candidates_skipped;
+        continue;
+      }
       exact_ready[slot] = 1U;
       if (!envelope_screen_evaluator)
         continue;
       const auto capsules = make_quintic_ph_envelope_capsules(candidate, config.minimum_clearance);
-      capsule_slices[slot] = {wave_capsules.size(), capsules.size()};
-      wave_capsules.insert(wave_capsules.end(), capsules.begin(), capsules.end());
+      cached_span_clear[slot].assign(capsules.size(), 0U);
+      for (std::size_t span = 0U; span < capsules.size(); ++span) {
+        if (config.reuse_span_certificates &&
+            span_cache.contains(candidate, span, config.minimum_clearance, config.continuous_envelope))
+          continue;
+        capsule_owners.emplace_back(slot, span);
+        wave_capsules.push_back(capsules[span]);
+      }
     }
     if (envelope_screen_evaluator && !wave_capsules.empty()) {
       const auto screened = envelope_screen_evaluator(wave_capsules);
       if (screened.definitely_clear.size() == wave_capsules.size()) {
-        for (std::size_t slot = 0U; slot < capsule_slices.size(); ++slot) {
-          const auto [begin, count] = capsule_slices[slot];
-          cached_span_clear[slot].assign(screened.definitely_clear.begin() + static_cast<std::ptrdiff_t>(begin),
-                                         screened.definitely_clear.begin() + static_cast<std::ptrdiff_t>(begin + count));
+        for (std::size_t item = 0U; item < capsule_owners.size(); ++item) {
+          const auto [slot, span] = capsule_owners[item];
+          cached_span_clear[slot][span] = screened.definitely_clear[item];
         }
       }
     }
     std::vector<std::optional<ExactCandidateEvaluation>> exact_evaluations(exact_candidates.size());
-    if (exact_candidate_lease.workers() > 1U && exact_candidates.size() > 1U) {
+    const auto ready_checks = static_cast<std::size_t>(std::count(exact_ready.begin(), exact_ready.end(), 1U));
+    if (exact_candidate_lease.workers() > 1U && ready_checks > 1U) {
       ++result.parallel_exact_waves;
-      result.parallel_exact_checks += exact_candidates.size();
+      result.parallel_exact_checks += ready_checks;
     }
     exact_candidate_pool.run(exact_candidates.size(), [&](std::size_t slot) {
       const auto candidate_index = exact_candidates[slot];
@@ -3786,7 +3928,7 @@ optimize_quintic_ph_trajectory(QuinticPHRoute& route,
       };
       exact_evaluations[slot] = ExactCandidateEvaluation{
           assess_trajectory(candidate, config, clearance_evaluator),
-          certify_quintic_ph_continuous_envelope(candidate, config.minimum_clearance,
+          certify_envelope(candidate, config.minimum_clearance,
                                                  clearance_evaluator, config.continuous_envelope,
                                                  envelope_screen_evaluator ? cached_screen
                                                                           : SplineEnvelopeScreenEvaluator{})};
@@ -3877,7 +4019,7 @@ optimize_quintic_ph_trajectory(QuinticPHRoute& route,
     result.paired_obstacle_support_attempts += tightening_statistics.paired_attempts;
     if (shortened) {
       const auto tightened_assessment = assess_trajectory(tightened, config, clearance_evaluator);
-      const auto tightened_envelope = certify_quintic_ph_continuous_envelope(
+      const auto tightened_envelope = certify_envelope(
           tightened, config.minimum_clearance, clearance_evaluator, config.continuous_envelope);
       if (tightened_assessment.violations == 0U && tightened_envelope.legal &&
           (!config.postpolish_route_constraint || config.postpolish_route_constraint(tightened)) &&
@@ -3901,7 +4043,7 @@ optimize_quintic_ph_trajectory(QuinticPHRoute& route,
   auto final_shape_config = config.shape;
   final_shape_config.minimum_bend_radius = config.minimum_bend_radius;
   const auto final_shape = certify_quintic_ph_shape(route, final_shape_config);
-  const auto final_envelope = certify_quintic_ph_continuous_envelope(
+  const auto final_envelope = certify_envelope(
       route, config.minimum_clearance, clearance_evaluator, config.continuous_envelope);
   result.final_violations = best_assessment.violations + final_envelope.violations();
   result.final_shape_violations = final_shape.violations();
@@ -3924,6 +4066,9 @@ optimize_quintic_ph_trajectory(QuinticPHRoute& route,
   result.legal = best_assessment.violations == 0U && final_shape.legal && final_envelope.legal &&
                  (!route_constraint || route_constraint(route));
   result.accepted = result.legal;
+  const auto [span_hits, span_misses] = span_cache.counts();
+  result.span_certificate_cache_hits = span_hits;
+  result.span_certificate_cache_misses = span_misses;
   return result;
 }
 

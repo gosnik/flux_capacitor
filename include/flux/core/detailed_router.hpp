@@ -211,6 +211,11 @@ struct DetailedRouteResult {
   bool generated_tail_cleanup_budget_exhausted{false};
   std::size_t spline_navigation_preparation_builds{0};
   std::size_t spline_navigation_preparation_hits{0};
+  std::size_t spline_obstacle_geometry_hits{0};
+  std::size_t spline_obstacle_geometry_misses{0};
+  std::size_t spline_obstacle_offset_hits{0};
+  std::size_t spline_obstacle_offset_misses{0};
+
   std::uint64_t spline_navigation_preparation_microseconds{0U};
   std::uint64_t spline_trajectory_microseconds{0U};
   std::uint64_t generated_tail_cleanup_microseconds{0U};
@@ -249,6 +254,16 @@ struct DetailedRouteResult {
   std::uint64_t spline_navigation_mesh_microseconds{0U};
   std::uint64_t spline_route_refinement_microseconds{0U};
   std::uint64_t spline_exact_merge_microseconds{0U};
+  std::size_t spline_span_certificate_cache_hits{0U};
+  std::size_t spline_span_certificate_cache_misses{0U};
+  std::size_t spline_equivalent_candidates_skipped{0U};
+  std::size_t spline_non_improving_candidates_skipped{0U};
+  std::size_t incremental_transaction_checks{0U};
+  std::size_t incremental_transaction_changed_objects{0U};
+  std::size_t incremental_transaction_neighbours{0U};
+  std::size_t incremental_transaction_affected_nets{0U};
+  std::size_t incremental_transaction_connectivity_hits{0U};
+  std::size_t incremental_transaction_full_fallbacks{0U};
   std::uint64_t residual_bend_repair_microseconds{0U};
   std::size_t spline_committed_context_retry_tasks{0};
   std::size_t spline_committed_context_retry_commits{0};

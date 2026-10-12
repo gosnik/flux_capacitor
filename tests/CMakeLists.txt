@@ -990,7 +990,7 @@ target_compile_features(flux_regional_tightening_tests PRIVATE cxx_std_20)
 add_test(NAME flux_regional_tightening_tests COMMAND flux_regional_tightening_tests)
 set_tests_properties(flux_regional_tightening_tests PROPERTIES TIMEOUT 120 LABELS "risk;routing")
 
-foreach(mechanism IN ITEMS regional_candidate_policy repair_subset routing_engine_budget routing_avbd copper_scaffold scaffold_curve scaffold_collision scaffold_joint_displacement)
+foreach(mechanism IN ITEMS copper_transaction span_certificate board_free_space_cache regional_candidate_policy repair_subset routing_engine_budget routing_avbd copper_scaffold scaffold_curve scaffold_collision scaffold_joint_displacement)
   add_executable(flux_${mechanism}_tests unit/${mechanism}_tests.cpp)
   target_link_libraries(flux_${mechanism}_tests PRIVATE flux::core)
   target_compile_features(flux_${mechanism}_tests PRIVATE cxx_std_20)

@@ -1,0 +1,22 @@
+{
+  "round": 13,
+  "baseline_revision": "b0af0c4",
+  "baseline_report": "reports/benchmark_history/2026-10-12-progressive-attachments-round12.json",
+  "stage": "curved materialization",
+  "failure": "Repeated whole-board transaction checks, per-net reconstruction of unchanged obstacles and repeated certification of unchanged PH spans dominate avoidable work; lower tiers currently pass.",
+  "hypotheses": [
+    "Infer complete copper deltas and spatially select unchanged neighbours; recompute only affected-net connectivity.",
+    "Reuse per-layer all-owner obstacle catalogs and individual offset geometry keyed by effective clearance.",
+    "Reuse complete legal span proofs within an immutable-field optimization invocation and reject equivalent or provably non-improving local candidates earlier."
+  ],
+  "safety": [
+    "Retain full structural checks and fail closed to full transaction validation on static/rule context changes.",
+    "Never reuse a span certificate across optimizer invocations or altered corridor identities.",
+    "Retain whole-route hull budgets and final whole-board internal and external KiCad validation."
+  ],
+  "baseline_detail_seconds": {
+    "tier0": 55.239082,
+    "tier1": 299.851633
+  },
+  "success_criteria": "Tier0/Tier1 complete with curved tracks and zero opens/DRC; record runtime and cache/pruning counters; no claim of Tier2 progress without its benchmark."
+}

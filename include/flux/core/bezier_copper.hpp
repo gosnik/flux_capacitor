@@ -8,6 +8,8 @@
 
 namespace flux {
 
+inline constexpr Nanometres default_bezier_flattening_tolerance{1'000};
+
 // Each chord is certified to be within centerline_deviation_nm of the mathematical cubic before
 // integer endpoint quantisation, and within quantization_error_nm after it.  Consumers requiring
 // an outer copper proxy enlarge its radius by their sum; connectivity consumers reduce the radius
@@ -30,7 +32,7 @@ struct BezierFlattening {
 // Uses adaptive de Casteljau subdivision. `tolerance` bounds the unquantised cubic-to-chord
 // deviation; integer point rounding is separately reported for every chord.
 [[nodiscard]] BezierFlattening tessellate_track_bezier(
-    const TrackBezier& track, Nanometres tolerance = Nanometres{1'000},
+    const TrackBezier& track, Nanometres tolerance = default_bezier_flattening_tolerance,
     std::size_t maximum_depth = 32U);
 
 // An obstacle/planning view. Curves are removed only from the returned copy and replaced by
@@ -43,7 +45,7 @@ struct ConservativeBezierBoard {
 };
 
 [[nodiscard]] ConservativeBezierBoard flatten_board_beziers_conservatively(
-    const Board& board, Nanometres tolerance = Nanometres{1'000},
+    const Board& board, Nanometres tolerance = default_bezier_flattening_tolerance,
     std::size_t maximum_depth = 32U);
 
 } // namespace flux

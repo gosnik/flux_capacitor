@@ -6,6 +6,7 @@
 #include "flux/core/router_telemetry.hpp"
 
 #include <cstddef>
+#include <optional>
 #include <stop_token>
 #include <vector>
 
@@ -46,6 +47,8 @@ struct MaterializationFeedbackResult {
   std::vector<Pass> passes;
   RoutingEngineOutcome engine_outcome{RoutingEngineOutcome::progressed};
   std::vector<RoutingEngineAttempt> engine_attempts;
+  // Latest retained scaffold snapshot, not cumulative timings across engine actions.
+  std::optional<CopperScaffoldCounters> retained_scaffold_counters;
   std::size_t engine_tightening_actions{0U};
   std::size_t engine_tightening_improvements{0U};
   std::size_t engine_decision_points{0U};

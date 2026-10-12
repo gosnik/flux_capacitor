@@ -1,0 +1,300 @@
+{
+  "round": 12,
+  "experiment": "progressive-endpoint-attachment-generation",
+  "recorded_at": "2026-10-12T01:59:43.217604+00:00",
+  "git_revision": "369115524edf8d2d11e2510328e53a0bc73bfa7d",
+  "revision_note": "Pre-commit HEAD; frozen source hashes identify tested implementation.",
+  "binary_sha256": "8252427b6969dc9749c8c9cb455baacfcd432b53fc2b8bda8e75a43ed85eaa4a",
+  "frozen_source_manifest_sha256": "1f1468809dea0187ac2d4a2db003adb29d4d16f54cb5821ca64c06477a15551a",
+  "configuration": {
+    "sequential": true,
+    "telemetry": "diagnostic",
+    "curved": true,
+    "routing_timeout_seconds": 900,
+    "external_kicad_drc": true,
+    "progressive_default": false
+  },
+  "diagnosis": {
+    "baseline_commit": "3691155",
+    "tier": 1,
+    "board": "bm_svf",
+    "failure": "Scaffold actions total61.07s before materialization; search validates up to128 endpoint attachments per side before using physical feedback. Tier2 prior timeout precedes materialization.",
+    "hypothesis": "Resumable bounded attachment prefixes allow easy escapes to route before broad enumeration while preserving full-set rich fallback and shared search budgets.",
+    "success_criterion": "Progressive synthetic mechanisms pass; final default Tier0/Tier1 curved output and KiCad DRC pass. Tier2 deferred after lower-tier progressive regression.",
+    "decision": "Progressive default regressed Tier1 in Round12a; final implementation opt-in. Verify established eager default with shared rejection dedup and new telemetry."
+  },
+  "validation": {
+    "status": "passed",
+    "release_build": "passed",
+    "binary_sha256": "8252427b6969dc9749c8c9cb455baacfcd432b53fc2b8bda8e75a43ed85eaa4a",
+    "regression_suites_passed": 8,
+    "core_tests_passed": 72,
+    "independent_review": "Duplicate rejected assembly budget starvation fixed; no remaining correctness blocker. Scene preparation timer now includes both collision indexes.",
+    "test_notes": "Existing via-history fixture requires 26 distinct rejected candidates; tight 27-check cap passes with duplicate suppression. New easy detour fixtures use 8000 expansions and 2048 compact budget to allow first prefix to finish.",
+    "eager_flag_smoke": "accepted; nonexistent board reached import error",
+    "cli_flag_smoke": "positive/negative modes accepted; conflicting modes rejected",
+    "test_seconds": 109.47,
+    "final_tiers": [
+      "tier0",
+      "tier1"
+    ],
+    "final_copper": "byte-identical to baseline on both tiers",
+    "cli_json_new_counters": "present and nonnegative in global and detailed outputs"
+  },
+  "progressive_experiment": {
+    "outcome": "stopped after confirmed scaffold regression; not a timeout or completed tier result",
+    "baseline": "3691155",
+    "tier0_detail_seconds": 58.371354,
+    "tier0_baseline_seconds": 55.375148,
+    "tier0_drc_violations": 0,
+    "tier1_scaffold_requests": 78,
+    "tier1_scaffold_satisfied": 72,
+    "tier1_scaffold_missing": 6,
+    "tier1_last_scaffold_completion_seconds": 189.117938,
+    "decision": "retain progressive generation as opt-in; restore eager default; no Tier2 promotion",
+    "binary_sha256": "d83652822bffbe676b0505b7f0ab1b7d8afef191270871513e57f4813f77143d"
+  },
+  "comparison": {
+    "tier0": {
+      "baseline_detail_seconds": 55.37514805298997,
+      "detail_seconds": 55.23908205499174,
+      "change_percent": -0.2457167209160782,
+      "complete": true,
+      "stop_reason": "complete",
+      "open_connections": 0,
+      "counts": {
+        "added_track_arcs": 28,
+        "added_track_beziers": 383,
+        "added_tracks": 175,
+        "added_vias": 3,
+        "copper_violation_counts": {},
+        "copper_violations": 0,
+        "unrounded_non_junction_bends": 0
+      },
+      "kicad": {
+        "available": true,
+        "violations": 0,
+        "unconnected_items": 0,
+        "categories": {}
+      },
+      "copper_byte_identical": true,
+      "copper_sha256": "aedb2f598244a54e8885bda7066c2d7ec9c63a00de644ac2d055d4333a52b24d",
+      "peak_rss_kib": 580132,
+      "timings_and_gpu": {
+        "residual_bend_repair_microseconds": 6665358,
+        "spline_clearance_batch_microseconds": 99182,
+        "spline_clearance_batch_queries": 767232,
+        "spline_clearance_cpu_fallbacks": 16,
+        "spline_clearance_gpu_dispatches": 161,
+        "spline_clearance_resident_reuses": 138,
+        "spline_clearance_resident_uploads": 23,
+        "spline_envelope_cpu_fallbacks": 0,
+        "spline_envelope_gpu_dispatches": 2222,
+        "spline_envelope_microseconds": 940793,
+        "spline_envelope_proven_clear": 57935,
+        "spline_envelope_queries": 59976,
+        "spline_envelope_resident_reuses": 2222,
+        "spline_envelope_resident_uploads": 0,
+        "spline_exact_merge_microseconds": 6609800,
+        "spline_gpu_polish_batches": 1145,
+        "spline_gpu_polish_candidates": 79235,
+        "spline_gpu_polish_cpu_fallbacks": 0,
+        "spline_gpu_polish_dispatches": 985,
+        "spline_gpu_polish_exact_shortlist_checks": 9160,
+        "spline_gpu_polish_microseconds": 486611,
+        "spline_gpu_precondition_accepted": 12,
+        "spline_gpu_precondition_attempts": 59,
+        "spline_gpu_precondition_cpu_fallbacks": 0,
+        "spline_gpu_precondition_dispatches": 59,
+        "spline_gpu_precondition_legal": 12,
+        "spline_gpu_precondition_solve_us": 11343,
+        "spline_navigation_mesh_microseconds": 10648323,
+        "spline_navigation_preparation_microseconds": 35786123,
+        "spline_navmesh_geometry_builds": 50,
+        "spline_navmesh_geometry_hits": 168,
+        "spline_navmesh_prepared_builds": 218,
+        "spline_navmesh_prepared_evictions": 59,
+        "spline_navmesh_prepared_hits": 0,
+        "spline_navmesh_prepared_waits": 0,
+        "spline_realization_microseconds": 37577116,
+        "spline_route_refinement_microseconds": 89394371,
+        "spline_screening_batched_chords": 318917,
+        "spline_screening_batches": 188,
+        "spline_screening_cache_hits": 87853,
+        "spline_screening_cache_misses": 318917,
+        "spline_screening_coalesced_waits": 138216,
+        "spline_screening_gpu_dispatches": 1746,
+        "spline_screening_gpu_pruned_work_items": 356253655,
+        "spline_screening_gpu_work_items": 15690088,
+        "spline_screening_microseconds": 1317179,
+        "spline_screening_resident_reuses": 1694,
+        "spline_screening_resident_uploads": 52,
+        "spline_trajectory_microseconds": 25646314
+      },
+      "retained_scaffold_search": {
+        "access_generation_microseconds": 6194,
+        "attachment_generation_microseconds": 4561,
+        "attachment_search_early_successes": 0,
+        "attachment_search_probes": 270,
+        "attachment_search_rounds": 1,
+        "compact_search_expansions": 24,
+        "domain_build_microseconds": 202,
+        "duplicate_rejected_assemblies": 0,
+        "edge_validation_microseconds": 4738,
+        "exact_goal_validation_microseconds": 32251,
+        "expansions": 24,
+        "search_microseconds": 34023,
+        "source_attachments": 128,
+        "target_attachments": 128
+      },
+      "engine_phases": [
+        {
+          "action": "global",
+          "elapsed_microseconds": 12575516,
+          "work_units": 7717
+        },
+        {
+          "action": "copper-scaffold",
+          "elapsed_microseconds": 1999160,
+          "work_units": 4639
+        },
+        {
+          "action": "copper-scaffold",
+          "elapsed_microseconds": 1948735,
+          "work_units": 682
+        },
+        {
+          "action": "materialize",
+          "elapsed_microseconds": 37810486,
+          "work_units": 6337
+        }
+      ]
+    },
+    "tier1": {
+      "baseline_detail_seconds": 300.4261820630054,
+      "detail_seconds": 299.8516333550215,
+      "change_percent": -0.19124455266799067,
+      "complete": true,
+      "stop_reason": "complete",
+      "open_connections": 0,
+      "counts": {
+        "added_track_arcs": 105,
+        "added_track_beziers": 407,
+        "added_tracks": 442,
+        "added_vias": 57,
+        "copper_violation_counts": {},
+        "copper_violations": 0,
+        "unrounded_non_junction_bends": 0
+      },
+      "kicad": {
+        "available": true,
+        "violations": 0,
+        "unconnected_items": 0,
+        "categories": {}
+      },
+      "copper_byte_identical": true,
+      "copper_sha256": "e590ca054a300ac5ed05684e32eb934c1396007983c536ca0fd2c0548b662e85",
+      "peak_rss_kib": 583940,
+      "timings_and_gpu": {
+        "residual_bend_repair_microseconds": 32804744,
+        "spline_clearance_batch_microseconds": 149455,
+        "spline_clearance_batch_queries": 1732224,
+        "spline_clearance_cpu_fallbacks": 54,
+        "spline_clearance_gpu_dispatches": 132,
+        "spline_clearance_resident_reuses": 74,
+        "spline_clearance_resident_uploads": 58,
+        "spline_envelope_cpu_fallbacks": 0,
+        "spline_envelope_gpu_dispatches": 3759,
+        "spline_envelope_microseconds": 1606922,
+        "spline_envelope_proven_clear": 77110,
+        "spline_envelope_queries": 88195,
+        "spline_envelope_resident_reuses": 3754,
+        "spline_envelope_resident_uploads": 5,
+        "spline_exact_merge_microseconds": 17517910,
+        "spline_gpu_polish_batches": 1798,
+        "spline_gpu_polish_candidates": 120704,
+        "spline_gpu_polish_cpu_fallbacks": 0,
+        "spline_gpu_polish_dispatches": 1491,
+        "spline_gpu_polish_exact_shortlist_checks": 14384,
+        "spline_gpu_polish_microseconds": 752396,
+        "spline_gpu_precondition_accepted": 56,
+        "spline_gpu_precondition_attempts": 113,
+        "spline_gpu_precondition_cpu_fallbacks": 0,
+        "spline_gpu_precondition_dispatches": 113,
+        "spline_gpu_precondition_legal": 51,
+        "spline_gpu_precondition_solve_us": 29039,
+        "spline_navigation_mesh_microseconds": 73185971,
+        "spline_navigation_preparation_microseconds": 129670416,
+        "spline_navmesh_geometry_builds": 5056,
+        "spline_navmesh_geometry_hits": 373,
+        "spline_navmesh_prepared_builds": 5429,
+        "spline_navmesh_prepared_evictions": 233,
+        "spline_navmesh_prepared_hits": 0,
+        "spline_navmesh_prepared_waits": 0,
+        "spline_realization_microseconds": 202353176,
+        "spline_route_refinement_microseconds": 549771053,
+        "spline_screening_batched_chords": 3015614,
+        "spline_screening_batches": 966,
+        "spline_screening_cache_hits": 344181,
+        "spline_screening_cache_misses": 3015614,
+        "spline_screening_coalesced_waits": 1334917,
+        "spline_screening_gpu_dispatches": 33886,
+        "spline_screening_gpu_pruned_work_items": 8367364871,
+        "spline_screening_gpu_work_items": 222267441,
+        "spline_screening_microseconds": 16375921,
+        "spline_screening_resident_reuses": 33634,
+        "spline_screening_resident_uploads": 252,
+        "spline_trajectory_microseconds": 59435552
+      },
+      "retained_scaffold_search": {
+        "access_generation_microseconds": 100172,
+        "attachment_generation_microseconds": 40838,
+        "attachment_search_early_successes": 0,
+        "attachment_search_probes": 2411,
+        "attachment_search_rounds": 9,
+        "compact_search_expansions": 32664,
+        "domain_build_microseconds": 2336,
+        "duplicate_rejected_assemblies": 0,
+        "edge_validation_microseconds": 1802308,
+        "exact_goal_validation_microseconds": 309472,
+        "expansions": 32664,
+        "search_microseconds": 2420531,
+        "source_attachments": 1152,
+        "target_attachments": 1152
+      },
+      "engine_phases": [
+        {
+          "action": "global",
+          "elapsed_microseconds": 33744645,
+          "work_units": 425420
+        },
+        {
+          "action": "copper-scaffold",
+          "elapsed_microseconds": 52391365,
+          "work_units": 2989040
+        },
+        {
+          "action": "copper-scaffold",
+          "elapsed_microseconds": 3150294,
+          "work_units": 19851
+        },
+        {
+          "action": "copper-scaffold",
+          "elapsed_microseconds": 5359686,
+          "work_units": 70132
+        },
+        {
+          "action": "materialize",
+          "elapsed_microseconds": 203981397,
+          "work_units": 13295
+        }
+      ]
+    }
+  },
+  "decision": "Keep progressive mode opt-in after lower-tier regression; retain default eager search, shared rejection deduplication and telemetry.",
+  "tier2": "Deferred because progressive experiment regressed Tier1; no claim of improvement.",
+  "artifacts": {
+    "final": "reports/validation/progressive-attachments-round12-20261012",
+    "progressive_trial": "reports/validation/progressive-attachments-round12a-20261012"
+  }
+}

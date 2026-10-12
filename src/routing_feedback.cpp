@@ -237,6 +237,8 @@ run_persistent_routing_session(const Board& planning_board, const Board& materia
   if (const auto* selected = engine.selected_detailed()) result.detailed = *selected;
   result.engine_outcome = engine.state().outcome;
   result.engine_attempts = engine.state().attempts;
+  if (engine.state().legal_scaffold)
+    result.retained_scaffold_counters = engine.state().legal_scaffold->counters;
   result.engine_tightening_actions = engine.state().tightening_actions;
   result.engine_tightening_improvements = engine.state().tightening_improvements;
   result.engine_decision_points = engine.state().decision_points;
@@ -294,7 +296,7 @@ MaterializationFeedbackResult refine_materialization_with_routability_feedback(
     const RoutingPlannerConfig& planner_config, const DetailedRouterConfig& detailed_config,
     std::size_t max_feedback_passes, std::stop_token stop_token, RouterTelemetrySink* telemetry) {
   MaterializationFeedbackResult result{
-      std::move(initial_routing), std::move(initial_detailed), false, false, {}, RoutingEngineOutcome::progressed, {}};
+      std::move(initial_routing), std::move(initial_detailed), false, false, {}, RoutingEngineOutcome::progressed, {}, std::nullopt};
   if (max_feedback_passes == 0U || result.detailed.complete() ||
       result.detailed.provisional_zone_refill_candidate() ||
       result.detailed.routability_diagnoses.empty() || stop_token.stop_requested()) {

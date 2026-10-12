@@ -1,0 +1,468 @@
+--- a/apps/flux-cli/main.cpp
++++ b/apps/flux-cli/main.cpp
+@@ -4253,0 +4254,10 @@
++                << ", \"attachment_search_rounds\": " << scaffold.counters.attachment_search_rounds
++                << ", \"attachment_search_probes\": " << scaffold.counters.attachment_search_probes
++                << ", \"attachment_search_early_successes\": " << scaffold.counters.attachment_search_early_successes
++                << ", \"duplicate_rejected_assemblies\": " << scaffold.counters.duplicate_rejected_assemblies
++                << ", \"access_generation_microseconds\": " << scaffold.counters.access_generation_microseconds
++                << ", \"domain_build_microseconds\": " << scaffold.counters.domain_build_microseconds
++                << ", \"attachment_generation_microseconds\": " << scaffold.counters.attachment_generation_microseconds
++                << ", \"edge_validation_microseconds\": " << scaffold.counters.edge_validation_microseconds
++                << ", \"exact_goal_validation_microseconds\": " << scaffold.counters.exact_goal_validation_microseconds
++                << ", \"search_microseconds\": " << scaffold.counters.search_microseconds
+@@ -5489,0 +5500,19 @@
++    if (session->retained_scaffold_counters) {
++      const auto& counters = *session->retained_scaffold_counters;
++      std::cout << ",\n  \"retained_scaffold_search\": {";
++      std::cout << "\"expansions\": " << counters.expansions;
++      std::cout << ", \"compact_search_expansions\": " << counters.compact_search_expansions;
++      std::cout << ", \"source_attachments\": " << counters.source_attachments;
++      std::cout << ", \"target_attachments\": " << counters.target_attachments;
++      std::cout << ", \"attachment_search_rounds\": " << counters.attachment_search_rounds;
++      std::cout << ", \"attachment_search_probes\": " << counters.attachment_search_probes;
++      std::cout << ", \"attachment_search_early_successes\": " << counters.attachment_search_early_successes;
++      std::cout << ", \"duplicate_rejected_assemblies\": " << counters.duplicate_rejected_assemblies;
++      std::cout << ", \"access_generation_microseconds\": " << counters.access_generation_microseconds;
++      std::cout << ", \"domain_build_microseconds\": " << counters.domain_build_microseconds;
++      std::cout << ", \"attachment_generation_microseconds\": " << counters.attachment_generation_microseconds;
++      std::cout << ", \"edge_validation_microseconds\": " << counters.edge_validation_microseconds;
++      std::cout << ", \"exact_goal_validation_microseconds\": " << counters.exact_goal_validation_microseconds;
++      std::cout << ", \"search_microseconds\": " << counters.search_microseconds;
++      std::cout << "}";
++    }
+@@ -7970,0 +8000 @@
++  bool eager_endpoint_attachments{false};
+@@ -8206,0 +8237,4 @@
++    } else if (argument == "--eager-endpoint-attachments") {
++      if ((std::string_view{argv[1]} != "route-kicad" && std::string_view{argv[1]} != "detail-kicad") ||
++          result.eager_endpoint_attachments) return std::nullopt;
++      result.eager_endpoint_attachments = true;
+@@ -9704 +9738 @@
+-               "[--max-regional-bundle-states N] [--max-straight-portfolio-checks N] [--max-straight-joint-windows 0..4] [--routing-engine-policy adaptive|legacy] [--routing-timeout-ms N] [--routing-slice-ms N] [--routing-slice-work N] [--routing-max-actions N] [--curved-tracks|--straight-tracks] "
++               "[--max-regional-bundle-states N] [--max-straight-portfolio-checks N] [--max-straight-joint-windows 0..4] [--eager-endpoint-attachments] [--routing-engine-policy adaptive|legacy] [--routing-timeout-ms N] [--routing-slice-ms N] [--routing-slice-work N] [--routing-max-actions N] [--curved-tracks|--straight-tracks] "
+@@ -9808 +9842 @@
+-               "[--max-straight-portfolio-checks N] [--max-straight-joint-windows 0..4] [--routing-engine-policy adaptive|legacy] [--routing-timeout-ms N] [--routing-slice-ms N] [--routing-slice-work N] [--routing-max-actions N] "
++               "[--max-straight-portfolio-checks N] [--max-straight-joint-windows 0..4] [--eager-endpoint-attachments] [--routing-engine-policy adaptive|legacy] [--routing-timeout-ms N] [--routing-slice-ms N] [--routing-slice-work N] [--routing-max-actions N] "
+@@ -10743,0 +10778 @@
++    engine_config.copper_scaffold.progressive_attachment_search = !tail->eager_endpoint_attachments;
+@@ -10879,0 +10915 @@
++    session_config.engine.copper_scaffold.progressive_attachment_search = !tail->eager_endpoint_attachments;
+--- a/include/flux/core/copper_scaffold.hpp
++++ b/include/flux/core/copper_scaffold.hpp
+@@ -51,0 +52,6 @@
++  // Start attachment search from small, stable prefixes and widen only after a bounded search
++  // fails.  The raw probe cap bounds each cursor advance when few grid candidates are legal.
++  bool progressive_attachment_search{true};
++  std::size_t initial_attachment_states{8U};
++  std::size_t expanded_attachment_states{32U};
++  std::size_t maximum_attachment_probes_per_round{256U};
+@@ -195,0 +202 @@
++  std::size_t duplicate_rejected_assemblies{0U};
+@@ -199,0 +207,9 @@
++  std::size_t attachment_search_rounds{0U};
++  std::size_t attachment_search_probes{0U};
++  std::size_t attachment_search_early_successes{0U};
++  std::uint64_t access_generation_microseconds{0U};
++  std::uint64_t domain_build_microseconds{0U};
++  std::uint64_t attachment_generation_microseconds{0U};
++  std::uint64_t edge_validation_microseconds{0U};
++  std::uint64_t exact_goal_validation_microseconds{0U};
++  std::uint64_t search_microseconds{0U};
+--- a/include/flux/core/routing_feedback.hpp
++++ b/include/flux/core/routing_feedback.hpp
+@@ -8,0 +9 @@
++#include <optional>
+@@ -48,0 +50,2 @@
++  // Latest retained scaffold snapshot, not cumulative timings across engine actions.
++  std::optional<CopperScaffoldCounters> retained_scaffold_counters;
+--- a/src/copper_scaffold.cpp
++++ b/src/copper_scaffold.cpp
+@@ -19,0 +20 @@
++#include <chrono>
+@@ -143,0 +145,9 @@
++struct CounterTimer {
++  std::uint64_t& total;
++  std::chrono::steady_clock::time_point started{std::chrono::steady_clock::now()};
++  ~CounterTimer() {
++    total += static_cast<std::uint64_t>(
++        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count());
++  }
++};
++
+@@ -263,0 +274,13 @@
++  return identity.str();
++}
++// A rejected assembly can be rediscovered after an attachment-prefix restart through a
++// different compact label.  Exact validation is deterministic for this immutable scene, so
++// share this identity across compact and rich searches without suppressing distinct approaches.
++[[nodiscard]] std::string assembled_path_identity(const GlobalRoutePath& path) {
++  std::ostringstream identity;
++  identity << path.net.value().size() << ':' << path.net.value() << ':' << path.connection_index;
++  for (const auto& point : path.points)
++    identity << ':' << point.position.x.value() << ',' << point.position.y.value() << ','
++             << point.layer.value().size() << ':' << point.layer.value();
++  for (const auto width : path.segment_widths) identity << ":w" << width.value();
++  for (const auto kind : path.segment_width_kinds) identity << ":k" << static_cast<int>(kind);
+@@ -363,0 +387 @@
++  const auto access_started = std::chrono::steady_clock::now();
+@@ -364,0 +389,2 @@
++  counters.access_generation_microseconds += static_cast<std::uint64_t>(
++      std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - access_started).count());
+@@ -400,0 +427 @@
++  const auto domain_started = std::chrono::steady_clock::now();
+@@ -401,0 +429,2 @@
++  counters.domain_build_microseconds += static_cast<std::uint64_t>(
++      std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - domain_started).count());
+@@ -406,0 +436 @@
++  const auto collision_started = std::chrono::steady_clock::now();
+@@ -409,0 +440,2 @@
++  counters.domain_build_microseconds += static_cast<std::uint64_t>(
++      std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - collision_started).count());
+@@ -432,0 +465 @@
++    CounterTimer edge_timer{counters.edge_validation_microseconds};
+@@ -470 +503,3 @@
+-  const auto attachments = [&](const std::vector<GlobalRoutePoint>& anchors) {
++  struct AttachmentCursor {
++    std::int64_t ring{0U}, anchor{0U}, dy{0U}, dx{0U};
++    bool initialized{false}, exhausted{false};
+@@ -471,0 +507,8 @@
++  };
++  // This is deliberately a cursor rather than a filtered precomputation.  Boards with many
++  // blocked pad escapes used to spend all attachment preparation time before a single maze
++  // probe could run.  Its traversal is the former ring-before-anchor order verbatim.
++  const auto advance_attachments = [&](AttachmentCursor& cursor,
++                                       const std::vector<GlobalRoutePoint>& anchors,
++                                       std::size_t wanted, std::size_t raw_probe_limit) {
++    const auto started = std::chrono::steady_clock::now();
+@@ -473 +516,22 @@
+-    for (std::int64_t ring = 0; ring <= radius; ++ring) for (const auto& endpoint : anchors) {
++    std::size_t probes = 0U;
++    if (!cursor.initialized) { cursor.initialized = true; cursor.dy = 0U; cursor.dx = 0U; }
++    while (!cursor.exhausted && cursor.result.size() < wanted &&
++           (raw_probe_limit == 0U || probes < raw_probe_limit)) {
++      if (cursor.ring > radius || anchors.empty()) {
++        cursor.exhausted = true; break;
++      }
++      if (cursor.anchor >= static_cast<std::int64_t>(anchors.size())) {
++        cursor.anchor = 0; ++cursor.ring; cursor.dy = -cursor.ring; cursor.dx = -cursor.ring;
++        continue;
++      }
++      const auto& endpoint = anchors[static_cast<std::size_t>(cursor.anchor)];
++      if (cursor.dy > cursor.ring) { ++cursor.anchor; cursor.dy = -cursor.ring; cursor.dx = -cursor.ring; continue; }
++      if (cursor.dx > cursor.ring) {
++        cursor.dx = -cursor.ring; ++cursor.dy; continue;
++      }
++      const auto dx = cursor.dx++;
++      const auto dy = cursor.dy;
++      if (std::max(std::abs(dx), std::abs(dy)) != cursor.ring) continue;
++      ++probes; ++counters.attachment_search_probes;
++      routing_kernel_checkpoint();
++      if (token.stop_requested()) { counters.cancelled = true; break; }
+@@ -477,19 +541,16 @@
+-      for (std::int64_t dy = -ring; dy <= ring; ++dy) for (std::int64_t dx = -ring; dx <= ring; ++dx) {
+-        routing_kernel_checkpoint();
+-        if (token.stop_requested()) { counters.cancelled = true; return result; }
+-        if (std::max(std::abs(dx), std::abs(dy)) != ring) continue;
+-        if (result.size() >= config.maximum_attachment_states) return result;
+-        const Node node{x + dx, y + dy, *layer};
+-        if (node.x < 0 || node.y < 0 || node.x > xmax || node.y > ymax) continue;
+-        const auto point = point_for(node, minimum, config.grid_pitch);
+-        if (!domain.map->exact_query(point.x.value(), point.y.value()).inside) continue;
+-        if (point != endpoint.position &&
+-            (!geometry::segment_inside_board_area(endpoint.position, point, base) ||
+-             !edge_is_legal(endpoint.position, endpoint.layer, point, endpoint.layer, result.size())))
+-          continue;
+-        if (std::none_of(result.begin(), result.end(), [&](const auto& old) {
+-              return old.node == node && old.anchor == endpoint;
+-            })) result.push_back({node, endpoint, attachment_cost(point, endpoint.position)});
+-      }
+-    }
+-    return result;
++      const Node node{x + dx, y + dy, *layer};
++      if (node.x < 0 || node.y < 0 || node.x > xmax || node.y > ymax) continue;
++      const auto point = point_for(node, minimum, config.grid_pitch);
++      if (!domain.map->exact_query(point.x.value(), point.y.value()).inside) continue;
++      if (point != endpoint.position) {
++        if (!geometry::segment_inside_board_area(endpoint.position, point, base)) continue;
++        const bool legal = edge_is_legal(endpoint.position, endpoint.layer, point, endpoint.layer,
++                                         cursor.result.size());
++        if (!legal) continue;
++      }
++      if (std::none_of(cursor.result.begin(), cursor.result.end(), [&](const auto& old) {
++            return old.node == node && old.anchor == endpoint;
++          })) cursor.result.push_back({node, endpoint, attachment_cost(point, endpoint.position)});
++    }
++    counters.attachment_generation_microseconds += static_cast<std::uint64_t>(
++        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count());
+@@ -497,2 +558,24 @@
+-  const auto starts = attachments(access.starts);
+-  const auto goals = attachments(access.goals);
++  AttachmentCursor source_cursor, target_cursor;
++  if (config.maximum_attachment_states == 0U) {
++    finish(CopperScaffoldSearchTermination::attachment_exhausted); return std::nullopt;
++  }
++  const auto attachment_target = config.progressive_attachment_search
++      ? std::min(config.maximum_attachment_states, std::max<std::size_t>(1U, config.initial_attachment_states))
++      : config.maximum_attachment_states;
++  advance_attachments(source_cursor, access.starts, attachment_target,
++                      config.progressive_attachment_search ? config.maximum_attachment_probes_per_round : 0U);
++  advance_attachments(target_cursor, access.goals, attachment_target,
++                      config.progressive_attachment_search ? config.maximum_attachment_probes_per_round : 0U);
++  auto& starts = source_cursor.result;
++  auto& goals = target_cursor.result;
++  // A sparse legal prefix must still get a search chance, but cannot be called exhausted merely
++  // because its first bounded raw-probe slice found no legal cell.
++  while ((starts.empty() && !source_cursor.exhausted) || (goals.empty() && !target_cursor.exhausted)) {
++    if (counters.cancelled) break;
++    if (starts.empty() && !source_cursor.exhausted)
++      advance_attachments(source_cursor, access.starts, attachment_target,
++                          config.progressive_attachment_search ? config.maximum_attachment_probes_per_round : 0U);
++    if (goals.empty() && !target_cursor.exhausted && !counters.cancelled)
++      advance_attachments(target_cursor, access.goals, attachment_target,
++                          config.progressive_attachment_search ? config.maximum_attachment_probes_per_round : 0U);
++  }
+@@ -539,0 +623 @@
++  std::set<std::string> rejected_assemblies;
+@@ -541 +625,5 @@
+-  if (!passage_search && compact_limit > 0U && compact_goal_limit > 0U) {
++  bool compact_round_budget_exhausted = false;
++  const auto run_compact = [&](std::size_t round_expansion_limit,
++                               std::size_t round_goal_limit) -> std::optional<Trial> {
++    if (passage_search || round_expansion_limit == 0U || round_goal_limit == 0U) return std::nullopt;
++    CounterTimer search_timer{counters.search_microseconds};
+@@ -542,0 +631,2 @@
++    ++counters.attachment_search_rounds;
++    std::size_t round_used = 0U;
+@@ -556,2 +646,2 @@
+-    while (!compact_open.empty() && compact_used < compact_limit &&
+-           goal_attempts < compact_goal_limit) {
++    while (!compact_open.empty() && round_used < round_expansion_limit &&
++           goal_attempts < round_goal_limit) {
+@@ -565 +655 @@
+-      ++compact_used; ++counters.expansions; ++counters.compact_search_expansions;
++      ++compact_used; ++round_used; ++counters.expansions; ++counters.compact_search_expansions;
+@@ -568 +658 @@
+-        if (goal_attempts >= compact_goal_limit) break;
++        if (goal_attempts >= round_goal_limit) break;
+@@ -573 +662,0 @@
+-        ++goal_attempts;
+@@ -588,0 +678,5 @@
++        if (!rejected_assemblies.emplace(assembled_path_identity(path)).second) {
++          ++counters.duplicate_rejected_assemblies;
++          continue;
++        }
++        ++goal_attempts;
+@@ -590 +684,5 @@
+-        if (legal_trial(base, path, index, trial) && scaffold_request_connected(trial.board, request)) {
++        const auto exact_started = std::chrono::steady_clock::now();
++        const bool exact_legal = legal_trial(base, path, index, trial) && scaffold_request_connected(trial.board, request);
++        counters.exact_goal_validation_microseconds += static_cast<std::uint64_t>(
++            std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - exact_started).count());
++        if (exact_legal) {
+@@ -591,0 +690,4 @@
++          if (config.progressive_attachment_search &&
++              ((starts.size() < config.maximum_attachment_states && !source_cursor.exhausted) ||
++               (goals.size() < config.maximum_attachment_states && !target_cursor.exhausted)))
++            ++counters.attachment_search_early_successes;
+@@ -622,0 +725,2 @@
++    compact_round_budget_exhausted = round_used >= round_expansion_limit ||
++                                     goal_attempts >= round_goal_limit;
+@@ -623,0 +728,60 @@
++    return std::nullopt;
++  };
++  const auto widen = [&](AttachmentCursor& cursor, const auto& anchors, std::size_t wanted) {
++    while (cursor.result.size() < wanted && !cursor.exhausted && !counters.cancelled)
++      advance_attachments(cursor, anchors, wanted,
++                          config.progressive_attachment_search ? config.maximum_attachment_probes_per_round : 0U);
++  };
++  const auto refresh_goals = [&] {
++    goals_at.clear(); estimates.clear();
++    for (std::size_t i = 0U; i < goals.size(); ++i) goals_at[goals[i].node].push_back(i);
++    if (access_evidence != nullptr) {
++      access_evidence->source_legal_attachments = starts.size();
++      access_evidence->target_legal_attachments = goals.size();
++    }
++  };
++  if (!passage_search && compact_limit > 0U && compact_goal_limit > 0U) {
++    if (!config.progressive_attachment_search) {
++      if (auto trial = run_compact(compact_limit, compact_goal_limit)) return trial;
++      if (counters.cancelled) return std::nullopt;
++    } else {
++      const auto first_expansions = std::max<std::size_t>(1U, compact_limit / 4U);
++      const auto first_goals = std::max<std::size_t>(1U, compact_goal_limit / 4U);
++      if (auto trial = run_compact(first_expansions, first_goals)) return trial;
++      if (counters.cancelled) return std::nullopt;
++      const auto middle = std::min(config.maximum_attachment_states,
++                                   std::max(attachment_target, config.expanded_attachment_states));
++      const auto source_before = starts.size(), target_before = goals.size();
++      widen(source_cursor, access.starts, middle); widen(target_cursor, access.goals, middle);
++      counters.source_attachments += starts.size() - source_before;
++      counters.target_attachments += goals.size() - target_before;
++      refresh_goals();
++      const auto half_expansions = compact_limit / 2U;
++      const auto half_goals = compact_goal_limit / 2U;
++      const bool middle_changed = starts.size() != source_before || goals.size() != target_before;
++      if (compact_used < half_expansions && goal_attempts < half_goals &&
++          (middle_changed || compact_round_budget_exhausted)) {
++        if (auto trial = run_compact(half_expansions - compact_used, half_goals)) return trial;
++        if (counters.cancelled) return std::nullopt;
++      }
++      const auto source_full_before = starts.size(), target_full_before = goals.size();
++      widen(source_cursor, access.starts, config.maximum_attachment_states);
++      widen(target_cursor, access.goals, config.maximum_attachment_states);
++      counters.source_attachments += starts.size() - source_full_before;
++      counters.target_attachments += goals.size() - target_full_before;
++      refresh_goals();
++      const bool full_changed = starts.size() != source_full_before || goals.size() != target_full_before;
++      if (compact_used < compact_limit && goal_attempts < compact_goal_limit &&
++          (full_changed || compact_round_budget_exhausted)) {
++        if (auto trial = run_compact(compact_limit - compact_used, compact_goal_limit)) return trial;
++        if (counters.cancelled) return std::nullopt;
++      }
++    }
++  } else if (config.progressive_attachment_search) {
++    // A disabled compact phase still needs the complete legal attachment universe for rich A*.
++    const auto source_before = starts.size(), target_before = goals.size();
++    widen(source_cursor, access.starts, config.maximum_attachment_states);
++    widen(target_cursor, access.goals, config.maximum_attachment_states);
++    counters.source_attachments += starts.size() - source_before;
++    counters.target_attachments += goals.size() - target_before;
++    refresh_goals();
+@@ -652,0 +817 @@
++  CounterTimer rich_search_timer{counters.search_microseconds};
+@@ -660 +824,0 @@
+-    ++goal_attempts;
+@@ -675,0 +840,5 @@
++    if (!rejected_assemblies.emplace(assembled_path_identity(path)).second) {
++      ++counters.duplicate_rejected_assemblies;
++      return std::nullopt;
++    }
++    ++goal_attempts;
+@@ -677 +846,5 @@
+-    if (legal_trial(base, path, index, trial) && scaffold_request_connected(trial.board, request)) {
++    const auto exact_started = std::chrono::steady_clock::now();
++    const bool exact_legal = legal_trial(base, path, index, trial) && scaffold_request_connected(trial.board, request);
++    counters.exact_goal_validation_microseconds += static_cast<std::uint64_t>(
++        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - exact_started).count());
++    if (exact_legal) {
+--- a/src/routing_feedback.cpp
++++ b/src/routing_feedback.cpp
+@@ -239,0 +240,2 @@
++  if (engine.state().legal_scaffold)
++    result.retained_scaffold_counters = engine.state().legal_scaffold->counters;
+@@ -297 +299 @@
+-      std::move(initial_routing), std::move(initial_detailed), false, false, {}, RoutingEngineOutcome::progressed, {}};
++      std::move(initial_routing), std::move(initial_detailed), false, false, {}, RoutingEngineOutcome::progressed, {}, std::nullopt};
+--- a/tests/unit/copper_scaffold_tests.cpp
++++ b/tests/unit/copper_scaffold_tests.cpp
+@@ -467 +467,4 @@
+-  config.maximum_goal_attempts = 256U;
++  config.initial_attachment_states = 1U;
++  config.expanded_attachment_states = 1U;
++  config.maximum_goal_attempts = 27U;
++  config.maximum_expansions_per_connection = 100'000U;
+@@ -469,2 +472,9 @@
+-  require(result.complete && result.counters.goal_rejections > 0U,
+-          "a rejected assembly must leave different via histories at the same endpoint state searchable");
++  require(result.complete && result.counters.goal_rejections > 0U &&
++              result.counters.goal_rejections < config.maximum_goal_attempts &&
++              result.counters.duplicate_rejected_assemblies > 0U &&
++              result.counters.expansions <= config.maximum_expansions_per_connection,
++          ("a rejected assembly must leave different via histories searchable without replenishing "
++          "the shared goal or expansion budget: complete=" + std::to_string(result.complete) +
++          " rejected=" + std::to_string(result.counters.goal_rejections) +
++          " duplicates=" + std::to_string(result.counters.duplicate_rejected_assemblies) +
++          " expansions=" + std::to_string(result.counters.expansions)).c_str());
+@@ -522,2 +532,4 @@
+-  require(result.complete && result.counters.compact_search_attempts == 1U &&
+-              result.counters.compact_search_fallbacks == 1U && result.counters.goal_rejections > 0U &&
++  require(result.complete && result.counters.compact_search_attempts >= 1U &&
++              result.counters.compact_search_attempts <= 3U &&
++              result.counters.compact_search_fallbacks == result.counters.compact_search_attempts &&
++              result.counters.compact_search_successes == 0U && result.counters.goal_rejections > 0U &&
+@@ -539,0 +552,3 @@
++  config.progressive_attachment_search = true;
++  config.initial_attachment_states = 1U;
++  config.expanded_attachment_states = 8U;
+@@ -549 +564,2 @@
+-  require(result.counters.compact_search_expansions > 0U && result.counters.cancelled &&
++  require(result.counters.attachment_search_probes > 0U &&
++              result.counters.compact_search_expansions > 0U && result.counters.cancelled &&
+@@ -647,0 +664,3 @@
++  config.progressive_attachment_search = true;
++  config.initial_attachment_states = 1U;
++  config.expanded_attachment_states = 8U;
+@@ -651,2 +670,67 @@
+-              result.counters.searched_connections > 0U,
+-          "blocked center access must recover through an exact DRC-clean searched pad-edge escape");
++              result.counters.searched_connections > 0U &&
++              result.counters.attachment_search_rounds > 1U &&
++              result.counters.expansions <= config.maximum_expansions_per_connection,
++          "a failed center-only prefix must widen to a DRC-clean searched pad-edge escape without "
++          "multiplying the connection expansion budget");
++}
++void progressive_attachment_search_avoids_eager_attachment_probes() {
++  auto board = fixture();
++  board.layers.resize(1U);
++  board.tracks.push_back({ObjectId{"progressive-blocker"}, NetId{"b"}, LayerId{"F.Cu"},
++                          mm(10,5), mm(10,15), Nanometres::from_mm(0.8), false});
++  const auto demand = request(NetId{"a"}, mm(2,10), LayerId{"F.Cu"},
++                              mm(18,10), LayerId{"F.Cu"});
++  CopperScaffoldConfig progressive;
++  progressive.grid_pitch = Nanometres::from_mm(0.5);
++  progressive.attachment_radius_cells = 2U;
++  progressive.maximum_attachment_states = 32U;
++  progressive.initial_attachment_states = 1U;
++  progressive.expanded_attachment_states = 8U;
++  progressive.maximum_expansions_per_connection = 8'000U;
++  progressive.compact_search_expansions = 2'048U;
++  const auto staged = construct_copper_scaffold(board, {demand}, progressive);
++
++  auto eager_config = progressive;
++  eager_config.progressive_attachment_search = false;
++  const auto eager = construct_copper_scaffold(board, {demand}, eager_config);
++  require(staged.complete && eager.complete && staged.paths.front().points.size() > 2U &&
++              check_copper_rules(staged.copper).ok() && check_copper_rules(eager.copper).ok(),
++          "the probe comparison must use a searched, DRC-clean detour rather than direct copper");
++  require(staged.counters.attachment_search_rounds == 1U &&
++              staged.counters.attachment_search_early_successes == 1U &&
++              staged.counters.attachment_search_probes < eager.counters.attachment_search_probes,
++          "an easy searched connection must finish from the first attachment prefix with fewer probes "
++          "than eager attachment generation");
++  require(staged.counters.expansions <= progressive.maximum_expansions_per_connection &&
++              eager.counters.expansions <= eager_config.maximum_expansions_per_connection,
++          "attachment strategy must retain the original total expansion budget");
++}
++void progressive_attachment_limits_fail_closed_and_clamp_zero_initial_prefix() {
++  auto board = fixture();
++  board.layers.resize(1U);
++  board.tracks.push_back({ObjectId{"attachment-limit-blocker"}, NetId{"b"}, LayerId{"F.Cu"},
++                          mm(10,5), mm(10,15), Nanometres::from_mm(0.8), false});
++  const auto demand = request(NetId{"a"}, mm(2,10), LayerId{"F.Cu"},
++                              mm(18,10), LayerId{"F.Cu"});
++  CopperScaffoldConfig disabled;
++  disabled.grid_pitch = Nanometres::from_mm(0.5);
++  disabled.maximum_attachment_states = 0U;
++  const auto rejected = construct_copper_scaffold(board, {demand}, disabled);
++  require(!rejected.complete && rejected.paths.empty() && rejected.copper == board &&
++              rejected.request_evidence.size() == 1U &&
++              rejected.request_evidence.front().termination == CopperScaffoldSearchTermination::attachment_exhausted,
++          "a zero attachment-state limit must fail closed after direct copper is rejected");
++
++  CopperScaffoldConfig zero_initial;
++  zero_initial.grid_pitch = Nanometres::from_mm(0.5);
++  zero_initial.maximum_attachment_states = 8U;
++  zero_initial.initial_attachment_states = 0U;
++  zero_initial.expanded_attachment_states = 0U;
++  zero_initial.maximum_attachment_probes_per_round = 1U;
++  zero_initial.maximum_expansions_per_connection = 8'000U;
++  zero_initial.compact_search_expansions = 2'048U;
++  const auto clamped = construct_copper_scaffold(board, {demand}, zero_initial);
++  require(clamped.complete && clamped.counters.attachment_search_probes > 0U &&
++              clamped.counters.expansions <= zero_initial.maximum_expansions_per_connection &&
++              check_copper_rules(clamped.copper).ok(),
++          "a zero initial prefix must clamp to a bounded first probe and retain total search limits");
+@@ -669,0 +754,2 @@
++  progressive_attachment_search_avoids_eager_attachment_probes();
++  progressive_attachment_limits_fail_closed_and_clamp_zero_initial_prefix();

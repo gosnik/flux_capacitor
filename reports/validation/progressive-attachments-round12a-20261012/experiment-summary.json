@@ -1,0 +1,13 @@
+{
+  "outcome": "stopped after confirmed scaffold regression; not a timeout or completed tier result",
+  "baseline": "3691155",
+  "tier0_detail_seconds": 58.371354,
+  "tier0_baseline_seconds": 55.375148,
+  "tier0_drc_violations": 0,
+  "tier1_scaffold_requests": 78,
+  "tier1_scaffold_satisfied": 72,
+  "tier1_scaffold_missing": 6,
+  "tier1_last_scaffold_completion_seconds": 189.117938,
+  "decision": "retain progressive generation as opt-in; restore eager default; no Tier2 promotion",
+  "binary_sha256": "d83652822bffbe676b0505b7f0ab1b7d8afef191270871513e57f4813f77143d"
+}

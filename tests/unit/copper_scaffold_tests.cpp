@@ -463,11 +463,22 @@ void rejected_goal_assembly_does_not_end_connection_search() {
                             ring[i], ring[(i + 1U) % ring.size()], Nanometres::from_mm(0.2), false});
   const auto path = request(NetId{"a"}, mm(8,10), LayerId{"F.Cu"}, mm(12,10), LayerId{"F.Cu"});
   CopperScaffoldConfig config; config.grid_pitch = Nanometres::from_mm(0.5);
+  config.progressive_attachment_search = true;
   config.maximum_attachment_states = 1U;
-  config.maximum_goal_attempts = 256U;
+  config.initial_attachment_states = 1U;
+  config.expanded_attachment_states = 1U;
+  config.maximum_goal_attempts = 27U;
+  config.maximum_expansions_per_connection = 100'000U;
   const auto result = construct_copper_scaffold(board, {path}, config);
-  require(result.complete && result.counters.goal_rejections > 0U,
-          "a rejected assembly must leave different via histories at the same endpoint state searchable");
+  require(result.complete && result.counters.goal_rejections > 0U &&
+              result.counters.goal_rejections < config.maximum_goal_attempts &&
+              result.counters.duplicate_rejected_assemblies > 0U &&
+              result.counters.expansions <= config.maximum_expansions_per_connection,
+          ("a rejected assembly must leave different via histories searchable without replenishing "
+          "the shared goal or expansion budget: complete=" + std::to_string(result.complete) +
+          " rejected=" + std::to_string(result.counters.goal_rejections) +
+          " duplicates=" + std::to_string(result.counters.duplicate_rejected_assemblies) +
+          " expansions=" + std::to_string(result.counters.expansions)).c_str());
   require(check_copper_rules(result.copper).ok(), "recovered goal assembly must pass full copper DRC");
 }
 void compact_search_preserves_component_attachment_provenance_within_shared_budget() {
@@ -519,8 +530,10 @@ void compact_search_falls_back_when_via_history_changes_goal_legality() {
   config.maximum_expansions_per_connection = 100'000U;
   config.compact_search_expansions = 128U;
   const auto result = construct_copper_scaffold(board, {demand}, config);
-  require(result.complete && result.counters.compact_search_attempts == 1U &&
-              result.counters.compact_search_fallbacks == 1U && result.counters.goal_rejections > 0U &&
+  require(result.complete && result.counters.compact_search_attempts >= 1U &&
+              result.counters.compact_search_attempts <= 3U &&
+              result.counters.compact_search_fallbacks == result.counters.compact_search_attempts &&
+              result.counters.compact_search_successes == 0U && result.counters.goal_rejections > 0U &&
               result.counters.expansions <= config.maximum_expansions_per_connection,
           "path-dependent via legality must fall through compact dominance to rich-state search");
   require(scaffold_request_connected(result.copper, demand) && check_copper_rules(result.copper).ok(),
@@ -537,6 +550,9 @@ void compact_search_cancellation_records_started_work() {
   config.maximum_joint_passage_candidates = 0U;
   config.maximum_displacement_attempts = 0U;
   config.maximum_coupled_exchange_attempts = 0U;
+  config.progressive_attachment_search = true;
+  config.initial_attachment_states = 1U;
+  config.expanded_attachment_states = 8U;
   CopperScaffoldResult result;
   std::stop_source search_stop;
   RoutingKernel kernel([&](std::stop_token) {
@@ -546,7 +562,8 @@ void compact_search_cancellation_records_started_work() {
           "closed passage must retain an active bounded search");
   search_stop.request_stop();
   while (kernel.advance({2048U, std::chrono::seconds{10}}) != RoutingKernelStatus::finished) {}
-  require(result.counters.compact_search_expansions > 0U && result.counters.cancelled &&
+  require(result.counters.attachment_search_probes > 0U &&
+              result.counters.compact_search_expansions > 0U && result.counters.cancelled &&
               result.request_evidence.size() == 1U &&
               result.request_evidence.front().termination == CopperScaffoldSearchTermination::cancelled,
           ("cancel evidence: compact=" + std::to_string(result.counters.compact_search_expansions) +
@@ -645,11 +662,81 @@ void fine_pitch_rotated_pad_edge_access_reaches_the_scaffold_grid() {
   require(access.goals.size() > 1U, "rotated pad edge escapes must supplement the existing center");
   CopperScaffoldConfig config;
   config.grid_pitch = Nanometres::from_mm(0.1); config.attachment_radius_cells = 2U;
+  config.progressive_attachment_search = true;
+  config.initial_attachment_states = 1U;
+  config.expanded_attachment_states = 8U;
   config.maximum_expansions_per_connection = 5'000U;
   const auto result = construct_copper_scaffold(board, {demand}, config);
   require(result.complete && check_copper_rules(result.copper).ok() &&
-              result.counters.searched_connections > 0U,
-          "blocked center access must recover through an exact DRC-clean searched pad-edge escape");
+              result.counters.searched_connections > 0U &&
+              result.counters.attachment_search_rounds > 1U &&
+              result.counters.expansions <= config.maximum_expansions_per_connection,
+          "a failed center-only prefix must widen to a DRC-clean searched pad-edge escape without "
+          "multiplying the connection expansion budget");
+}
+void progressive_attachment_search_avoids_eager_attachment_probes() {
+  auto board = fixture();
+  board.layers.resize(1U);
+  board.tracks.push_back({ObjectId{"progressive-blocker"}, NetId{"b"}, LayerId{"F.Cu"},
+                          mm(10,5), mm(10,15), Nanometres::from_mm(0.8), false});
+  const auto demand = request(NetId{"a"}, mm(2,10), LayerId{"F.Cu"},
+                              mm(18,10), LayerId{"F.Cu"});
+  CopperScaffoldConfig progressive;
+  progressive.progressive_attachment_search = true;
+  progressive.grid_pitch = Nanometres::from_mm(0.5);
+  progressive.attachment_radius_cells = 2U;
+  progressive.maximum_attachment_states = 32U;
+  progressive.initial_attachment_states = 1U;
+  progressive.expanded_attachment_states = 8U;
+  progressive.maximum_expansions_per_connection = 8'000U;
+  progressive.compact_search_expansions = 2'048U;
+  const auto staged = construct_copper_scaffold(board, {demand}, progressive);
+
+  auto eager_config = progressive;
+  eager_config.progressive_attachment_search = false;
+  const auto eager = construct_copper_scaffold(board, {demand}, eager_config);
+  require(staged.complete && eager.complete && staged.paths.front().points.size() > 2U &&
+              check_copper_rules(staged.copper).ok() && check_copper_rules(eager.copper).ok(),
+          "the probe comparison must use a searched, DRC-clean detour rather than direct copper");
+  require(staged.counters.attachment_search_rounds == 1U &&
+              staged.counters.attachment_search_early_successes == 1U &&
+              staged.counters.attachment_search_probes < eager.counters.attachment_search_probes,
+          "an easy searched connection must finish from the first attachment prefix with fewer probes "
+          "than eager attachment generation");
+  require(staged.counters.expansions <= progressive.maximum_expansions_per_connection &&
+              eager.counters.expansions <= eager_config.maximum_expansions_per_connection,
+          "attachment strategy must retain the original total expansion budget");
+}
+void progressive_attachment_limits_fail_closed_and_clamp_zero_initial_prefix() {
+  auto board = fixture();
+  board.layers.resize(1U);
+  board.tracks.push_back({ObjectId{"attachment-limit-blocker"}, NetId{"b"}, LayerId{"F.Cu"},
+                          mm(10,5), mm(10,15), Nanometres::from_mm(0.8), false});
+  const auto demand = request(NetId{"a"}, mm(2,10), LayerId{"F.Cu"},
+                              mm(18,10), LayerId{"F.Cu"});
+  CopperScaffoldConfig disabled;
+  disabled.grid_pitch = Nanometres::from_mm(0.5);
+  disabled.maximum_attachment_states = 0U;
+  const auto rejected = construct_copper_scaffold(board, {demand}, disabled);
+  require(!rejected.complete && rejected.paths.empty() && rejected.copper == board &&
+              rejected.request_evidence.size() == 1U &&
+              rejected.request_evidence.front().termination == CopperScaffoldSearchTermination::attachment_exhausted,
+          "a zero attachment-state limit must fail closed after direct copper is rejected");
+
+  CopperScaffoldConfig zero_initial;
+  zero_initial.progressive_attachment_search = true;
+  zero_initial.grid_pitch = Nanometres::from_mm(0.5);
+  zero_initial.maximum_attachment_states = 8U;
+  zero_initial.initial_attachment_states = 0U;
+  zero_initial.expanded_attachment_states = 0U;
+  zero_initial.maximum_attachment_probes_per_round = 1U;
+  zero_initial.maximum_expansions_per_connection = 8'000U;
+  zero_initial.compact_search_expansions = 2'048U;
+  const auto clamped = construct_copper_scaffold(board, {demand}, zero_initial);
+  require(clamped.complete && clamped.counters.attachment_search_probes > 0U &&
+              clamped.counters.expansions <= zero_initial.maximum_expansions_per_connection &&
+              check_copper_rules(clamped.copper).ok(),
+          "a zero initial prefix must clamp to a bounded first probe and retain total search limits");
 }
 
 } // namespace
@@ -667,6 +754,8 @@ int main() {
   retained_branch_can_attach_to_component_interior();
   same_net_on_separate_layers_does_not_prove_connectivity();
   fine_pitch_rotated_pad_edge_access_reaches_the_scaffold_grid();
+  progressive_attachment_search_avoids_eager_attachment_probes();
+  progressive_attachment_limits_fail_closed_and_clamp_zero_initial_prefix();
   accepts_legal_supplied_topology();
   finds_a_legal_detour_when_the_supplied_line_is_blocked();
   supplies_a_legal_via_transition();

@@ -1,0 +1,117 @@
+{
+  "tier0": {
+    "baseline_detail_seconds": 55.37514805298997,
+    "detail_seconds": 58.37135400203988,
+    "change_percent": 5.4107411978072895,
+    "complete": true,
+    "stop_reason": "complete",
+    "open_connections": 0,
+    "counts": {
+      "added_track_arcs": 29,
+      "added_track_beziers": 387,
+      "added_tracks": 177,
+      "added_vias": 3,
+      "copper_violation_counts": {},
+      "copper_violations": 0,
+      "unrounded_non_junction_bends": 0
+    },
+    "kicad": {
+      "available": true,
+      "violations": 0,
+      "unconnected_items": 0,
+      "categories": {}
+    },
+    "copper_byte_identical": false,
+    "copper_sha256": "b21fe9549cc0cb3a5a3360406c84f32fd2ab5d403c99043c736ebc9f175cd641",
+    "peak_rss_kib": 582644,
+    "timings_and_gpu": {
+      "residual_bend_repair_microseconds": 7788863,
+      "spline_clearance_batch_microseconds": 98866,
+      "spline_clearance_batch_queries": 709760,
+      "spline_clearance_cpu_fallbacks": 13,
+      "spline_clearance_gpu_dispatches": 157,
+      "spline_clearance_resident_reuses": 136,
+      "spline_clearance_resident_uploads": 21,
+      "spline_envelope_cpu_fallbacks": 0,
+      "spline_envelope_gpu_dispatches": 2016,
+      "spline_envelope_microseconds": 899946,
+      "spline_envelope_proven_clear": 59003,
+      "spline_envelope_queries": 61472,
+      "spline_envelope_resident_reuses": 2014,
+      "spline_envelope_resident_uploads": 2,
+      "spline_exact_merge_microseconds": 6606273,
+      "spline_gpu_polish_batches": 1150,
+      "spline_gpu_polish_candidates": 78140,
+      "spline_gpu_polish_cpu_fallbacks": 0,
+      "spline_gpu_polish_dispatches": 1015,
+      "spline_gpu_polish_exact_shortlist_checks": 9200,
+      "spline_gpu_polish_microseconds": 502447,
+      "spline_gpu_precondition_accepted": 11,
+      "spline_gpu_precondition_attempts": 57,
+      "spline_gpu_precondition_cpu_fallbacks": 0,
+      "spline_gpu_precondition_dispatches": 57,
+      "spline_gpu_precondition_legal": 10,
+      "spline_gpu_precondition_solve_us": 18066,
+      "spline_navigation_mesh_microseconds": 9980736,
+      "spline_navigation_preparation_microseconds": 36320358,
+      "spline_navmesh_geometry_builds": 59,
+      "spline_navmesh_geometry_hits": 174,
+      "spline_navmesh_prepared_builds": 233,
+      "spline_navmesh_prepared_evictions": 57,
+      "spline_navmesh_prepared_hits": 0,
+      "spline_navmesh_prepared_waits": 0,
+      "spline_realization_microseconds": 40695320,
+      "spline_route_refinement_microseconds": 90338515,
+      "spline_screening_batched_chords": 327957,
+      "spline_screening_batches": 184,
+      "spline_screening_cache_hits": 81762,
+      "spline_screening_cache_misses": 327957,
+      "spline_screening_coalesced_waits": 142305,
+      "spline_screening_gpu_dispatches": 1679,
+      "spline_screening_gpu_pruned_work_items": 361274947,
+      "spline_screening_gpu_work_items": 15383001,
+      "spline_screening_microseconds": 1322077,
+      "spline_screening_resident_reuses": 1629,
+      "spline_screening_resident_uploads": 50,
+      "spline_trajectory_microseconds": 26133971
+    },
+    "retained_scaffold_search": {
+      "access_generation_microseconds": 6438,
+      "attachment_generation_microseconds": 122,
+      "attachment_search_early_successes": 1,
+      "attachment_search_probes": 16,
+      "attachment_search_rounds": 1,
+      "compact_search_expansions": 97,
+      "domain_build_microseconds": 198,
+      "duplicate_rejected_assemblies": 0,
+      "edge_validation_microseconds": 7712,
+      "exact_goal_validation_microseconds": 28414,
+      "expansions": 97,
+      "search_microseconds": 36978,
+      "source_attachments": 8,
+      "target_attachments": 8
+    },
+    "engine_phases": [
+      {
+        "action": "global",
+        "elapsed_microseconds": 12720518,
+        "work_units": 7717
+      },
+      {
+        "action": "copper-scaffold",
+        "elapsed_microseconds": 1881172,
+        "work_units": 1155
+      },
+      {
+        "action": "copper-scaffold",
+        "elapsed_microseconds": 1865251,
+        "work_units": 501
+      },
+      {
+        "action": "materialize",
+        "elapsed_microseconds": 40995197,
+        "work_units": 6400
+      }
+    ]
+  }
+}

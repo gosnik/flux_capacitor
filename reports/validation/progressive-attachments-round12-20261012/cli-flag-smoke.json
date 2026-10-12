@@ -1,0 +1,24 @@
+[
+  {
+    "args": [
+      "--progressive-endpoint-attachments"
+    ],
+    "parsed": true,
+    "exit": 4
+  },
+  {
+    "args": [
+      "--eager-endpoint-attachments"
+    ],
+    "parsed": true,
+    "exit": 4
+  },
+  {
+    "args": [
+      "--progressive-endpoint-attachments",
+      "--eager-endpoint-attachments"
+    ],
+    "parsed": false,
+    "exit": 1
+  }
+]

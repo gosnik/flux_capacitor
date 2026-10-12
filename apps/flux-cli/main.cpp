@@ -4251,6 +4251,16 @@ void print_route_result(const flux::GlobalRouteResult& result,
                 << ", \"compact_search_expansions\": " << scaffold.counters.compact_search_expansions
                 << ", \"compact_search_successes\": " << scaffold.counters.compact_search_successes
                 << ", \"compact_search_fallbacks\": " << scaffold.counters.compact_search_fallbacks
+                << ", \"attachment_search_rounds\": " << scaffold.counters.attachment_search_rounds
+                << ", \"attachment_search_probes\": " << scaffold.counters.attachment_search_probes
+                << ", \"attachment_search_early_successes\": " << scaffold.counters.attachment_search_early_successes
+                << ", \"duplicate_rejected_assemblies\": " << scaffold.counters.duplicate_rejected_assemblies
+                << ", \"access_generation_microseconds\": " << scaffold.counters.access_generation_microseconds
+                << ", \"domain_build_microseconds\": " << scaffold.counters.domain_build_microseconds
+                << ", \"attachment_generation_microseconds\": " << scaffold.counters.attachment_generation_microseconds
+                << ", \"edge_validation_microseconds\": " << scaffold.counters.edge_validation_microseconds
+                << ", \"exact_goal_validation_microseconds\": " << scaffold.counters.exact_goal_validation_microseconds
+                << ", \"search_microseconds\": " << scaffold.counters.search_microseconds
                 << ", \"peak_via_history_nodes\": " << scaffold.counters.peak_via_history_nodes
                 << ", \"via_history_budget_exhaustions\": " << scaffold.counters.via_history_budget_exhaustions
                 << ", \"source_attachments\": " << scaffold.counters.source_attachments
@@ -5487,6 +5497,25 @@ void print_detailed_result(const flux::DetailedRouteResult& result,
   }
   if (session) {
     print_engine_fields(session->engine_outcome, session->engine_attempts);
+    if (session->retained_scaffold_counters) {
+      const auto& counters = *session->retained_scaffold_counters;
+      std::cout << ",\n  \"retained_scaffold_search\": {";
+      std::cout << "\"expansions\": " << counters.expansions;
+      std::cout << ", \"compact_search_expansions\": " << counters.compact_search_expansions;
+      std::cout << ", \"source_attachments\": " << counters.source_attachments;
+      std::cout << ", \"target_attachments\": " << counters.target_attachments;
+      std::cout << ", \"attachment_search_rounds\": " << counters.attachment_search_rounds;
+      std::cout << ", \"attachment_search_probes\": " << counters.attachment_search_probes;
+      std::cout << ", \"attachment_search_early_successes\": " << counters.attachment_search_early_successes;
+      std::cout << ", \"duplicate_rejected_assemblies\": " << counters.duplicate_rejected_assemblies;
+      std::cout << ", \"access_generation_microseconds\": " << counters.access_generation_microseconds;
+      std::cout << ", \"domain_build_microseconds\": " << counters.domain_build_microseconds;
+      std::cout << ", \"attachment_generation_microseconds\": " << counters.attachment_generation_microseconds;
+      std::cout << ", \"edge_validation_microseconds\": " << counters.edge_validation_microseconds;
+      std::cout << ", \"exact_goal_validation_microseconds\": " << counters.exact_goal_validation_microseconds;
+      std::cout << ", \"search_microseconds\": " << counters.search_microseconds;
+      std::cout << "}";
+    }
     std::cout << ",\n  \"routing_engine_scheduler\": \"deadline_experiments\"";
     std::cout << ",\n  \"routing_engine_experiment_initial_explorations\": " << session->engine_experiment_initial_explorations;
     std::cout << ",\n  \"routing_engine_experiment_state_suppressions\": " << session->engine_experiment_state_suppressions;
@@ -7968,6 +7997,7 @@ struct KicadCommandTail {
   std::optional<std::size_t> routing_slice_work;
   std::optional<std::size_t> routing_max_actions;
   bool routing_legacy_policy{false};
+  std::optional<bool> progressive_endpoint_attachments;
   std::optional<std::size_t> physical_feedback_retries;
   std::optional<bool> feedback_shadows_advisory;
   bool oracle_first_feedback{false};
@@ -8204,6 +8234,11 @@ struct KicadCommandTail {
       if (parsed.ec != std::errc{} || parsed.ptr != token.data() + token.size() || value > 4U)
         return std::nullopt;
       result.max_straight_joint_windows = value;
+    } else if (argument == "--eager-endpoint-attachments" ||
+               argument == "--progressive-endpoint-attachments") {
+      if ((std::string_view{argv[1]} != "route-kicad" && std::string_view{argv[1]} != "detail-kicad") ||
+          result.progressive_endpoint_attachments.has_value()) return std::nullopt;
+      result.progressive_endpoint_attachments = argument == "--progressive-endpoint-attachments";
     } else if (argument == "--routing-engine-policy") {
       if (std::string_view{argv[1]} != "route-kicad" && std::string_view{argv[1]} != "detail-kicad")
         return std::nullopt;
@@ -9701,7 +9736,7 @@ void print_help() {
                "[--feedback-shadow-policy enforced|advisory] [--oracle-first-feedback | --assembled-straight-feedback | --full-strength-first-pass | --no-full-strength-first-pass] "
                "[--frozen-copper-context] [--expand-frozen-copper-scope] [--prioritize-frozen-scope-expansion] "
                "[--local-channel-occupancy] [--shared-channel-copper] [--centerline-channel-cuts] "
-               "[--max-regional-bundle-states N] [--max-straight-portfolio-checks N] [--max-straight-joint-windows 0..4] [--routing-engine-policy adaptive|legacy] [--routing-timeout-ms N] [--routing-slice-ms N] [--routing-slice-work N] [--routing-max-actions N] [--curved-tracks|--straight-tracks] "
+               "[--max-regional-bundle-states N] [--max-straight-portfolio-checks N] [--max-straight-joint-windows 0..4] [--progressive-endpoint-attachments|--eager-endpoint-attachments] [--routing-engine-policy adaptive|legacy] [--routing-timeout-ms N] [--routing-slice-ms N] [--routing-slice-work N] [--routing-max-actions N] [--curved-tracks|--straight-tracks] "
                "[--max-static-seed-workers N] "
                "[--terrain-height-evolution | --no-terrain-height-evolution] [--board-terrain-guidance | --no-board-terrain-guidance] [--hc-composition | --no-hc-composition] [--layered-navmesh | --no-layered-navmesh] "
                "[--no-telemetry] [--telemetry-listen ADDRESS:PORT] "
@@ -9805,7 +9840,7 @@ void print_help() {
                "[--max-router-iterations N] [--physical-feedback-retries N] "
                "[--feedback-shadow-policy enforced|advisory] [--oracle-first-feedback | --assembled-straight-feedback | --full-strength-first-pass | --no-full-strength-first-pass] "
                "[--frozen-copper-context] [--expand-frozen-copper-scope] [--prioritize-frozen-scope-expansion] "
-               "[--max-straight-portfolio-checks N] [--max-straight-joint-windows 0..4] [--routing-engine-policy adaptive|legacy] [--routing-timeout-ms N] [--routing-slice-ms N] [--routing-slice-work N] [--routing-max-actions N] "
+               "[--max-straight-portfolio-checks N] [--max-straight-joint-windows 0..4] [--progressive-endpoint-attachments|--eager-endpoint-attachments] [--routing-engine-policy adaptive|legacy] [--routing-timeout-ms N] [--routing-slice-ms N] [--routing-slice-work N] [--routing-max-actions N] "
                "[--max-static-seed-workers N] "
                "[--max-expansions N] [--expansion-retry-heuristic-weight-per-mille N] "
                "[--reuse-weighted-search-frontier] "
@@ -10741,6 +10776,7 @@ int main(int argc, char** argv) {
     flux::RoutingEngineConfig engine_config;
     engine_config.planner = planner_config;
     engine_config.materialize = false;
+    engine_config.copper_scaffold.progressive_attachment_search = tail->progressive_endpoint_attachments.value_or(false);
     engine_config.post_negotiation_sampled_conflict_repair = tail->repair_sampled_conflicts;
     engine_config.planning_mode = tail->routing_legacy_policy
         ? flux::RoutingEnginePlanningMode::legacy_plan_routes
@@ -10877,6 +10913,7 @@ int main(int argc, char** argv) {
         tail->max_final_routability_feedback_passes.value_or(3U);
     session_config.post_negotiation_sampled_conflict_repair = tail->repair_sampled_conflicts;
     session_config.max_post_negotiation_sampled_conflict_repair_cones = 2U;
+    session_config.engine.copper_scaffold.progressive_attachment_search = tail->progressive_endpoint_attachments.value_or(false);
     session_config.engine.planning_mode = tail->routing_legacy_policy
         ? flux::RoutingEnginePlanningMode::legacy_plan_routes
         : flux::RoutingEnginePlanningMode::split_stages;

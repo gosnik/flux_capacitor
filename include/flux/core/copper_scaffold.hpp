@@ -49,6 +49,13 @@ struct CopperScaffoldConfig {
   std::size_t maximum_component_access_points{32U};
   std::size_t maximum_attachment_states{128U};
   std::size_t attachment_radius_cells{2U};
+  // Start attachment search from small, stable prefixes and widen only after a bounded search
+  // fails.  The raw probe cap bounds each cursor advance when few grid candidates are legal.
+  // Opt-in until progressive choices preserve benchmark completion and performance.
+  bool progressive_attachment_search{false};
+  std::size_t initial_attachment_states{8U};
+  std::size_t expanded_attachment_states{32U};
+  std::size_t maximum_attachment_probes_per_round{256U};
   std::size_t maximum_goal_attempts{64U};
   // Optional optimistic node-dominance pass before the provenance-rich search. Zero disables it.
   std::size_t compact_search_expansions{25'000U};
@@ -193,10 +200,20 @@ struct CopperScaffoldCounters {
   std::size_t exchange_rollbacks_connectivity_not_preserved{0U};
   std::size_t exchange_rollbacks_cancelled{0U};
   std::size_t goal_rejections{0U};
+  std::size_t duplicate_rejected_assemblies{0U};
   std::size_t peak_via_history_nodes{0U};
   std::size_t via_history_budget_exhaustions{0U};
   std::size_t source_attachments{0U};
   std::size_t target_attachments{0U};
+  std::size_t attachment_search_rounds{0U};
+  std::size_t attachment_search_probes{0U};
+  std::size_t attachment_search_early_successes{0U};
+  std::uint64_t access_generation_microseconds{0U};
+  std::uint64_t domain_build_microseconds{0U};
+  std::uint64_t attachment_generation_microseconds{0U};
+  std::uint64_t edge_validation_microseconds{0U};
+  std::uint64_t exact_goal_validation_microseconds{0U};
+  std::uint64_t search_microseconds{0U};
   std::size_t component_connections{0U};
   std::size_t survivor_tracks_preserved{0U};
   std::size_t survivor_vias_preserved{0U};

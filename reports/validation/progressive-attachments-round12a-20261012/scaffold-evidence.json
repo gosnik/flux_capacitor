@@ -1,0 +1,74 @@
+[
+  {
+    "seconds": 33.775841,
+    "message": "action=copper-scaffold, generation=0, work=0; requests=78; satisfied=1; missing=77"
+  },
+  {
+    "seconds": 93.660516,
+    "message": "action=copper-scaffold, generation=1, work=5562645; accepted=yes, elapsed_us=58604724, scheduler=deadline_experiments; preparation_work=0; repair_work=0; active_us=92308770; suspended=0; resumed=0; invalidated=0"
+  },
+  {
+    "seconds": 141.266094,
+    "message": "action=copper-scaffold, generation=2, work=4549227; accepted=yes, elapsed_us=46507649, scheduler=deadline_experiments; preparation_work=0; repair_work=0; active_us=138816419; suspended=0; resumed=0; invalidated=0"
+  },
+  {
+    "seconds": 189.117938,
+    "message": "action=copper-scaffold, generation=3, work=4548846; accepted=no, elapsed_us=46732854, scheduler=deadline_experiments; preparation_work=0; repair_work=0; active_us=185549273; suspended=0; resumed=0; invalidated=0"
+  },
+  {
+    "seconds": 290.44842,
+    "message": "action=copper-scaffold, generation=0, work=0; requests=78; satisfied=60; missing=18"
+  },
+  {
+    "seconds": 290.478487,
+    "message": "action=copper-scaffold, generation=0, work=0; requests=78; satisfied=61; missing=17"
+  },
+  {
+    "seconds": 290.509909,
+    "message": "action=copper-scaffold, generation=0, work=0; requests=78; satisfied=62; missing=16"
+  },
+  {
+    "seconds": 290.543551,
+    "message": "action=copper-scaffold, generation=0, work=0; requests=78; satisfied=63; missing=15"
+  },
+  {
+    "seconds": 290.576459,
+    "message": "action=copper-scaffold, generation=0, work=0; requests=78; satisfied=64; missing=14"
+  },
+  {
+    "seconds": 290.607752,
+    "message": "action=copper-scaffold, generation=0, work=0; requests=78; satisfied=65; missing=13"
+  },
+  {
+    "seconds": 290.638405,
+    "message": "action=copper-scaffold, generation=0, work=0; requests=78; satisfied=66; missing=12"
+  },
+  {
+    "seconds": 290.669223,
+    "message": "action=copper-scaffold, generation=0, work=0; requests=78; satisfied=67; missing=11"
+  },
+  {
+    "seconds": 290.701759,
+    "message": "action=copper-scaffold, generation=0, work=0; requests=78; satisfied=68; missing=10"
+  },
+  {
+    "seconds": 290.734156,
+    "message": "action=copper-scaffold, generation=0, work=0; requests=78; satisfied=69; missing=9"
+  },
+  {
+    "seconds": 290.769291,
+    "message": "action=copper-scaffold, generation=0, work=0; requests=78; satisfied=70; missing=8"
+  },
+  {
+    "seconds": 290.80069,
+    "message": "action=copper-scaffold, generation=0, work=0; requests=78; satisfied=71; missing=7"
+  },
+  {
+    "seconds": 290.831965,
+    "message": "action=copper-scaffold, generation=0, work=0; requests=78; satisfied=72; missing=6"
+  },
+  {
+    "seconds": 298.898894,
+    "message": "action=copper-scaffold, generation=0, work=698140; requests=78; satisfied=72; missing=6"
+  }
+]

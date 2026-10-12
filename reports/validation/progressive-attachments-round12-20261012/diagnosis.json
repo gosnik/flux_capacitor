@@ -1,0 +1,9 @@
+{
+  "baseline_commit": "3691155",
+  "tier": 1,
+  "board": "bm_svf",
+  "failure": "Scaffold actions total61.07s before materialization; search validates up to128 endpoint attachments per side before using physical feedback. Tier2 prior timeout precedes materialization.",
+  "hypothesis": "Resumable bounded attachment prefixes allow easy escapes to route before broad enumeration while preserving full-set rich fallback and shared search budgets.",
+  "success_criterion": "Progressive synthetic mechanisms pass; final default Tier0/Tier1 curved output and KiCad DRC pass. Tier2 deferred after lower-tier progressive regression.",
+  "decision": "Progressive default regressed Tier1 in Round12a; final implementation opt-in. Verify established eager default with shared rejection dedup and new telemetry."
+}

@@ -1,0 +1,18 @@
+{
+  "status": "passed",
+  "release_build": "passed",
+  "binary_sha256": "8252427b6969dc9749c8c9cb455baacfcd432b53fc2b8bda8e75a43ed85eaa4a",
+  "regression_suites_passed": 8,
+  "core_tests_passed": 72,
+  "independent_review": "Duplicate rejected assembly budget starvation fixed; no remaining correctness blocker. Scene preparation timer now includes both collision indexes.",
+  "test_notes": "Existing via-history fixture requires 26 distinct rejected candidates; tight 27-check cap passes with duplicate suppression. New easy detour fixtures use 8000 expansions and 2048 compact budget to allow first prefix to finish.",
+  "eager_flag_smoke": "accepted; nonexistent board reached import error",
+  "cli_flag_smoke": "positive/negative modes accepted; conflicting modes rejected",
+  "test_seconds": 109.47,
+  "final_tiers": [
+    "tier0",
+    "tier1"
+  ],
+  "final_copper": "byte-identical to baseline on both tiers",
+  "cli_json_new_counters": "present and nonnegative in global and detailed outputs"
+}

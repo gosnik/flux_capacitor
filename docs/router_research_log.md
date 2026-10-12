@@ -10009,3 +10009,14 @@ Offline replay tests43 for91,43+45 for44 in both orders, and11+19 for44/91 in bo
 3. Merely enlarge victim/attempt budgets: lower priority because diagnostic replays already show victim failures with the promising groups.
 
 [OpenROAD detailed routing](https://openroad.readthedocs.io/en/latest/main/src/drt/README.html) treats pin access separately from track assignment and search/repair. [Conflict-Based Search](https://ojs.aaai.org/index.php/AAAI/article/view/8140) separates conflict-level constraints from individual path search. These support the separation of concerns; temporary PCB escape reservations are a Flux experiment, not a claimed direct implementation of either source. Time-expanded MAPF guarantees do not transfer to persistent PCB copper.
+
+## Round23 — Offline escape reservations and bounded search diagnostic (2026-10-12)
+
+### Hypothesis and experiment
+Before production integration, rerun the seven Round22 saved-copper cases with deterministic victim-owned pad-touching track reservations (at most two per pad/eight total, no vias). Reserve only during incoming search, remove every temporary object before victim reconstruction, compare to same-run no-reservation controls. Also replay request115 with50k and200k search expansion limits against unchanged saved copper. No router policy changes or tier runs in this diagnostic round.
+
+### Results and decision
+No reservation scenario completes both incoming and all victims; no temporary IDs leak and no additional DRC appears over the six inherited pad-clearance reports. For91/43, reservation changes victim failure from zero access to expansion exhaustion (eight target attachments), but still does not complete. For44/43+45, reservations preserve target attachments but the incoming search exhausts. For11+19 groups,19 remains attachment-exhausted. Request115 exhausts50k and200k expansions in2.681s and10.037s without connectivity improvement. Do not integrate either the reservation policy or a larger global search budget.
+
+### Next mechanism
+Request19 ends at an interior coarse point of same-net producer11. After11 is rerouted in a coupled exchange, that old coordinate can lose physical copper membership. Outer engine rebinds are only applied to retained missing requests, while19 was satisfied before rip-up and fails only inside the transaction. Test existing proof-based producer-to-real-pad rebind in the transaction candidate scene; verify actual pad-component preservation rather than assuming a changed virtual target is safe.

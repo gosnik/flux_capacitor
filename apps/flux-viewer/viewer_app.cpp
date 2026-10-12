@@ -1193,6 +1193,14 @@ void ViewerApp::draw_board_canvas() {
       pixels.reserve(primitive.points.size() - 1U);
       for (std::size_t index = 1; index < primitive.points.size(); ++index)
         pixels.push_back(screen(primitive.points[index]));
+      // ImGui requires clockwise screen-space contours, including mirrored KiCad pads.
+      double twice_area = 0.0;
+      for (std::size_t index = 0; index < pixels.size(); ++index) {
+        const auto& a = pixels[index];
+        const auto& b = pixels[(index + 1U) % pixels.size()];
+        twice_area += static_cast<double>(a.x) * b.y - static_cast<double>(b.x) * a.y;
+      }
+      if (twice_area < 0.0) std::reverse(pixels.begin(), pixels.end());
       draw->AddConcavePolyFilled(pixels.data(), static_cast<int>(pixels.size()), pad_color);
       draw->AddPolyline(pixels.data(), static_cast<int>(pixels.size()), outline_color,
                         ImDrawFlags_Closed, 1.0F);

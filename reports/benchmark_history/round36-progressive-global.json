@@ -56,5 +56,15 @@
       "kicad_reported_unconnected_items": 0
     }
   ],
-  "report_directory": "reports/validation/progressive-global-round36-20261013"
+  "report_directory": "reports/validation/progressive-global-round36-20261013",
+  "implementation_revision": "3f959f0",
+  "esc_followup": {
+    "status": "running",
+    "routing_budget_seconds": 3600,
+    "outer_limit_seconds": 4500,
+    "first_allocation_iteration_telemetry_seconds": 16.876299,
+    "previous_attempt": "timed out before allocation after 3600-second routing budget",
+    "physical_copper_verified": false,
+    "report_directory": "reports/validation/progressive-global-round36-20261013/esc"
+  }
 }

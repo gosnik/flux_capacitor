@@ -10217,3 +10217,6 @@ Preparation expiry and session cancellation are separate: the former returns com
 
 ### Round36 verification
 Release and viewer builds passed; focused CTest5/5, risk CTest33/33, and the private preparation lease regression passed. Independent review is clear after mode-aware validation, early diagnostic fields, watcher cleanup, and worker-lease fixes. Frozen sequential Tier0/1/2 all passed exact copper and external KiCad DRC, with byte-identical board outputs to Round34. Detailed times: Tier0 39.042s (previous 31.044s), Tier1 117.328s (previous 106.314s), Tier2 255.071s (previous 223.759s). The responsiveness change has measurable overhead on small boards; evaluate its benefit on the previously preparation-bound ESC. Telemetry and source hashes are preserved under `reports/validation/progressive-global-round36-20261013/`.
+
+### ESC follow-up checkpoint
+The same staged ESC input and rules entered PathFinder iteration1 at16.876s of routing telemetry (roughly50s wall including input setup), versus never reaching allocation within the prior3600-second routing budget. The rerun remains active with a3600-second routing/4500-second outer limit. Provisional allocation and rip-up activity are not a physical-copper or DRC success claim. Implementation revision `3f959f0`; reports under the Round36 `esc/` directory.

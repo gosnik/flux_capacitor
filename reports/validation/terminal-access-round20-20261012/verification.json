@@ -1,0 +1,28 @@
+{
+  "focused_command": "ctest --test-dir build/release -j1 --output-on-failure -R '^flux_copper_scaffold_tests$'",
+  "focused_status": "PASS",
+  "focused_passed": 1,
+  "focused_failed": 0,
+  "focused_log": "reports/validation/terminal-access-round20-20261012/focused.log",
+  "ctest_command": "ctest --test-dir build/release -j1 --output-on-failure -R '^(flux_unit_tests|flux_copper_transaction_tests|flux_span_certificate_tests|flux_board_free_space_cache_tests|flux_ph_tightening_tests|flux_layered_navmesh_tests|flux_copper_scaffold_tests|flux_scaffold_curve_tests|flux_scaffold_collision_tests|flux_routing_engine_experiment_tests|flux_scaffold_joint_displacement_tests)$'",
+  "ctest_status": "PASS",
+  "ctest_passed": 11,
+  "ctest_failed": 0,
+  "ctest_log": "reports/validation/terminal-access-round20-20261012/ctest.log",
+  "noop_build_command": "ninja -C build/release flux-cli",
+  "noop_build_status": "PASS",
+  "noop_build_log": "reports/validation/terminal-access-round20-20261012/noop-build.log",
+  "probe_compile_status": "PASS",
+  "probe_run_status": "PASS",
+  "probe_output": "reports/validation/terminal-access-round20-20261012/probe-access.json",
+  "probe_findings": {
+    "records": 20,
+    "legal_grid_attachments": 0,
+    "dominant_blockers": [
+      "pads",
+      "tracks",
+      "vias"
+    ],
+    "request_45_removal_effect": "no material change in sampled access legality"
+  }
+}

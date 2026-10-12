@@ -1,0 +1,187 @@
+diff --git a/apps/flux-cli/main.cpp b/apps/flux-cli/main.cpp
+index e9d3003..27d40ac 100644
+--- a/apps/flux-cli/main.cpp
++++ b/apps/flux-cli/main.cpp
+@@ -4255,6 +4255,7 @@ void print_route_result(const flux::GlobalRouteResult& result,
+                 << ", \"attachment_search_probes\": " << scaffold.counters.attachment_search_probes
+                 << ", \"outward_attachment_probes\": " << scaffold.counters.outward_attachment_probes
+                 << ", \"outward_attachments\": " << scaffold.counters.outward_attachments
++                << ", \"irrelevant_attachment_blockers_pruned\": " << scaffold.counters.irrelevant_attachment_blockers_pruned
+                 << ", \"attachment_search_early_successes\": " << scaffold.counters.attachment_search_early_successes
+                 << ", \"duplicate_rejected_assemblies\": " << scaffold.counters.duplicate_rejected_assemblies
+                 << ", \"access_generation_microseconds\": " << scaffold.counters.access_generation_microseconds
+@@ -5545,6 +5546,7 @@ void print_detailed_result(const flux::DetailedRouteResult& result,
+       std::cout << ", \"attachment_search_probes\": " << counters.attachment_search_probes;
+       std::cout << ", \"outward_attachment_probes\": " << counters.outward_attachment_probes;
+       std::cout << ", \"outward_attachments\": " << counters.outward_attachments;
++      std::cout << ", \"irrelevant_attachment_blockers_pruned\": " << counters.irrelevant_attachment_blockers_pruned;
+       std::cout << ", \"attachment_search_early_successes\": " << counters.attachment_search_early_successes;
+       std::cout << ", \"duplicate_rejected_assemblies\": " << counters.duplicate_rejected_assemblies;
+       std::cout << ", \"access_generation_microseconds\": " << counters.access_generation_microseconds;
+diff --git a/include/flux/core/copper_scaffold.hpp b/include/flux/core/copper_scaffold.hpp
+index c26aa4f..45d9f8e 100644
+--- a/include/flux/core/copper_scaffold.hpp
++++ b/include/flux/core/copper_scaffold.hpp
+@@ -209,6 +209,7 @@ struct CopperScaffoldCounters {
+   std::size_t attachment_search_probes{0U};
+   std::size_t outward_attachment_probes{0U};
+   std::size_t outward_attachments{0U};
++  std::size_t irrelevant_attachment_blockers_pruned{0U};
+   std::size_t attachment_search_early_successes{0U};
+   std::uint64_t access_generation_microseconds{0U};
+   std::uint64_t domain_build_microseconds{0U};
+diff --git a/src/copper_scaffold.cpp b/src/copper_scaffold.cpp
+index b680e7c..7399428 100644
+--- a/src/copper_scaffold.cpp
++++ b/src/copper_scaffold.cpp
+@@ -466,7 +466,8 @@ struct PassageSearch {
+     return penalty;
+   };
+   const auto rules = resolve_net_routing_rules(base, request.net);
+-  const auto edge_is_legal = [&](Point a, LayerId al, Point b, LayerId bl, std::size_t serial) {
++  const auto edge_is_legal = [&](Point a, LayerId al, Point b, LayerId bl, std::size_t serial,
++                                 std::set<std::string>* attachment_blockers = nullptr) {
+     CounterTimer edge_timer{counters.edge_validation_microseconds};
+     std::string id_text = "__flux-copper-scaffold-probe-" + std::to_string(index) + "-" +
+                           std::to_string(serial);
+@@ -478,7 +479,10 @@ struct PassageSearch {
+         const auto report = collision.check_track(track);
+         if (!report.ok() && frontier_blockers != nullptr) for (const auto& violation : report.violations)
+           for (const auto& object : violation.object_ids)
+-            if (object != id.value()) frontier_blockers->insert(object);
++            if (object != id.value()) {
++              frontier_blockers->insert(object);
++              if (attachment_blockers) attachment_blockers->insert(object);
++            }
+         return spatially_legal(report);
+       }
+       GlobalRoutePath edge; edge.net = request.net; edge.points = {{a, al}, {b, bl}};
+@@ -492,7 +496,10 @@ struct PassageSearch {
+       const auto report = collision.check_via(via);
+       if (!report.ok() && frontier_blockers != nullptr) for (const auto& violation : report.violations)
+         for (const auto& object : violation.object_ids)
+-          if (object != id.value()) frontier_blockers->insert(object);
++          if (object != id.value()) {
++            frontier_blockers->insert(object);
++            if (attachment_blockers) attachment_blockers->insert(object);
++          }
+       return spatially_legal(report);
+     }
+     GlobalRoutePath edge; edge.net = request.net; edge.points = {{a, al}, {b, bl}};
+@@ -505,7 +512,7 @@ struct PassageSearch {
+   };
+   std::optional<std::vector<CopperPadShape>> pad_shapes;
+   std::map<std::pair<Point, LayerId>, std::optional<Point>> outward_stubs;
+-  std::map<std::pair<Point, LayerId>, bool> outward_stub_legs;
++  std::map<std::pair<Point, LayerId>, std::pair<bool, std::set<std::string>>> outward_stub_legs;
+   const auto outward_stub_for = [&](const GlobalRoutePoint& anchor) -> std::optional<Point> {
+     const auto key = std::pair{anchor.position, anchor.layer};
+     if (const auto found = outward_stubs.find(key); found != outward_stubs.end())
+@@ -538,6 +545,7 @@ struct PassageSearch {
+     std::int64_t ring{0U}, anchor{0U}, dy{0U}, dx{0U};
+     bool initialized{false}, outward_phase{false}, exhausted{false};
+     std::vector<Attachment> result;
++    std::set<std::string> blockers;
+   };
+   // This is deliberately a cursor rather than a filtered precomputation.  Boards with many
+   // blocked pad escapes used to spend all attachment preparation time before a single maze
+@@ -591,16 +599,17 @@ struct PassageSearch {
+       if (!domain.map->exact_query(point.x.value(), point.y.value()).inside ||
+           !geometry::segment_inside_board_area(origin, point, base)) continue;
+       if (stub) {
+-        auto [found, inserted] = outward_stub_legs.emplace(
+-            std::pair{endpoint.position, endpoint.layer}, false);
++        auto [found, inserted] = outward_stub_legs.try_emplace(
++            std::pair{endpoint.position, endpoint.layer});
+         if (inserted)
+-          found->second = geometry::segment_inside_board_area(endpoint.position, *stub, base) &&
++          found->second.first = geometry::segment_inside_board_area(endpoint.position, *stub, base) &&
+               edge_is_legal(endpoint.position, endpoint.layer, *stub, endpoint.layer,
+-                            cursor.result.size());
+-        if (!found->second) continue;
++                            cursor.result.size(), &found->second.second);
++        cursor.blockers.insert(found->second.second.begin(), found->second.second.end());
++        if (!found->second.first) continue;
+       }
+       if (point != origin && !edge_is_legal(origin, endpoint.layer, point, endpoint.layer,
+-                                             cursor.result.size()))
++                                             cursor.result.size(), &cursor.blockers))
+         continue;
+       if (std::none_of(cursor.result.begin(), cursor.result.end(), [&](const auto& old) {
+             return old.node == node && old.anchor == endpoint && old.outward_stub ==
+@@ -646,6 +655,18 @@ struct PassageSearch {
+     access_evidence->target_legal_attachments = goals.size();
+   }
+   if (counters.cancelled || starts.empty() || goals.empty()) {
++    if (!counters.cancelled && frontier_blockers) {
++      // Repair the inaccessible endpoint's cut first. Failed probes beside an endpoint
++      // that already has access cannot explain why the opposite endpoint has none, and
++      // must not consume the bounded victim list before its actual blockers are tried.
++      const auto previous_blockers = frontier_blockers->size();
++      frontier_blockers->clear();
++      if (starts.empty())
++        frontier_blockers->insert(source_cursor.blockers.begin(), source_cursor.blockers.end());
++      if (goals.empty())
++        frontier_blockers->insert(target_cursor.blockers.begin(), target_cursor.blockers.end());
++      counters.irrelevant_attachment_blockers_pruned += previous_blockers - frontier_blockers->size();
++    }
+     finish(counters.cancelled ? CopperScaffoldSearchTermination::cancelled :
+                                CopperScaffoldSearchTermination::attachment_exhausted);
+     return std::nullopt;
+diff --git a/src/routing_engine.cpp b/src/routing_engine.cpp
+index 124bf86..ef44245 100644
+--- a/src/routing_engine.cpp
++++ b/src/routing_engine.cpp
+@@ -2061,6 +2061,7 @@ RoutingEngineStepResult RoutingEngine::advance(RoutingEngineStepBudget budget,
+               "; attachment_us=" + std::to_string(c.attachment_generation_microseconds) +
+               "; outward_probes=" + std::to_string(c.outward_attachment_probes) +
+               "; outward_attachments=" + std::to_string(c.outward_attachments) +
++              "; irrelevant_attachment_blockers_pruned=" + std::to_string(c.irrelevant_attachment_blockers_pruned) +
+               "; goal_rejections=" + std::to_string(c.goal_rejections));
+           for (const auto index : result.missing_indices) {
+             if (index >= result.request_evidence.size()) continue;
+diff --git a/tests/unit/copper_scaffold_tests.cpp b/tests/unit/copper_scaffold_tests.cpp
+index 6074dda..fd33a37 100644
+--- a/tests/unit/copper_scaffold_tests.cpp
++++ b/tests/unit/copper_scaffold_tests.cpp
+@@ -627,6 +627,32 @@ void same_net_on_separate_layers_does_not_prove_connectivity() {
+   require(result.complete && !result.paths.empty() && !result.copper.vias.empty(),
+           "coincident same-net copper on different layers needs a physical transition");
+ }
++void inaccessible_terminal_evidence_excludes_the_accessible_end() {
++  auto board = fixture();
++  board.layers.resize(1U);
++  board.tracks.push_back({ObjectId{"source-neighbour"}, NetId{"b"}, LayerId{"F.Cu"},
++                          mm(1.55,1.5), mm(1.55,2.5), Nanometres::from_mm(0.2), true});
++  board.tracks.push_back({ObjectId{"target-blocker"}, NetId{"b"}, LayerId{"F.Cu"},
++                          mm(17,18), mm(19,18), Nanometres::from_mm(0.2), true});
++  CopperScaffoldConfig config;
++  config.maximum_victim_exchanges = 0U;
++  config.maximum_coupled_exchange_attempts = 0U;
++  config.maximum_joint_passage_candidates = 0U;
++  config.maximum_displacement_attempts = 0U;
++  for (const bool reverse : {false, true}) {
++    auto demand = request(NetId{"a"}, mm(2,2), LayerId{"F.Cu"}, mm(18.05,18.05), LayerId{"F.Cu"});
++    if (reverse) std::reverse(demand.points.begin(), demand.points.end());
++    const auto result = construct_copper_scaffold(board, {demand}, config);
++    const auto& evidence = result.request_evidence.front();
++    require(!result.complete && evidence.termination == CopperScaffoldSearchTermination::attachment_exhausted &&
++                (reverse ? evidence.target_legal_attachments : evidence.source_legal_attachments) > 0U &&
++                (reverse ? evidence.source_legal_attachments : evidence.target_legal_attachments) == 0U,
++            "one endpoint must retain access while the opposite endpoint is blocked");
++    require(result.counters.irrelevant_attachment_blockers_pruned > 0U &&
++                evidence.blocker_objects == std::vector<ObjectId>{ObjectId{"target-blocker"}},
++            "successful-end rejected probes must not displace the inaccessible-end repair witnesses");
++  }
++}
+ void fine_pitch_rotated_pad_edge_access_reaches_the_scaffold_grid() {
+   auto board = fixture();
+   board.layers.resize(1U);
+@@ -794,6 +820,7 @@ int main() {
+   retained_branch_can_attach_to_component_interior();
+   same_net_on_separate_layers_does_not_prove_connectivity();
+   fine_pitch_rotated_pad_edge_access_reaches_the_scaffold_grid();
++  inaccessible_terminal_evidence_excludes_the_accessible_end();
+   progressive_attachment_search_avoids_eager_attachment_probes();
+   progressive_attachment_limits_fail_closed_and_clamp_zero_initial_prefix();
+   accepts_legal_supplied_topology();

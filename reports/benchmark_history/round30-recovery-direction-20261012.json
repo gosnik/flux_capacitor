@@ -1,0 +1,18 @@
+{
+  "baseline_revision": "6f6a843",
+  "artifact_root": "reports/validation/recovery-direction-round30-20261012",
+  "outcome": "rejected_rich_recovery_direction_policy",
+  "tier0": {
+    "passed": true,
+    "detail_seconds": 30.83955828100443,
+    "opens": 0
+  },
+  "tier1": {
+    "status": "aborted_by_operator_for_performance_regression",
+    "last_telemetry_seconds": 231.001852,
+    "completed": null
+  },
+  "tier2": {
+    "status": "not_run_lower_tier_regression"
+  }
+}

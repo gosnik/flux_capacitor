@@ -1,0 +1,7 @@
+# Round30 — constrained rich recovery
+
+Retains all forward compact search and progressive compact phases. Only after compact failure, when rich search has expansion/goal budget remaining, choose the smaller legal frontier. Public path orientation, identities, endpoint evidence and exact transactional validation remain unchanged. A direction change resets compact collision evidence and its boolean edge cache together, allowing the final frontier to re-attribute blockers.
+
+This refines rejected Round29, which changed early route choices and regressed Tier1 planning beyond277s. Regression cases compare successful compact output with the feature disabled and cover rich fallback, progressive rich fallback, blocker evidence after compact work, exact DRC, original orientation and cancellation.
+
+Baseline: Round27 (`a24444c`, report root `../residual-frontier-round27-20261012`). Sequential frozen curved Tier0/1/2 telemetry and final KiCad checks will determine acceptance. Tier0 passes51/51, zero opens/internal/external DRC,30.840s detailed. Tier1 was stopped after231.002s telemetry without completion, versus66.166s baseline planning. Final routability is unmeasured; this is an operator-aborted performance experiment. Tier2 was not run. Reject this policy: preserving compact successes is insufficient when reversal still changes successful rich choices. Preserve full forward search and test opposite-endpoint evidence only after actual failure. `rejected-experiment.patch` recovers tested code from parent6f6a843.

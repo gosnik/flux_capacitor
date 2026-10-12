@@ -1,0 +1,295 @@
+diff --git a/apps/flux-cli/main.cpp b/apps/flux-cli/main.cpp
+index fba126e..65b1322 100644
+--- a/apps/flux-cli/main.cpp
++++ b/apps/flux-cli/main.cpp
+@@ -4270,6 +4270,7 @@ void print_route_result(const flux::GlobalRouteResult& result,
+                 << ", \"search_microseconds\": " << scaffold.counters.search_microseconds
+                 << ", \"peak_via_history_nodes\": " << scaffold.counters.peak_via_history_nodes
+                 << ", \"via_history_budget_exhaustions\": " << scaffold.counters.via_history_budget_exhaustions
++                << ", \"constrained_endpoint_reversals\": " << scaffold.counters.constrained_endpoint_reversals
+                 << ", \"source_attachments\": " << scaffold.counters.source_attachments
+                 << ", \"target_attachments\": " << scaffold.counters.target_attachments
+                 << ", \"component_connections\": " << scaffold.counters.component_connections
+@@ -5548,6 +5549,7 @@ void print_detailed_result(const flux::DetailedRouteResult& result,
+       std::cout << ",\n  \"retained_scaffold_search\": {";
+       std::cout << "\"expansions\": " << counters.expansions;
+       std::cout << ", \"compact_search_expansions\": " << counters.compact_search_expansions;
++      std::cout << ", \"constrained_endpoint_reversals\": " << counters.constrained_endpoint_reversals;
+       std::cout << ", \"source_attachments\": " << counters.source_attachments;
+       std::cout << ", \"target_attachments\": " << counters.target_attachments;
+       std::cout << ", \"attachment_search_rounds\": " << counters.attachment_search_rounds;
+diff --git a/include/flux/core/copper_scaffold.hpp b/include/flux/core/copper_scaffold.hpp
+index 05b86de..617842e 100644
+--- a/include/flux/core/copper_scaffold.hpp
++++ b/include/flux/core/copper_scaffold.hpp
+@@ -61,6 +61,9 @@ struct CopperScaffoldConfig {
+   std::size_t expanded_attachment_states{32U};
+   std::size_t maximum_attachment_probes_per_round{256U};
+   std::size_t maximum_goal_attempts{64U};
++  // During rich recovery only, search from the more constrained attachment side after forward
++  // compact search fails. Public evidence remains in request orientation.
++  bool constrained_endpoint_reverse_search{true};
+   // Optional optimistic node-dominance pass before the provenance-rich search. Zero disables it.
+   std::size_t compact_search_expansions{25'000U};
+   std::size_t maximum_via_history_nodes{262'144U};
+@@ -219,6 +222,7 @@ struct CopperScaffoldCounters {
+   std::size_t via_history_budget_exhaustions{0U};
+   std::size_t source_attachments{0U};
+   std::size_t target_attachments{0U};
++  std::size_t constrained_endpoint_reversals{0U};
+   std::size_t attachment_search_rounds{0U};
+   std::size_t attachment_search_probes{0U};
+   std::size_t outward_attachment_probes{0U};
+diff --git a/src/copper_scaffold.cpp b/src/copper_scaffold.cpp
+index 3cebece..2b1d741 100644
+--- a/src/copper_scaffold.cpp
++++ b/src/copper_scaffold.cpp
+@@ -392,7 +392,7 @@ struct PassageSearch {
+     finish(CopperScaffoldSearchTermination::no_copper_layers); return std::nullopt;
+   }
+   const auto access_started = std::chrono::steady_clock::now();
+-  const auto access = scaffold_connection_access(base, request, config.maximum_component_access_points);
++  auto access = scaffold_connection_access(base, request, config.maximum_component_access_points);
+   counters.access_generation_microseconds += static_cast<std::uint64_t>(
+       std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - access_started).count());
+   if (access_evidence != nullptr) {
+@@ -654,6 +654,17 @@ struct PassageSearch {
+                                CopperScaffoldSearchTermination::attachment_exhausted);
+     return std::nullopt;
+   }
++  bool reverse_search = false;
++  const auto account_attachment_growth = [&](std::size_t source_before, std::size_t target_before) {
++    counters.source_attachments += starts.size() - source_before;
++    counters.target_attachments += goals.size() - target_before;
++  };
++  const auto normalize_request_orientation = [&](GlobalRoutePath& path) {
++    if (!reverse_search) return;
++    std::reverse(path.points.begin(), path.points.end());
++    std::reverse(path.segment_widths.begin(), path.segment_widths.end());
++    std::reverse(path.segment_width_kinds.begin(), path.segment_width_kinds.end());
++  };
+   std::map<Node, std::vector<std::size_t>> goals_at;
+   for (std::size_t i = 0U; i < goals.size(); ++i) goals_at[goals[i].node].push_back(i);
+   std::map<Node, std::uint64_t> estimates;
+@@ -742,6 +753,7 @@ struct PassageSearch {
+         if (goals[goal_id].outward_stub && path.points.back() != *goals[goal_id].outward_stub)
+           path.points.push_back(*goals[goal_id].outward_stub);
+         if (path.points.back() != goals[goal_id].anchor) path.points.push_back(goals[goal_id].anchor);
++        normalize_request_orientation(path);
+         clear_coarse_metadata(path); compress_collinear_grid_runs(path);
+         path.segment_widths.assign(path.points.size() - 1U, rules.track_width);
+         path.segment_width_kinds.assign(path.points.size() - 1U, GlobalRouteSegmentWidthKind::nominal);
+@@ -806,8 +818,8 @@ struct PassageSearch {
+     goals_at.clear(); estimates.clear();
+     for (std::size_t i = 0U; i < goals.size(); ++i) goals_at[goals[i].node].push_back(i);
+     if (access_evidence != nullptr) {
+-      access_evidence->source_legal_attachments = starts.size();
+-      access_evidence->target_legal_attachments = goals.size();
++      access_evidence->source_legal_attachments = reverse_search ? goals.size() : starts.size();
++      access_evidence->target_legal_attachments = reverse_search ? starts.size() : goals.size();
+     }
+   };
+   if (!passage_search && compact_limit > 0U && compact_goal_limit > 0U) {
+@@ -823,8 +835,7 @@ struct PassageSearch {
+                                    std::max(attachment_target, config.expanded_attachment_states));
+       const auto source_before = starts.size(), target_before = goals.size();
+       widen(source_cursor, access.starts, middle); widen(target_cursor, access.goals, middle);
+-      counters.source_attachments += starts.size() - source_before;
+-      counters.target_attachments += goals.size() - target_before;
++      account_attachment_growth(source_before, target_before);
+       refresh_goals();
+       const auto half_expansions = compact_limit / 2U;
+       const auto half_goals = compact_goal_limit / 2U;
+@@ -837,8 +848,7 @@ struct PassageSearch {
+       const auto source_full_before = starts.size(), target_full_before = goals.size();
+       widen(source_cursor, access.starts, config.maximum_attachment_states);
+       widen(target_cursor, access.goals, config.maximum_attachment_states);
+-      counters.source_attachments += starts.size() - source_full_before;
+-      counters.target_attachments += goals.size() - target_full_before;
++      account_attachment_growth(source_full_before, target_full_before);
+       refresh_goals();
+       const bool full_changed = starts.size() != source_full_before || goals.size() != target_full_before;
+       if (compact_used < compact_limit && goal_attempts < compact_goal_limit &&
+@@ -852,8 +862,24 @@ struct PassageSearch {
+     const auto source_before = starts.size(), target_before = goals.size();
+     widen(source_cursor, access.starts, config.maximum_attachment_states);
+     widen(target_cursor, access.goals, config.maximum_attachment_states);
+-    counters.source_attachments += starts.size() - source_before;
+-    counters.target_attachments += goals.size() - target_before;
++    account_attachment_growth(source_before, target_before);
++    refresh_goals();
++  }
++  const auto rich_budget = config.maximum_expansions_per_connection - compact_used;
++  if (!counters.cancelled && rich_budget > 0U && goal_attempts < config.maximum_goal_attempts &&
++      config.constrained_endpoint_reverse_search && goals.size() < starts.size()) {
++    std::swap(source_cursor, target_cursor);
++    std::swap(access.starts, access.goals);
++    reverse_search = true;
++    ++counters.constrained_endpoint_reversals;
++    // Compact probes are useful only for compact recovery. Once rich search changes direction,
++    // causal repair must be attributed to its final frontier rather than stale forward probes.
++    if (frontier_blockers != nullptr) {
++      frontier_blockers->clear();
++      // A false-only cache would otherwise skip collision reporting for compact-rejected edges
++      // that the reversed rich frontier reaches again.
++      edge_cache.clear();
++    }
+     refresh_goals();
+   }
+   std::priority_queue<QueueEntry, std::vector<QueueEntry>, QueueOrder> open;
+@@ -909,6 +935,7 @@ struct PassageSearch {
+     if (goals[goal_id].outward_stub && path.points.back() != *goals[goal_id].outward_stub)
+       path.points.push_back(*goals[goal_id].outward_stub);
+     if (path.points.back() != goals[goal_id].anchor) path.points.push_back(goals[goal_id].anchor);
++    normalize_request_orientation(path);
+     clear_coarse_metadata(path); compress_collinear_grid_runs(path);
+     path.segment_widths.assign(path.points.size() - 1U, rules.track_width);
+     path.segment_width_kinds.assign(path.points.size() - 1U, GlobalRouteSegmentWidthKind::nominal);
+@@ -933,7 +960,6 @@ struct PassageSearch {
+     ++counters.goal_rejections; ++counters.candidate_rejections;
+     return std::nullopt;
+   };
+-  const auto rich_budget = config.maximum_expansions_per_connection - compact_used;
+   while (!open.empty() && local_expansions < rich_budget &&
+          goal_attempts < config.maximum_goal_attempts) {
+     routing_kernel_checkpoint();
+diff --git a/src/routing_engine.cpp b/src/routing_engine.cpp
+index c9373f5..ff56630 100644
+--- a/src/routing_engine.cpp
++++ b/src/routing_engine.cpp
+@@ -1964,6 +1964,7 @@ RoutingEngineStepResult RoutingEngine::advance(RoutingEngineStepBudget budget,
+               "; search_us=" + std::to_string(c.search_microseconds) +
+               "; edge_validation_us=" + std::to_string(c.edge_validation_microseconds) +
+               "; attachment_us=" + std::to_string(c.attachment_generation_microseconds) +
++              "; constrained_endpoint_reversals=" + std::to_string(c.constrained_endpoint_reversals) +
+               "; outward_probes=" + std::to_string(c.outward_attachment_probes) +
+               "; outward_attachments=" + std::to_string(c.outward_attachments) +
+               "; goal_rejections=" + std::to_string(c.goal_rejections) +
+diff --git a/tests/unit/copper_scaffold_tests.cpp b/tests/unit/copper_scaffold_tests.cpp
+index d686676..11b80ce 100644
+--- a/tests/unit/copper_scaffold_tests.cpp
++++ b/tests/unit/copper_scaffold_tests.cpp
+@@ -893,6 +893,115 @@ void exact_grid_attachment_checks_coincident_copper() {
+           "a same-net exact grid contact must remain a legal searched attachment");
+ }
+ 
++void constrained_endpoint_reverse_search_preserves_request_orientation() {
++  const auto make_board = [](bool sealed) {
++    auto board = fixture();
++    board.layers.resize(1U);
++    board.tracks.push_back({ObjectId{"constrained-source-component"}, NetId{"a"}, LayerId{"F.Cu"},
++                            mm(2,2), mm(2,18), Nanometres::from_mm(0.2), false});
++    board.tracks.push_back({ObjectId{"constrained-barrier"}, NetId{"b"}, LayerId{"F.Cu"},
++                            mm(10, sealed ? 0 : 5), mm(10, sealed ? 20 : 15),
++                            Nanometres::from_mm(0.8), false});
++    return board;
++  };
++  auto demand = request(NetId{"a"}, mm(2,10), LayerId{"F.Cu"}, mm(18,10), LayerId{"F.Cu"});
++  demand.connection_index = 7U;
++  CopperScaffoldConfig config;
++  config.grid_pitch = Nanometres::from_mm(0.5);
++  config.maximum_expansions_per_connection = 100'000U;
++  config.maximum_victim_exchanges = 0U;
++  config.maximum_joint_passage_candidates = 0U;
++  config.maximum_displacement_attempts = 0U;
++  config.compact_search_expansions = 50U;
++
++  auto compact_config = config;
++  compact_config.compact_search_expansions = 10'000U;
++  const auto compact_forward = construct_copper_scaffold(make_board(false), {demand}, compact_config);
++  auto compact_disabled = compact_config;
++  compact_disabled.constrained_endpoint_reverse_search = false;
++  const auto compact_reference = construct_copper_scaffold(make_board(false), {demand}, compact_disabled);
++  require(compact_forward.complete && compact_reference.complete &&
++              compact_forward.counters.constrained_endpoint_reversals == 0U &&
++              compact_forward.paths == compact_reference.paths &&
++              check_copper_rules(compact_forward.copper).ok(),
++          "a successful forward compact search must remain unchanged when reverse fallback is enabled");
++
++  const auto blocked = construct_copper_scaffold(make_board(true), {demand}, config);
++  require(!blocked.complete && blocked.paths.empty() &&
++              blocked.counters.compact_search_expansions == config.compact_search_expansions &&
++              blocked.counters.constrained_endpoint_reversals == 1U &&
++              blocked.request_evidence.size() == 1U &&
++              blocked.request_evidence.front().source_legal_attachments >
++                  blocked.request_evidence.front().target_legal_attachments &&
++              std::find(blocked.request_evidence.front().blocker_objects.begin(),
++                        blocked.request_evidence.front().blocker_objects.end(),
++                        ObjectId{"constrained-barrier"}) != blocked.request_evidence.front().blocker_objects.end(),
++          "a bounded asymmetric blocked search must reverse its frontier while retaining original blocker evidence");
++
++  const auto routed = construct_copper_scaffold(make_board(false), {demand}, config);
++  require(routed.complete && routed.counters.constrained_endpoint_reversals == 1U &&
++              routed.request_evidence.front().source_legal_attachments >
++                  routed.request_evidence.front().target_legal_attachments &&
++              routed.paths.front().points.front().position.x < routed.paths.front().points.back().position.x &&
++              routed.paths.front().net == demand.net &&
++              routed.paths.front().connection_index == demand.connection_index &&
++              check_copper_rules(routed.copper).ok(),
++          "reverse frontier search must publish a DRC-clean path in original request orientation");
++
++  auto rich_only = config;
++  rich_only.compact_search_expansions = 0U;
++  rich_only.maximum_expansions_per_connection = 100'000U;
++  const auto rich = construct_copper_scaffold(make_board(false), {demand}, rich_only);
++  require(rich.complete && rich.counters.constrained_endpoint_reversals == 1U &&
++              rich.paths.front().net == demand.net &&
++              rich.paths.front().connection_index == demand.connection_index &&
++              rich.paths.front().points.front().position.x < rich.paths.front().points.back().position.x &&
++              rich.counters.expansions <= rich_only.maximum_expansions_per_connection &&
++              check_copper_rules(rich.copper).ok(),
++          ("rich-only reverse search must retain original request identity, orientation, and budget: complete=" +
++           std::to_string(rich.complete) + " reversals=" + std::to_string(rich.counters.constrained_endpoint_reversals) +
++           " expansions=" + std::to_string(rich.counters.expansions) +
++           " source=" + std::to_string(rich.request_evidence.front().source_legal_attachments) +
++           " target=" + std::to_string(rich.request_evidence.front().target_legal_attachments) +
++           " termination=" + std::string(to_string(rich.request_evidence.front().termination))).c_str());
++
++  auto progressive = config;
++  progressive.progressive_attachment_search = true;
++  progressive.initial_attachment_states = 1U;
++  progressive.expanded_attachment_states = 32U;
++  progressive.maximum_attachment_states = 128U;
++  progressive.compact_search_expansions = 4'096U;
++  const auto widened = construct_copper_scaffold(make_board(true), {demand}, progressive);
++  require(!widened.complete && widened.counters.constrained_endpoint_reversals == 1U &&
++              widened.request_evidence.front().source_legal_attachments >
++                  widened.request_evidence.front().target_legal_attachments &&
++              widened.counters.source_attachments >= widened.request_evidence.front().source_legal_attachments &&
++              widened.counters.target_attachments >= widened.request_evidence.front().target_legal_attachments,
++          "progressive widening must reorient a tied prefix while preserving original attachment evidence");
++
++  auto progressive_rich = progressive;
++  progressive_rich.compact_search_expansions = 0U;
++  progressive_rich.maximum_expansions_per_connection = rich_only.maximum_expansions_per_connection;
++  const auto widened_rich = construct_copper_scaffold(make_board(false), {demand}, progressive_rich);
++  require(widened_rich.complete && widened_rich.counters.constrained_endpoint_reversals == 1U &&
++              widened_rich.request_evidence.front().source_legal_attachments >
++                  widened_rich.request_evidence.front().target_legal_attachments &&
++              widened_rich.paths.front().net == demand.net &&
++              widened_rich.paths.front().connection_index == demand.connection_index &&
++              widened_rich.paths.front().points.front().position.x <
++                  widened_rich.paths.front().points.back().position.x &&
++              widened_rich.counters.expansions <= progressive_rich.maximum_expansions_per_connection &&
++              check_copper_rules(widened_rich.copper).ok(),
++          "rich progressive widening must reverse the later asymmetric frontier without changing request orientation");
++
++  std::stop_source stop;
++  stop.request_stop();
++  const auto cancelled = construct_copper_scaffold(make_board(false), {demand}, config, stop.get_token());
++  require(cancelled.counters.cancelled && cancelled.counters.constrained_endpoint_reversals == 0U &&
++              cancelled.paths.empty() && check_copper_rules(cancelled.copper).ok(),
++          "cancellation before attachment generation must not publish or reverse a partial search");
++}
++
+ } // namespace
+ int main() {
+   via_histories_are_canonical_immutable_and_bounded();
+@@ -911,6 +1020,7 @@ int main() {
+   progressive_attachment_search_avoids_eager_attachment_probes();
+   progressive_attachment_limits_fail_closed_and_clamp_zero_initial_prefix();
+   exact_grid_attachment_checks_coincident_copper();
++  constrained_endpoint_reverse_search_preserves_request_orientation();
+   accepts_legal_supplied_topology();
+   finds_a_legal_detour_when_the_supplied_line_is_blocked();
+   supplies_a_legal_via_transition();

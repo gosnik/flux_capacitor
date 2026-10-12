@@ -10097,3 +10097,10 @@ Deterministic compact/rich direction and provenance regressions, all11 existing 
 
 ### Round29 result and decision
 All11 regression targets pass and independent review passes after progressive phase handling. Tier0 remains byte-identical and clean,30.534s detailed versus30.432s. Unconditional reversal changes Tier1 early routes and causes a substantial regression: stopped after277.316s telemetry versus66.166s baseline planning, still without a completed result. This is an operator-aborted performance experiment; final routability is unmeasured. Tier2 was not advanced while the lower tier regressed. Reject unconditional reversal. Preserve successful forward compact choices; use smaller-frontier direction only for rich recovery after compact failure, with failure evidence from that frontier.
+
+## Round30 — Constrained endpoint only during rich recovery (2026-10-12)
+
+Round29 proves that changing every initial search direction alters otherwise successful routing choices and regresses Tier1. Preserve the complete forward compact search and its progressive phases. Only after compact failure, before rich labels are created and while budget remains, use the smaller legal frontier; normalize the resulting path to original request orientation. When direction changes, use the new frontier's collision evidence for causal repair instead of broad forward-search noise. Production budgets and exact validation remain unchanged. Measure lower-tier completion and runtime before advancing to Tier2.
+
+### Round30 result and decision
+All11 final regression targets and independent review pass; the review fixed stale boolean edge-cache entries suppressing blocker re-attribution after evidence reset. Tier0 remains clean,30.840s detailed. Tier1 again regresses and was stopped after231.002s telemetry without final completion (baseline planning66.166s). Do not promote or advance Tier2. Recovery-only reversal still changes successful rich searches. Preserve the whole forward policy; first test whether correct target-side victim evidence alone lets the unchanged forward search complete the known repair.

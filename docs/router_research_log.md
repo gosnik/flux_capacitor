@@ -10172,3 +10172,29 @@ The same assertion also required circular arcs specifically, while the valid cur
 
 ### Round34 results
 All 11 regression targets passed after the fixture corrections. Sequential telemetry Tier0/1/2 retained byte-identical clean copper (31.044s/106.314s/223.759s detailed). Tier3 reached88/148 physical requests,60 opens at its900s limit, versus51/148 previously; it remains incomplete. Retain the general terminal escape improvement; expensive repair remains the frontier. Evidence: `reports/validation/terminal-neckdown-round34-20261013/`.
+
+## Round35 — Exact custom pad and touching-zone contour import (2026-10-13)
+
+### Failure
+The STM32G474 three-motor ESC diagnostic attempt could not strictly represent four custom USB connector pads or the complete PGND front-layer zone. The importer substituted anchor dimensions for custom copper and rejected one bridged saved-fill walk, dropping the entire zone. Baseline import retained106 of107 zones and reported599 physical opens, versus499 native KiCad opens; these counts are not assumed directly equivalent. The600-second diagnostic attempt expired during global preparation with no newly materialized copper.
+
+### Hypothesis and experiment
+Preserve exact filled custom polygons whose anchors are contained by the polygon, including concavity and pad/footprint transforms. Unsupported primitive unions must remain explicit failures. Decompose valid bridged filled-zone walks at touching vertices into separate simple copper regions with correctly assigned holes. Never fill holes or substitute a convex hull. Extend source telemetry to show exact custom pad contours.
+
+### Research
+KiCad's [custom pad format](https://dev-docs.kicad.org/en/file-formats/sexpr-intro/) specifies an anchor and graphical primitives; [PAD effective geometry](https://docs.kicad.org/doxygen/classPAD.html) represents their union. A contained anchor plus one filled polygon therefore needs no geometric approximation. Existing Flux polygon and zone predicates provide the integration boundary.
+
+### Validation plan
+Focused concave/rotated-pad distance, clearance, connectivity, and contour-decomposition tests; existing regression targets; strict import of the real board; native KiCad refill/DRC on a staged copy. Then give the complex board3600 seconds of routing time with4500 seconds outer limit, curved tracks and recorded telemetry. Preserve original files and all earlier diagnostic evidence. Results pending.
+
+### Geometry diagnosis and normalization boundary
+The first repeated-vertex decomposition was necessary but insufficient. Permanent decoder-stage diagnostics identified a second contour with4,306 vertices: edges527 and539 properly cross at27.14999944463071mm. Its intersection cannot be represented exactly by Flux's integer-nanometre simple polygon model. Raw input therefore remains fail-closed.
+
+KiCad's [SHAPE_POLY_SET API](https://docs.kicad.org/doxygen/classSHAPE__POLY__SET.html) provides native self-intersection normalization. Add an explicit `refill_zones.py --normalize-saved-fills-only` preparation mode, gated by KiCad's `IsSelfIntersecting()` per saved zone/layer. It uses KiCad's own `Unfracture`, `Simplify`, and `Fracture` operations, preserves source files and zone definitions, and reports changed UUID/layer/vertex counts. This is native integer-grid normalization, not a claim of algebraic identity to a self-crossing raw walk. The selective prepared board imports strictly with all107 zones and four custom polygons;19 zone/layer fills are normalized. Broad normalization of all fills was tested first and retained as evidence, then narrowed to flagged fills.
+
+Independent review found a reflex-vertex containment hole in the initial rectangular-anchor proof; require positive boundary separation for rectangular anchors and custom-pad containment. New tests reject anchor copper extending across a concave notch. The initial free-space fixture needed a declared routed net; fix that test setup rather than altering extraction requirements.
+
+### Round35 results
+The final core suite passed76/76 cases,33 relevant CTest targets passed, and native normalization tests passed4/4. The selectively prepared ESC imports strictly with all107 zones and four exact custom pads. Native DRC reports zero error violations and499 reported open items;499 is KiCad's unconnected-item reporting cap, not the total. Flux reports555 source connections. Source board files and non-fill expressions were preserved.
+
+The frozen60-minute attempt ended after3655.037s with no completed global checkpoint or physical copper candidate; peakRSS7433444KiB. Engine outcome is timed-out despite unset result defaults saying invalid_input. Provisional alternatives were published but not handed to physical routing. Telemetry grew to approximately997MB. This is a preparation failure, not evidence of geometric infeasibility. Keep import fixes; address bounded preparation next. Evidence: `reports/validation/esc-import-round35-20261013/`.

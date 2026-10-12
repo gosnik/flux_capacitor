@@ -11,7 +11,7 @@
 
 namespace flux {
 
-inline constexpr std::uint32_t board_schema_version = 22;
+inline constexpr std::uint32_t board_schema_version = 23;
 inline constexpr std::int64_t max_abs_coordinate_nm = 1'000'000'000;
 
 struct Point {
@@ -220,6 +220,12 @@ struct Pad {
   Nanometres drill_height{Nanometres{0}};
   Point drill_offset;
   bool plated{true};
+  // For a supported KiCad custom pad, this is the one filled primitive expressed in the
+  // pad's copper-local frame. It replaces the anchor shape only after import has proved the
+  // anchor is contained by it, so it is the exact copper union rather than an envelope.
+  std::optional<Polygon> custom_copper_polygon{};
+  // KiCad's custom-pad anchor, retained to prove the supported contained-anchor subset at import.
+  PadShape custom_anchor_shape{PadShape::unknown};
 
   bool operator==(const Pad&) const = default;
 };

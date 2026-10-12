@@ -536,6 +536,13 @@ ValidationReport validate_board_impl(const Board& board, bool reuse_static_zone_
         add_issue(report, IssueSeverity::error, "invalid_pad_shape_geometry",
                   "pad shape dimensions or corner radius are inconsistent", {pad.id.value()});
       }
+      if (pad.shape == PadShape::custom &&
+          (!pad.custom_copper_polygon || !geometry::is_simple_polygon(*pad.custom_copper_polygon) ||
+           (pad.custom_anchor_shape != PadShape::circle &&
+            pad.custom_anchor_shape != PadShape::rectangle))) {
+        add_issue(report, IssueSeverity::error, "invalid_custom_pad_geometry",
+                  "custom pads require one simple exact copper polygon", {pad.id.value()});
+      }
       for (const auto& layer : pad.layers) {
         if (!has_value(layer_ids, layer.value())) {
           add_issue(report, IssueSeverity::error, "unknown_pad_layer",

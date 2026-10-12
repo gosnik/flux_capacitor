@@ -1,4 +1,5 @@
 #include "flux/core/copper_geometry.hpp"
+#include "flux/core/connectivity.hpp"
 #include "flux/core/board_free_space.hpp"
 #include "flux/core/detailed_router.hpp"
 #include "flux/core/drc.hpp"
@@ -8265,6 +8266,91 @@ void kicad_pad_frames_match_placed_board_coordinates() {
           "known-connected KRT copper must remain connected after canonical import");
 }
 
+void kicad_contained_custom_polygon_pads_preserve_exact_copper() {
+  const auto board_text = R"((kicad_pcb (version 20241229) (generator "pcbnew")
+    (layers (0 "F.Cu" signal) (44 "Edge.Cuts" user)) (net 0 "") (net 1 "N")
+    (gr_rect (start 0 0) (end 50 50) (stroke (width 0.05) (type default))
+      (fill none) (layer "Edge.Cuts"))
+    (footprint "Test:Custom" (layer "F.Cu") (at 20 20 90)
+      (pad "1" smd custom (at 2 3) (size 0.1 0.1) (layers "F.Cu") (net 1 "N")
+        (options (clearance outline) (anchor circle))
+        (primitives (gr_poly (pts (xy -2 -1) (xy 2 -1) (xy 2 1) (xy 0 1)
+          (xy 0 0.2) (xy -0.5 0.2) (xy -0.5 1) (xy -2 1) (xy -2 -1))
+          (width 0) (fill yes)))))))";
+  const auto imported = flux::io::import_kicad_pcb(board_text);
+  require(imported.strict() && imported.board->footprints.size() == 1U,
+          "a contained filled custom polygon must import strictly");
+  const auto& pad = imported.board->footprints.front().pads.front();
+  require(pad.custom_copper_polygon && pad.custom_copper_polygon->vertices.size() == 8U,
+          "custom copper must retain the pad-local concave polygon");
+  const auto copper = flux::copper_pad_shapes(*imported.board);
+  require(copper.size() == 1U && copper.front().custom_copper_polygon,
+          "custom copper must transform into the shared world-space pad geometry");
+  require(std::find(copper.front().custom_copper_polygon->vertices.begin(),
+                    copper.front().custom_copper_polygon->vertices.end(), mm(21.0, 17.0)) !=
+              copper.front().custom_copper_polygon->vertices.end(),
+          "custom-pad vertices must retain the pad's absolute zero-degree world orientation");
+  require(flux::point_to_pad_copper_distance_nm(mm(24.5, 18.0), copper.front()) == 0.0L,
+          "custom copper must connect at polygon area outside its 0.1mm anchor");
+  require(flux::copper_probes_share_component(
+              *imported.board, NetId{"kicad-net-1"},
+              flux::CopperConnectivityProbe{mm(23.0, 18.0), {LayerId{"F.Cu"}}},
+              flux::CopperConnectivityProbe{mm(24.5, 18.0), {LayerId{"F.Cu"}}}),
+          "connectivity probes must accept copper inside the custom polygon beyond its anchor");
+  require(flux::point_to_pad_copper_distance_nm(mm(22.75, 18.6), copper.front()) > 0.0L,
+          "custom-pad distance queries must preserve concavity instead of using the anchor envelope");
+  const auto free = flux::extract_polygonal_board_free_space(
+      *imported.board, flux::BoardFreeSpaceExtractionConfig{LayerId{"F.Cu"}, NetId{"kicad-net-0"}, true, true, true});
+  require(free.complete() && free.domain.obstacles.size() == 1U &&
+              free.domain.obstacles.front().vertices.size() == 8U,
+          "free-space extraction must emit the exact custom copper polygon as its obstacle");
+
+  const auto back = flux::io::import_kicad_pcb(R"((kicad_pcb (version 20241229)
+    (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user)) (net 0 "") (net 1 "N")
+    (gr_rect (start 0 0) (end 50 50) (stroke (width 0.05) (type default)) (fill none) (layer "Edge.Cuts"))
+    (footprint "Test:CustomBack" (layer "B.Cu") (at 20 40 90)
+      (pad "1" smd custom (at 2 3) (size 0.1 0.1) (layers "B.Cu") (net 1 "N")
+        (options (clearance outline) (anchor circle))
+        (primitives (gr_poly (pts (xy -2 -1) (xy 2 -1) (xy 2 1) (xy -2 1) (xy -2 -1))
+          (width 0) (fill yes)))))))");
+  const auto back_copper = back.board ? flux::copper_pad_shapes(*back.board)
+                                      : std::vector<flux::CopperPadShape>{};
+  require(back.strict() && back_copper.size() == 1U && back_copper.front().custom_copper_polygon &&
+              std::find(back_copper.front().custom_copper_polygon->vertices.begin(),
+                        back_copper.front().custom_copper_polygon->vertices.end(), mm(21.0, 37.0)) !=
+                  back_copper.front().custom_copper_polygon->vertices.end(),
+          "back-side custom-pad vertices must preserve KiCad's reflected local coordinate frame");
+
+  const auto unsupported = flux::io::import_kicad_pcb(R"((kicad_pcb (version 20241229)
+    (layers (0 "F.Cu" signal) (44 "Edge.Cuts" user)) (net 0 "") (net 1 "N")
+    (gr_rect (start 0 0) (end 10 10) (stroke (width 0.05) (type default)) (fill none) (layer "Edge.Cuts"))
+    (footprint "Test:Bad" (layer "F.Cu") (at 5 5)
+      (pad "1" smd custom (at 0 0) (size 0.1 0.1) (layers "F.Cu") (net 1 "N")
+        (options (clearance outline) (anchor circle))
+        (primitives (gr_line (start -1 0) (end 1 0) (width 0.2)))))))");
+  require(!unsupported.strict(), "unsupported custom primitives must fail import rather than lose copper");
+
+  const auto escaping_anchor = flux::io::import_kicad_pcb(R"((kicad_pcb (version 20241229)
+    (layers (0 "F.Cu" signal) (44 "Edge.Cuts" user)) (net 0 "") (net 1 "N")
+    (gr_rect (start 0 0) (end 20 20) (stroke (width 0.05) (type default))
+      (fill none) (layer "Edge.Cuts"))
+    (footprint "Test:Reflex" (layer "F.Cu") (at 10 10)
+      (pad "1" smd custom (at 0 0) (size 4 2) (layers "F.Cu") (net 1 "N")
+        (options (clearance outline) (anchor rect))
+        (primitives (gr_poly (pts (xy -3 -3) (xy 3 -3) (xy 3 3) (xy 2 3)
+          (xy 2 0) (xy -2 0) (xy -2 3) (xy -3 3)) (width 0) (fill yes)))))))");
+  require(!escaping_anchor.strict() &&
+              std::any_of(escaping_anchor.diagnostics.begin(), escaping_anchor.diagnostics.end(),
+                  [](const auto& diagnostic) { return diagnostic.code == "unsupported_custom_pad_union"; }),
+          "rectangular anchors spanning a reflex notch must not silently lose their copper");
+  auto spanning_pad = copper.front();
+  spanning_pad.custom_copper_polygon = flux::Polygon{{mm(-2,-1), mm(2,-1), mm(2,1), mm(-2,1)}};
+  const flux::Polygon notched_container{{mm(-3,-3), mm(3,-3), mm(3,3), mm(2,3),
+                                        mm(2,0), mm(-2,0), mm(-2,3), mm(-3,3)}};
+  require(!flux::pad_inside_polygon(spanning_pad, notched_container),
+          "custom copper spanning a reflex boundary must not be classified inside a zone hole");
+}
+
 void cancellation_and_kicad_export_boundaries_fail_closed() {
   const auto board = two_pad_board();
   std::stop_source stop;
@@ -8540,6 +8626,64 @@ void cancellation_and_kicad_export_boundaries_fail_closed() {
                           }),
           "an unchanged unfilled zone must retain exact source syntax and canonical refill state "
           "through source-preserving export");
+  auto bridged_zone_contents = contents;
+  bridged_zone_contents.insert(
+      board_close,
+      "  (zone (net 1) (layer \"F.Cu\") (uuid \"bridged-zone-test\") (hatch edge 0.5)\n"
+      "    (filled_polygon (layer \"F.Cu\") (pts\n"
+      "      (xy 20 20) (xy 30 20) (xy 31 20) (xy 31 21) (xy 30 20)\n"
+      "      (xy 30 30) (xy 20 30) (xy 20 25)\n"
+      "      (xy 23 25) (xy 23 27) (xy 27 27) (xy 27 23) (xy 23 23) (xy 23 25)\n"
+      "      (xy 20 25) (xy 20 20)))\n"
+      "  )\n");
+  const auto bridged_zone_import = flux::io::import_kicad_pcb(bridged_zone_contents);
+  const auto bridged_zone = bridged_zone_import.board
+                                ? std::find_if(bridged_zone_import.board->zones.begin(),
+                                               bridged_zone_import.board->zones.end(),
+                                               [](const auto& zone) {
+                                                 return zone.id == ObjectId{"bridged-zone-test"};
+                                               })
+                                : std::vector<flux::CopperZone>::const_iterator{};
+  require(bridged_zone_import.strict() && bridged_zone_import.board &&
+              bridged_zone != bridged_zone_import.board->zones.end() &&
+              bridged_zone->fills.size() == 2U &&
+              std::count_if(bridged_zone->fills.begin(), bridged_zone->fills.end(),
+                            [](const auto& fill) { return fill.holes.size() == 1U; }) == 1U &&
+              std::count_if(bridged_zone->fills.begin(), bridged_zone->fills.end(),
+                            [](const auto& fill) { return fill.holes.empty(); }) == 1U,
+          "a bridged KiCad fill with a vertex-touching copper island must retain both exact "
+          "outer fills and its disjoint hole");
+  auto pinched_hole_contents = bridged_zone_contents;
+  const std::string external_island =
+      "(xy 20 20) (xy 30 20) (xy 31 20) (xy 31 21) (xy 30 20)\n"
+      "      (xy 30 30)";
+  const auto island_winding = pinched_hole_contents.find(external_island);
+  require(island_winding != std::string::npos,
+          "the bridged-zone fixture must retain its touching island");
+  pinched_hole_contents.replace(island_winding, external_island.size(),
+      "(xy 20 20) (xy 25 20) (xy 24 21) (xy 26 21) (xy 25 20) (xy 30 20)\n"
+      "      (xy 30 30)");
+  const auto pinched_hole_import = flux::io::import_kicad_pcb(pinched_hole_contents);
+  require(!pinched_hole_import.strict() &&
+              std::any_of(pinched_hole_import.diagnostics.begin(), pinched_hole_import.diagnostics.end(),
+                          [](const auto& diagnostic) {
+                            return diagnostic.code == "unsupported_zone_fill_geometry";
+                          }),
+          "a reversed contour touching an outer boundary must fail closed rather than becoming "
+          "a copper island");
+  auto crossing_zone_contents = bridged_zone_contents;
+  const auto island_extent = crossing_zone_contents.find("(xy 31 21) (xy 30 20)");
+  require(island_extent != std::string::npos,
+          "the bridged-zone fixture must retain its touching island extent");
+  crossing_zone_contents.replace(island_extent, std::string{"(xy 31 21) (xy 30 20)"}.size(),
+                                 "(xy 29 21) (xy 30 20)");
+  const auto crossing_zone_import = flux::io::import_kicad_pcb(crossing_zone_contents);
+  require(!crossing_zone_import.strict() &&
+              std::any_of(crossing_zone_import.diagnostics.begin(), crossing_zone_import.diagnostics.end(),
+                          [](const auto& diagnostic) {
+                            return diagnostic.code == "unsupported_zone_fill_geometry";
+                          }),
+          "crossing filled contours must fail closed rather than changing the saved copper");
   auto named_net_contents = contents;
   const auto erase_once = [&named_net_contents](std::string_view value) {
     const auto position = named_net_contents.find(value);
@@ -11431,6 +11575,8 @@ int main(int argc, char** argv) {
       {"routing_engine_distinguishes_deadline_cancellation_and_budget", routing_engine_distinguishes_deadline_cancellation_and_budget},
       {"kicad_drill_offsets_preserve_copper_and_hole_anchors", kicad_drill_offsets_preserve_copper_and_hole_anchors},
       {"kicad_pad_frames_match_placed_board_coordinates", kicad_pad_frames_match_placed_board_coordinates},
+      {"kicad_contained_custom_polygon_pads_preserve_exact_copper",
+       kicad_contained_custom_polygon_pads_preserve_exact_copper},
       {"units_remain_exact_and_saturating", units_remain_exact_and_saturating},
       {"multisource_terminal_membership_preserves_access_preference_order",
        multisource_terminal_membership_preserves_access_preference_order},

@@ -1,0 +1,14 @@
+{
+  "round": 35,
+  "revision": "8662bbb",
+  "dirty": true,
+  "board": "stm32g474_3x350w_bldc",
+  "elapsed_seconds": 3655.036579,
+  "peak_rss_kib": 7433444,
+  "outcome": "timed-out",
+  "candidate_available": false,
+  "completed_engine_decision_points": 0,
+  "drc_output_validated": false,
+  "source_strictly_imported": true,
+  "reports": "reports/validation/esc-import-round35-20261013"
+}

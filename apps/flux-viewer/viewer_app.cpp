@@ -1188,7 +1188,15 @@ void ViewerApp::draw_board_canvas() {
                     0.90F);
     const auto half_width = static_cast<long double>(primitive.width_nm) / 2.0L;
     const auto half_height = static_cast<long double>(primitive.height_nm) / 2.0L;
-    if (primitive.shape == "circle" || primitive.width_nm == primitive.height_nm) {
+    if (primitive.shape == "custom" && primitive.points.size() >= 4U) {
+      std::vector<ImVec2> pixels;
+      pixels.reserve(primitive.points.size() - 1U);
+      for (std::size_t index = 1; index < primitive.points.size(); ++index)
+        pixels.push_back(screen(primitive.points[index]));
+      draw->AddConcavePolyFilled(pixels.data(), static_cast<int>(pixels.size()), pad_color);
+      draw->AddPolyline(pixels.data(), static_cast<int>(pixels.size()), outline_color,
+                        ImDrawFlags_Closed, 1.0F);
+    } else if (primitive.shape == "circle" || primitive.width_nm == primitive.height_nm) {
       const auto radius = static_cast<float>(std::max(1.5, static_cast<double>(primitive.width_nm) /
                                                                2'000'000.0 * view_.pixels_per_mm));
       draw->AddCircleFilled(screen(center), radius, pad_color, 24);

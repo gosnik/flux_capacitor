@@ -347,9 +347,8 @@ candidate_spline_failure_profile(const RegionalBundleAssignment& candidate) {
       if (pad.id == id) {
         const auto center = geometry::transform_point(pad.local_position, footprint.position,
                                                        footprint.rotation, footprint.side);
-        const auto radius = static_cast<std::int64_t>(std::ceil(std::hypotl(
-            static_cast<long double>(pad.width.value()) / 2.0L,
-            static_cast<long double>(pad.height.value()) / 2.0L)));
+        const auto radius = static_cast<std::int64_t>(
+            std::ceil(conservative_pad_radius_nm(pad)));
         return inflate(geometry::AxisAlignedBounds{center, center}, radius);
       }
   for (const auto& zone : board.zones)

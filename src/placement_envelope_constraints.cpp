@@ -1,6 +1,7 @@
 #include "flux/io/placement_envelope_constraints.hpp"
 
 #include "flux/core/geometry.hpp"
+#include "flux/core/copper_geometry.hpp"
 #include "flux/core/validation.hpp"
 #include "flux/io/sexpr.hpp"
 
@@ -107,9 +108,8 @@ void reject_unknown_children(const SExpression& parent, const std::set<std::stri
   auto min_y = std::numeric_limits<std::int64_t>::max();
   auto max_y = std::numeric_limits<std::int64_t>::min();
   for (const auto& pad : footprint.pads) {
-    const auto half_width = static_cast<long double>(std::abs(pad.width.value())) / 2.0L;
-    const auto half_height = static_cast<long double>(std::abs(pad.height.value())) / 2.0L;
-    const auto radius = static_cast<std::int64_t>(std::ceil(std::hypot(half_width, half_height)));
+    const auto radius = static_cast<std::int64_t>(
+        std::ceil(conservative_pad_radius_nm(pad)));
     min_x = std::min(min_x, pad.local_position.x.value() - radius);
     max_x = std::max(max_x, pad.local_position.x.value() + radius);
     min_y = std::min(min_y, pad.local_position.y.value() - radius);

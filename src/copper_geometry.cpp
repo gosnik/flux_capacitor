@@ -347,11 +347,38 @@ struct RoundedCore {
   return result;
 }
 
+[[nodiscard]] bool core_overlaps_polygon(const RoundedCore& core, const Polygon& polygon) {
+  if (polygon.vertices.size() < 3U) return false;
+  if (std::any_of(core.vertices.begin(), core.vertices.end(),
+                  [&polygon](const auto point) { return point_in_polygon(point, polygon); }) ||
+      std::any_of(polygon.vertices.begin(), polygon.vertices.end(), [&core](const auto point) {
+        return point_core_distance(as_vector(point), core) <= core.radius_nm;
+      })) {
+    return true;
+  }
+  return core_polygon_boundary_distance(core, polygon) <= core.radius_nm;
+}
+
+[[nodiscard]] long double core_polygon_copper_distance(const RoundedCore& core,
+                                                        const Polygon& polygon) {
+  return core_overlaps_polygon(core, polygon)
+             ? 0.0L
+             : std::max(0.0L, core_polygon_boundary_distance(core, polygon) - core.radius_nm);
+}
+
 } // namespace
 
 long double conservative_pad_radius_nm(const Pad& pad) {
   if (!pad.plated && pad_has_drill(pad)) {
     return static_cast<long double>(std::max(pad.drill_width, pad.drill_height).value()) / 2.0L;
+  }
+  if (pad.custom_copper_polygon) {
+    auto radius = 0.0L;
+    for (const auto point : pad.custom_copper_polygon->vertices) {
+      radius = std::max(radius, std::hypotl(static_cast<long double>(point.x.value()),
+                                            static_cast<long double>(point.y.value())));
+    }
+    return radius;
   }
   const auto half_width = static_cast<long double>(pad.width.value()) / 2.0L;
   const auto half_height = static_cast<long double>(pad.height.value()) / 2.0L;
@@ -380,6 +407,14 @@ std::vector<CopperPadShape> copper_pad_shapes(const Board& board) {
       const auto rotation_value =
           footprint.rotation.value() +
           (footprint.side == BoardSide::front ? pad.rotation.value() : -pad.rotation.value());
+      std::optional<Polygon> custom_polygon;
+      if (!drill_only && pad.custom_copper_polygon) {
+        const auto pad_local = geometry::transform_polygon(*pad.custom_copper_polygon,
+                                                           pad.local_position, pad.rotation,
+                                                           BoardSide::front);
+        custom_polygon = geometry::transform_polygon(pad_local, footprint.position,
+                                                     footprint.rotation, footprint.side);
+      }
       result.push_back(CopperPadShape{
           pad.id, pad.net,
           drill_only ? pad_drill_world_position(footprint, pad)
@@ -392,7 +427,7 @@ std::vector<CopperPadShape> copper_pad_shapes(const Board& board) {
           drill_only ? pad.drill_width : pad.width,
           drill_only ? pad.drill_height : pad.height,
           drill_only ? Nanometres{0} : pad.corner_radius,
-          Microdegrees{-rotation_value}, conservative_pad_radius_nm(pad)});
+          Microdegrees{-rotation_value}, conservative_pad_radius_nm(pad), std::move(custom_polygon)});
     }
   }
   return result;
@@ -460,6 +495,9 @@ long double drill_to_drill_boundary_distance_nm(const DrillShape& lhs, const Dri
 
 std::optional<PolygonalPadOutline> polygonal_pad_outline(const CopperPadShape& pad,
                                                          Nanometres maximum_radial_excess) {
+  if (pad.custom_copper_polygon) {
+    return PolygonalPadOutline{*pad.custom_copper_polygon, false};
+  }
   if (maximum_radial_excess.value() <= 0 || pad.width.value() <= 0 || pad.height.value() <= 0) {
     return std::nullopt;
   }
@@ -515,11 +553,17 @@ std::optional<PolygonalPadOutline> polygonal_pad_outline(const CopperPadShape& p
 }
 
 long double point_to_pad_copper_distance_nm(Point point, const CopperPadShape& pad) {
+  if (pad.custom_copper_polygon) {
+    return geometry::point_polygon_copper_distance_nm(point, *pad.custom_copper_polygon);
+  }
   const auto core = pad_core(pad);
   return std::max(0.0L, point_core_distance(as_vector(point), core) - core.radius_nm);
 }
 
 long double segment_to_pad_copper_distance_nm(Point start, Point end, const CopperPadShape& pad) {
+  if (pad.custom_copper_polygon) {
+    return geometry::segment_polygon_copper_distance_nm(start, end, *pad.custom_copper_polygon);
+  }
   const auto core = pad_core(pad);
   return std::max(0.0L,
                   segment_core_distance(as_vector(start), as_vector(end), core) - core.radius_nm);
@@ -527,12 +571,26 @@ long double segment_to_pad_copper_distance_nm(Point start, Point end, const Copp
 
 long double circular_arc_to_pad_copper_distance_nm(Point start, Point middle, Point end,
                                                    const CopperPadShape& pad) {
+  if (pad.custom_copper_polygon) {
+    return geometry::circular_arc_polygon_copper_distance_nm(start, middle, end,
+                                                              *pad.custom_copper_polygon);
+  }
   const auto core = pad_core(pad);
   return std::max(0.0L, circular_arc_core_distance(start, middle, end, core) - core.radius_nm -
                             rounded_core_quantization_guard_nm(core));
 }
 
 long double pad_to_pad_copper_distance_nm(const CopperPadShape& lhs, const CopperPadShape& rhs) {
+  if (lhs.custom_copper_polygon && rhs.custom_copper_polygon) {
+    return geometry::polygon_copper_distance_nm(*lhs.custom_copper_polygon,
+                                                *rhs.custom_copper_polygon);
+  }
+  if (lhs.custom_copper_polygon) {
+    return core_polygon_copper_distance(pad_core(rhs), *lhs.custom_copper_polygon);
+  }
+  if (rhs.custom_copper_polygon) {
+    return core_polygon_copper_distance(pad_core(lhs), *rhs.custom_copper_polygon);
+  }
   const auto lhs_core = pad_core(lhs);
   const auto rhs_core = pad_core(rhs);
   return std::max(0.0L,
@@ -540,12 +598,18 @@ long double pad_to_pad_copper_distance_nm(const CopperPadShape& lhs, const Coppe
 }
 
 bool pad_copper_intersects(const CopperPadShape& lhs, const CopperPadShape& rhs) {
+  if (lhs.custom_copper_polygon || rhs.custom_copper_polygon) {
+    return pad_to_pad_copper_distance_nm(lhs, rhs) <= 0.0L;
+  }
   const auto lhs_core = pad_core(lhs);
   const auto rhs_core = pad_core(rhs);
   return core_distance(lhs_core, rhs_core) <= lhs_core.radius_nm + rhs_core.radius_nm;
 }
 
 bool pad_copper_overlaps_polygon(const CopperPadShape& pad, const Polygon& polygon) {
+  if (pad.custom_copper_polygon) {
+    return geometry::polygons_overlap(*pad.custom_copper_polygon, polygon);
+  }
   if (polygon.vertices.size() < 3U) {
     return false;
   }
@@ -563,6 +627,9 @@ bool pad_copper_overlaps_polygon(const CopperPadShape& pad, const Polygon& polyg
 }
 
 long double pad_to_polygon_boundary_distance_nm(const CopperPadShape& pad, const Polygon& polygon) {
+  if (pad.custom_copper_polygon) {
+    return geometry::polygon_boundary_distance_nm(*pad.custom_copper_polygon, polygon);
+  }
   const auto core = pad_core(pad);
   return std::max(0.0L, core_polygon_boundary_distance(core, polygon) - core.radius_nm);
 }
@@ -570,6 +637,10 @@ long double pad_to_polygon_boundary_distance_nm(const CopperPadShape& pad, const
 bool pad_inside_polygon(const CopperPadShape& pad, const Polygon& polygon) {
   if (polygon.vertices.size() < 3U) {
     return false;
+  }
+  if (pad.custom_copper_polygon) {
+    return geometry::polygon_inside(*pad.custom_copper_polygon, polygon) &&
+           geometry::polygon_boundary_distance_nm(*pad.custom_copper_polygon, polygon) > 0.0L;
   }
   const auto core = pad_core(pad);
   if (!std::all_of(core.vertices.begin(), core.vertices.end(),

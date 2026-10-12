@@ -25,6 +25,27 @@ but disables live application.
 
 The lower-level adapters remain available for explicit workflows.
 
+### Saved-fill normalization
+
+Flux supports a custom pad made from one filled, zero-width `gr_poly` with its circle or
+rectangle anchor contained by that polygon. Concave copper remains concave; unsupported
+primitive unions fail import instead of becoming an anchor-sized approximation.
+
+Some KiCad saved fills contain self-intersections below one nanometre. Normalize those with
+KiCad's own polygon engine before importing a separate routing input:
+
+```sh
+/usr/bin/python3 plugins/kicad/refill_zones.py \
+  --board board.kicad_pcb --output board.prepared.kicad_pcb \
+  --normalize-saved-fills-only --report normalization.json
+```
+
+Only saved zone/layer fills flagged by KiCad as self-intersecting are normalized. This does not
+refill pours, change zone definitions, or authorize the output as routed. The report records each
+changed zone and layer. Copy the matching project settings beside the prepared board, run native
+DRC, and obtain a new netclass snapshot bound to that prepared board before routing it. The
+original file remains unchanged. Raw self-intersecting contours still fail strict Flux import.
+
 ### Refillable-zone routing
 
 For boards whose saved pours disconnect otherwise usable multilayer free space, opt into the

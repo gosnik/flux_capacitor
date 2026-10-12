@@ -1216,14 +1216,18 @@ void import_outline(const SExpression& root, Board& board, Importer& importer) {
 [[nodiscard]] NetId referenced_net(const SExpression& expression, Importer& importer,
                                    std::string_view context, bool missing_is_no_net);
 
-[[nodiscard]] std::optional<CopperZoneFill> decode_filled_region(LayerId layer, Polygon fractured) {
+[[nodiscard]] std::optional<std::vector<CopperZoneFill>> decode_filled_region(
+    LayerId layer, Polygon fractured, std::string& failure_stage) {
+  failure_stage.clear();
   if (fractured.vertices.size() > 1U && fractured.vertices.front() == fractured.vertices.back()) {
     fractured.vertices.pop_back();
   }
   if (geometry::is_simple_polygon(fractured)) {
-    return CopperZoneFill{std::move(layer), std::move(fractured), {}};
+    return std::vector<CopperZoneFill>{
+        CopperZoneFill{std::move(layer), std::move(fractured), {}}};
   }
   if (fractured.vertices.size() < 3U) {
+    failure_stage = "fewer than three vertices";
     return std::nullopt;
   }
 
@@ -1235,6 +1239,7 @@ void import_outline(const SExpression& root, Board& board, Importer& importer) {
     const auto end = fractured.vertices[(index + 1U) % fractured.vertices.size()];
     if (start == end || !geometry::coordinate_in_range(start) ||
         !geometry::coordinate_in_range(end)) {
+      failure_stage = "invalid raw edge";
       return std::nullopt;
     }
     edges.push_back(RawPolygonEdge{start, end});
@@ -1249,11 +1254,13 @@ void import_outline(const SExpression& root, Board& board, Importer& importer) {
       continue;
     }
     if (indices.size() != 2U) {
+      failure_stage = "bridge edge multiplicity";
       return std::nullopt;
     }
     const auto& first = edges[indices[0]];
     const auto& second = edges[indices[1]];
     if (first.start != second.end || first.end != second.start) {
+      failure_stage = "bridge edge direction";
       return std::nullopt;
     }
     bridge_edge[indices[0]] = true;
@@ -1261,6 +1268,7 @@ void import_outline(const SExpression& root, Board& board, Importer& importer) {
     removed_bridge = true;
   }
   if (!removed_bridge) {
+    failure_stage = "no reversible bridge edges";
     return std::nullopt;
   }
 
@@ -1273,8 +1281,10 @@ void import_outline(const SExpression& root, Board& board, Importer& importer) {
     incident_edges[edges[index].end].push_back(index);
   }
   if (incident_edges.empty() ||
-      std::any_of(incident_edges.begin(), incident_edges.end(),
-                  [](const auto& entry) { return entry.second.size() != 2U; })) {
+      std::any_of(incident_edges.begin(), incident_edges.end(), [](const auto& entry) {
+        return entry.second.size() < 2U || entry.second.size() % 2U != 0U;
+      })) {
+    failure_stage = "residual edge degree";
     return std::nullopt;
   }
 
@@ -1290,6 +1300,7 @@ void import_outline(const SExpression& root, Board& board, Importer& importer) {
     auto current_edge = first_edge;
     for (std::size_t step = 0; step <= edges.size(); ++step) {
       if (visited[current_edge]) {
+        failure_stage = "residual traversal revisited edge";
         return std::nullopt;
       }
       visited[current_edge] = true;
@@ -1300,6 +1311,7 @@ void import_outline(const SExpression& root, Board& board, Importer& importer) {
       } else if (edge.end == current_point) {
         current_point = edge.start;
       } else {
+        failure_stage = "residual traversal disconnected edge";
         return std::nullopt;
       }
       if (current_point == first_point) {
@@ -1307,51 +1319,184 @@ void import_outline(const SExpression& root, Board& board, Importer& importer) {
       }
       const auto incident = incident_edges.find(current_point);
       if (incident == incident_edges.end()) {
+        failure_stage = "residual traversal missing incidence";
         return std::nullopt;
       }
       const auto next = std::find_if(incident->second.begin(), incident->second.end(),
                                      [&visited](std::size_t index) { return !visited[index]; });
       if (next == incident->second.end()) {
+        failure_stage = "residual traversal has no successor";
         return std::nullopt;
       }
       current_edge = *next;
     }
-    if (current_point != first_point || !geometry::is_simple_polygon(contour)) {
+    if (current_point != first_point) {
+      failure_stage = "residual traversal did not close";
       return std::nullopt;
     }
-    contours.push_back(std::move(contour));
+    // A KiCad clipping walk can touch itself at a vertex.  The contour then has an
+    // even-degree articulation point, even though each resulting boundary is a
+    // simple polygon.  Split at every repeated vertex instead of rejecting the
+    // complete saved fill or treating the enclosed island as a hole.
+    std::vector<Polygon> pending;
+    pending.push_back(std::move(contour));
+    while (!pending.empty()) {
+      auto candidate = std::move(pending.back());
+      pending.pop_back();
+      std::map<Point, std::size_t> first_vertex;
+      bool split = false;
+      for (std::size_t index = 0; index < candidate.vertices.size(); ++index) {
+        const auto [first, inserted] = first_vertex.emplace(candidate.vertices[index], index);
+        if (inserted) {
+          continue;
+        }
+        Polygon loop;
+        loop.vertices.insert(loop.vertices.end(), candidate.vertices.begin() +
+                                                   static_cast<std::ptrdiff_t>(first->second),
+                             candidate.vertices.begin() + static_cast<std::ptrdiff_t>(index));
+        Polygon remainder;
+        remainder.vertices.insert(remainder.vertices.end(), candidate.vertices.begin(),
+                                  candidate.vertices.begin() +
+                                      static_cast<std::ptrdiff_t>(first->second));
+        remainder.vertices.insert(remainder.vertices.end(),
+                                  candidate.vertices.begin() + static_cast<std::ptrdiff_t>(index),
+                                  candidate.vertices.end());
+        if (loop.vertices.size() < 3U || remainder.vertices.size() < 3U) {
+          failure_stage = "repeated-vertex split degeneracy";
+          return std::nullopt;
+        }
+        pending.push_back(std::move(loop));
+        pending.push_back(std::move(remainder));
+        split = true;
+        break;
+      }
+      if (!split) {
+        if (!geometry::is_simple_polygon(candidate)) {
+          failure_stage = "split contour not simple";
+          return std::nullopt;
+        }
+        contours.push_back(std::move(candidate));
+      }
+    }
   }
   if (contours.empty()) {
+    failure_stage = "no residual contours";
     return std::nullopt;
   }
   for (std::size_t index = 0; index < edges.size(); ++index) {
     if (!bridge_edge[index] && !visited[index]) {
+      failure_stage = "unvisited residual edge";
       return std::nullopt;
     }
   }
 
-  const auto outer = std::max_element(contours.begin(), contours.end(),
-                                      [](const Polygon& lhs, const Polygon& rhs) {
-                                        return std::abs(geometry::signed_double_area(lhs)) <
-                                               std::abs(geometry::signed_double_area(rhs));
-                                      });
-  CopperZoneFill result{std::move(layer), std::move(*outer), {}};
-  contours.erase(outer);
-  for (auto& hole : contours) {
-    if (!geometry::polygon_inside(hole, result.area) ||
-        geometry::polygon_boundary_distance_nm(hole, result.area) <= 0.0L ||
-        std::any_of(result.holes.begin(), result.holes.end(), [&hole](const Polygon& prior) {
-          return geometry::polygons_overlap(hole, prior);
-        })) {
-      return std::nullopt;
+  const auto same_winding = [&contours](std::size_t lhs, std::size_t rhs) {
+    return (geometry::signed_double_area(contours[lhs]) > 0.0L) ==
+           (geometry::signed_double_area(contours[rhs]) > 0.0L);
+  };
+  const auto has_nonvertex_intersection = [](const Polygon& lhs, const Polygon& rhs) {
+    const auto lies_strictly_on = [](Point point, Point start, Point end) {
+      return point != start && point != end && geometry::point_on_segment(point, start, end);
+    };
+    for (std::size_t lhs_index = 0; lhs_index < lhs.vertices.size(); ++lhs_index) {
+      const auto lhs_next = (lhs_index + 1U) % lhs.vertices.size();
+      for (std::size_t rhs_index = 0; rhs_index < rhs.vertices.size(); ++rhs_index) {
+        const auto rhs_next = (rhs_index + 1U) % rhs.vertices.size();
+        const auto lhs_start = lhs.vertices[lhs_index];
+        const auto lhs_end = lhs.vertices[lhs_next];
+        const auto rhs_start = rhs.vertices[rhs_index];
+        const auto rhs_end = rhs.vertices[rhs_next];
+        if (!geometry::segments_intersect(lhs_start, lhs_end, rhs_start, rhs_end)) {
+          continue;
+        }
+        const bool shares_vertex = lhs_start == rhs_start || lhs_start == rhs_end ||
+                                  lhs_end == rhs_start || lhs_end == rhs_end;
+        if (!shares_vertex || lies_strictly_on(lhs_start, rhs_start, rhs_end) ||
+            lies_strictly_on(lhs_end, rhs_start, rhs_end) ||
+            lies_strictly_on(rhs_start, lhs_start, lhs_end) ||
+            lies_strictly_on(rhs_end, lhs_start, lhs_end)) {
+          return true;
+        }
+      }
     }
-    result.holes.push_back(std::move(hole));
+    return false;
+  };
+  for (std::size_t lhs = 0; lhs < contours.size(); ++lhs) {
+    for (std::size_t rhs = lhs + 1U; rhs < contours.size(); ++rhs) {
+      const bool lhs_inside_rhs = geometry::polygon_inside(contours[lhs], contours[rhs]);
+      const bool rhs_inside_lhs = geometry::polygon_inside(contours[rhs], contours[lhs]);
+      if (has_nonvertex_intersection(contours[lhs], contours[rhs])) {
+        failure_stage = "contour non-vertex intersection";
+        return std::nullopt;
+      }
+      if ((lhs_inside_rhs || rhs_inside_lhs) &&
+          geometry::polygon_boundary_distance_nm(contours[lhs], contours[rhs]) <= 0.0L &&
+          !same_winding(lhs, rhs)) {
+        // A reversed contour touching its containing boundary is a pinched hole.  It cannot be
+        // represented as either a legal hole or an independent copper island without changing
+        // the filled region, so retain strict fail-closed import semantics.
+        failure_stage = "opposite-winding tangent contour";
+        return std::nullopt;
+      }
+    }
   }
-  std::sort(result.holes.begin(), result.holes.end(), [](const Polygon& lhs, const Polygon& rhs) {
-    return std::lexicographical_compare(lhs.vertices.begin(), lhs.vertices.end(),
-                                        rhs.vertices.begin(), rhs.vertices.end());
-  });
-  return result;
+
+  std::vector<std::optional<std::size_t>> parent(contours.size());
+  for (std::size_t inner = 0; inner < contours.size(); ++inner) {
+    for (std::size_t outer = 0; outer < contours.size(); ++outer) {
+      if (inner == outer || !geometry::polygon_inside(contours[inner], contours[outer]) ||
+          geometry::polygon_boundary_distance_nm(contours[inner], contours[outer]) <= 0.0L) {
+        continue;
+      }
+      if (!parent[inner] ||
+          std::abs(geometry::signed_double_area(contours[outer])) <
+              std::abs(geometry::signed_double_area(contours[*parent[inner]]))) {
+        parent[inner] = outer;
+      }
+    }
+  }
+
+  std::vector<std::size_t> depth(contours.size(), 0U);
+  for (std::size_t index = 0; index < contours.size(); ++index) {
+    for (auto ancestor = parent[index]; ancestor; ancestor = parent[*ancestor]) {
+      ++depth[index];
+      if (depth[index] >= contours.size()) {
+        failure_stage = "contour containment cycle";
+        return std::nullopt;
+      }
+    }
+  }
+
+  std::vector<CopperZoneFill> result;
+  for (std::size_t outer = 0; outer < contours.size(); ++outer) {
+    if (depth[outer] % 2U != 0U) {
+      continue;
+    }
+    CopperZoneFill fill{layer, std::move(contours[outer]), {}};
+    for (std::size_t hole = 0; hole < contours.size(); ++hole) {
+      if (parent[hole] != outer || depth[hole] % 2U == 0U ||
+          std::any_of(fill.holes.begin(), fill.holes.end(), [&contours, hole](const Polygon& prior) {
+            return geometry::polygons_overlap(contours[hole], prior);
+          })) {
+        if (parent[hole] == outer && depth[hole] % 2U != 0U) {
+          failure_stage = "overlapping sibling holes";
+          return std::nullopt;
+        }
+        continue;
+      }
+      fill.holes.push_back(std::move(contours[hole]));
+    }
+    std::sort(fill.holes.begin(), fill.holes.end(), [](const Polygon& lhs, const Polygon& rhs) {
+      return std::lexicographical_compare(lhs.vertices.begin(), lhs.vertices.end(),
+                                          rhs.vertices.begin(), rhs.vertices.end());
+    });
+    result.push_back(std::move(fill));
+  }
+  if (result.empty()) {
+    failure_stage = "no material contours";
+    return std::nullopt;
+  }
+  return std::optional<std::vector<CopperZoneFill>>{std::move(result)};
 }
 
 [[nodiscard]] std::optional<CopperZone>
@@ -1384,17 +1529,19 @@ import_copper_zone(const SExpression& zone, Importer& importer, std::string fall
       valid = false;
       continue;
     }
+    std::string failure_stage;
     auto fill = decode_filled_region(LayerId{std::string(*layer)},
-                                     Polygon{parse_points(*filled_polygon, importer)});
+                                     Polygon{parse_points(*filled_polygon, importer)}, failure_stage);
     if (!fill) {
       importer.warning("unsupported_zone_fill_geometry",
                        "filled zone walk cannot be decomposed exactly into one outer contour "
-                       "and disjoint holes",
+                       "and disjoint holes: " + failure_stage,
                        filled_polygon->location);
       valid = false;
       continue;
     }
-    result.fills.push_back(std::move(*fill));
+    result.fills.insert(result.fills.end(), std::make_move_iterator(fill->begin()),
+                        std::make_move_iterator(fill->end()));
   }
   return valid && !result.fills.empty() ? std::optional<CopperZone>{std::move(result)}
                                         : std::nullopt;
@@ -1652,6 +1799,82 @@ struct ParsedPadDrill {
   return {};
 }
 
+[[nodiscard]] bool custom_anchor_is_contained(const Pad& pad, const Polygon& polygon) {
+  if (pad.custom_anchor_shape == PadShape::circle) {
+    const auto center = Point{};
+    return geometry::locate_point(polygon, center) != geometry::PointLocation::outside &&
+           geometry::point_polygon_boundary_distance_nm(center, polygon) + 1.0e-6L >=
+               static_cast<long double>(std::max(pad.width, pad.height).value()) / 2.0L;
+  }
+  if (pad.custom_anchor_shape == PadShape::rectangle) {
+    const auto half_width = (pad.width.value() + 1) / 2;
+    const auto half_height = (pad.height.value() + 1) / 2;
+    const Polygon anchor{{Point{Nanometres{-half_width}, Nanometres{-half_height}},
+                          Point{Nanometres{half_width}, Nanometres{-half_height}},
+                          Point{Nanometres{half_width}, Nanometres{half_height}},
+                          Point{Nanometres{-half_width}, Nanometres{half_height}}}};
+    // Vertex contact alone cannot prove containment across a concave boundary.
+    return geometry::polygon_inside(anchor, polygon) &&
+           geometry::polygon_boundary_distance_nm(anchor, polygon) > 0.0L;
+  }
+  return false;
+}
+
+// KiCad custom primitives are intentionally accepted only where their copper union reduces to
+// one exact simple polygon. Other primitive families need a real boolean-union representation;
+// accepting them as a size envelope would silently remove copper from routing and DRC.
+[[nodiscard]] std::optional<Polygon> parse_contained_custom_pad_polygon(const SExpression& pad,
+                                                                         Pad& canonical,
+                                                                         Importer& importer) {
+  const auto* primitives = find_child(pad, "primitives");
+  if (primitives == nullptr) {
+    importer.error("missing_custom_pad_primitives", "custom pad has no primitives", pad.location);
+    return std::nullopt;
+  }
+  const auto polygons = find_children(*primitives, "gr_poly");
+  const auto primitive_count = static_cast<std::size_t>(std::count_if(
+      primitives->children.begin(), primitives->children.end(), [](const auto& child) {
+        return !child.is_atom();
+      }));
+  if (polygons.size() != primitive_count || polygons.size() != 1U) {
+    importer.error("unsupported_custom_pad_primitives",
+                   "custom pad requires exactly one filled zero-width gr_poly primitive",
+                   primitives->location);
+    return std::nullopt;
+  }
+  const auto& primitive = *polygons.front();
+  const auto width = named_number(primitive, "width", importer);
+  const auto fill = named_atom(primitive, "fill");
+  const auto* points = find_child(primitive, "pts");
+  if (!width || *width != 0.0 || !fill || *fill != "yes" || points == nullptr) {
+    importer.error("unsupported_custom_pad_polygon",
+                   "custom gr_poly must be filled and have zero stroke width", primitive.location);
+    return std::nullopt;
+  }
+  Polygon polygon;
+  for (const auto* coordinate : find_children(*points, "xy")) {
+    if (const auto point = parse_point(*coordinate, importer, "custom pad polygon point")) {
+      polygon.vertices.push_back(*point);
+    }
+  }
+  // KiCad serializes many custom-pad gr_poly contours with an explicit closing point, while the
+  // canonical polygon representation closes contours implicitly.
+  if (polygon.vertices.size() > 1U && polygon.vertices.front() == polygon.vertices.back()) {
+    polygon.vertices.pop_back();
+  }
+  if (!geometry::is_simple_polygon(polygon)) {
+    importer.error("invalid_custom_pad_polygon",
+                   "custom pad gr_poly must be a simple non-degenerate polygon", primitive.location);
+    return std::nullopt;
+  }
+  if (!custom_anchor_is_contained(canonical, polygon)) {
+    importer.error("unsupported_custom_pad_union",
+                   "custom pad anchor must be a contained circle or rectangle", primitive.location);
+    return std::nullopt;
+  }
+  return polygon;
+}
+
 void import_footprints(const SExpression& root, Board& board, Importer& importer) {
   std::size_t footprint_index = 0;
   for (const auto* expression : find_children(root, "footprint")) {
@@ -1758,10 +1981,9 @@ void import_footprints(const SExpression& root, Board& board, Importer& importer
       if (const auto shape = atom_at(*pad_expression, 3)) {
         pad.shape = parse_pad_shape(*shape);
       }
-      if (pad.shape == PadShape::trapezoid || pad.shape == PadShape::custom ||
-          pad.shape == PadShape::unknown) {
+      if (pad.shape == PadShape::trapezoid || pad.shape == PadShape::unknown) {
         importer.warning("pad_shape_approximated",
-                         "trapezoid, custom, or unknown pad shape was reduced to its size envelope",
+                         "trapezoid or unknown pad shape was reduced to its size envelope",
                          pad_expression->location);
       }
       if (const auto* size = find_child(*pad_expression, "size")) {
@@ -1771,6 +1993,15 @@ void import_footprints(const SExpression& root, Board& board, Importer& importer
         }
       } else {
         importer.error("missing_pad_size", "copper pad has no size", pad_expression->location);
+      }
+      if (pad.shape == PadShape::custom) {
+        if (const auto* options = find_child(*pad_expression, "options")) {
+          if (const auto anchor = named_atom(*options, "anchor")) {
+            pad.custom_anchor_shape = parse_pad_shape(*anchor);
+          }
+        }
+        pad.custom_copper_polygon =
+            parse_contained_custom_pad_polygon(*pad_expression, pad, importer);
       }
       if (pad.shape == PadShape::round_rectangle) {
         const auto ratio = named_number(*pad_expression, "roundrect_rratio", importer);
@@ -1791,6 +2022,12 @@ void import_footprints(const SExpression& root, Board& board, Importer& importer
       const auto drill = parse_pad_drill(*pad_expression, importer);
       pad.drill_width = drill.width;
       pad.drill_height = drill.height;
+      if (pad.shape == PadShape::custom &&
+          (pad.drill_width.value() != 0 || pad.drill_height.value() != 0)) {
+        importer.error("unsupported_custom_pad_drill",
+                       "contained-polygon custom-pad support does not include drills",
+                       pad_expression->location);
+      }
       // KiCad's serialized drill offset moves copper relative to the hole anchor. Canonical
       // pads instead anchor copper and store the hole relative to it. Rebase both together so
       // neither copper nor drill is moved in world coordinates by the representation change.
@@ -1817,6 +2054,9 @@ void import_footprints(const SExpression& root, Board& board, Importer& importer
       for (auto& pad : footprint.pads) {
         unmirror(pad.local_position);
         unmirror(pad.drill_offset);
+        if (pad.custom_copper_polygon) {
+          for (auto& point : pad.custom_copper_polygon->vertices) unmirror(point);
+        }
       }
     }
     board.footprints.push_back(std::move(footprint));

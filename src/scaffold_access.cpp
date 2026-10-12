@@ -128,6 +128,20 @@ template <typename Visitor>
                     GlobalRoutePoint{pad.position, layer}) != accepted_anchors.end())
         member_layers.push_back(layer);
     if (member_layers.empty()) continue;
+    if (pad.custom_copper_polygon) {
+      const auto& vertices = pad.custom_copper_polygon->vertices;
+      for (std::size_t index = 0; index < vertices.size(); ++index) {
+        const auto next = vertices[(index + 1U) % vertices.size()];
+        const auto midpoint = Point{
+            Nanometres{vertices[index].x.value() + (next.x.value() - vertices[index].x.value()) / 2},
+            Nanometres{vertices[index].y.value() + (next.y.value() - vertices[index].y.value()) / 2}};
+        for (const auto candidate : {vertices[index], midpoint}) {
+          for (const auto& layer : member_layers)
+            if (!visit({candidate, layer})) return false;
+        }
+      }
+      continue;
+    }
     const auto radians = static_cast<long double>(pad.rotation.value()) * std::acos(-1.0L) / 180'000'000.0L;
     const auto point = [&](long double x, long double y) {
       return Point{Nanometres{static_cast<std::int64_t>(std::llround(static_cast<long double>(pad.position.x.value()) + x * std::cos(radians) - y * std::sin(radians)))},

@@ -20,6 +20,8 @@ struct CopperPadShape {
   Nanometres corner_radius;
   Microdegrees rotation;
   long double conservative_radius_nm{0.0L};
+  // World-space exact copper for the supported contained-anchor custom-pad subset.
+  std::optional<Polygon> custom_copper_polygon{};
 };
 
 [[nodiscard]] long double conservative_pad_radius_nm(const Pad& pad);

@@ -3,6 +3,7 @@
 #include "flux/core/regional_router.hpp"
 
 #include "flux/core/geometry.hpp"
+#include "flux/core/copper_geometry.hpp"
 #include "flux/core/routing_compute.hpp"
 #include "flux/core/routing_feedback.hpp"
 #include "flux/core/routing_rules.hpp"
@@ -610,8 +611,7 @@ representative_hard_capacity_pass(const GlobalRouteResult& route);
       if (pad.id == id) {
         const auto position = geometry::transform_point(pad.local_position, footprint.position,
                                                         footprint.rotation, footprint.side);
-        const auto radius =
-            static_cast<long double>(std::max(pad.width, pad.height).value()) / 2.0L;
+        const auto radius = conservative_pad_radius_nm(pad);
         return point_bounds(position, radius);
       }
     }

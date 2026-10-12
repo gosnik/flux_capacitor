@@ -18,7 +18,7 @@ def _new_output(path: pathlib.Path, source: pathlib.Path) -> pathlib.Path:
     output = parent / path.name
     if output == source:
         raise RefillError("refilled output must differ from the provisional board")
-    if output.exists():
+    if output.exists() or output.is_symlink():
         raise RefillError(f"refilled output already exists: {output}")
     return output
 
@@ -46,6 +46,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=pathlib.Path,
         help="write the bounded machine-readable result to a new file",
     )
+    parser.add_argument(
+        "--normalize-saved-fills-only", action="store_true",
+        help="normalize existing filled polygons with KiCad without recomputing pours",
+    )
     args = parser.parse_args(argv)
 
     report: dict[str, object] = {"ok": False, "zone_refill_required": True}
@@ -61,17 +65,52 @@ def main(argv: Sequence[str] | None = None) -> int:
         zones = board.Zones()
         if len(zones) == 0:
             raise RefillError("provisional board contains no zones to refill")
-        pcbnew.ZONE_FILLER(board).Fill(zones)
+        normalized_layers = 0
+        normalized_fills: list[dict[str, object]] = []
+        if args.normalize_saved_fills_only:
+            # Use KiCad's own integer-grid interpretation of fractured fills. Raw saved
+            # clipping walks can contain sub-grid intersections that Flux cannot represent
+            # as simple contours. Do not change zone definitions or refill their copper.
+            for zone in zones:
+                if zone.GetIsRuleArea():
+                    continue
+                for layer in zone.GetLayerSet().Seq():
+                    if not zone.HasFilledPolysForLayer(layer):
+                        continue
+                    polygons = zone.GetFilledPolysList(layer)
+                    if not polygons.IsSelfIntersecting():
+                        continue
+                    vertices_before = polygons.TotalVertices()
+                    polygons.Unfracture()
+                    polygons.Simplify()
+                    polygons.Fracture()
+                    if polygons.TotalVertices() == 0:
+                        raise RefillError("normalization removed all copper from a saved zone layer")
+                    zone.SetFilledPolysList(layer, polygons)
+                    if not zone.HasFilledPolysForLayer(layer):
+                        raise RefillError("normalization lost a saved zone layer")
+                    normalized_layers += 1
+                    normalized_fills.append({
+                        "zone_uuid": zone.m_Uuid.AsString(),
+                        "layer": board.GetLayerName(layer),
+                        "vertices_before": vertices_before,
+                        "vertices_after": polygons.TotalVertices(),
+                    })
+        else:
+            pcbnew.ZONE_FILLER(board).Fill(zones)
         if not pcbnew.SaveBoard(str(output), board):
             raise RefillError("KiCad did not save the refilled board")
-        if not output.is_file():
+        if output.is_symlink() or not output.is_file():
             raise RefillError("KiCad reported success without a refilled artifact")
         report.update(
             {
                 "ok": True,
                 "provisional": str(source),
                 "candidate": str(output),
-                "zones_refilled": len(zones),
+                "operation": "normalize_saved_fills" if args.normalize_saved_fills_only else "refill",
+                "zones_refilled": 0 if args.normalize_saved_fills_only else len(zones),
+                "zone_layers_normalized": normalized_layers,
+                "normalized_fills": normalized_fills,
                 "kicad_version": pcbnew.Version(),
             }
         )

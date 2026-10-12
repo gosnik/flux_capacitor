@@ -224,6 +224,12 @@ if(Python3_Interpreter_FOUND)
             "${CMAKE_CURRENT_SOURCE_DIR}/python/test_kicad_candidate_bridge.py")
   set_tests_properties(flux_kicad_candidate_bridge_tests PROPERTIES
     ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+  add_test(
+    NAME flux_kicad_zone_normalization_tests
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/python/test_zone_normalization.py")
+  set_tests_properties(flux_kicad_zone_normalization_tests PROPERTIES
+    ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
 endif()
 
 function(flux_add_cli_test name pass_expression)

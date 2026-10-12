@@ -263,6 +263,14 @@ make_source_board_scene(const Board& board, std::string source_path) {
       primitive.rotation_microdegrees =
           Microdegrees{footprint.rotation.value() + local_rotation}.value();
       primitive.shape = pad_shape_name(pad.shape);
+      if (pad.custom_copper_polygon) {
+        // Keep the anchor first for drill placement; remaining points are the copper outline.
+        const auto local = geometry::transform_polygon(*pad.custom_copper_polygon,
+            pad.local_position, pad.rotation, BoardSide::front);
+        const auto world = geometry::transform_polygon(local, footprint.position,
+            footprint.rotation, footprint.side);
+        for (const auto& vertex : world.vertices) primitive.points.push_back(source_point(vertex));
+      }
       primitive.side = footprint.side == BoardSide::front ? "front" : "back";
       primitive.filled = true;
       scene->primitives.push_back(std::move(primitive));

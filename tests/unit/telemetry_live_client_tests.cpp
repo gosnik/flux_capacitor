@@ -59,6 +59,16 @@ int main() {
                                    flux::PadShape::rectangle,
                                    flux::Nanometres{600'000},
                                    flux::Nanometres{400'000}});
+  auto custom_pad = source_footprint.pads.front();
+  custom_pad.id = flux::ObjectId{"fixture-custom-pad"};
+  custom_pad.shape = flux::PadShape::custom;
+  custom_pad.custom_copper_polygon = flux::Polygon{{
+      {flux::Nanometres{-300'000}, flux::Nanometres{-200'000}},
+      {flux::Nanometres{300'000}, flux::Nanometres{-200'000}},
+      {flux::Nanometres{100'000}, flux::Nanometres{0}},
+      {flux::Nanometres{300'000}, flux::Nanometres{200'000}},
+      {flux::Nanometres{-300'000}, flux::Nanometres{200'000}}}};
+  source_footprint.pads.push_back(std::move(custom_pad));
   source_board.footprints.push_back(std::move(source_footprint));
   source_board.tracks.push_back({flux::ObjectId{"fixture-track"},
                                  flux::NetId{"fixture-net"},
@@ -197,6 +207,14 @@ int main() {
               has_source_kind("via") && has_source_kind("zone"),
           "the WebSocket recovery scene must retain the KiCad board, fitting, and copper geometry "
           "required by the viewer");
+  const auto custom_primitive = std::find_if(scene.primitives.begin(), scene.primitives.end(),
+      [](const auto& primitive) { return primitive.id == "fixture-custom-pad"; });
+  require(custom_primitive != scene.primitives.end() && custom_primitive->shape == "custom" &&
+              custom_primitive->points.size() == 6U &&
+              custom_primitive->points[0].x_nm == 2'000'000 &&
+              custom_primitive->points[1].x_nm == 1'700'000 &&
+              custom_primitive->points[3].x_nm == 2'100'000,
+          "custom pad telemetry must retain its anchor and concave world-space copper outline");
   require(received_started(), "the live event must use the shared canonical representation");
   const auto completed = std::find_if(events.begin(), events.end(), [](const auto& event) {
     return event.type == flux::telemetry::EventType::pathfinder_iteration_completed;

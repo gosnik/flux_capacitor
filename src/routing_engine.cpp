@@ -1969,6 +1969,9 @@ RoutingEngineStepResult RoutingEngine::advance(RoutingEngineStepBudget budget,
               "; coupled_budget_exhaustions=" + std::to_string(c.coupled_expansion_budget_exhaustions) +
               "; transactional_terminal_rebind_attempts=" + std::to_string(c.transactional_terminal_rebind_attempts) +
               "; transactional_terminal_rebinds_accepted=" + std::to_string(c.transactional_terminal_rebinds_accepted) +
+              "; preservation_repair_attempts=" + std::to_string(c.preservation_repair_attempts) +
+              "; preservation_demands_accepted=" + std::to_string(c.preservation_demands_accepted) +
+              "; preservation_repair_rollbacks=" + std::to_string(c.preservation_repair_rollbacks) +
               "; rollbacks=" + std::to_string(c.exchange_rollbacks) +
               "; rollback_incoming=" + std::to_string(c.exchange_rollbacks_incoming_unroutable) +
               "; rollback_victim=" + std::to_string(c.exchange_rollbacks_victim_unroutable) +

@@ -4256,6 +4256,9 @@ void print_route_result(const flux::GlobalRouteResult& result,
                 << ", \"outward_attachment_probes\": " << scaffold.counters.outward_attachment_probes
                 << ", \"transactional_terminal_rebind_attempts\": " << scaffold.counters.transactional_terminal_rebind_attempts
                 << ", \"transactional_terminal_rebinds_accepted\": " << scaffold.counters.transactional_terminal_rebinds_accepted
+                << ", \"preservation_repair_attempts\": " << scaffold.counters.preservation_repair_attempts
+                << ", \"preservation_demands_accepted\": " << scaffold.counters.preservation_demands_accepted
+                << ", \"preservation_repair_rollbacks\": " << scaffold.counters.preservation_repair_rollbacks
                 << ", \"outward_attachments\": " << scaffold.counters.outward_attachments
                 << ", \"attachment_search_early_successes\": " << scaffold.counters.attachment_search_early_successes
                 << ", \"duplicate_rejected_assemblies\": " << scaffold.counters.duplicate_rejected_assemblies
@@ -5552,6 +5555,9 @@ void print_detailed_result(const flux::DetailedRouteResult& result,
       std::cout << ", \"outward_attachment_probes\": " << counters.outward_attachment_probes;
       std::cout << ", \"transactional_terminal_rebind_attempts\": " << counters.transactional_terminal_rebind_attempts;
       std::cout << ", \"transactional_terminal_rebinds_accepted\": " << counters.transactional_terminal_rebinds_accepted;
+      std::cout << ", \"preservation_repair_attempts\": " << counters.preservation_repair_attempts;
+      std::cout << ", \"preservation_demands_accepted\": " << counters.preservation_demands_accepted;
+      std::cout << ", \"preservation_repair_rollbacks\": " << counters.preservation_repair_rollbacks;
       std::cout << ", \"outward_attachments\": " << counters.outward_attachments;
       std::cout << ", \"attachment_search_early_successes\": " << counters.attachment_search_early_successes;
       std::cout << ", \"duplicate_rejected_assemblies\": " << counters.duplicate_rejected_assemblies;

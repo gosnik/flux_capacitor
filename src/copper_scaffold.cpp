@@ -14,6 +14,7 @@
 #include "scaffold_via_history.hpp"
 #include "scaffold_joint_displacement.hpp"
 #include "scaffold_connectivity_guard.hpp"
+#include "scaffold_physical_demands.hpp"
 #include "scaffold_terminal_rebind.hpp"
 
 #include <algorithm>
@@ -2142,11 +2143,92 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
           record_rollback(CopperScaffoldExchangeRollbackReason::connectivity_not_preserved, victims, disconnected);
           return;
         }
+        const auto cancel_component = [&] {
+          if (!stop_token.stop_requested()) return false;
+          result.counters.cancelled = true;
+          record_rollback(CopperScaffoldExchangeRollbackReason::cancelled, victims);
+          return true;
+        };
+        if (cancel_component()) return;
+        std::vector<GlobalRoutePath> preservation_demands;
+        std::vector<Trial> preservation_trials;
+        std::vector<CopperScaffoldRequestEvidence> preservation_evidence;
         if (!rebound_victims.empty() &&
             !preserves_existing_pad_components(analyze_connectivity(result.copper), analyze_connectivity(rebuilt))) {
-          record_rollback(CopperScaffoldExchangeRollbackReason::connectivity_not_preserved, victims, std::nullopt, true);
-          return;
+          if (config.maximum_preservation_demands == 0U) {
+            record_rollback(CopperScaffoldExchangeRollbackReason::connectivity_not_preserved, victims,
+                            std::nullopt, true);
+            return;
+          }
+          ++result.counters.preservation_repair_attempts;
+          const auto derived = derive_pad_preservation_demands(
+              result.copper, rebuilt, requests, config.maximum_preservation_demands);
+          if (cancel_component()) return;
+          if (!derived || derived->empty()) {
+            ++result.counters.preservation_repair_rollbacks;
+            record_rollback(CopperScaffoldExchangeRollbackReason::connectivity_not_preserved, victims,
+                            std::nullopt, true);
+            return;
+          }
+          preservation_demands = *derived;
+          preservation_trials.reserve(preservation_demands.size());
+          preservation_evidence.reserve(preservation_demands.size());
+          // Reserve all appended demands in the common fair-share denominator before routing the
+          // first one. Direct legal trials consume a slot too, although they spend no expansion.
+          remaining_demands += preservation_demands.size();
+          for (std::size_t added = 0U; added < preservation_demands.size(); ++added) {
+            if (cancel_component()) return;
+            const auto demand_index = requests.size() + added;
+            CopperScaffoldRequestEvidence evidence;
+            evidence.request_identity = canonical_request_identity(preservation_demands[added]);
+            evidence.net = preservation_demands[added].net;
+            evidence.connection_index = preservation_demands[added].connection_index;
+            Trial direct;
+            const auto direct_legal = legal_trial(rebuilt, preservation_demands[added], demand_index, direct) &&
+                scaffold_request_connected(direct.board, preservation_demands[added]);
+            if (cancel_component()) return;
+            if (direct_legal) {
+              evidence.termination = CopperScaffoldSearchTermination::direct_route_accepted;
+              rebuilt = std::move(direct.board);
+              preservation_trials.push_back(std::move(direct));
+              preservation_evidence.push_back(std::move(evidence));
+              --remaining_demands;
+              continue;
+            }
+            auto routed = coupled_search(rebuilt, preservation_demands[added], demand_index, &evidence);
+            if (cancel_component()) return;
+            if (!routed || !scaffold_request_connected(routed ? routed->board : rebuilt, preservation_demands[added])) {
+              ++result.counters.preservation_repair_rollbacks;
+              record_rollback(CopperScaffoldExchangeRollbackReason::connectivity_not_preserved, victims,
+                              std::nullopt, true);
+              return;
+            }
+            rebuilt = std::move(routed->board);
+            preservation_trials.push_back(std::move(*routed));
+            preservation_evidence.push_back(std::move(evidence));
+          }
+          auto supplemented_complete = candidate_complete;
+          supplemented_complete.insert(supplemented_complete.end(), preservation_demands.size(), true);
+          for (std::size_t request = 0U; request < supplemented_complete.size(); ++request) {
+            const auto& demand = request < requests.size() ?
+                (rebound_victims.contains(request) ? rebound_victims.at(request) : requests[request]) :
+                preservation_demands[request - requests.size()];
+            if (supplemented_complete[request] && !scaffold_request_connected(rebuilt, demand)) {
+              ++result.counters.preservation_repair_rollbacks;
+              record_rollback(CopperScaffoldExchangeRollbackReason::connectivity_not_preserved, victims,
+                              request < requests.size() ? std::optional<std::size_t>{request} : std::nullopt, true);
+              return;
+            }
+          }
+          if (!preserves_existing_pad_components(analyze_connectivity(result.copper), analyze_connectivity(rebuilt))) {
+            ++result.counters.preservation_repair_rollbacks;
+            record_rollback(CopperScaffoldExchangeRollbackReason::connectivity_not_preserved, victims,
+                            std::nullopt, true);
+            return;
+          }
+          candidate_complete = std::move(supplemented_complete);
         }
+        if (cancel_component()) return;
         std::erase_if(result.paths, [&](const auto& path) {
           return std::any_of(victims.begin(), victims.end(), [&](const auto victim) {
             return path.net == requests[victim].net && path.connection_index == requests[victim].connection_index;
@@ -2176,6 +2258,19 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
         if (!incoming->path.points.empty()) result.paths.push_back(std::move(incoming->path));
         for (auto& replacement : replacements)
           if (!replacement.path.points.empty()) result.paths.push_back(std::move(replacement.path));
+        for (std::size_t added = 0U; added < preservation_demands.size(); ++added) {
+          requests.push_back(preservation_demands[added]);
+          result.requests.push_back(preservation_demands[added]);
+          result.request_identities.push_back(canonical_request_identity(preservation_demands[added]));
+          auto evidence = std::move(preservation_evidence[added]);
+          evidence.request_identity = result.request_identities.back();
+          result.request_evidence.push_back(std::move(evidence));
+          request_dynamic_ids.push_back(std::move(preservation_trials[added].dynamic_ids));
+          duplicate_request.push_back(false);
+          if (!preservation_trials[added].path.points.empty())
+            result.paths.push_back(std::move(preservation_trials[added].path));
+        }
+        result.counters.preservation_demands_accepted += preservation_demands.size();
         result.copper = std::move(rebuilt); complete = std::move(candidate_complete);
         refresh_dynamic_via_consumers();
         result.counters.survivor_tracks_preserved += preserved_tracks;

@@ -10042,3 +10042,16 @@ Diagnostic-only rollback fields identify the first disconnected request separate
 The92/13 replay disproves a stale-target explanation for that failure: victim13 has zero source attachments and128 target attachments; source U4.51 loses real connectivity. Investigate protection of the actual source escape after the preservation-demand experiment.
 
 Diagnostic correction: Round24 initial replay validated pad preservation against the post-rip-up intermediate board. Round25 repeats against the original saved board and confirms both final-state cases preserve it, while the earlier checkpoint does not. Production Round24 always compared against the original transaction incumbent, so its rejection was correct.
+
+## Round26 — Bounded atomic preservation demands (2026-10-12)
+
+### Hypothesis
+A victim route carries incidental pad attachments not represented by its two endpoint demands. Round25 proves that one direct additional branch can preserve the lost ground pad without new DRC. Derive deterministic supplemental real-pad demands only within previously connected incumbent groups that the candidate splits. Route at most two under existing coupled/component bounds, keep existing request indices as an exact prefix, and append unique new identities/copper owners only after the whole candidate preserves original pad components and checked demands. No baseline opens may be silently converted into this repair scope.
+
+### Research and integration choice
+KiCad’s [joint representation](https://docs.kicad.org/doxygen/pns__joint_8h_source.html) explicitly inventories linked copper items; its [topology implementation](https://docs.kicad.org/doxygen/pns__topology_8cpp_source.html) traverses connected joints and resolves unconnected anchors using a branched node. These support retaining physical connectivity obligations beyond a route’s endpoint pair. Flux already has exact pad-component analysis and a deterministic bounded MST demand generator, so the smallest experiment extends those interfaces rather than importing KiCad code or replacing routing topology. The new generator has bounded pair comparisons and at most two supplemental demands per coupled transaction.
+
+### Verification and result
+All 11 regression targets pass, including retained-checkpoint replay of the appended demand. Independent review found no material issue after cancellation checks were added through supplemental staging and immediately before commit. Frozen source remained unchanged. Sequential curved telemetry runs preserve byte-identical Tier0/1 copper, both with zero opens and internal/external KiCad DRC: detailed runtime29.948s/107.060s versus29.571s/104.561s.
+
+Tier2 improves114/117→117/118 scaffold requests (one preservation demand appended), remaining request115 only; physical opens15→14. Runtime278.111s versus313.552s Round24/316.035s Round25, peakRSS1210528KiB. First pass accepts one supplemental demand, one transaction rebind and one coupled exchange; later passes retain it. No final curved materialization or external KiCad validation is reached, so Tier2 remains incomplete. Keep the general atomic preservation repair. Next diagnose request115 and why outstanding real pad components do not become actionable residual demands.

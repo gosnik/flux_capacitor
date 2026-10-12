@@ -723,6 +723,65 @@ void residual_demand_pair_budget_is_atomic() {
           "frontier Prim must inspect each component pair only once within its exact allowance");
 }
 
+void pad_preservation_demands_restore_only_regressed_components() {
+  const NetId net{"engine-experiment-net"};
+  const LayerId front{"F.Cu"};
+  auto incumbent = two_pad_board();
+  for (std::size_t i = 0U; i < 2U; ++i) {
+    auto pad = incumbent.footprints.front();
+    pad.id = ObjectId{"unrelated-" + std::to_string(i)};
+    pad.pads.front().id = ObjectId{"unrelated-pad-" + std::to_string(i)};
+    pad.position = mm(35.0 + 30.0 * static_cast<double>(i), 60.0);
+    incumbent.footprints.push_back(std::move(pad));
+  }
+  incumbent.tracks = {{ObjectId{"incumbent-link"}, net, front, mm(20,40), mm(80,40),
+                       Nanometres::from_mm(0.2), false}};
+  auto candidate = incumbent;
+  candidate.tracks.clear();
+  const std::vector<GlobalRoutePath> existing = {
+      {net, 3U, {{mm(20,40),front},{mm(80,40),front}}},
+      {net, 8U, {{mm(20,40),front},{mm(80,40),front}}}};
+
+  const auto demands = derive_pad_preservation_demands(incumbent, candidate, existing);
+  require(demands && demands->size() == 1U && demands->front().net == net &&
+              demands->front().connection_index == 9U &&
+              demands->front().points == std::vector<GlobalRoutePoint>{{mm(20,40),front}, {mm(80,40),front}},
+          "pad preservation must restore exactly the incumbent component that candidate split");
+  require(derive_pad_preservation_demands(incumbent, candidate, existing) == demands,
+          "pad preservation demands must be deterministic including fresh connection identities");
+
+  auto restored = candidate;
+  restored.tracks = {{ObjectId{"restored-link"}, net, front, demands->front().points.front().position,
+                      demands->front().points.back().position, Nanometres::from_mm(0.2), false}};
+  const auto restored_report = analyze_connectivity(restored);
+  require(restored_report.open_connections == 2U,
+          "restoring a split group must leave unrelated incumbent-open pads untouched");
+}
+
+void pad_preservation_demand_bounds_are_all_or_none() {
+  const NetId net{"engine-experiment-net"};
+  const LayerId front{"F.Cu"};
+  auto incumbent = two_pad_board();
+  auto third = incumbent.footprints.front();
+  third.id = ObjectId{"third"};
+  third.pads.front().id = ObjectId{"third-pad"};
+  third.position = mm(50, 40);
+  incumbent.footprints.push_back(std::move(third));
+  incumbent.tracks = {{ObjectId{"left-link"}, net, front, mm(20,40), mm(50,40), Nanometres::from_mm(0.2), false},
+                      {ObjectId{"right-link"}, net, front, mm(50,40), mm(80,40), Nanometres::from_mm(0.2), false}};
+  auto candidate = incumbent;
+  candidate.tracks.clear();
+  const std::vector<GlobalRoutePath> existing = {{net, 4U, {{mm(20,40),front},{mm(80,40),front}}}};
+  require(!derive_pad_preservation_demands(incumbent, candidate, existing, 1U),
+          "a demand limit that cannot restore every split partition must reject the whole suffix");
+  require(!derive_pad_preservation_demands(incumbent, candidate, existing, 2U, 2U),
+          "a shared pair-check limit must reject rather than return a partial preservation suffix");
+  const auto complete = derive_pad_preservation_demands(incumbent, candidate, existing, 2U, 3U);
+  require(complete && complete->size() == 2U && complete->front().connection_index == 5U &&
+              complete->back().connection_index == 6U,
+          "the exact complete bound must admit the deterministic two-edge preservation MST");
+}
+
 void source_only_terminal_becomes_a_physical_obligation() {
   const auto planning = two_pad_board();
   auto source = planning;
@@ -873,6 +932,8 @@ int main() {
   partial_scaffold_routes_missing_requests_against_retained_copper();
   residual_physical_demands_preserve_checked_components();
   residual_demand_pair_budget_is_atomic();
+  pad_preservation_demands_restore_only_regressed_components();
+  pad_preservation_demand_bounds_are_all_or_none();
   source_only_terminal_becomes_a_physical_obligation();
   direct_scaffold_terminal_rebind_is_bounded_and_preserves_peers();
   scaffold_certifies_materialization_source();

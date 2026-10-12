@@ -45,6 +45,10 @@ struct CopperScaffoldConfig {
   std::size_t maximum_coupled_victims{3U};
   std::size_t maximum_coupled_exchange_attempts{8U};
   std::size_t maximum_coupled_expansions{200'000U};
+  // A rebound coupled transaction may restore pad components that are not represented by its
+  // original coarse requests.  This bounds deterministic, physical pad-to-pad supplement
+  // demands; zero leaves the existing transaction behavior unchanged.
+  std::size_t maximum_preservation_demands{2U};
   std::size_t maximum_failure_evidence{32U};
   std::size_t maximum_component_access_points{32U};
   std::size_t maximum_attachment_states{128U};
@@ -201,6 +205,9 @@ struct CopperScaffoldCounters {
   // to a proved producer pad. Both counts describe only fully bounded transaction-local tries.
   std::size_t transactional_terminal_rebind_attempts{0U};
   std::size_t transactional_terminal_rebinds_accepted{0U};
+  std::size_t preservation_repair_attempts{0U};
+  std::size_t preservation_demands_accepted{0U};
+  std::size_t preservation_repair_rollbacks{0U};
   std::size_t exchange_rollbacks{0U};
   std::size_t exchange_rollbacks_incoming_unroutable{0U};
   std::size_t exchange_rollbacks_victim_unroutable{0U};

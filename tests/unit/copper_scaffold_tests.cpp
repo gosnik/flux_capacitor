@@ -319,7 +319,11 @@ void coupled_exchange_rebinds_obsolete_virtual_branch_terminal() {
   pads.id = ObjectId{"virtual-branch-pads"}; pads.reference = "J1";
   pads.pads = {{ObjectId{"producer-left"}, NetId{"a"}, mm(0.1,0.9), {LayerId{"F.Cu"}}},
                {ObjectId{"producer-right"}, NetId{"a"}, mm(19.9,0.9), {LayerId{"F.Cu"}}},
-               {ObjectId{"branch-source"}, NetId{"a"}, mm(0.1,1.7), {LayerId{"F.Cu"}}}};
+               {ObjectId{"branch-source"}, NetId{"a"}, mm(0.1,1.7), {LayerId{"F.Cu"}}},
+               // The original producer crosses this incidental pad. Its exchange replacement
+               // detours below it, so preserving the original pad partition needs one physical
+               // supplement even though all explicit coarse demands remain connected.
+               {ObjectId{"incidental-producer-pad"}, NetId{"a"}, mm(9.4,0.9), {LayerId{"F.Cu"}}}};
   for (auto& pad : pads.pads) pad.width = pad.height = Nanometres::from_mm(0.2);
   board.footprints.push_back(std::move(pads));
   CopperScaffoldConfig config;
@@ -342,13 +346,16 @@ void coupled_exchange_rebinds_obsolete_virtual_branch_terminal() {
   const std::vector<GlobalRoutePath> original{producer, branch, incoming};
   const auto result = construct_copper_scaffold(board, original, config);
   const auto rebinding_ok = result.complete && result.counters.transactional_terminal_rebinds_accepted == 1U &&
+      result.counters.preservation_repair_attempts == 1U && result.counters.preservation_demands_accepted == 1U &&
       result.counters.coupled_victim_exchanges_accepted == 1U &&
-      result.requests.size() == original.size() && result.requests[0] == producer &&
+      result.requests.size() == original.size() + 1U && result.requests[0] == producer &&
       result.requests[1] != branch && result.requests[1].points.front() == branch.points.front() &&
       result.requests[1].points.back() != branch.points.back() && check_copper_rules(result.copper).ok();
   if (!rebinding_ok) throw std::runtime_error("virtual branch exchange: complete=" + std::to_string(result.complete) +
       "; accepted=" + std::to_string(result.counters.transactional_terminal_rebinds_accepted) +
       "; attempts=" + std::to_string(result.counters.transactional_terminal_rebind_attempts) +
+      "; preservation_attempts=" + std::to_string(result.counters.preservation_repair_attempts) +
+      "; preservation_demands=" + std::to_string(result.counters.preservation_demands_accepted) +
       "; coupled=" + std::to_string(result.counters.coupled_victim_exchanges_accepted) +
       "; victim_attempts=" + std::to_string(result.counters.coupled_victim_exchanges_attempted) +
       "; missing=" + std::to_string(result.missing_indices.size()) +
@@ -357,6 +364,22 @@ void coupled_exchange_rebinds_obsolete_virtual_branch_terminal() {
   require(analyze_connectivity(result.copper).open_connections == 0U &&
               result.request_identities[1] == result.request_evidence[1].request_identity,
           "accepted virtual-terminal rebind must preserve pad connectivity and publish its new identity");
+
+  const auto resumed = construct_copper_scaffold(board, result.requests, config, {}, &result);
+  require(resumed.complete && resumed.requests == result.requests &&
+              resumed.request_identities == result.request_identities &&
+              resumed.counters.preservation_demands_accepted == 0U &&
+              analyze_connectivity(resumed.copper).open_connections == 0U &&
+              check_copper_rules(resumed.copper).ok(),
+          "retained checkpoint replay must preserve the accepted suffix without duplicating demands or owners");
+
+  auto preservation_disabled = config;
+  preservation_disabled.maximum_preservation_demands = 0U;
+  const auto rolled_back_preservation = construct_copper_scaffold(board, original, preservation_disabled);
+  require(!rolled_back_preservation.complete && rolled_back_preservation.requests == original &&
+              rolled_back_preservation.counters.preservation_repair_attempts == 0U &&
+              rolled_back_preservation.counters.preservation_demands_accepted == 0U,
+          "disabled physical preservation repair must roll back the rebound transaction without publishing a suffix");
 
   auto no_component = config;
   no_component.maximum_coupled_victims = 1U;

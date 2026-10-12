@@ -4254,6 +4254,8 @@ void print_route_result(const flux::GlobalRouteResult& result,
                 << ", \"attachment_search_rounds\": " << scaffold.counters.attachment_search_rounds
                 << ", \"attachment_search_probes\": " << scaffold.counters.attachment_search_probes
                 << ", \"outward_attachment_probes\": " << scaffold.counters.outward_attachment_probes
+                << ", \"transactional_terminal_rebind_attempts\": " << scaffold.counters.transactional_terminal_rebind_attempts
+                << ", \"transactional_terminal_rebinds_accepted\": " << scaffold.counters.transactional_terminal_rebinds_accepted
                 << ", \"outward_attachments\": " << scaffold.counters.outward_attachments
                 << ", \"attachment_search_early_successes\": " << scaffold.counters.attachment_search_early_successes
                 << ", \"duplicate_rejected_assemblies\": " << scaffold.counters.duplicate_rejected_assemblies
@@ -5544,6 +5546,8 @@ void print_detailed_result(const flux::DetailedRouteResult& result,
       std::cout << ", \"attachment_search_rounds\": " << counters.attachment_search_rounds;
       std::cout << ", \"attachment_search_probes\": " << counters.attachment_search_probes;
       std::cout << ", \"outward_attachment_probes\": " << counters.outward_attachment_probes;
+      std::cout << ", \"transactional_terminal_rebind_attempts\": " << counters.transactional_terminal_rebind_attempts;
+      std::cout << ", \"transactional_terminal_rebinds_accepted\": " << counters.transactional_terminal_rebinds_accepted;
       std::cout << ", \"outward_attachments\": " << counters.outward_attachments;
       std::cout << ", \"attachment_search_early_successes\": " << counters.attachment_search_early_successes;
       std::cout << ", \"duplicate_rejected_assemblies\": " << counters.duplicate_rejected_assemblies;

@@ -1,4 +1,5 @@
 #include "flux/core/copper_scaffold.hpp"
+#include "flux/core/connectivity.hpp"
 #include "flux/core/drc.hpp"
 #include "flux/core/routing_kernel.hpp"
 #include "../../src/scaffold_via_history.hpp"
@@ -307,6 +308,63 @@ void coupled_exchange_rebuilds_two_causal_victims_and_preserves_survivor() {
   require(std::find(result.copper.tracks.begin(), result.copper.tracks.end(), fixed) != result.copper.tracks.end() &&
               result.satisfied_indices.size() == 4U && check_copper_rules(result.copper).ok(),
           "coupled commit must retain unrelated copper and every previously satisfied demand");
+}
+void coupled_exchange_rebinds_obsolete_virtual_branch_terminal() {
+  auto board = fixture();
+  board.outline = Polygon{{mm(0,0), mm(20,0), mm(20,2.6), mm(0,2.6)}};
+  board.rules.copper_to_edge_clearance = Nanometres{0};
+  board.rules.default_via_diameter = Nanometres::from_mm(2.0);
+  board.rules.default_via_drill = Nanometres::from_mm(0.5);
+  Footprint pads;
+  pads.id = ObjectId{"virtual-branch-pads"}; pads.reference = "J1";
+  pads.pads = {{ObjectId{"producer-left"}, NetId{"a"}, mm(0.1,0.9), {LayerId{"F.Cu"}}},
+               {ObjectId{"producer-right"}, NetId{"a"}, mm(19.9,0.9), {LayerId{"F.Cu"}}},
+               {ObjectId{"branch-source"}, NetId{"a"}, mm(0.1,1.7), {LayerId{"F.Cu"}}}};
+  for (auto& pad : pads.pads) pad.width = pad.height = Nanometres::from_mm(0.2);
+  board.footprints.push_back(std::move(pads));
+  CopperScaffoldConfig config;
+  config.grid_pitch = Nanometres::from_mm(0.1);
+  config.maximum_cells = 20'000U;
+  config.maximum_expansions_per_connection = 100'000U;
+  config.maximum_victim_exchanges = 2U;
+  config.maximum_joint_passage_candidates = 0U;
+  config.maximum_displacement_attempts = 0U;
+  config.maximum_coupled_victims = 2U;
+  config.maximum_coupled_exchange_attempts = 4U;
+  config.maximum_coupled_expansions = 300'000U;
+  GlobalRoutePath producer{NetId{"a"}, 0U,
+      {{mm(0.1,0.9), LayerId{"F.Cu"}}, {mm(10,0.9), LayerId{"F.Cu"}}, {mm(19.9,0.9), LayerId{"F.Cu"}}}};
+  GlobalRoutePath branch{NetId{"a"}, 1U,
+      {{mm(0.1,1.7), LayerId{"F.Cu"}}, {mm(19.9,1.7), LayerId{"F.Cu"}},
+       {mm(10,0.9), LayerId{"F.Cu"}}}};
+  GlobalRoutePath incoming{NetId{"b"}, 0U,
+      {{mm(10,0.5), LayerId{"F.Cu"}}, {mm(10,2.1), LayerId{"F.Cu"}}}};
+  const std::vector<GlobalRoutePath> original{producer, branch, incoming};
+  const auto result = construct_copper_scaffold(board, original, config);
+  const auto rebinding_ok = result.complete && result.counters.transactional_terminal_rebinds_accepted == 1U &&
+      result.counters.coupled_victim_exchanges_accepted == 1U &&
+      result.requests.size() == original.size() && result.requests[0] == producer &&
+      result.requests[1] != branch && result.requests[1].points.front() == branch.points.front() &&
+      result.requests[1].points.back() != branch.points.back() && check_copper_rules(result.copper).ok();
+  if (!rebinding_ok) throw std::runtime_error("virtual branch exchange: complete=" + std::to_string(result.complete) +
+      "; accepted=" + std::to_string(result.counters.transactional_terminal_rebinds_accepted) +
+      "; attempts=" + std::to_string(result.counters.transactional_terminal_rebind_attempts) +
+      "; coupled=" + std::to_string(result.counters.coupled_victim_exchanges_accepted) +
+      "; victim_attempts=" + std::to_string(result.counters.coupled_victim_exchanges_attempted) +
+      "; missing=" + std::to_string(result.missing_indices.size()) +
+      "; request1_end=" + std::to_string(result.requests[1].points.back().position.x.value()) + "," +
+      std::to_string(result.requests[1].points.back().position.y.value()));
+  require(analyze_connectivity(result.copper).open_connections == 0U &&
+              result.request_identities[1] == result.request_evidence[1].request_identity,
+          "accepted virtual-terminal rebind must preserve pad connectivity and publish its new identity");
+
+  auto no_component = config;
+  no_component.maximum_coupled_victims = 1U;
+  no_component.maximum_coupled_exchange_attempts = 0U;
+  const auto rolled_back = construct_copper_scaffold(board, original, no_component);
+  require(!rolled_back.complete && rolled_back.requests == original &&
+              rolled_back.request_identities[1] == rolled_back.request_evidence[1].request_identity,
+          "without an accepted transaction, virtual-terminal evidence must not change canonical demand identities");
 }
 void three_victim_component_succeeds_only_when_the_component_bound_allows_it() {
   auto board = fixture();
@@ -840,6 +898,7 @@ int main() {
   causal_exchange_preserves_survivors_and_rebuilds_victim();
   bounded_pns_displacement_moves_only_attributed_generated_copper();
   coupled_exchange_rebuilds_two_causal_victims_and_preserves_survivor();
+  coupled_exchange_rebinds_obsolete_virtual_branch_terminal();
   three_victim_component_succeeds_only_when_the_component_bound_allows_it();
   callback_cancellation_publishes_only_legal_checkpoint();
 }

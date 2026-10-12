@@ -13,7 +13,6 @@
 #include "scaffold_physical_demands.hpp"
 #include "scaffold_access.hpp"
 
-#include <boost/multiprecision/cpp_int.hpp>
 
 #include <algorithm>
 #include <array>
@@ -38,117 +37,6 @@ std::size_t plus(std::size_t a, std::size_t b) {
 [[nodiscard]] std::vector<GlobalRoutePath> scaffold_requests(const Board& board,
                                                               const GlobalRouteResult& global);
 
-[[nodiscard]] bool point_on_same_layer_segment(const GlobalRoutePoint& point,
-                                                const GlobalRoutePoint& first,
-                                                const GlobalRoutePoint& second) {
-  if (point.layer != first.layer || point.layer != second.layer) return false;
-  const auto ax = first.position.x.value(), ay = first.position.y.value();
-  const auto bx = second.position.x.value(), by = second.position.y.value();
-  const auto px = point.position.x.value(), py = point.position.y.value();
-  using boost::multiprecision::cpp_int;
-  const cpp_int cross = (cpp_int{bx} - ax) * (cpp_int{py} - ay) -
-                        (cpp_int{by} - ay) * (cpp_int{px} - ax);
-  return cross == 0 && px >= std::min(ax, bx) && px <= std::max(ax, bx) &&
-         py >= std::min(ay, by) && py <= std::max(ay, by);
-}
-
-[[nodiscard]] bool endpoint_is_real_pad(const std::vector<CopperPadShape>& pads, const NetId& net,
-                                        const GlobalRoutePoint& endpoint) {
-  return std::any_of(pads.begin(), pads.end(), [&](const auto& pad) {
-    return pad.net == net && std::find(pad.layers.begin(), pad.layers.end(), endpoint.layer) != pad.layers.end() &&
-        point_to_pad_copper_distance_nm(endpoint.position, pad) <= 0.0L;
-  });
-}
-
-// Rebind an inaccessible abstract endpoint, or a bounded search aimed at an obsolete branch
-// of an already connected producer. A producer must contain that point on selected same-layer coarse
-// geometry and expose a real pad endpoint.  This is intentionally not a nearest-pad search.
-[[nodiscard]] std::pair<std::vector<GlobalRoutePath>, std::vector<ScaffoldTerminalRebind>>
-rebind_exhausted_scaffold_terminals(const Board& board, const CopperScaffoldResult& retained) {
-  auto rebound = retained.requests;
-  std::vector<ScaffoldTerminalRebind> bindings;
-  const auto pads = copper_pad_shapes(board);
-  for (const auto index : retained.missing_indices) {
-    if (index >= retained.requests.size() || index >= retained.request_evidence.size()) continue;
-    const auto& request = retained.requests[index];
-    const auto& evidence = retained.request_evidence[index];
-    if (request.points.size() < 2U || !evidence.access_evaluated ||
-        evidence.target_endpoint_contained_by_copper) continue;
-    const bool inaccessible =
-        evidence.termination == CopperScaffoldSearchTermination::attachment_exhausted &&
-        evidence.target_legal_attachments == 0U;
-    const bool exhausted_branch_search =
-        evidence.termination == CopperScaffoldSearchTermination::expansion_budget_exhausted;
-    if (!inaccessible && !exhausted_branch_search) continue;
-    const auto orphan = request.points.back();
-    if (endpoint_is_real_pad(pads, request.net, orphan)) continue;
-    // The source component must not already contain the chosen pad: that would certify only a
-    // loop while leaving the original terminal obligation open.
-    std::vector<ScaffoldTerminalRebind> candidates;
-    for (std::size_t producer = 0U; producer < retained.requests.size(); ++producer) {
-      if (producer == index) continue;
-      const auto& path = retained.requests[producer];
-      if (path.net != request.net || path.points.size() < 2U) continue;
-      // A legal grid attachment says nothing about whether the old branch point remains on
-      // its producer's copper. For budget failures require both retained satisfaction and
-      // exact physical connectivity of that producer before changing the obligation.
-      if (!inaccessible &&
-          (std::find(retained.satisfied_indices.begin(), retained.satisfied_indices.end(), producer) ==
-               retained.satisfied_indices.end() || !scaffold_request_connected(retained.copper, path))) continue;
-      bool contains = false;
-      for (std::size_t segment = 1U; segment < path.points.size(); ++segment)
-        contains = contains || point_on_same_layer_segment(orphan, path.points[segment - 1U], path.points[segment]);
-      if (!contains) continue;
-      for (const auto& terminal : {path.points.front(), path.points.back()}) {
-        if (!endpoint_is_real_pad(pads, request.net, terminal)) continue;
-        GlobalRoutePath component_probe;
-        component_probe.net = request.net;
-        component_probe.points = {request.points.front(), terminal};
-        if (scaffold_request_connected(retained.copper, component_probe)) continue;
-        ScaffoldTerminalRebind candidate;
-        candidate.request_index = index;
-        candidate.original_endpoint = orphan;
-        candidate.terminal = terminal;
-        candidate.proof = "request=" + std::to_string(index) + "; producer=" +
-            std::to_string(producer) + "; net=" + request.net.value() + "; layer=" + orphan.layer.value() +
-            "; orphan=" + std::to_string(orphan.position.x.value()) + "," +
-            std::to_string(orphan.position.y.value()) + "; terminal=" +
-            std::to_string(terminal.position.x.value()) + "," + std::to_string(terminal.position.y.value());
-        candidates.push_back(std::move(candidate));
-      }
-    }
-    std::sort(candidates.begin(), candidates.end(), [](const auto& a, const auto& b) {
-      return std::tuple{a.terminal.position.x.value(), a.terminal.position.y.value(), a.terminal.layer, a.proof} <
-             std::tuple{b.terminal.position.x.value(), b.terminal.position.y.value(), b.terminal.layer, b.proof};
-    });
-    if (candidates.empty()) continue;
-    rebound[index].points.back() = candidates.front().terminal;
-    // The old route's last segment/corridor certificates ended at the abstract point. It can
-    // remain conceptual provenance in the binding proof, but cannot be direct-admitted after
-    // the physical terminal changes.
-    rebound[index].medial_resource_sequence.clear();
-    rebound[index].medial_transition_portals.clear();
-    rebound[index].medial_transition_grid_edges.clear();
-    rebound[index].geometric_corridors.clear();
-    rebound[index].segment_widths.clear();
-    rebound[index].segment_width_kinds.clear();
-    rebound[index].medial_topology_breaks = 0U;
-    rebound[index].medial_direct_portal_transitions = 0U;
-    rebound[index].medial_unmapped_nodes = 0U;
-    rebound[index].medial_interior_unmapped_nodes = 0U;
-    rebound[index].direct_medial_edges = 0U;
-    rebound[index].direct_medial_grid_steps_bypassed = 0U;
-    rebound[index].terminal_neck_down_segments = 0U;
-    rebound[index].terminal_neck_down_length_nm = 0U;
-    rebound[index].medial_neck_down_segments = 0U;
-    rebound[index].medial_neck_down_length_nm = 0U;
-    rebound[index].corridor_neck_down_segments = 0U;
-    rebound[index].corridor_neck_down_length_nm = 0U;
-    rebound[index].legal_scaffold = false;
-    bindings.push_back(std::move(candidates.front()));
-  }
-  return {std::move(rebound), std::move(bindings)};
-}
 std::size_t difference(std::size_t newer, std::size_t older) {
   return newer > older ? newer - older : 0U;
 }
@@ -684,36 +572,6 @@ void emit_engine_event(RouterTelemetrySink* sink, const char* phase, RoutingEngi
   return std::move(out).str();
 }
 } // namespace
-
-std::pair<std::vector<GlobalRoutePath>, std::vector<ScaffoldTerminalRebind>>
-derive_scaffold_terminal_rebinds(const Board& board, const CopperScaffoldResult& retained,
-                                const std::vector<std::string>& attempted_proofs,
-                                const std::string& physical_context) {
-  auto result = rebind_exhausted_scaffold_terminals(board, retained);
-  for (auto& binding : result.second)
-    binding.proof += "; physical-context=" + physical_context;
-  std::erase_if(result.second, [&](const auto& binding) {
-    if (std::find(attempted_proofs.begin(), attempted_proofs.end(), binding.proof) == attempted_proofs.end())
-      return false;
-    result.first[binding.request_index] = retained.requests[binding.request_index];
-    return true;
-  });
-  return result;
-}
-
-bool scaffold_preserves_satisfied_requests(const CopperScaffoldResult& candidate,
-                                          const CopperScaffoldResult& incumbent) {
-  for (const auto old_index : incumbent.satisfied_indices) {
-    if (old_index >= incumbent.requests.size()) return false;
-    const auto& request = incumbent.requests[old_index];
-    const auto found = std::find(candidate.requests.begin(), candidate.requests.end(), request);
-    if (found == candidate.requests.end()) return false;
-    const auto new_index = static_cast<std::size_t>(found - candidate.requests.begin());
-    if (std::find(candidate.satisfied_indices.begin(), candidate.satisfied_indices.end(), new_index) ==
-        candidate.satisfied_indices.end()) return false;
-  }
-  return true;
-}
 
 std::vector<std::size_t> select_physical_repair_requests(
     const CopperScaffoldResult& scaffold, const std::vector<std::size_t>& attempts,
@@ -2109,6 +1967,8 @@ RoutingEngineStepResult RoutingEngine::advance(RoutingEngineStepBudget budget,
               "; coupled_attempts=" + std::to_string(c.coupled_victim_exchanges_attempted) +
               "; coupled_accepted=" + std::to_string(c.coupled_victim_exchanges_accepted) +
               "; coupled_budget_exhaustions=" + std::to_string(c.coupled_expansion_budget_exhaustions) +
+              "; transactional_terminal_rebind_attempts=" + std::to_string(c.transactional_terminal_rebind_attempts) +
+              "; transactional_terminal_rebinds_accepted=" + std::to_string(c.transactional_terminal_rebinds_accepted) +
               "; rollbacks=" + std::to_string(c.exchange_rollbacks) +
               "; rollback_incoming=" + std::to_string(c.exchange_rollbacks_incoming_unroutable) +
               "; rollback_victim=" + std::to_string(c.exchange_rollbacks_victim_unroutable) +

@@ -1,0 +1,32 @@
+{
+  "tier": 2,
+  "board": "ft2232h_jtag",
+  "failing_stage": "coupled scaffold victim reconstruction",
+  "classification": "obsolete synthetic terminal after same-net producer reroute",
+  "request_indices": [
+    44,
+    91,
+    11,
+    19
+  ],
+  "layer": "F.Cu",
+  "region_nm": {
+    "orphan": [
+      123500000,
+      111500000
+    ],
+    "proven_terminal": [
+      121750000,
+      112675000
+    ]
+  },
+  "baseline": {
+    "satisfied_requests": 114,
+    "required_requests": 117,
+    "physical_open_connections": 18
+  },
+  "mechanism": "A previously satisfied branch remains tied to a coarse interior point when its producer is rerouted. The transient victim failure is invisible to retained-missing-request rebind logic.",
+  "proof": "Two saved-copper replay transactions complete after producer-backed real-pad rebind, preserving pad components and adding zero DRC violations.",
+  "scope": "One bounded rebind retry inside atomic singleton/coupled repair; no clearance relaxation or board-specific selection.",
+  "known_limit": "Chained rebinding through an earlier rebound victim is conservatively rejected in the same transaction."
+}

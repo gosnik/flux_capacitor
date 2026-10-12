@@ -194,6 +194,10 @@ struct CopperScaffoldCounters {
   // Searches stopped by the shared component budget are inconclusive, rather than evidence that
   // the displaced component is infeasible.
   std::size_t coupled_expansion_budget_exhaustions{0U};
+  // A failed exchange victim may be rebound from a now-obsolete selected-coarse branch contact
+  // to a proved producer pad. Both counts describe only fully bounded transaction-local tries.
+  std::size_t transactional_terminal_rebind_attempts{0U};
+  std::size_t transactional_terminal_rebinds_accepted{0U};
   std::size_t exchange_rollbacks{0U};
   std::size_t exchange_rollbacks_incoming_unroutable{0U};
   std::size_t exchange_rollbacks_victim_unroutable{0U};

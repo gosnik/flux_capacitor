@@ -146,6 +146,7 @@ add_library(flux_core
   src/routing_feedback.cpp
   src/routing_kernel.cpp
   src/routing_engine.cpp
+  src/scaffold_terminal_rebind.cpp
   src/routing_engine_policy.cpp
   src/routing_avbd.cpp
   src/routing_xpbd.cpp

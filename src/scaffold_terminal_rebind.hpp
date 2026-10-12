@@ -21,7 +21,8 @@ struct ScaffoldTerminalRebind {
 [[nodiscard]] std::pair<std::vector<GlobalRoutePath>, std::vector<ScaffoldTerminalRebind>>
 derive_scaffold_terminal_rebinds(const Board&, const CopperScaffoldResult&,
                                const std::vector<std::string>& attempted_proofs = {},
-                               const std::string& physical_context = {});
+                               const std::string& physical_context = {},
+                               bool require_connected_producer = false);
 
 // A changed demand domain may never discard an already checked peer obligation.
 [[nodiscard]] bool scaffold_preserves_satisfied_requests(const CopperScaffoldResult& candidate,

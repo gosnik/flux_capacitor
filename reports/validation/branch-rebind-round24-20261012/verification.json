@@ -1,0 +1,12 @@
+{
+  "build": "pass",
+  "ctest": {
+    "passed": 11,
+    "failed": 0,
+    "seconds": 149.19,
+    "log": "final-regression-tests.log"
+  },
+  "no_op_build": true,
+  "review": "No material correctness findings; chained rebind limitation documented",
+  "synthetic": "Actual coupled rebind acceptance plus rollback; pad connectivity and DRC preserved"
+}

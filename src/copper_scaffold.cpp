@@ -14,6 +14,7 @@
 #include "scaffold_via_history.hpp"
 #include "scaffold_joint_displacement.hpp"
 #include "scaffold_connectivity_guard.hpp"
+#include "scaffold_terminal_rebind.hpp"
 
 #include <algorithm>
 #include <array>
@@ -998,11 +999,16 @@ struct PassageSearch {
 } // namespace
 
 CopperScaffoldResult construct_copper_scaffold(const Board& board,
-                                               const std::vector<GlobalRoutePath>& requests,
+                                               const std::vector<GlobalRoutePath>& input_requests,
                                                const CopperScaffoldConfig& config,
                                                std::stop_token stop_token,
                                                const CopperScaffoldResult* retained,
                                                const std::function<void(const CopperScaffoldResult&)>& publish) {
+  // A coupled repair may prove that a coarse interior branch contact has become obsolete after
+  // its producer is rebuilt.  Keep this domain mutable, but publish a changed demand only with
+  // the exact transaction that realizes it.
+  std::vector<GlobalRoutePath> effective_requests = input_requests;
+  auto& requests = effective_requests;
   CopperScaffoldResult result; result.copper = board; result.requests = requests;
   result.request_count = requests.size();
   result.request_identities.reserve(requests.size());
@@ -1049,6 +1055,44 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
         }
       }
     }
+  };
+  // Rebinding is an exchange-local repair: the old coarse point remains authoritative until a
+  // full candidate transaction has rebuilt every affected request and passed its usual gates.
+  const auto rebind_failed_transaction_victim = [&](const Board& scene, std::size_t victim,
+                                                    const CopperScaffoldRequestEvidence& evidence,
+                                                    const std::vector<bool>& candidate_complete)
+      -> std::optional<GlobalRoutePath> {
+    if (victim >= requests.size() || evidence.termination != CopperScaffoldSearchTermination::attachment_exhausted ||
+        evidence.target_legal_attachments != 0U)
+      return std::nullopt;
+    ++result.counters.transactional_terminal_rebind_attempts;
+    CopperScaffoldResult transient;
+    transient.copper = scene;
+    transient.requests = requests;
+    transient.request_evidence.resize(requests.size());
+    transient.request_evidence[victim] = evidence;
+    for (std::size_t request = 0U; request < candidate_complete.size(); ++request) {
+      if (request == victim) continue;
+      if (candidate_complete[request]) transient.satisfied_indices.push_back(request);
+    }
+    transient.missing_indices.push_back(victim);
+    const auto rebound = derive_scaffold_terminal_rebinds(
+        scene, transient, {}, "transactional-coupled-repair", true);
+    if (rebound.second.size() != 1U || rebound.second.front().request_index != victim ||
+        rebound.first.size() != requests.size())
+      return std::nullopt;
+    return rebound.first[victim];
+  };
+  const auto commit_rebound_request = [&](std::size_t victim, const GlobalRoutePath& rebound) {
+    requests[victim] = rebound;
+    result.requests[victim] = rebound;
+    result.request_identities[victim] = canonical_request_identity(rebound);
+    result.request_evidence[victim].request_identity = result.request_identities[victim];
+    result.request_evidence[victim].net = rebound.net;
+    result.request_evidence[victim].connection_index = rebound.connection_index;
+    result.request_evidence[victim].termination = CopperScaffoldSearchTermination::search_succeeded;
+    result.request_evidence[victim].blocker_objects.clear();
+    result.request_evidence[victim].blocker_nets.clear();
   };
   const auto account_requests = [&](CopperScaffoldResult& target) {
     target.request_count = requests.size();
@@ -1820,8 +1864,32 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
         continue;
       }
       exposed_blockers.clear();
+      CopperScaffoldRequestEvidence victim_evidence;
+      victim_evidence.request_identity = result.request_identities[victim];
+      victim_evidence.net = requests[victim].net;
+      victim_evidence.connection_index = requests[victim].connection_index;
+      const auto victim_expansions_before = result.counters.expansions;
       auto replacement = search_route(rebuilt, requests[victim], victim, config,
-                                      result.counters, stop_token, &exposed_blockers);
+                                      result.counters, stop_token, &exposed_blockers,
+                                      &victim_evidence.termination, &victim_evidence);
+      std::optional<GlobalRoutePath> rebound_victim;
+      if (!replacement && !result.counters.cancelled) {
+        auto candidate_complete = complete;
+        candidate_complete[index] = true;
+        rebound_victim = rebind_failed_transaction_victim(rebuilt, victim, victim_evidence,
+                                                           candidate_complete);
+        if (rebound_victim) {
+          exposed_blockers.clear();
+          auto bounded = config;
+          const auto consumed = result.counters.expansions - victim_expansions_before;
+          bounded.maximum_expansions_per_connection =
+              consumed >= config.maximum_expansions_per_connection ? 0U :
+              config.maximum_expansions_per_connection - consumed;
+          replacement = bounded.maximum_expansions_per_connection == 0U ? std::optional<Trial>{} :
+              search_route(rebuilt, *rebound_victim, victim, bounded, result.counters,
+                                     stop_token, &exposed_blockers);
+        }
+      }
       if (!replacement) {
         extend_causal_victims(exposed_blockers);
         record_rollback(result.counters.cancelled ? CopperScaffoldExchangeRollbackReason::cancelled :
@@ -1831,7 +1899,8 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
         continue; // Transaction rollback: result is still the untouched subset.
       }
       rebuilt = std::move(replacement->board);
-      if (!scaffold_request_connected(rebuilt, requests[victim])) {
+      const auto& replacement_request = rebound_victim ? *rebound_victim : requests[victim];
+      if (!scaffold_request_connected(rebuilt, replacement_request)) {
         record_rollback(CopperScaffoldExchangeRollbackReason::victim_unroutable, {victim});
         continue;
       }
@@ -1841,7 +1910,8 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
       bool preserved_connectivity = true;
       for (std::size_t request = 0U; request < candidate_complete.size(); ++request)
         if (candidate_complete[request] &&
-            !scaffold_request_connected(rebuilt, requests[request])) {
+            !scaffold_request_connected(rebuilt, request == victim && rebound_victim
+                                                      ? *rebound_victim : requests[request])) {
           preserved_connectivity = false;
           break;
         }
@@ -1849,10 +1919,17 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
         record_rollback(CopperScaffoldExchangeRollbackReason::connectivity_not_preserved, {victim});
         continue;
       }
+      if (rebound_victim && !preserves_existing_pad_components(analyze_connectivity(result.copper),
+                                                                 analyze_connectivity(rebuilt))) {
+        record_rollback(CopperScaffoldExchangeRollbackReason::connectivity_not_preserved, {victim});
+        continue;
+      }
       std::erase_if(result.paths, [&](const auto& path) {
         return path.net == requests[victim].net &&
                path.connection_index == requests[victim].connection_index;
       });
+      if (rebound_victim) commit_rebound_request(victim, *rebound_victim);
+      if (rebound_victim) ++result.counters.transactional_terminal_rebinds_accepted;
       request_dynamic_ids[index] = incoming->dynamic_ids;
       request_dynamic_ids[victim] = replacement->dynamic_ids;
       // The survivor path can still depend on a victim-created reused via. Keep that ID owned
@@ -1947,7 +2024,8 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
               return survivor_ids.contains(via.id.value());
             }));
         const auto coupled_search = [&](const Board& scene, const GlobalRoutePath& demand,
-                                        std::size_t demand_index) {
+                                        std::size_t demand_index,
+                                        CopperScaffoldRequestEvidence* evidence = nullptr) {
           if (coupled_expansions >= config.maximum_coupled_expansions) {
             attempt_budget_limited = true; coupled_budget_limited = true;
             coupled_budget_exhausted = true;
@@ -1968,7 +2046,8 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
           const auto before = result.counters.expansions;
           CopperScaffoldSearchTermination termination = CopperScaffoldSearchTermination::not_attempted;
           auto trial = search_route(scene, demand, demand_index, limited, result.counters, stop_token,
-                                    &exposed_blockers, &termination);
+                                    &exposed_blockers, &termination, evidence);
+          if (evidence != nullptr) evidence->termination = termination;
           const auto consumed = result.counters.expansions - before;
           coupled_expansions += consumed;
           component_expansions += consumed;
@@ -1995,14 +2074,39 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
         rebuilt = std::move(incoming->board);
         std::vector<Trial> replacements;
         replacements.reserve(victims.size());
+        std::map<std::size_t, GlobalRoutePath> rebound_victims;
         bool rebuilt_victims = true;
         for (const auto victim : victims) {
           if (coupled_expansions >= config.maximum_coupled_expansions) {
             attempt_budget_limited = true; coupled_budget_limited = true;
             coupled_budget_exhausted = true; rebuilt_victims = false; break;
           }
-          auto replacement = coupled_search(rebuilt, requests[victim], victim);
-          if (!replacement || !scaffold_request_connected(replacement ? replacement->board : rebuilt, requests[victim])) {
+          CopperScaffoldRequestEvidence victim_evidence;
+          victim_evidence.request_identity = result.request_identities[victim];
+          victim_evidence.net = requests[victim].net;
+          victim_evidence.connection_index = requests[victim].connection_index;
+          auto replacement = coupled_search(rebuilt, requests[victim], victim, &victim_evidence);
+          if (!replacement && !result.counters.cancelled) {
+            auto candidate_complete = complete;
+            candidate_complete[index] = true;
+            for (const auto rebuilt_victim : victims) {
+              if (rebuilt_victim == victim) break;
+              candidate_complete[rebuilt_victim] = true;
+            }
+            auto rebound = rebind_failed_transaction_victim(rebuilt, victim, victim_evidence,
+                                                             candidate_complete);
+            if (rebound) {
+              // The ordinary demand has consumed its scheduled share.  This one proof retry is
+              // nevertheless charged to the same component cap and cannot divide by zero after
+              // the last ordinary victim search.
+              ++remaining_demands;
+              exposed_blockers.clear();
+              replacement = coupled_search(rebuilt, *rebound, victim);
+              if (replacement) rebound_victims.emplace(victim, std::move(*rebound));
+            }
+          }
+          const auto demand = rebound_victims.contains(victim) ? &rebound_victims.at(victim) : &requests[victim];
+          if (!replacement || !scaffold_request_connected(replacement ? replacement->board : rebuilt, *demand)) {
             extend_causal_victims(exposed_blockers);
             maximum_component_size = std::min({config.maximum_coupled_victims, victim_order.size(),
                                                maximum_component_victims});
@@ -2022,10 +2126,16 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
         for (const auto victim : victims) candidate_complete[victim] = true;
         bool preserved = true;
         for (std::size_t request = 0U; request < candidate_complete.size(); ++request)
-          if (candidate_complete[request] && !scaffold_request_connected(rebuilt, requests[request])) {
+          if (candidate_complete[request] && !scaffold_request_connected(
+              rebuilt, rebound_victims.contains(request) ? rebound_victims.at(request) : requests[request])) {
             preserved = false; break;
         }
         if (!preserved) {
+          record_rollback(CopperScaffoldExchangeRollbackReason::connectivity_not_preserved, victims);
+          return;
+        }
+        if (!rebound_victims.empty() &&
+            !preserves_existing_pad_components(analyze_connectivity(result.copper), analyze_connectivity(rebuilt))) {
           record_rollback(CopperScaffoldExchangeRollbackReason::connectivity_not_preserved, victims);
           return;
         }
@@ -2052,6 +2162,9 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
         request_dynamic_ids[victims.front()].insert(request_dynamic_ids[victims.front()].end(),
                                                      preserved_dynamic_vias.begin(),
                                                      preserved_dynamic_vias.end());
+        for (const auto& [victim, rebound] : rebound_victims)
+          commit_rebound_request(victim, rebound);
+        result.counters.transactional_terminal_rebinds_accepted += rebound_victims.size();
         if (!incoming->path.points.empty()) result.paths.push_back(std::move(incoming->path));
         for (auto& replacement : replacements)
           if (!replacement.path.points.empty()) result.paths.push_back(std::move(replacement.path));

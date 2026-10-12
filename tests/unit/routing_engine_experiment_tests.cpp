@@ -769,6 +769,8 @@ void direct_scaffold_terminal_rebind_is_bounded_and_preserves_peers() {
               rebound.first[1].points.back() != failed.points.back() &&
               rebound.first[1].terminal_neck_down_segments == 0U,
           "direct producer rebind must change only the failed demand and clear stale certificates");
+  require(derive_scaffold_terminal_rebinds(board, retained, {}, {}, true).second.empty(),
+          "transient repair must reject an unconnected producer even when direct discovery may inspect it");
   const auto consumed = derive_scaffold_terminal_rebinds(board, retained, {rebound.second.front().proof});
   require(consumed.second.empty() && consumed.first == retained.requests,
           "a consumed failed proof must not replace requests or request another retry");
@@ -796,6 +798,8 @@ void direct_scaffold_terminal_rebind_is_bounded_and_preserves_peers() {
   require(derive_scaffold_terminal_rebinds(board, retained).second.empty(),
           "a satisfaction index alone must not substitute for physical producer connectivity");
   retained.copper = checked_copper;
+  require(derive_scaffold_terminal_rebinds(board, retained, {}, {}, true).second.size() == 1U,
+          "transient repair may use the same proof only after its producer is physically connected");
   retained.request_evidence[1].target_endpoint_contained_by_copper = true;
   require(derive_scaffold_terminal_rebinds(board, retained).second.empty(),
           "a branch still present in copper must keep its physical target");
@@ -807,6 +811,49 @@ void direct_scaffold_terminal_rebind_is_bounded_and_preserves_peers() {
   checkpoint.satisfied_indices.clear();
   require(!scaffold_preserves_satisfied_requests(checkpoint, retained),
           "a partial rebound checkpoint may not discard a checked peer");
+  checkpoint = retained;
+  checkpoint.requests[0].points.back() = {mm(51,41), front};
+  require(!scaffold_preserves_satisfied_requests(checkpoint, retained),
+          "an arbitrary changed terminal must not satisfy the outer preservation gate");
+  auto proof_incumbent = retained;
+  proof_incumbent.satisfied_indices = {1U};
+  auto proof_checkpoint = proof_incumbent;
+  proof_checkpoint.requests = bypass.first;
+  proof_checkpoint.copper.tracks.push_back(
+      {ObjectId{"proved-rebind"}, net, front, failed.points.front().position,
+       bypass.first[1].points.back().position, Nanometres::from_mm(0.2), false});
+  require(scaffold_preserves_satisfied_requests(proof_checkpoint, proof_incumbent),
+          "only a pad-backed producer proof with preserved existing components may rebind a checked demand");
+  Footprint unrelated;
+  unrelated.id = ObjectId{"U4"}; unrelated.reference = "U4"; unrelated.position = mm(65,60);
+  unrelated.pads = {{ObjectId{"U4-pad"}, net, Point{}, {front}}};
+  proof_incumbent.copper.footprints.push_back(unrelated);
+  auto arbitrary_pad = proof_checkpoint;
+  arbitrary_pad.copper.footprints.push_back(unrelated);
+  arbitrary_pad.requests[1].points.back() = {mm(65,60), front};
+  arbitrary_pad.copper.tracks.push_back({ObjectId{"arbitrary-pad"}, net, front, mm(50,60), mm(65,60),
+                                         Nanometres::from_mm(0.2), false});
+  require(!scaffold_preserves_satisfied_requests(arbitrary_pad, proof_incumbent),
+          "a same-net pad that is not the proved producer terminal must be rejected");
+  auto real_pad_original = retained;
+  real_pad_original.satisfied_indices = {1U};
+  real_pad_original.requests[1].points.back() = producer.points.front();
+  auto real_pad_relocation = proof_checkpoint;
+  real_pad_relocation.requests[1].points.back() = producer.points.back();
+  require(!scaffold_preserves_satisfied_requests(real_pad_relocation, real_pad_original),
+          "a relocation from an already real pad is never a virtual-branch rebind");
+  auto component_incumbent = proof_incumbent;
+  component_incumbent.copper.tracks.push_back({ObjectId{"protected-pad-component"}, net, front,
+      mm(50,60), mm(65,60), Nanometres::from_mm(0.2), false});
+  auto component_regression = component_incumbent;
+  component_regression.requests = bypass.first;
+  component_regression.copper.tracks.push_back({ObjectId{"component-rebind"}, net, front,
+      failed.points.front().position, bypass.first[1].points.back().position, Nanometres::from_mm(0.2), false});
+  std::erase_if(component_regression.copper.tracks, [](const auto& track) {
+    return track.id == ObjectId{"protected-pad-component"};
+  });
+  require(!scaffold_preserves_satisfied_requests(component_regression, component_incumbent),
+          "a proof rebind must reject any split of a pre-existing pad component");
   retained.copper.tracks.push_back({ObjectId{"already-connected"}, net, front, mm(50,60), mm(20,40),
                                    Nanometres::from_mm(0.2), false});
   require(derive_scaffold_terminal_rebinds(board, retained).second.empty(),

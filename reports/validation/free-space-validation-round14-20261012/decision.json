@@ -1,0 +1,5 @@
+{
+  "decision": "keep",
+  "reason": "Both curved lower tiers pass external DRC with byte-identical copper. Detailed wall time decreased10.60%/5.02%, preparation worker time decreased34.72%/31.18%, and peak RSS decreased2.25%/3.85%. Single-run comparison; no isolated attribution beyond stage timers.",
+  "next_bottleneck": "Repeated Boost polygon offset/Boolean assembly accounts for86.834 of87.475 summed Tier1 preparation seconds. Investigate reuse of Boolean-ready geometry and common obstacle unions before further validation or GPU work."
+}

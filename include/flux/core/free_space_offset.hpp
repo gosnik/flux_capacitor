@@ -40,11 +40,34 @@ struct FreeSpaceOffsetResult {
 };
 
 // Reuses a single solid/filled obstacle expansion by its complete contour geometry and exact
-// effective clearance. The cache never stores a final free-space result: outer boundaries,
-// cutouts, exclusions, and all other obstacles are still combined for each call.
+// effective clearance. Validated source BVHs are shared across domain/net views; positive
+// contour clearance certificates include the complete nearby boundary/rule context. Each
+// validation store is bounded by entry count and 262144 retained/referenced vertices.
+// The cache never stores a final free-space result: Boolean construction and exact containment
+// and overlap validation still run for each call.
 class FreeSpaceOffsetCache {
  public:
-  struct Stats { std::size_t hits{0}; std::size_t misses{0}; std::size_t entries{0}; };
+  struct Stats {
+    // Obstacle-expansion cache metrics retained for compatibility.
+    std::size_t hits{0};
+    std::size_t misses{0};
+    std::size_t entries{0};
+    // Validation/preparation and positive clearance-certificate reuse.
+    std::size_t input_validation_hits{0};
+    std::size_t input_validation_misses{0};
+    std::size_t prepared_domain_hits{0};
+    std::size_t prepared_domain_misses{0};
+    std::size_t clearance_certificate_hits{0};
+    std::size_t clearance_certificate_misses{0};
+    std::size_t validation_entries{0};
+    std::size_t retained_vertices{0};
+    double input_validation_seconds{0.0};
+    double preparation_seconds{0.0};
+    double boolean_operations_seconds{0.0};
+    double output_validation_seconds{0.0};
+    std::size_t prepared_source_hits{0};
+    std::size_t prepared_source_misses{0};
+  };
 
   explicit FreeSpaceOffsetCache(std::size_t capacity = 256U);
   ~FreeSpaceOffsetCache();

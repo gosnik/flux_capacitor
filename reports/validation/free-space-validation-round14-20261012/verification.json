@@ -1,0 +1,25 @@
+{
+  "build": {
+    "status": "PASS",
+    "log": "final-build.log",
+    "command": "cmake --build build/release --target flux-cli flux_unit_tests flux_copper_transaction_tests flux_span_certificate_tests flux_board_free_space_cache_tests flux_ph_tightening_tests flux_layered_navmesh_tests flux_copper_scaffold_tests flux_scaffold_curve_tests flux_scaffold_collision_tests flux_routing_engine_experiment_tests flux_scaffold_joint_displacement_tests -j4"
+  },
+  "tests": {
+    "status": "PASS",
+    "total": 11,
+    "failed": 0,
+    "log": "regression.log",
+    "command": "ctest --test-dir build/release -j1 --output-on-failure -R ^flux_(unit_tests|copper_transaction_tests|span_certificate_tests|board_free_space_cache_tests|ph_tightening_tests|layered_navmesh_tests|copper_scaffold_tests|scaffold_curve_tests|scaffold_collision_tests|routing_engine_experiment_tests|scaffold_joint_displacement_tests)$"
+  },
+  "settled_noop_build": {
+    "status": "PASS",
+    "log": "settled-noop-build.log",
+    "output": "ninja: no work to do."
+  },
+  "cli_sha256": "8a3412d72329768aa8ce14e6d5158a2802781726b379ba433f914d8eaa3505aa",
+  "freeze_verify": {
+    "status": "PASS",
+    "drift": []
+  },
+  "independent_review": "No outstanding correctness, invalidation, concurrency, retained-memory or telemetry findings after final delta."
+}

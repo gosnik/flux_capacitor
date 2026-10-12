@@ -1,0 +1,11 @@
+{
+  "baseline_revision": "411725f",
+  "hypothesis": "Repeated raw boundary clearance tests and source preparation dominate remaining free-space validation despite 95% offset expansion hits. Reuse validated immutable source geometry, prune exact threshold checks using prepared BVHs, and reuse contour certificates with complete geometric/rule context. Preserve exact containment and final DRC.",
+  "tier1_baseline": {
+    "detail_seconds": 238.59908819798147,
+    "navigation_preparation_worker_seconds": 127.099894,
+    "offset_hits": 90353,
+    "offset_misses": 4695
+  },
+  "success": "Sequential telemetry-enabled Tier0/1 remain complete and external DRC clean; measure preparation and end-to-end time against Round13."
+}

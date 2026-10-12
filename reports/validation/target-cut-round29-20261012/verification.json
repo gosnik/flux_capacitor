@@ -1,0 +1,90 @@
+{
+  "compile": "PASS",
+  "command": "replay_target_cut ft2232h_jtag.kicad_pcb global-result.json telemetry.jsonl 50000 0.25 saved reverse",
+  "cases": 11,
+  "baseline_exact_drc": 6,
+  "new_exact_drc_all_cases": 0,
+  "results": [
+    {
+      "group": "9",
+      "complete": false,
+      "expansions": 479,
+      "pad_preserved": true,
+      "opens": 1
+    },
+    {
+      "group": "90",
+      "complete": true,
+      "expansions": 20538,
+      "pad_preserved": true,
+      "opens": 0
+    },
+    {
+      "group": "97",
+      "complete": true,
+      "expansions": 9328,
+      "pad_preserved": true,
+      "opens": 0
+    },
+    {
+      "group": "98",
+      "complete": false,
+      "expansions": 3205,
+      "pad_preserved": true,
+      "opens": 1
+    },
+    {
+      "group": "9,90",
+      "complete": false,
+      "expansions": 20301,
+      "pad_preserved": false,
+      "opens": 1
+    },
+    {
+      "group": "9,97",
+      "complete": true,
+      "expansions": 9328,
+      "pad_preserved": true,
+      "opens": 0
+    },
+    {
+      "group": "9,98",
+      "complete": false,
+      "expansions": 3205,
+      "pad_preserved": true,
+      "opens": 1
+    },
+    {
+      "group": "90,97",
+      "complete": true,
+      "expansions": 12515,
+      "pad_preserved": true,
+      "opens": 0
+    },
+    {
+      "group": "90,98",
+      "complete": true,
+      "expansions": 25206,
+      "pad_preserved": false,
+      "opens": 1
+    },
+    {
+      "group": "97,98",
+      "complete": true,
+      "expansions": 28831,
+      "pad_preserved": true,
+      "opens": 0
+    },
+    {
+      "group": "9,90,97,98",
+      "complete": true,
+      "expansions": 32335,
+      "pad_preserved": true,
+      "opens": 0
+    }
+  ],
+  "git_revision": "b413814",
+  "routing_implementation_revision": "a24444c",
+  "production_direction_selection": "not yet enabled; incoming request reversed explicitly by diagnostic",
+  "promotion": "offline straight scaffold proof only; final curved and external KiCad validation pending"
+}

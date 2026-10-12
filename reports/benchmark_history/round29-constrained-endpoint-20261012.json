@@ -1,0 +1,20 @@
+{
+  "baseline_revision": "b413814",
+  "experiment": "unconditional constrained endpoint maze search",
+  "artifact_root": "reports/validation/constrained-endpoint-round29-20261012",
+  "outcome": "rejected_unconditional_direction_policy",
+  "tier0": {
+    "passed": true,
+    "detail_seconds": 30.534002917003818,
+    "opens": 0,
+    "copper_byte_identical": true
+  },
+  "tier1": {
+    "status": "aborted_by_operator_for_performance_regression",
+    "last_telemetry_seconds": 277.316096,
+    "completed": null
+  },
+  "tier2": {
+    "status": "not_run_lower_tier_regression"
+  }
+}

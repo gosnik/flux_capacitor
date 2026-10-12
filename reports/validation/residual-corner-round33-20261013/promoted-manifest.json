@@ -1,0 +1,8 @@
+{
+  "path": "tests/fixtures/routing-corpus/manifest.json",
+  "sha256": "7f22fc3e898a52b120d7ae282bc2049ee830abe6c14b5176437061a34e4e3561",
+  "tier2": "qualified",
+  "tier3": "unlocked",
+  "tier2_probe_iterations": 30,
+  "tier2_detail_iterations": 30
+}

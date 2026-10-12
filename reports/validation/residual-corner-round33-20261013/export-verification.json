@@ -1,0 +1,13 @@
+{
+  "baseline_manifest_command": "python3 tests/python/test_routing_baseline_manifest.py --flux-cli build/release/flux-cli --corpus tests/fixtures/routing-corpus --verifier tests/python/verify_routing_corpus.py",
+  "baseline_manifest": "PASS",
+  "export_command": "export_scaffold gb_nintendo_power.kicad_pcb tier3/telemetry/gb_nintendo_power-global.jsonl tier3/diagnostic-scaffold/gb_nintendo_power.kicad_pcb",
+  "drc_command": "kicad-cli pcb drc --format json --output gb_nintendo_power-drc.json gb_nintendo_power.kicad_pcb",
+  "inspect_command": "build/release/flux-cli inspect-kicad gb_nintendo_power.kicad_pcb",
+  "export_exit": 0,
+  "drc_exit": 0,
+  "inspect_exit": 0,
+  "drc": {"violations": 28, "unconnected_items": 97, "categories": {"lib_footprint_issues": 22, "silk_overlap": 6}},
+  "inspect": {"open_connections": 97, "tracks": 279, "vias": 20, "core_validation_errors": 0, "import_warnings": 19},
+  "hashes": "hashes.sha256"
+}

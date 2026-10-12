@@ -112,7 +112,7 @@
     {
       "id": "ft2232h_jtag",
       "level": 2,
-      "status": "unlocked",
+      "status": "qualified",
       "qualification": "detailed_complete",
       "kicad_routing_tools_set": "set5",
       "repo": "thecasterian/FT2232-JTAG-UART",
@@ -141,7 +141,7 @@
         "min_track_arcs": 1,
         "max_unrounded_non_junction_bends": 0
       },
-      "note": "FT2232H dual JTAG/UART adapter: compact 64-pin fine-pitch fanout and USB interface; clean routed reference.",
+      "note": "Qualified curved routing with zero opens, internal copper violations, unrounded non-junction bends and external KiCad DRC errors. Retained physical demands expand the canonical 117 connections.",
       "source_corpus_commit": "ec2bf0e1021c0ed95c45b14664d02c56777a0974",
       "preparation": {
         "method": "KiCadRoutingTools tests/stress/prep_set2.py",
@@ -149,12 +149,14 @@
         "compatibility_change": "Passed null OUTLINE_ERROR_HANDLER before the allow-arcs boolean to match the KiCad 9 GetBoardPolygonOutlines overload. Resolved swig_compat import against the pinned checkout.",
         "result": "Normalized source and retained routed reference; stripped tracks, vias and copper zones, retained rule areas; rebuilt Edge.Cuts and removed non-routing board graphics. Original PCB and project retained under source/. Source rules and placements were not edited."
       },
-      "probe_timeout_seconds": 7200
+      "probe_timeout_seconds": 7200,
+      "probe_iterations": 30,
+      "detail_iterations": 30
     },
     {
       "id": "gb_nintendo_power",
       "level": 3,
-      "status": "locked",
+      "status": "unlocked",
       "qualification": "detailed_complete",
       "kicad_routing_tools_set": "set24",
       "repo": "RWeick/DMG-A20-01-Nintendo-Power-Cartridge",

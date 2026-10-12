@@ -1,0 +1,56 @@
+{
+  "round": 33,
+  "decision": "keep and promote Tier2",
+  "source_manifest": "reports/validation/residual-corner-round33-20261013/source-build.json",
+  "validation": {
+    "tests_passed": 11,
+    "implementation_review": "pass",
+    "promotion_review": "pass",
+    "source_drift": [],
+    "tier2_harness_exit": 1,
+    "tier2_harness_reason": "explicit unlocked-tier promotion guard, after all qualification gates passed",
+    "tier2_authoritative_drc_errors": 0,
+    "tier2_authoritative_drc_opens": 0,
+    "manifest_preflight": "pass",
+    "tier3_independent_drc": {
+      "opens": 97,
+      "inherited_lib_footprint_issues": 22,
+      "inherited_silk_overlap": 6,
+      "added_routing_violations": 0
+    }
+  },
+  "tier0": {
+    "pass": true,
+    "byte_identical": true,
+    "detail_seconds": 30.879097197030205
+  },
+  "tier1": {
+    "pass": true,
+    "byte_identical": true,
+    "detail_seconds": 106.8092667980236
+  },
+  "tier2": {
+    "pass": true,
+    "global_seconds": 161.16048564302037,
+    "detail_seconds": 224.1662296570139,
+    "open_connections": 0,
+    "copper_violations": 0,
+    "unrounded_bends": 0,
+    "tracks": 889,
+    "arcs": 164,
+    "beziers": 421,
+    "vias": 75,
+    "peak_rss_kib": 725652,
+    "copper_sha256": "366565e9a86fcdf6b9ccaa39d163db05a298d626a23d42950ddcd5a7325f9b78"
+  },
+  "tier3": {
+    "pass": false,
+    "global_seconds": 140.7074613069999,
+    "open_connections": 97,
+    "scaffold_satisfied": 51,
+    "scaffold_requested": 148,
+    "tracks": 279,
+    "vias": 20,
+    "peak_rss_kib": 559696
+  }
+}

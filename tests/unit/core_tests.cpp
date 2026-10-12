@@ -1824,6 +1824,34 @@ void physical_probe_preserves_native_coordinate_clearance() {
   }
 }
 
+void arc_pad_quantization_guard_tracks_actual_core_rounding() {
+  const auto pad = [](Microdegrees rotation) {
+    return flux::CopperPadShape{ObjectId{"arc-pad"},
+                                 NetId{"arc-pad-net"},
+                                 Point{Nanometres{0}, Nanometres{0}},
+                                 {LayerId{"F.Cu"}},
+                                 flux::PadShape::rectangle,
+                                 Nanometres{1'000'000},
+                                 Nanometres{1'000'000},
+                                 Nanometres{0},
+                                 rotation,
+                                 0.0L};
+  };
+  const auto axis_aligned_gap = flux::circular_arc_to_pad_copper_distance_nm(
+      Point{Nanometres{-1'175'000}, Nanometres{2'000'000}},
+      Point{Nanometres{0}, Nanometres{825'000}},
+      Point{Nanometres{1'175'000}, Nanometres{2'000'000}}, pad(Microdegrees{0}));
+  require(axis_aligned_gap == 325'000.0L,
+          "an exact-integer pad core must not lose clearance to a blanket arc rounding guard");
+  const auto rotated_gap = flux::circular_arc_to_pad_copper_distance_nm(
+      Point{Nanometres{-1'175'000}, Nanometres{-2'207'107}},
+      Point{Nanometres{0}, Nanometres{-1'032'107}},
+      Point{Nanometres{1'175'000}, Nanometres{-2'207'107}},
+      pad(Microdegrees{45'000'000}));
+  require(rotated_gap == 324'999.0L,
+          "a fractional rotated core must retain the one-nanometre ceil rounding guard");
+}
+
 void kicad_clearance_epsilon_is_final_validation_only() {
   const auto board_with_gap = [](std::int64_t gap_nm) {
     Board board;
@@ -11413,6 +11441,8 @@ int main(int argc, char** argv) {
       {"default_planar_pitch_uses_scoped_source_rules", default_planar_pitch_uses_scoped_source_rules},
       {"regional_candidate_ranker_is_schema_bound_and_deterministic",
        regional_candidate_ranker_is_schema_bound_and_deterministic},
+      {"arc_pad_quantization_guard_tracks_actual_core_rounding",
+       arc_pad_quantization_guard_tracks_actual_core_rounding},
       {"kicad_clearance_epsilon_is_final_validation_only",
        kicad_clearance_epsilon_is_final_validation_only},
       {"source_bound_board_rules_control_geometry_and_hole_clearance",

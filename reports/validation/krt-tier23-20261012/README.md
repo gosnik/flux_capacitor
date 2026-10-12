@@ -35,3 +35,18 @@ Tier2's41 library-footprint warnings and Tier3's22 library-footprint/6silkscreen
 KRT source is a clean snapshot of committed revision `023d3f79027d5406e4ea8e68291f588c5c135673` from the local installation. The installation's uncommitted QFN patch was deliberately excluded and left untouched. Its installed native `grid_router.so` was copied and hashed. `source-manifest.json` records the exact Python/native inputs. A new checkout of that revision plus the recorded native build is required to regenerate the untracked source snapshot; the runner does not download or modify the installed checkout.
 
 Flux source/build/results are linked by `../residual-frontier-round27-20261012/source-build.json`, `summary.json`, `export-verification.json`, and the `codex/residual-frontier-round-27` tag. Its provisional copper and KiCad reports are in the corresponding `tier2/diagnostic-scaffold/` and `tier3/diagnostic-scaffold/` folders.
+
+## Subsequent Flux progress (Round32, 2026-10-13)
+
+The comparison above retains its original Round27 measurements. Round31's exhausted-pocket blocker diagnosis subsequently closed Tier2's last physical connection. Round32 retained curved materialization:131/131 scaffold requests, zero opens,889 tracks,163 arcs,421 Beziers and75 vias. Global command166.07s; separate detailed command225.25s (which repeats planning), so these are not additive stages within one routing call. Diagnostic KiCad error-severity DRC found zero errors/opens. One unresolved non-junction corner still prevents Tier2 promotion. Tier0/1 remained byte-identical and clean. See `../final-drc-parity-round32-20261013/summary.json`. Tier3 has not been rerun since the original comparison.
+
+## Current comparison after Tier2 promotion (Round33)
+
+| Board/router | Routing command wall time | Physical opens | Outcome |
+|---|---:|---:|---|
+| Tier2 Flux Round33 |224.17s detailed end-to-end|0|Pass:421 Beziers,164 arcs,75vias; zero unrounded bends and KiCad DRC errors|
+| Tier2 KRT matched |14.77s|10|Incomplete|
+| Tier3 Flux Round33 |140.71s global/scaffold attempt|97|Incomplete; no final materialization|
+| Tier3 KRT matched |162.17s|83|Incomplete|
+
+Flux's additional standalone Tier2 global command took161.16s; it is a separate repeated benchmark, not additional time inside the224.17s detailed command. Tier0/1 stayed byte-identical and DRC-clean. Configuration caveats from the original matched comparison still apply. `../residual-corner-round33-20261013/` holds the new evidence and final Tier2 board.

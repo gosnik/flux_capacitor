@@ -214,6 +214,21 @@ struct RoundedCore {
   return result;
 }
 
+// The arc predicates operate on integer endpoints, so polygonal core vertices are rounded
+// before their segment distances are measured.  The maximum vertex displacement bounds the
+// Hausdorff displacement of a point, segment, or convex polygon core.  Subtracting its ceiling
+// therefore keeps the reported gap conservative without charging exact integer cores.
+[[nodiscard]] long double rounded_core_quantization_guard_nm(const RoundedCore& core) {
+  auto maximum_displacement = 0.0L;
+  for (const auto& vertex : core.vertices) {
+    const auto rounded = Point{Nanometres{static_cast<std::int64_t>(std::llround(vertex.x))},
+                               Nanometres{static_cast<std::int64_t>(std::llround(vertex.y))}};
+    maximum_displacement = std::max(maximum_displacement,
+                                    vector_distance(vertex, as_vector(rounded)));
+  }
+  return std::ceil(maximum_displacement);
+}
+
 [[nodiscard]] long double circular_arc_core_distance(Point start, Point middle, Point end,
                                                      const RoundedCore& core) {
   if (core.vertices.size() == 1U) {
@@ -513,12 +528,8 @@ long double segment_to_pad_copper_distance_nm(Point start, Point end, const Copp
 long double circular_arc_to_pad_copper_distance_nm(Point start, Point middle, Point end,
                                                    const CopperPadShape& pad) {
   const auto core = pad_core(pad);
-  // Polygonal pad cores are rotated in long double and then quantized for the
-  // canonical arc/segment predicates.  Keep rule acceptance conservative at
-  // that integer boundary instead of allowing rounding to create clearance.
-  constexpr long double quantization_guard_nm = 2.0L;
   return std::max(0.0L, circular_arc_core_distance(start, middle, end, core) - core.radius_nm -
-                            quantization_guard_nm);
+                            rounded_core_quantization_guard_nm(core));
 }
 
 long double pad_to_pad_copper_distance_nm(const CopperPadShape& lhs, const CopperPadShape& rhs) {

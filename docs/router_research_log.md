@@ -9887,3 +9887,21 @@ Summed worker Boolean time fell23.418→0.778s and86.834→2.903s; total navigat
 Tier0 copper is byte-identical. Tier1 copper differs:490 tracks,124 arcs,355 Beziers and57 vias versus442/105/408/57. KiCad centreline length rises902.748→904.299mm (+0.172%). Front/back copper renders were inspected: long runs remain direct with rounded turns, without obvious new loops; short segmented transitions remain in places. Exact checks pass. The cause of the changed decomposition was not isolated; grouping and runtime-sensitive candidate processing changed, so this is not claimed as a byte-preserving optimization on Tier1.
 
 Tier1 global/scaffold actions now consume about87s and materialization45s. Summed NavMesh construction39.628s and trajectory35.754s outweigh Boolean preparation. Tier2 was not rerun because its known search failure precedes materialization. Detailed evidence is in `reports/benchmark_history/2026-10-12-boolean-cache-round15.json`.
+
+## Round 16 — Lazy NavMesh construction for certified corridors (2026-10-12)
+
+### Failure and hypothesis
+Round15 passes Tier0/1, but Tier1 records5147 prepared NavMesh builds with zero hits and39.628s of summed navigation work. `refine_spline_run` constructs a full search lattice before selecting the certified source corridor; downstream clearance queries only need prepared boundary geometry. Reordering this decision should eliminate unused lattices without changing acceptance rules.
+
+### Change
+Expose geometry-only preparation through the existing bounded, exact-region cache. Certified source corridors use this geometry for exact clearance probes. Construct the full lattice only when no source corridor is available. Full-domain preparation shares the same geometry API, preserving concurrent request coalescing, validation mode isolation, and memory limits.
+
+### Verification
+Independent review found no material correctness, clearance, fallback, or concurrency issue. Geometry-only preparation intentionally returns a domain with no lattice: `PreparedNavMeshDomain::ok()` remains the searchable-domain predicate and returns false for this object; consumers use its geometry and diagnostic. Public API comments document the non-searchable contract. All11 regression targets passed, including new point-query parity through holes/outside the board, no-lattice assertions, repeated geometry reuse and full-mesh reuse of that geometry. The final build was a no-op; frozen source hashes have no drift.
+
+### Results and decision
+Keep this focused work-elimination change. Sequential curved Tier0 and Tier1 telemetry runs pass51/51 and90/90 physical connections. Both final boards are byte-identical to Round15, with zero opens, internal copper violations, external KiCad violations/unconnected items, and unrounded non-junction bends. Route lengths and copper/via counts are unchanged; no new visual claim is needed for identical copper.
+
+Tier0 full prepared-mesh builds fell218→168; summed navigation work12.403→11.071s, materialization15.888→15.722s and detailed-command wall time31.430→31.178s. Tier1 full builds fell5147→5076; summed navigation work39.628→28.943s (-26.96%), materialization45.145→42.274s (-6.36%). However total detailed-command time rose133.248→135.310s (+1.55%): unchanged global/scaffold actions took91.908s versus87.0s. This single run supports the targeted mechanism but does not demonstrate an end-to-end speedup. Worker timers overlap and are not additive wall-time phases.
+
+PeakRSS was636288→628588KiB and639648→639596KiB. Separate preliminary global commands took15.264s and92.387s, excluded from detailed-command timing. No builds/tests or tier processes overlapped the benchmarks. Tier2 was not rerun because its known frontier failure precedes materialization. Remaining full mesh builds largely occur outside successful certified-corridor selection; this optimization cannot remove those without changing fallback behavior. Global/scaffold work remains the principal wall-time target. Evidence is recorded in `reports/benchmark_history/2026-10-12-lazy-navmesh-round16.json`.

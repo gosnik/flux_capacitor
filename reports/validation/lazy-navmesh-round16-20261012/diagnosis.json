@@ -1,0 +1,11 @@
+{
+  "failure": "Tier1 passes but prepares full search lattices before selecting certified source corridors.",
+  "evidence": {
+    "tier1_detail_seconds": 133.248324,
+    "navmesh_worker_seconds": 39.628413,
+    "prepared_builds": 5147,
+    "prepared_hits": 0
+  },
+  "hypothesis": "Geometry-only clearance guards avoid unused cell decomposition and adjacency while retaining exact curve checks.",
+  "acceptance": "Sequential curved Tier0/1 pass with zero opens and KiCad DRC violations; regression tests pass; measure lattice build reduction and wall time."
+}

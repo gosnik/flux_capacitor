@@ -337,6 +337,11 @@ public:
   prepare(const OffsetFreeSpaceRegion& region, const NavMeshConfig& config,
           bool validate_source_topology = true);
 
+  // Returns only immutable free-space boundary geometry and its acceleration structures. It does
+  // not construct cells, adjacency, or any searchable NavMesh lattice.
+  [[nodiscard]] std::shared_ptr<const PreparedNavMeshDomain>
+  prepare_geometry(const OffsetFreeSpaceRegion& region, bool validate_source_topology = true);
+
   [[nodiscard]] Stats stats() const;
 
   // Internal support for the NavMesh builder.  The returned values preserve the ordinary exact
@@ -481,6 +486,11 @@ validate_navmesh_topology_signature(const NavMeshTopologySignature& signature,
 
 [[nodiscard]] PreparedNavMeshDomain prepare_navmesh_domain(const OffsetFreeSpaceRegion& region,
                                                            const NavMeshConfig& config = {});
+
+// Prepares only immutable free-space boundary geometry and its acceleration structures. The
+// returned domain contains no cells or searchable NavMesh lattice.
+[[nodiscard]] PreparedNavMeshDomain
+prepare_navmesh_geometry(const OffsetFreeSpaceRegion& region, bool validate_source_topology = true);
 
 // Fast path for a region returned by offset_polygonal_free_space(). That producer has already
 // exact-validated polygon simplicity, strict hole containment and pairwise disjointness. The cell

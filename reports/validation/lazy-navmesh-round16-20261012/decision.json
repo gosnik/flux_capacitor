@@ -1,0 +1,25 @@
+{
+  "decision": "keep",
+  "hypothesis": "supported for eliminating unnecessary lattice work; end-to-end speedup not demonstrated in this single run",
+  "reason": "Both tiers preserve byte-identical copper and pass internal and external exact validation. Tier1 navigation work decreases27% and materialization6.36%, while unchanged scaffold search varies upward.",
+  "tier0": {
+    "prepared_builds_before": 218,
+    "prepared_builds_after": 168,
+    "materialize_seconds_before": 15.887885,
+    "materialize_seconds_after": 15.722095
+  },
+  "tier1": {
+    "prepared_builds_before": 5147,
+    "prepared_builds_after": 5076,
+    "navigation_worker_seconds_before": 39.628413,
+    "navigation_worker_seconds_after": 28.943376,
+    "materialize_seconds_before": 45.145147,
+    "materialize_seconds_after": 42.274496,
+    "detail_seconds_before": 133.2483241779846,
+    "detail_seconds_after": 135.30979330296395
+  },
+  "quality": "Both boards byte-identical to Round15; zero opens, copper violations, external KiCad violations/unconnected items, unrounded non-junction bends.",
+  "measurement_limit": "Single sequential runs, worker sums overlap; do not infer end-to-end acceleration.",
+  "next_bottleneck": "Global/scaffold search dominates wall time; most remaining lattice builds are fallback or non-certified candidates, so enlarging the cache alone is unlikely to help.",
+  "tier2": "Not rerun; no claim of advancing search frontier."
+}

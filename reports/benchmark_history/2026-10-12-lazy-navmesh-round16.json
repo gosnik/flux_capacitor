@@ -1,0 +1,467 @@
+{
+  "round": 16,
+  "experiment": "lazy-navmesh-for-certified-corridors",
+  "recorded_at": "2026-10-12T05:42:34.836719+00:00",
+  "git_revision": "e8528c953c3ec692017979d88a718529f9742806",
+  "revision_note": "Pre-commit HEAD; frozen source hashes identify tested implementation.",
+  "binary_sha256": "90bf45d8e63a32ce54272494c9f815639d72cf04420ea050df9033d583a35797",
+  "frozen_source_manifest_sha256": "2522916e994ec74dd50493e6b6ba648b2aeb81be18275c78bad350c4bf072d65",
+  "configuration": {
+    "sequential": true,
+    "telemetry": "diagnostic",
+    "curved": true,
+    "routing_timeout_seconds": 900,
+    "external_kicad_drc": true
+  },
+  "diagnosis": {
+    "failure": "Tier1 passes but prepares full search lattices before selecting certified source corridors.",
+    "evidence": {
+      "tier1_detail_seconds": 133.248324,
+      "navmesh_worker_seconds": 39.628413,
+      "prepared_builds": 5147,
+      "prepared_hits": 0
+    },
+    "hypothesis": "Geometry-only clearance guards avoid unused cell decomposition and adjacency while retaining exact curve checks.",
+    "acceptance": "Sequential curved Tier0/1 pass with zero opens and KiCad DRC violations; regression tests pass; measure lattice build reduction and wall time."
+  },
+  "validation": {
+    "build_command": "cmake --build build/release -j4 --target flux-cli flux_unit_tests flux_copper_transaction_tests flux_span_certificate_tests flux_board_free_space_cache_tests flux_ph_tightening_tests flux_layered_navmesh_tests flux_copper_scaffold_tests flux_scaffold_curve_tests flux_scaffold_collision_tests flux_routing_engine_experiment_tests flux_scaffold_joint_displacement_tests",
+    "build_status": "PASS",
+    "ctest_command": "ctest --test-dir build/release -j1 --output-on-failure -R '^(flux_unit_tests|flux_copper_transaction_tests|flux_span_certificate_tests|flux_board_free_space_cache_tests|flux_ph_tightening_tests|flux_layered_navmesh_tests|flux_copper_scaffold_tests|flux_scaffold_curve_tests|flux_scaffold_collision_tests|flux_routing_engine_experiment_tests|flux_scaffold_joint_displacement_tests)$'",
+    "ctest_status": "PASS",
+    "ctest_passed": 11,
+    "ctest_failed": 0,
+    "build_log": "reports/validation/lazy-navmesh-round16-20261012/build.log",
+    "ctest_log": "reports/validation/lazy-navmesh-round16-20261012/ctest.log",
+    "noop_build_log": "reports/validation/lazy-navmesh-round16-20261012/noop-build.log",
+    "noop_build_status": "PASS",
+    "cli_sha256": "90bf45d8e63a32ce54272494c9f815639d72cf04420ea050df9033d583a35797",
+    "independent_review": "No material correctness, clearance, fallback, or concurrency findings. Geometry-only domain intentionally has no searchable cells; ok() remains a full-domain predicate.",
+    "freeze_verify": {
+      "status": "PASS",
+      "drift": []
+    }
+  },
+  "comparison": {
+    "tier0": {
+      "baseline_detail_seconds": 31.43013977597002,
+      "detail_seconds": 31.177534668007866,
+      "baseline_global_seconds": 15.224103642976843,
+      "global_seconds": 15.26386965304846,
+      "change_percent": -0.8037034189561032,
+      "complete": true,
+      "stop_reason": "complete",
+      "open_connections": 0,
+      "counts": {
+        "added_track_arcs": 24,
+        "added_track_beziers": 396,
+        "added_tracks": 162,
+        "added_vias": 3,
+        "copper_violation_counts": {},
+        "copper_violations": 0,
+        "unrounded_non_junction_bends": 0
+      },
+      "kicad": {
+        "available": true,
+        "violations": 0,
+        "unconnected_items": 0,
+        "categories": {}
+      },
+      "copper_byte_identical": true,
+      "copper_sha256": "5cf4171660a299dd37781fcf55376fd42c054c41f6fcdf0eba543744743b745c",
+      "peak_rss_kib": 628588,
+      "baseline_peak_rss_kib": 636288,
+      "baseline_navigation_preparation_microseconds": 1370326,
+      "timings_and_gpu": {
+        "incremental_transaction_affected_nets": 195,
+        "incremental_transaction_changed_objects": 2074,
+        "incremental_transaction_checks": 195,
+        "incremental_transaction_connectivity_hits": 57,
+        "incremental_transaction_full_fallbacks": 0,
+        "incremental_transaction_neighbours": 1879,
+        "residual_bend_repair_microseconds": 956095,
+        "spline_clearance_batch_microseconds": 167443,
+        "spline_clearance_batch_queries": 767232,
+        "spline_clearance_cpu_fallbacks": 16,
+        "spline_clearance_gpu_dispatches": 161,
+        "spline_clearance_resident_reuses": 138,
+        "spline_clearance_resident_uploads": 23,
+        "spline_envelope_cpu_fallbacks": 0,
+        "spline_envelope_gpu_dispatches": 1424,
+        "spline_envelope_microseconds": 1786117,
+        "spline_envelope_proven_clear": 9892,
+        "spline_envelope_queries": 10771,
+        "spline_envelope_resident_reuses": 1422,
+        "spline_envelope_resident_uploads": 2,
+        "spline_equivalent_candidates_skipped": 2414,
+        "spline_exact_merge_microseconds": 2181184,
+        "spline_free_space_boolean_contour_extraction_microseconds": 88245,
+        "spline_free_space_boolean_conversion_microseconds": 8680,
+        "spline_free_space_boolean_offset_preparation_microseconds": 20801,
+        "spline_free_space_boolean_operations_microseconds": 769733,
+        "spline_free_space_boolean_subtraction_microseconds": 63930,
+        "spline_free_space_boolean_union_microseconds": 578753,
+        "spline_free_space_clearance_certificate_hits": 1048,
+        "spline_free_space_clearance_certificate_misses": 180,
+        "spline_free_space_input_validation_hits": 32,
+        "spline_free_space_input_validation_microseconds": 4018,
+        "spline_free_space_input_validation_misses": 32,
+        "spline_free_space_outline_cache_hits": 61,
+        "spline_free_space_outline_cache_misses": 3,
+        "spline_free_space_output_validation_microseconds": 551330,
+        "spline_free_space_preparation_microseconds": 2476,
+        "spline_free_space_prepared_domain_hits": 32,
+        "spline_free_space_prepared_domain_misses": 32,
+        "spline_free_space_prepared_source_hits": 12735,
+        "spline_free_space_prepared_source_misses": 2452,
+        "spline_free_space_union_cache_hits": 23341,
+        "spline_free_space_union_cache_misses": 5153,
+        "spline_gpu_polish_batches": 1145,
+        "spline_gpu_polish_candidates": 79235,
+        "spline_gpu_polish_cpu_fallbacks": 0,
+        "spline_gpu_polish_dispatches": 985,
+        "spline_gpu_polish_exact_shortlist_checks": 9160,
+        "spline_gpu_polish_microseconds": 1555826,
+        "spline_gpu_precondition_accepted": 12,
+        "spline_gpu_precondition_attempts": 59,
+        "spline_gpu_precondition_cpu_fallbacks": 0,
+        "spline_gpu_precondition_dispatches": 59,
+        "spline_gpu_precondition_legal": 12,
+        "spline_gpu_precondition_solve_us": 17184,
+        "spline_navigation_mesh_microseconds": 11070989,
+        "spline_navigation_preparation_microseconds": 1340872,
+        "spline_navmesh_geometry_builds": 53,
+        "spline_navmesh_geometry_hits": 165,
+        "spline_navmesh_prepared_builds": 168,
+        "spline_navmesh_prepared_evictions": 9,
+        "spline_navmesh_prepared_hits": 0,
+        "spline_navmesh_prepared_waits": 0,
+        "spline_non_improving_candidates_skipped": 3118,
+        "spline_obstacle_geometry_hits": 52,
+        "spline_obstacle_geometry_misses": 4,
+        "spline_obstacle_offset_hits": 24297,
+        "spline_obstacle_offset_misses": 4261,
+        "spline_realization_microseconds": 15487770,
+        "spline_route_refinement_microseconds": 46006151,
+        "spline_screening_batched_chords": 128599,
+        "spline_screening_batches": 51,
+        "spline_screening_cache_hits": 10966,
+        "spline_screening_cache_misses": 128599,
+        "spline_screening_coalesced_waits": 52303,
+        "spline_screening_gpu_dispatches": 685,
+        "spline_screening_gpu_pruned_work_items": 140443010,
+        "spline_screening_gpu_work_items": 6850200,
+        "spline_screening_microseconds": 650091,
+        "spline_screening_resident_reuses": 665,
+        "spline_screening_resident_uploads": 20,
+        "spline_span_certificate_cache_hits": 18687,
+        "spline_span_certificate_cache_misses": 12280,
+        "spline_trajectory_microseconds": 22231847
+      },
+      "retained_scaffold_search": {
+        "access_generation_microseconds": 6074,
+        "attachment_generation_microseconds": 4102,
+        "attachment_search_early_successes": 0,
+        "attachment_search_probes": 270,
+        "attachment_search_rounds": 1,
+        "compact_search_expansions": 24,
+        "domain_build_microseconds": 203,
+        "duplicate_rejected_assemblies": 0,
+        "edge_validation_microseconds": 4463,
+        "exact_goal_validation_microseconds": 27075,
+        "expansions": 24,
+        "search_microseconds": 28794,
+        "source_attachments": 128,
+        "target_attachments": 128
+      },
+      "baseline_engine_phases": [
+        {
+          "action": "global",
+          "elapsed_microseconds": 10569422,
+          "work_units": 7717
+        },
+        {
+          "action": "copper-scaffold",
+          "elapsed_microseconds": 2010631,
+          "work_units": 4639
+        },
+        {
+          "action": "copper-scaffold",
+          "elapsed_microseconds": 1898431,
+          "work_units": 682
+        },
+        {
+          "action": "materialize",
+          "elapsed_microseconds": 15887885,
+          "work_units": 6320
+        }
+      ],
+      "engine_phases": [
+        {
+          "action": "global",
+          "elapsed_microseconds": 10585893,
+          "work_units": 7717
+        },
+        {
+          "action": "copper-scaffold",
+          "elapsed_microseconds": 1949770,
+          "work_units": 4639
+        },
+        {
+          "action": "copper-scaffold",
+          "elapsed_microseconds": 1860448,
+          "work_units": 682
+        },
+        {
+          "action": "materialize",
+          "elapsed_microseconds": 15722095,
+          "work_units": 6320
+        }
+      ]
+    },
+    "tier1": {
+      "baseline_detail_seconds": 133.2483241779846,
+      "detail_seconds": 135.30979330296395,
+      "baseline_global_seconds": 92.92047447798541,
+      "global_seconds": 92.38675061595859,
+      "change_percent": 1.5470882187049284,
+      "complete": true,
+      "stop_reason": "complete",
+      "open_connections": 0,
+      "counts": {
+        "added_track_arcs": 124,
+        "added_track_beziers": 355,
+        "added_tracks": 490,
+        "added_vias": 57,
+        "copper_violation_counts": {},
+        "copper_violations": 0,
+        "unrounded_non_junction_bends": 0
+      },
+      "kicad": {
+        "available": true,
+        "violations": 0,
+        "unconnected_items": 0,
+        "categories": {}
+      },
+      "copper_byte_identical": true,
+      "copper_sha256": "f27560d09628a1871b896af0a1974bd7618f0e39824fb46e854880485b12463a",
+      "peak_rss_kib": 639596,
+      "baseline_peak_rss_kib": 639648,
+      "baseline_navigation_preparation_microseconds": 3498492,
+      "timings_and_gpu": {
+        "incremental_transaction_affected_nets": 398,
+        "incremental_transaction_changed_objects": 2374,
+        "incremental_transaction_checks": 398,
+        "incremental_transaction_connectivity_hits": 88,
+        "incremental_transaction_full_fallbacks": 0,
+        "incremental_transaction_neighbours": 5350,
+        "residual_bend_repair_microseconds": 4570334,
+        "spline_clearance_batch_microseconds": 344259,
+        "spline_clearance_batch_queries": 1397888,
+        "spline_clearance_cpu_fallbacks": 29,
+        "spline_clearance_gpu_dispatches": 132,
+        "spline_clearance_resident_reuses": 76,
+        "spline_clearance_resident_uploads": 56,
+        "spline_envelope_cpu_fallbacks": 0,
+        "spline_envelope_gpu_dispatches": 1455,
+        "spline_envelope_microseconds": 1122609,
+        "spline_envelope_proven_clear": 13045,
+        "spline_envelope_queries": 16933,
+        "spline_envelope_resident_reuses": 1455,
+        "spline_envelope_resident_uploads": 0,
+        "spline_equivalent_candidates_skipped": 1930,
+        "spline_exact_merge_microseconds": 2718835,
+        "spline_free_space_boolean_contour_extraction_microseconds": 350616,
+        "spline_free_space_boolean_conversion_microseconds": 15254,
+        "spline_free_space_boolean_offset_preparation_microseconds": 36766,
+        "spline_free_space_boolean_operations_microseconds": 2905394,
+        "spline_free_space_boolean_subtraction_microseconds": 258175,
+        "spline_free_space_boolean_union_microseconds": 2217302,
+        "spline_free_space_clearance_certificate_hits": 5589,
+        "spline_free_space_clearance_certificate_misses": 503,
+        "spline_free_space_input_validation_hits": 85,
+        "spline_free_space_input_validation_microseconds": 14401,
+        "spline_free_space_input_validation_misses": 66,
+        "spline_free_space_outline_cache_hits": 147,
+        "spline_free_space_outline_cache_misses": 4,
+        "spline_free_space_output_validation_microseconds": 548651,
+        "spline_free_space_preparation_microseconds": 9647,
+        "spline_free_space_prepared_domain_hits": 86,
+        "spline_free_space_prepared_domain_misses": 66,
+        "spline_free_space_prepared_source_hits": 41292,
+        "spline_free_space_prepared_source_misses": 2540,
+        "spline_free_space_union_cache_hits": 81806,
+        "spline_free_space_union_cache_misses": 11822,
+        "spline_gpu_polish_batches": 1461,
+        "spline_gpu_polish_candidates": 90778,
+        "spline_gpu_polish_cpu_fallbacks": 0,
+        "spline_gpu_polish_dispatches": 1169,
+        "spline_gpu_polish_exact_shortlist_checks": 11688,
+        "spline_gpu_polish_microseconds": 1601254,
+        "spline_gpu_precondition_accepted": 42,
+        "spline_gpu_precondition_attempts": 91,
+        "spline_gpu_precondition_cpu_fallbacks": 0,
+        "spline_gpu_precondition_dispatches": 91,
+        "spline_gpu_precondition_legal": 40,
+        "spline_gpu_precondition_solve_us": 24982,
+        "spline_navigation_mesh_microseconds": 28943376,
+        "spline_navigation_preparation_microseconds": 3508339,
+        "spline_navmesh_geometry_builds": 5035,
+        "spline_navmesh_geometry_hits": 112,
+        "spline_navmesh_prepared_builds": 5076,
+        "spline_navmesh_prepared_evictions": 135,
+        "spline_navmesh_prepared_hits": 0,
+        "spline_navmesh_prepared_waits": 0,
+        "spline_non_improving_candidates_skipped": 5357,
+        "spline_obstacle_geometry_hits": 96,
+        "spline_obstacle_geometry_misses": 4,
+        "spline_obstacle_offset_hits": 89286,
+        "spline_obstacle_offset_misses": 4493,
+        "spline_realization_microseconds": 40635552,
+        "spline_route_refinement_microseconds": 132569849,
+        "spline_screening_batched_chords": 755103,
+        "spline_screening_batches": 491,
+        "spline_screening_cache_hits": 154936,
+        "spline_screening_cache_misses": 755103,
+        "spline_screening_coalesced_waits": 314009,
+        "spline_screening_gpu_dispatches": 3131,
+        "spline_screening_gpu_pruned_work_items": 704803191,
+        "spline_screening_gpu_work_items": 21919367,
+        "spline_screening_microseconds": 2425922,
+        "spline_screening_resident_reuses": 3036,
+        "spline_screening_resident_uploads": 95,
+        "spline_span_certificate_cache_hits": 38103,
+        "spline_span_certificate_cache_misses": 21818,
+        "spline_trajectory_microseconds": 35497340
+      },
+      "retained_scaffold_search": {
+        "access_generation_microseconds": 98134,
+        "attachment_generation_microseconds": 41584,
+        "attachment_search_early_successes": 0,
+        "attachment_search_probes": 2411,
+        "attachment_search_rounds": 9,
+        "compact_search_expansions": 32664,
+        "domain_build_microseconds": 2770,
+        "duplicate_rejected_assemblies": 0,
+        "edge_validation_microseconds": 1803146,
+        "exact_goal_validation_microseconds": 296047,
+        "expansions": 32664,
+        "search_microseconds": 2423161,
+        "source_attachments": 1152,
+        "target_attachments": 1152
+      },
+      "baseline_engine_phases": [
+        {
+          "action": "global",
+          "elapsed_microseconds": 31205343,
+          "work_units": 425420
+        },
+        {
+          "action": "copper-scaffold",
+          "elapsed_microseconds": 49501332,
+          "work_units": 2989040
+        },
+        {
+          "action": "copper-scaffold",
+          "elapsed_microseconds": 2146334,
+          "work_units": 19851
+        },
+        {
+          "action": "copper-scaffold",
+          "elapsed_microseconds": 4145003,
+          "work_units": 70132
+        },
+        {
+          "action": "materialize",
+          "elapsed_microseconds": 45145147,
+          "work_units": 13352
+        }
+      ],
+      "engine_phases": [
+        {
+          "action": "global",
+          "elapsed_microseconds": 31508825,
+          "work_units": 425420
+        },
+        {
+          "action": "copper-scaffold",
+          "elapsed_microseconds": 51937480,
+          "work_units": 2989040
+        },
+        {
+          "action": "copper-scaffold",
+          "elapsed_microseconds": 3127611,
+          "work_units": 19851
+        },
+        {
+          "action": "copper-scaffold",
+          "elapsed_microseconds": 5334372,
+          "work_units": 70132
+        },
+        {
+          "action": "materialize",
+          "elapsed_microseconds": 42274496,
+          "work_units": 13352
+        }
+      ]
+    }
+  },
+  "copper_lengths": {
+    "method": "KiCad GetLength on track/arc copper plus net-assigned copper Bezier shapes; excludes via barrels",
+    "kicad_version": "10.0.6-10.0.6~ubuntu26.04.1",
+    "runs": {
+      "boolean-cache-round15-20261012": {
+        "tier0": {
+          "length_mm": 441.2632611961762,
+          "tracks_and_arcs": 186,
+          "net_assigned_copper_beziers": 396
+        },
+        "tier1": {
+          "length_mm": 904.2989845543588,
+          "tracks_and_arcs": 614,
+          "net_assigned_copper_beziers": 355
+        }
+      },
+      "lazy-navmesh-round16-20261012": {
+        "tier0": {
+          "length_mm": 441.2632611961762,
+          "tracks_and_arcs": 186,
+          "net_assigned_copper_beziers": 396
+        },
+        "tier1": {
+          "length_mm": 904.2989845543588,
+          "tracks_and_arcs": 614,
+          "net_assigned_copper_beziers": 355
+        }
+      }
+    }
+  },
+  "decision": {
+    "decision": "keep",
+    "hypothesis": "supported for eliminating unnecessary lattice work; end-to-end speedup not demonstrated in this single run",
+    "reason": "Both tiers preserve byte-identical copper and pass internal and external exact validation. Tier1 navigation work decreases27% and materialization6.36%, while unchanged scaffold search varies upward.",
+    "tier0": {
+      "prepared_builds_before": 218,
+      "prepared_builds_after": 168,
+      "materialize_seconds_before": 15.887885,
+      "materialize_seconds_after": 15.722095
+    },
+    "tier1": {
+      "prepared_builds_before": 5147,
+      "prepared_builds_after": 5076,
+      "navigation_worker_seconds_before": 39.628413,
+      "navigation_worker_seconds_after": 28.943376,
+      "materialize_seconds_before": 45.145147,
+      "materialize_seconds_after": 42.274496,
+      "detail_seconds_before": 133.2483241779846,
+      "detail_seconds_after": 135.30979330296395
+    },
+    "quality": "Both boards byte-identical to Round15; zero opens, copper violations, external KiCad violations/unconnected items, unrounded non-junction bends.",
+    "measurement_limit": "Single sequential runs, worker sums overlap; do not infer end-to-end acceleration.",
+    "next_bottleneck": "Global/scaffold search dominates wall time; most remaining lattice builds are fallback or non-certified candidates, so enlarging the cache alone is unlikely to help.",
+    "tier2": "Not rerun; no claim of advancing search frontier."
+  },
+  "measurement_note": "Single runs against Round15; worker timers overlap and are not additive wall-time stages. Desktop viewer remained running. No concurrent builds/tests or other tier runs.",
+  "tier2": "Not rerun; known search frontier failure precedes curved materialization.",
+  "artifacts": "reports/validation/lazy-navmesh-round16-20261012"
+}

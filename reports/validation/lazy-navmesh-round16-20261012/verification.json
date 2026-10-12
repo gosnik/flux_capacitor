@@ -1,0 +1,18 @@
+{
+  "build_command": "cmake --build build/release -j4 --target flux-cli flux_unit_tests flux_copper_transaction_tests flux_span_certificate_tests flux_board_free_space_cache_tests flux_ph_tightening_tests flux_layered_navmesh_tests flux_copper_scaffold_tests flux_scaffold_curve_tests flux_scaffold_collision_tests flux_routing_engine_experiment_tests flux_scaffold_joint_displacement_tests",
+  "build_status": "PASS",
+  "ctest_command": "ctest --test-dir build/release -j1 --output-on-failure -R '^(flux_unit_tests|flux_copper_transaction_tests|flux_span_certificate_tests|flux_board_free_space_cache_tests|flux_ph_tightening_tests|flux_layered_navmesh_tests|flux_copper_scaffold_tests|flux_scaffold_curve_tests|flux_scaffold_collision_tests|flux_routing_engine_experiment_tests|flux_scaffold_joint_displacement_tests)$'",
+  "ctest_status": "PASS",
+  "ctest_passed": 11,
+  "ctest_failed": 0,
+  "build_log": "reports/validation/lazy-navmesh-round16-20261012/build.log",
+  "ctest_log": "reports/validation/lazy-navmesh-round16-20261012/ctest.log",
+  "noop_build_log": "reports/validation/lazy-navmesh-round16-20261012/noop-build.log",
+  "noop_build_status": "PASS",
+  "cli_sha256": "90bf45d8e63a32ce54272494c9f815639d72cf04420ea050df9033d583a35797",
+  "independent_review": "No material correctness, clearance, fallback, or concurrency findings. Geometry-only domain intentionally has no searchable cells; ok() remains a full-domain predicate.",
+  "freeze_verify": {
+    "status": "PASS",
+    "drift": []
+  }
+}

@@ -9428,6 +9428,60 @@ void navmesh_screening_context_coalesces_snapshot_chords_without_stale_domains()
           "mutating outstanding snapshots");
 }
 
+void geometry_only_navmesh_preparation_preserves_point_queries_and_reuse() {
+  flux::OffsetFreeSpaceRegion region;
+  region.area = rectangle(0, 0, 12, 12);
+  region.holes.push_back(rectangle(3, 3, 5, 9));
+  region.holes.push_back(rectangle(7, 2, 10, 5));
+
+  flux::NavMeshConfig config;
+  config.cell_pitch = Nanometres::from_mm(1.0);
+  config.maximum_cells = 20'000U;
+
+  const auto geometry = flux::prepare_navmesh_geometry(region);
+  const auto full = flux::prepare_navmesh_domain(region, config);
+  const std::vector<Point> probes{
+      mm(1, 1),  // free space
+      mm(4, 6),  // first cutout
+      mm(8, 3),  // second cutout
+      mm(-1, 6), // outside the outline
+      mm(13, 6), // outside the outline
+  };
+  bool point_queries_match = geometry.diagnostic.empty() && geometry.cells.empty() &&
+                             geometry.coordinate_by_cell.empty() &&
+                             geometry.cell_by_coordinate.empty() &&
+                             geometry.cells_by_coordinate.empty() &&
+                             geometry.adjacency_by_cell.empty() && full.ok();
+  for (const auto probe : probes) {
+    const auto geometry_query = flux::query_prepared_navmesh_point(geometry, probe);
+    const auto full_query = flux::query_prepared_navmesh_point(full, probe);
+    point_queries_match = point_queries_match &&
+                          geometry_query.inside == full_query.inside &&
+                          geometry_query.boundary_distance_nm == full_query.boundary_distance_nm;
+  }
+  require(point_queries_match && flux::query_prepared_navmesh_point(geometry, mm(1, 1)).inside &&
+              !flux::query_prepared_navmesh_point(geometry, mm(4, 6)).inside &&
+              !flux::query_prepared_navmesh_point(geometry, mm(8, 3)).inside &&
+              !flux::query_prepared_navmesh_point(geometry, mm(-1, 6)).inside &&
+              !flux::query_prepared_navmesh_point(geometry, mm(13, 6)).inside,
+          "geometry-only NavMesh preparation must preserve full-domain point classification "
+          "through holes and outside the outline without materializing a lattice");
+
+  flux::NavMeshScreeningContext context(20'000U, 2U, 20'000U, 1'000U);
+  const auto initial_geometry = context.prepare_geometry(region);
+  const auto repeated_geometry = context.prepare_geometry(region);
+  const auto after_geometry_reuse = context.stats();
+  const auto prepared = context.prepare(region, config);
+  const auto after_full_prepare = context.stats();
+  require(initial_geometry && repeated_geometry && initial_geometry == repeated_geometry &&
+              initial_geometry->diagnostic.empty() && initial_geometry->cells.empty() &&
+              prepared && prepared->ok() && after_geometry_reuse.geometry_misses == 1U &&
+              after_geometry_reuse.geometry_hits == 1U && after_full_prepare.geometry_misses == 1U &&
+              after_full_prepare.geometry_hits >= 2U,
+          "geometry-only preparation must reuse its immutable snapshot and let a later full "
+          "NavMesh preparation reuse that same cached geometry");
+}
+
 void usped_mountains_inform_navmesh_without_changing_free_space() {
   const std::vector<std::uint8_t> mask{1, 1, 0, 1, 1};
   const std::vector<double> clearance{0.1, 3.0, 0.0, 3.0, 0.1};
@@ -11373,6 +11427,8 @@ int main(int argc, char** argv) {
        regional_ownership_and_immutable_cache_are_dependency_bound},
       {"navmesh_screening_context_coalesces_snapshot_chords_without_stale_domains",
        navmesh_screening_context_coalesces_snapshot_chords_without_stale_domains},
+      {"geometry_only_navmesh_preparation_preserves_point_queries_and_reuse",
+       geometry_only_navmesh_preparation_preserves_point_queries_and_reuse},
       {"advanced_routing_compute_shortlists_preserve_cpu_authority",
        advanced_routing_compute_shortlists_preserve_cpu_authority},
       {"routing_compute_spatial_chords_preserve_nearest_and_uncertainty",

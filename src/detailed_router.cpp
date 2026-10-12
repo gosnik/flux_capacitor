@@ -3614,10 +3614,6 @@ first_spline_collision(const CopperDrcReport& report,
         true,
         2U,
         Nanometres{0}};
-    auto prepared = screening_context != nullptr
-        ? screening_context->prepare(region, navmesh_config)
-        : std::make_shared<const PreparedNavMeshDomain>(
-              prepare_navmesh_domain(region, navmesh_config));
     // Certified scaffolds use the NavMesh only as a local clearance guard.  Re-searching between
     // their endpoints could replace the selected route class, so retain the source corridor.
     const auto source_corridor = run.topology_locked
@@ -3625,6 +3621,16 @@ first_spline_collision(const CopperDrcReport& report,
                                         config.spline_control_corridor,
                                         config.spline_minimum_bend_radius)
         : std::optional<NavMeshRouteResult>{};
+    // A certified source corridor supplies its own cells. Only its clearance evaluator
+    // needs prepared boundary geometry; construct a search lattice only on fallback.
+    auto prepared = source_corridor
+        ? (screening_context != nullptr
+               ? screening_context->prepare_geometry(region)
+               : std::make_shared<const PreparedNavMeshDomain>(prepare_navmesh_geometry(region)))
+        : (screening_context != nullptr
+               ? screening_context->prepare(region, navmesh_config)
+               : std::make_shared<const PreparedNavMeshDomain>(
+                     prepare_navmesh_domain(region, navmesh_config)));
     auto routed = source_corridor ? *source_corridor
         : route_prepared_navmesh(*prepared, run.points.front(), run.points.back(), navmesh_config);
     result.spline_navmesh_refined_parents += routed.adaptive_refined_parent_cells;

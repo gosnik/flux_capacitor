@@ -4270,6 +4270,10 @@ void print_route_result(const flux::GlobalRouteResult& result,
                 << ", \"search_microseconds\": " << scaffold.counters.search_microseconds
                 << ", \"peak_via_history_nodes\": " << scaffold.counters.peak_via_history_nodes
                 << ", \"via_history_budget_exhaustions\": " << scaffold.counters.via_history_budget_exhaustions
+                << ", \"terminal_pocket_probes\": " << scaffold.counters.terminal_pocket_probes
+                << ", \"terminal_pocket_probe_expansions\": " << scaffold.counters.terminal_pocket_probe_expansions
+                << ", \"terminal_pockets_exhausted\": " << scaffold.counters.terminal_pockets_exhausted
+                << ", \"terminal_pocket_probe_microseconds\": " << scaffold.counters.terminal_pocket_probe_microseconds
                 << ", \"source_attachments\": " << scaffold.counters.source_attachments
                 << ", \"target_attachments\": " << scaffold.counters.target_attachments
                 << ", \"component_connections\": " << scaffold.counters.component_connections
@@ -5548,6 +5552,10 @@ void print_detailed_result(const flux::DetailedRouteResult& result,
       std::cout << ",\n  \"retained_scaffold_search\": {";
       std::cout << "\"expansions\": " << counters.expansions;
       std::cout << ", \"compact_search_expansions\": " << counters.compact_search_expansions;
+      std::cout << ", \"terminal_pocket_probes\": " << counters.terminal_pocket_probes;
+      std::cout << ", \"terminal_pocket_probe_expansions\": " << counters.terminal_pocket_probe_expansions;
+      std::cout << ", \"terminal_pockets_exhausted\": " << counters.terminal_pockets_exhausted;
+      std::cout << ", \"terminal_pocket_probe_microseconds\": " << counters.terminal_pocket_probe_microseconds;
       std::cout << ", \"source_attachments\": " << counters.source_attachments;
       std::cout << ", \"target_attachments\": " << counters.target_attachments;
       std::cout << ", \"attachment_search_rounds\": " << counters.attachment_search_rounds;

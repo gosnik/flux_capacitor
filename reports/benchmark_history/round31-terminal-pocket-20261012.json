@@ -1,0 +1,32 @@
+{
+  "round": 31,
+  "experiment": "Evidence-only terminal pocket diagnosis",
+  "decision": "keep",
+  "source_manifest": "reports/validation/terminal-pocket-round31-20261012/source-build.json",
+  "tests": {
+    "targets_passed": 11,
+    "independent_review": "pass",
+    "source_drift": []
+  },
+  "tier0": {
+    "passed": true,
+    "detail_seconds": 30.641187281988095,
+    "copper_byte_identical": true
+  },
+  "tier1": {
+    "passed": true,
+    "detail_seconds": 105.10525569104357,
+    "copper_byte_identical": true
+  },
+  "tier2": {
+    "passed": false,
+    "scaffold_satisfied": 131,
+    "scaffold_requested": 131,
+    "physical_opens": 0,
+    "global_seconds": 159.6207624290255,
+    "detail_seconds": 222.11894995899638,
+    "final_internal_pad_clearance_reports": 6,
+    "final_curved": false
+  },
+  "reports": "reports/validation/terminal-pocket-round31-20261012"
+}

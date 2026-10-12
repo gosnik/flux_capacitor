@@ -1,0 +1,12 @@
+{
+  "export_command": "export_scaffold tests/fixtures/routing-corpus/ft2232h_jtag.kicad_pcb tier2/telemetry/ft2232h_jtag-global.jsonl tier2/diagnostic-scaffold/ft2232h_jtag.kicad_pcb",
+  "drc_command": "kicad-cli pcb drc --format json --output tier2/diagnostic-scaffold/ft2232h_jtag-drc.json tier2/diagnostic-scaffold/ft2232h_jtag.kicad_pcb",
+  "inspect_command": "build/release/flux-cli inspect-kicad tier2/diagnostic-scaffold/ft2232h_jtag.kicad_pcb",
+  "export_exit": 0,
+  "drc_exit": 0,
+  "inspect_exit": 0,
+  "drc": {"violations": 62, "unconnected_items": 0, "categories": {"lib_footprint_issues": 41, "track_dangling": 21}},
+  "inspect": {"open_connections": 0, "tracks": 1341, "vias": 75, "core_validation_errors": 0, "import_warnings": 1},
+  "source_warning_expected": 41,
+  "hashes": "hashes.sha256"
+}

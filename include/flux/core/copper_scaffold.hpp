@@ -61,6 +61,11 @@ struct CopperScaffoldConfig {
   std::size_t expanded_attachment_states{32U};
   std::size_t maximum_attachment_probes_per_round{256U};
   std::size_t maximum_goal_attempts{64U};
+  // After a full forward maze failure, a reversed bounded probe may contribute only sampled
+  // exhausted-frontier blocker evidence to the existing causal repair ordering. It never
+  // publishes a path or establishes infeasibility; zero disables the diagnostic.
+  std::size_t maximum_terminal_pocket_probes{8U};
+  std::size_t maximum_terminal_pocket_expansions{2'000U};
   // Optional optimistic node-dominance pass before the provenance-rich search. Zero disables it.
   std::size_t compact_search_expansions{25'000U};
   std::size_t maximum_via_history_nodes{262'144U};
@@ -219,6 +224,9 @@ struct CopperScaffoldCounters {
   std::size_t via_history_budget_exhaustions{0U};
   std::size_t source_attachments{0U};
   std::size_t target_attachments{0U};
+  std::size_t terminal_pocket_probes{0U};
+  std::size_t terminal_pocket_probe_expansions{0U};
+  std::size_t terminal_pockets_exhausted{0U};
   std::size_t attachment_search_rounds{0U};
   std::size_t attachment_search_probes{0U};
   std::size_t outward_attachment_probes{0U};
@@ -230,6 +238,7 @@ struct CopperScaffoldCounters {
   std::uint64_t edge_validation_microseconds{0U};
   std::uint64_t exact_goal_validation_microseconds{0U};
   std::uint64_t search_microseconds{0U};
+  std::uint64_t terminal_pocket_probe_microseconds{0U};
   std::size_t component_connections{0U};
   std::size_t survivor_tracks_preserved{0U};
   std::size_t survivor_vias_preserved{0U};

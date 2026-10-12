@@ -1964,6 +1964,10 @@ RoutingEngineStepResult RoutingEngine::advance(RoutingEngineStepBudget budget,
               "; search_us=" + std::to_string(c.search_microseconds) +
               "; edge_validation_us=" + std::to_string(c.edge_validation_microseconds) +
               "; attachment_us=" + std::to_string(c.attachment_generation_microseconds) +
+              "; terminal_pocket_probes=" + std::to_string(c.terminal_pocket_probes) +
+              "; terminal_pocket_probe_expansions=" + std::to_string(c.terminal_pocket_probe_expansions) +
+              "; terminal_pockets_exhausted=" + std::to_string(c.terminal_pockets_exhausted) +
+              "; terminal_pocket_probe_microseconds=" + std::to_string(c.terminal_pocket_probe_microseconds) +
               "; outward_probes=" + std::to_string(c.outward_attachment_probes) +
               "; outward_attachments=" + std::to_string(c.outward_attachments) +
               "; goal_rejections=" + std::to_string(c.goal_rejections) +

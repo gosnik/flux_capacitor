@@ -81,6 +81,82 @@ void finds_a_legal_detour_when_the_supplied_line_is_blocked() {
           "blocked direct line must receive a complete detour");
   require(check_copper_rules(result.copper).ok(), "detour must be DRC legal");
 }
+void terminal_pocket_probe_preserves_forward_success_and_bounds_failure_work() {
+  auto board = fixture();
+  board.layers.resize(1U);
+  board.tracks.push_back({ObjectId{"terminal-pocket-detour-barrier"}, NetId{"b"}, LayerId{"F.Cu"},
+                          mm(10,5), mm(10,15), Nanometres::from_mm(0.8), false});
+  const auto demand = request(NetId{"a"}, mm(2,10), LayerId{"F.Cu"}, mm(18,10), LayerId{"F.Cu"});
+  CopperScaffoldConfig config;
+  config.grid_pitch = Nanometres::from_mm(0.5);
+  const auto enabled = construct_copper_scaffold(board, {demand}, config);
+  auto disabled_config = config;
+  disabled_config.maximum_terminal_pocket_probes = 0U;
+  const auto disabled = construct_copper_scaffold(board, {demand}, disabled_config);
+  require(enabled.complete && disabled.complete && enabled.paths == disabled.paths &&
+              enabled.counters.terminal_pocket_probes == 0U && check_copper_rules(enabled.copper).ok(),
+          "a successful forward search must not invoke or be changed by terminal-pocket diagnostics");
+
+  auto sealed = fixture();
+  sealed.layers.resize(1U);
+  sealed.tracks.push_back({ObjectId{"terminal-pocket-source-component"}, NetId{"a"}, LayerId{"F.Cu"},
+                           mm(2,2), mm(2,18), Nanometres::from_mm(0.2), false});
+  sealed.tracks.push_back({ObjectId{"terminal-pocket-full-barrier"}, NetId{"b"}, LayerId{"F.Cu"},
+                           mm(10,0), mm(10,20), Nanometres::from_mm(0.8), false});
+  CopperScaffoldConfig bounded;
+  bounded.grid_pitch = Nanometres::from_mm(0.5);
+  bounded.compact_search_expansions = 0U;
+  bounded.maximum_expansions_per_connection = 20U;
+  bounded.maximum_terminal_pocket_expansions = 20U;
+  bounded.maximum_victim_exchanges = 0U;
+  bounded.maximum_joint_passage_candidates = 0U;
+  bounded.maximum_displacement_attempts = 0U;
+  const auto exhausted = construct_copper_scaffold(sealed, {demand}, bounded);
+  require(!exhausted.complete && exhausted.counters.terminal_pocket_probes == 1U &&
+              exhausted.counters.terminal_pocket_probe_expansions <=
+                  bounded.maximum_terminal_pocket_expansions &&
+              exhausted.counters.terminal_pockets_exhausted == 0U &&
+              exhausted.request_evidence.front().termination ==
+                  CopperScaffoldSearchTermination::expansion_budget_exhausted,
+          "a cap-exhausted reverse probe must remain bounded and leave forward failure policy unchanged");
+
+  auto pocket = fixture();
+  pocket.layers.resize(1U);
+  pocket.tracks.push_back({ObjectId{"terminal-pocket-broad-source"}, NetId{"a"}, LayerId{"F.Cu"},
+                           mm(2,2), mm(2,18), Nanometres::from_mm(0.2), false});
+  const auto add_ring = [&](std::string id, Point first, Point second) {
+    pocket.tracks.push_back({ObjectId{std::move(id)}, NetId{"b"}, LayerId{"F.Cu"}, first, second,
+                             Nanometres::from_mm(0.2), false});
+  };
+  add_ring("terminal-pocket-top", mm(17,9), mm(19,9));
+  add_ring("terminal-pocket-right", mm(19,9), mm(19,11));
+  add_ring("terminal-pocket-bottom", mm(19,11), mm(17,11));
+  add_ring("terminal-pocket-left", mm(17,11), mm(17,9));
+  CopperScaffoldConfig sealed_pocket = bounded;
+  sealed_pocket.maximum_terminal_pocket_expansions = 2'000U;
+  const auto pocket_result = construct_copper_scaffold(pocket, {demand}, sealed_pocket);
+  auto no_pocket_probe = sealed_pocket;
+  no_pocket_probe.maximum_terminal_pocket_probes = 0U;
+  const auto forward_only = construct_copper_scaffold(pocket, {demand}, no_pocket_probe);
+  require(!pocket_result.complete && pocket_result.paths.empty() && pocket_result.copper == pocket &&
+              pocket_result.counters.terminal_pocket_probes == 1U &&
+              pocket_result.counters.terminal_pockets_exhausted == 1U &&
+              pocket_result.request_evidence.front().termination ==
+                  forward_only.request_evidence.front().termination &&
+              pocket_result.request_evidence.front().source_legal_attachments ==
+                  forward_only.request_evidence.front().source_legal_attachments &&
+              pocket_result.request_evidence.front().target_legal_attachments ==
+                  forward_only.request_evidence.front().target_legal_attachments &&
+              std::any_of(pocket_result.request_evidence.front().blocker_objects.begin(),
+                          pocket_result.request_evidence.front().blocker_objects.end(), [](const auto& object) {
+                            return object == ObjectId{"terminal-pocket-top"} ||
+                                   object == ObjectId{"terminal-pocket-right"} ||
+                                   object == ObjectId{"terminal-pocket-bottom"} ||
+                                   object == ObjectId{"terminal-pocket-left"};
+                          }) &&
+              check_copper_rules(pocket_result.copper).ok(),
+          "an exhausted sealed target pocket must add sampled blockers without changing forward evidence or copper");
+}
 void supplies_a_legal_via_transition() {
   const auto board = fixture();
   const auto result = construct_copper_scaffold(board, {request(NetId{"a"}, mm(2,2), LayerId{"F.Cu"}, mm(18,2), LayerId{"B.Cu"})});
@@ -91,7 +167,9 @@ void cancellation_never_publishes_illegal_copper() {
   const auto board = fixture();
   std::stop_source stop; stop.request_stop();
   const auto result = construct_copper_scaffold(board, {request(NetId{"a"}, mm(2,2), LayerId{"F.Cu"}, mm(18,18), LayerId{"F.Cu"})}, {}, stop.get_token());
-  require(!result.complete && result.paths.empty() && result.counters.cancelled, "cancel must retain no partial candidate");
+  require(!result.complete && result.paths.empty() && result.counters.cancelled &&
+              result.counters.terminal_pocket_probes == 0U,
+          "cancel must retain no partial candidate or start a terminal-pocket probe");
   require(check_copper_rules(result.copper).ok(), "cancel must not publish illegal copper");
 }
 void malformed_or_mismatched_retained_paths_are_not_reused() {
@@ -913,6 +991,7 @@ int main() {
   exact_grid_attachment_checks_coincident_copper();
   accepts_legal_supplied_topology();
   finds_a_legal_detour_when_the_supplied_line_is_blocked();
+  terminal_pocket_probe_preserves_forward_success_and_bounds_failure_work();
   supplies_a_legal_via_transition();
   cancellation_never_publishes_illegal_copper();
   malformed_or_mismatched_retained_paths_are_not_reused();

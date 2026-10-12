@@ -1220,6 +1220,48 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
     }
     record_blocker_evidence(result.request_evidence[index], result.copper, frontier_blockers,
                             config.maximum_failure_evidence);
+    std::set<std::string> terminal_pocket_blockers;
+    const auto primary_termination = result.request_evidence[index].termination;
+    const bool probe_terminal_pocket =
+        !result.counters.cancelled && !stop_token.stop_requested() &&
+        config.maximum_terminal_pocket_probes > result.counters.terminal_pocket_probes &&
+        config.maximum_terminal_pocket_expansions > 0U &&
+        (primary_termination == CopperScaffoldSearchTermination::expansion_budget_exhausted ||
+         primary_termination == CopperScaffoldSearchTermination::search_exhausted) &&
+        result.request_evidence[index].source_legal_attachments >
+            result.request_evidence[index].target_legal_attachments &&
+        result.request_evidence[index].target_legal_attachments > 0U;
+    if (probe_terminal_pocket) {
+      auto reversed = requests[index];
+      std::reverse(reversed.points.begin(), reversed.points.end());
+      std::reverse(reversed.segment_widths.begin(), reversed.segment_widths.end());
+      std::reverse(reversed.segment_width_kinds.begin(), reversed.segment_width_kinds.end());
+      auto bounded = config;
+      bounded.maximum_expansions_per_connection = config.maximum_terminal_pocket_expansions;
+      bounded.compact_search_expansions = 0U;
+      CopperScaffoldSearchTermination pocket_termination = CopperScaffoldSearchTermination::not_attempted;
+      CopperScaffoldCounters probe_counters;
+      ++result.counters.terminal_pocket_probes;
+      {
+        CounterTimer timer{result.counters.terminal_pocket_probe_microseconds};
+        static_cast<void>(search_route(result.copper, reversed, index, bounded, probe_counters, stop_token,
+                                       &terminal_pocket_blockers, &pocket_termination));
+      }
+      result.counters.terminal_pocket_probe_expansions += probe_counters.expansions;
+      result.counters.expansions += probe_counters.expansions;
+      if (probe_counters.cancelled || stop_token.stop_requested()) {
+        result.counters.cancelled = true;
+        break;
+      }
+      if (pocket_termination == CopperScaffoldSearchTermination::search_exhausted &&
+          !terminal_pocket_blockers.empty()) {
+        ++result.counters.terminal_pockets_exhausted;
+        frontier_blockers.insert(terminal_pocket_blockers.begin(), terminal_pocket_blockers.end());
+        record_blocker_evidence(result.request_evidence[index], result.copper, frontier_blockers,
+                                config.maximum_failure_evidence);
+      } else
+        terminal_pocket_blockers.clear();
+    }
     if (result.counters.cancelled) break;
     // Bounded causal exchange: retain survivor copper, remove one attributed victim, admit the
     // blocked request, then rebuild the victim. Failure leaves the published result untouched.
@@ -1245,6 +1287,7 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
     // Causality comes only from the failed search frontier.  A rejected coarse path is useful
     // evidence, but it must not cause unrelated routes to be displaced after the independent
     // full-domain search found a different obstruction.
+    extend_causal_victims(terminal_pocket_blockers);
     extend_causal_victims(frontier_blockers);
 
     bool jointly_repaired = false;

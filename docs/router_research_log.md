@@ -10104,3 +10104,18 @@ Round29 proves that changing every initial search direction alters otherwise suc
 
 ### Round30 result and decision
 All11 final regression targets and independent review pass; the review fixed stale boolean edge-cache entries suppressing blocker re-attribution after evidence reset. Tier0 remains clean,30.840s detailed. Tier1 again regresses and was stopped after231.002s telemetry without final completion (baseline planning66.166s). Do not promote or advance Tier2. Recovery-only reversal still changes successful rich searches. Preserve the whole forward policy; first test whether correct target-side victim evidence alone lets the unchanged forward search complete the known repair.
+
+## Round31 — Evidence-only terminal pocket diagnosis
+
+### Isolated proof
+Using saved Round27 Tier2 copper and explicitly disabling the rejected direction policy, forward incoming plus victim97 succeeds in19,751 expansions, zero physical opens, zero new internal DRC, and preserved incumbent pad groups. Four other groups containing97 also succeed. Therefore correct causal victim selection alone can solve the last connection without changing successful forward search geometry.
+
+### Hypothesis
+After a full forward search has failed, a separately bounded reverse diagnostic may exhaust the small target-side sampled pocket and identify its boundary owners. Only exhaustive, uncancelled diagnostic evidence gets first choice of the existing bounded victim slots; retain original forward evidence too. Discard all diagnostic paths and preserve forward identities, orientation, budgets and exact transactional acceptance. A budget-limited probe makes no feasibility claim and leaves candidate priority unchanged. Bound probes per scaffold pass and expose their actual overhead in telemetry.
+
+### Results and decision
+All 11 regression targets and independent review pass. Frozen source remained unchanged throughout sequential curved telemetry runs. Tier0 and Tier1 retain byte-identical copper, zero opens and zero internal/external KiCad DRC; detailed runtimes30.641s and105.105s.
+
+Tier2 completes131/131 physical scaffold requests with zero opens in159.621s, versus130/131 with one open in309.399s. Three diagnostic probes cost50.694ms; two exhausted pockets supplied actionable blocker evidence. Keep the general evidence-only repair change.
+
+Final curved materialization remains incomplete: six inherited input pad-clearance reports trigger fallback to straight copper. Independent provisional scaffold export has zero KiCad opens or clearance/hole violations,41 inherited footprint warnings and21 dangling-track warnings. This is not final curved Tier2 promotion. Detailed materialization takes222.119s. Next investigate final validation parity: a representative input pad gap is199872nm against200000nm nominal clearance, within KiCad's500nm electrical DRC epsilon. Routing clearances must remain unchanged.

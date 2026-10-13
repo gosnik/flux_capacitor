@@ -93,10 +93,15 @@
     }
   ],
   "esc": {
-    "status": "pending_extended_rerun",
+    "status": "running",
     "routing_limit_seconds": 3600,
     "outer_limit_seconds": 4500,
-    "provisional_output_requires_native_refill": true
+    "provisional_output_requires_native_refill": true,
+    "started_at": "2026-10-13T16:48:27.612809+00:00",
+    "run_metadata": "reports/validation/esc-physical-round37-20261013/esc/run.json",
+    "implementation_revision": "5235c1d48af09e15dcd7a41406b89647b8ba7f53",
+    "first_pathfinder_iteration_seconds": 17.281981,
+    "physical_copper_accepted": false
   },
   "frozen_binary_sha256": "1b2e8ded73024b0da744b4a00400b6822f98aae4bf5e16e45cd754bc61a53679",
   "resumed_date": "2026-10-14",
@@ -124,5 +129,7 @@
     "normalized_open_connections": 554,
     "normalized_zones_requiring_refill": 1,
     "whole_board_accepted": false
-  }
+  },
+  "implementation_revision": "5235c1d48af09e15dcd7a41406b89647b8ba7f53",
+  "implementation_tag": "codex/refill-physical-round-37"
 }

@@ -117,6 +117,78 @@ long double routing_physical_gain(const RoutingPhysicalEvidence& before,
          static_cast<long double>(before.malformed_paths - after.malformed_paths);
 }
 
+namespace {
+std::uint64_t saturating_add(std::uint64_t left, std::uint64_t right) {
+  return right > std::numeric_limits<std::uint64_t>::max() - left
+      ? std::numeric_limits<std::uint64_t>::max() : left + right;
+}
+
+long double finite_gain(long double gain) {
+  return std::isfinite(gain) ? gain : 0.0L;
+}
+
+long double saturating_add(long double left, long double right) {
+  const auto sum = left + right;
+  return std::isfinite(sum) ? sum : std::numeric_limits<long double>::max();
+}
+
+void append_throughput_sample(RoutingExperimentTrial& trial,
+                              RoutingExperimentThroughputSample sample) {
+  sample.physical_gain = finite_gain(sample.physical_gain);
+  const auto size = std::min(trial.throughput_history_size,
+                             routing_experiment_throughput_history_limit);
+  if (size < routing_experiment_throughput_history_limit) {
+    trial.throughput_history[size] = sample;
+    trial.throughput_history_size = size + 1U;
+  } else {
+    std::move(trial.throughput_history.begin() + 1U, trial.throughput_history.end(),
+              trial.throughput_history.begin());
+    trial.throughput_history.back() = sample;
+  }
+}
+
+void append_trial_history(RoutingExperimentTrial& destination,
+                          const RoutingExperimentTrial& source) {
+  const auto size = std::min(source.throughput_history_size,
+                             routing_experiment_throughput_history_limit);
+  if (size == 0U) {
+    append_throughput_sample(destination, {source.dispatched_sequence, source.active_elapsed_us,
+                                           source.physical_gain});
+    return;
+  }
+  for (std::size_t index = 0U; index < size; ++index)
+    append_throughput_sample(destination, source.throughput_history[index]);
+}
+} // namespace
+
+void update_routing_experiment_trial(RoutingExperimentScheduleState& state,
+                                     RoutingExperimentTrial trial) {
+  trial.physical_gain = finite_gain(trial.physical_gain);
+  const auto found = std::find_if(state.trials.begin(), state.trials.end(), [&](const auto& existing) {
+    return existing.strategy == trial.strategy && existing.state_key == trial.state_key;
+  });
+  if (found == state.trials.end()) {
+    RoutingExperimentTrial aggregate;
+    aggregate.strategy = trial.strategy;
+    aggregate.state_key = std::move(trial.state_key);
+    aggregate.active_elapsed_us = trial.active_elapsed_us;
+    aggregate.physical_gain = trial.physical_gain;
+    aggregate.dispatched_sequence = trial.dispatched_sequence;
+    aggregate.exhausted = trial.exhausted;
+    aggregate.stagnant = trial.stagnant;
+    append_trial_history(aggregate, trial);
+    state.trials.push_back(std::move(aggregate));
+  } else {
+    found->active_elapsed_us = saturating_add(found->active_elapsed_us, trial.active_elapsed_us);
+    found->physical_gain = saturating_add(finite_gain(found->physical_gain), trial.physical_gain);
+    found->dispatched_sequence = std::max(found->dispatched_sequence, trial.dispatched_sequence);
+    found->exhausted = found->exhausted || trial.exhausted;
+    found->stagnant = found->stagnant || trial.stagnant;
+    append_trial_history(*found, trial);
+  }
+  state.last_dispatched_sequence = std::max(state.last_dispatched_sequence, trial.dispatched_sequence);
+}
+
 std::optional<RoutingExperimentSelection>
 select_routing_experiment(const std::vector<RoutingExperimentCandidate>& candidates,
                           const RoutingExperimentScheduleState& state) {
@@ -133,9 +205,18 @@ select_routing_experiment(const std::vector<RoutingExperimentCandidate>& candida
     auto& aggregate = aggregates[{trial.strategy, trial.state_key}];
     aggregate.seen = true;
     aggregate.blocked = aggregate.blocked || trial.exhausted || trial.stagnant;
-    aggregate.samples.push_back({trial.dispatched_sequence,
-                                 {trial.active_elapsed_us,
-                                  std::isfinite(trial.physical_gain) ? trial.physical_gain : 0.0L}});
+    const auto history_size = std::min(trial.throughput_history_size,
+                                       routing_experiment_throughput_history_limit);
+    if (history_size == 0U) {
+      aggregate.samples.push_back({trial.dispatched_sequence,
+          {trial.active_elapsed_us, finite_gain(trial.physical_gain)}});
+    } else {
+      for (std::size_t index = 0U; index < history_size; ++index) {
+        const auto& sample = trial.throughput_history[index];
+        aggregate.samples.push_back({sample.dispatched_sequence,
+                                     {sample.active_elapsed_us, finite_gain(sample.physical_gain)}});
+      }
+    }
     aggregate.last_sequence = std::max(aggregate.last_sequence, trial.dispatched_sequence);
     strategy_last_dispatch[trial.strategy] =
         std::max(strategy_last_dispatch[trial.strategy], trial.dispatched_sequence);
@@ -154,9 +235,8 @@ select_routing_experiment(const std::vector<RoutingExperimentCandidate>& candida
       const auto begin = samples.size() > 8U ? samples.size() - 8U : 0U;
       std::uint64_t elapsed = 0U; long double gain = 0.0L;
       for (std::size_t sample = begin; sample < samples.size(); ++sample) {
-        elapsed = samples[sample].second.first > std::numeric_limits<std::uint64_t>::max() - elapsed
-                      ? std::numeric_limits<std::uint64_t>::max() : elapsed + samples[sample].second.first;
-        gain += samples[sample].second.second;
+        elapsed = saturating_add(elapsed, samples[sample].second.first);
+        gain = saturating_add(gain, samples[sample].second.second);
       }
       selection.rolling_gain_per_us = gain / static_cast<long double>(std::max<std::uint64_t>(1U, elapsed));
     }

@@ -423,6 +423,59 @@ void routing_engine_scaffold_progress_preserves_external_validation_gate() {
           "current passing external validation must complete scaffold routing");
 }
 
+void routing_engine_refillable_scaffold_preserves_definitions_and_final_gate() {
+  auto board = two_pad_board();
+  const NetId plane{"saved-plane"};
+  board.nets.push_back(Net{plane, "SAVED_PLANE", 1});
+  flux::CopperZone saved_fill;
+  saved_fill.id = ObjectId{"saved-plane-zone"};
+  saved_fill.net = plane;
+  saved_fill.fills = {flux::CopperZoneFill{LayerId{"F.Cu"}, rectangle(0.0, 0.0, 100.0, 80.0), {}}};
+  board.zones.push_back(std::move(saved_fill));
+
+  flux::RoutingEngineConfig config;
+  config.detailed.defer_saved_zone_fill_clearance_to_refill = true;
+  // Refill deferral intentionally excludes the continuous/topology-locked materialization
+  // modes. Match the supported WorkPlan configuration so this test exercises the scaffold
+  // handoff rather than invalid-input policy rejection.
+  config.detailed.pull_tight_45_degrees = false;
+  config.detailed.continuous_refinement = false;
+  config.detailed.topology_locked_medial_materialization = false;
+  config.planner.global.grid_pitch = Nanometres::from_mm(5.0);
+  config.planner.global.max_iterations = 1U;
+  config.max_actions = 12U;
+  flux::RoutingEngine engine(board, board, config);
+  for (std::size_t step = 0U; step < 10000U && !engine.terminal(); ++step)
+    static_cast<void>(engine.advance({.work_units = 1000U}));
+
+  const auto& state = engine.state();
+  require(state.legal_scaffold && state.legal_scaffold->complete &&
+              state.legal_scaffold->copper.zones.size() == 1U &&
+              state.legal_scaffold->copper.zones.front().id == ObjectId{"saved-plane-zone"} &&
+              state.legal_scaffold->copper.zones.front().fills.empty() &&
+              state.legal_scaffold->copper.zones.front().requires_refill &&
+              std::any_of(state.attempts.begin(), state.attempts.end(), [](const auto& attempt) {
+                return attempt.action == flux::RoutingEngineAction::construct_copper_scaffold && attempt.accepted;
+              }),
+          "refill-deferred scaffold must exactly route against fixed copper while retaining an "
+          "unfilled zone definition for native refill");
+  const auto* detailed = engine.selected_detailed();
+  require(detailed && detailed->provisional_zone_refill_candidate() && detailed->candidate &&
+              detailed->candidate->zones.size() == 1U &&
+              detailed->candidate->zones.front().fills.empty() &&
+              detailed->candidate->zones.front().requires_refill &&
+              !state.accepted_detailed && state.outcome != flux::RoutingEngineOutcome::complete &&
+              state.outcome != flux::RoutingEngineOutcome::awaiting_external_validation,
+          "a provisional scaffold/materialization candidate must omit stale zone fills and never be "
+          "presented as final DRC acceptance; detailed_stop=" +
+              std::to_string(detailed ? static_cast<int>(detailed->stop_reason) : -1) +
+              "; candidate=" + (detailed && detailed->candidate ? "true" : "false") +
+              "; opens=" + std::to_string(detailed ? detailed->connectivity.open_connections : 0U) +
+              "; drc=" + std::to_string(detailed ? detailed->copper_drc.violations.size() : 0U) +
+              "; outcome=" + std::to_string(static_cast<int>(state.outcome)) +
+              "; diagnostic=" + (detailed ? detailed->diagnostic : "none"));
+}
+
 void routing_engine_cancels_a_live_continuation() {
   const auto board = two_pad_board();
   flux::RoutingEngineConfig config;
@@ -1024,6 +1077,38 @@ void straight_scene_portfolio_replays_retained_window_alternative() {
               handed_off.candidate->tracks == enabled.validated_copper_scene.data->scene.tracks &&
               handed_off.candidate->vias == enabled.validated_copper_scene.data->scene.vias,
           "detailed handoff must reuse exact regional primitives and pass final DRC/connectivity");
+  auto refill_board = board;
+  const NetId refill_plane{"regional-refill-plane"};
+  refill_board.nets.push_back(Net{refill_plane, "REGIONAL_REFILL_PLANE", 2});
+  flux::CopperZone refill_zone;
+  refill_zone.id = ObjectId{"regional-saved-fill"};
+  refill_zone.net = refill_plane;
+  refill_zone.fills = {flux::CopperZoneFill{front, rectangle(0.0, 0.0, 100.0, 80.0), {}}};
+  refill_board.zones.push_back(std::move(refill_zone));
+  auto refill_artifact = std::make_shared<flux::RegionalCopperSceneData>(
+      *enabled.validated_copper_scene.data);
+  auto normalized_refill_source = refill_board;
+  normalized_refill_source.zones.front().fills.clear();
+  normalized_refill_source.zones.front().requires_refill = true;
+  refill_artifact->source = normalized_refill_source;
+  refill_artifact->scene.nets = normalized_refill_source.nets;
+  refill_artifact->scene.zones = normalized_refill_source.zones;
+  refill_artifact->refillable_zone_fills = true;
+  auto refill_plan = scene_plan;
+  refill_plan.regional.validated_copper_scene.data = std::move(refill_artifact);
+  auto refill_scene_config = scene_config;
+  refill_scene_config.defer_saved_zone_fill_clearance_to_refill = true;
+  refill_scene_config.circular_arc_refinement = false;
+  const auto refill_handoff =
+      flux::materialize_detailed_route(refill_board, refill_plan, refill_scene_config);
+  require(refill_handoff.reused_validated_regional_scene &&
+              refill_handoff.provisional_zone_refill_candidate() && refill_handoff.candidate &&
+              refill_handoff.candidate->zones.size() == 1U &&
+              refill_handoff.candidate->zones.front().fills.empty() &&
+              refill_handoff.candidate->zones.front().requires_refill,
+          "a no-refinement refillable regional artifact must reuse its normalized source scene "
+          "and publish only a native-refill candidate: " + refill_handoff.diagnostic +
+              "; reused=" + std::to_string(refill_handoff.reused_validated_regional_scene));
   auto transformed_config = scene_config;
   transformed_config.pull_tight_45_degrees = true;
   const auto transformed = flux::materialize_detailed_route(board, scene_plan, transformed_config);
@@ -8984,6 +9069,71 @@ void cancellation_and_kicad_export_boundaries_fail_closed() {
           "non-serialized tentative geometry must round-trip against the unchanged KiCad source");
 }
 
+void saved_zone_fill_export_requires_explicit_refill_transition() {
+  const auto source_contents = load_minimal_kicad_fixture();
+  const auto source_import = flux::io::import_kicad_pcb(source_contents);
+  require(source_import.strict() && source_import.board,
+          "saved-zone-fill export fixture must import strictly");
+
+  auto candidate = *source_import.board;
+  const auto saved_fill = std::find_if(candidate.zones.begin(), candidate.zones.end(),
+                                       [](const auto& zone) { return !zone.fills.empty(); });
+  require(saved_fill != candidate.zones.end(),
+          "saved-zone-fill export fixture must contain a filled copper zone");
+  const auto saved_zone_id = saved_fill->id;
+  saved_fill->fills.clear();
+  saved_fill->requires_refill = true;
+
+  const auto default_export =
+      flux::io::export_kicad_candidate(source_contents, *source_import.board, candidate);
+  require(!default_export.ok() &&
+              std::any_of(default_export.diagnostics.begin(), default_export.diagnostics.end(),
+                          [](const auto& diagnostic) {
+                            return diagnostic.code == "unsupported_design_change";
+                          }),
+          "saved fills must remain immutable unless the explicit refill export mode is enabled");
+
+  flux::io::KicadExportOptions refill_options;
+  refill_options.defer_saved_zone_fills_to_refill = true;
+  const auto refill_export = flux::io::export_kicad_candidate(
+      source_contents, *source_import.board, candidate, refill_options);
+  const auto refill_import = refill_export.contents
+                                 ? flux::io::import_kicad_pcb(*refill_export.contents)
+                                 : flux::io::KicadImportResult{};
+  require(refill_export.ok() && refill_export.contents &&
+              refill_export.contents->find("(filled_polygon") == std::string::npos &&
+              refill_import.strict() && refill_import.board &&
+              std::any_of(refill_import.board->zones.begin(), refill_import.board->zones.end(),
+                          [&saved_zone_id](const auto& zone) {
+                            return zone.id == saved_zone_id && zone.fills.empty() &&
+                                   zone.requires_refill;
+                          }),
+          "explicit refill export must remove only saved fill syntax and strictly re-import as a "
+          "refill-required zone");
+
+  auto net_mutation = candidate;
+  net_mutation.zones.front().net = NetId{"kicad-net-0"};
+  const auto net_export = flux::io::export_kicad_candidate(
+      source_contents, *source_import.board, net_mutation, refill_options);
+  require(!net_export.ok() &&
+              std::any_of(net_export.diagnostics.begin(), net_export.diagnostics.end(),
+                          [](const auto& diagnostic) {
+                            return diagnostic.code == "unsupported_design_change";
+                          }),
+          "refill export must reject a changed zone net");
+
+  auto definition_mutation = candidate;
+  definition_mutation.zones.front().name += " mutated";
+  const auto definition_export = flux::io::export_kicad_candidate(
+      source_contents, *source_import.board, definition_mutation, refill_options);
+  require(!definition_export.ok() &&
+              std::any_of(definition_export.diagnostics.begin(), definition_export.diagnostics.end(),
+                          [](const auto& diagnostic) {
+                            return diagnostic.code == "unsupported_design_change";
+                          }),
+          "refill export must reject a changed zone definition");
+}
+
 void routing_xpbd_joint_relaxation_preserves_endpoints_and_reports_stress() {
   const flux::RegionalRouterConfig production_regional_defaults;
   require(production_regional_defaults.enable_xpbd_relaxation &&
@@ -11625,6 +11775,8 @@ int main(int argc, char** argv) {
       {"routing_engine_explores_supported_physical_families", routing_engine_explores_supported_physical_families},
       {"routing_engine_scaffold_progress_preserves_external_validation_gate",
        routing_engine_scaffold_progress_preserves_external_validation_gate},
+      {"routing_engine_refillable_scaffold_preserves_definitions_and_final_gate",
+       routing_engine_refillable_scaffold_preserves_definitions_and_final_gate},
       {"routing_engine_cancels_a_live_continuation", routing_engine_cancels_a_live_continuation},
       {"routing_engine_resumes_and_requires_current_external_validation", routing_engine_resumes_and_requires_current_external_validation},
       {"routing_engine_distinguishes_deadline_cancellation_and_budget", routing_engine_distinguishes_deadline_cancellation_and_budget},
@@ -11758,6 +11910,8 @@ int main(int argc, char** argv) {
        integrated_placement_rejects_proxy_improvement_that_violates_copper_rules},
       {"cancellation_and_kicad_export_boundaries_fail_closed",
        cancellation_and_kicad_export_boundaries_fail_closed},
+      {"saved_zone_fill_export_requires_explicit_refill_transition",
+       saved_zone_fill_export_requires_explicit_refill_transition},
       {"progressive_static_seed_preparation_retains_a_cheap_allocatable_tree",
        progressive_static_seed_preparation_retains_a_cheap_allocatable_tree},
   };

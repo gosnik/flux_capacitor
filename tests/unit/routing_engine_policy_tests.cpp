@@ -149,6 +149,50 @@ int main() {
       {{1U, "new-3", true, 0U}, {2U, "new-3", true, 1U}}, churn);
   require(shared_churn_choice && shared_churn_choice->strategy == 2U,
           "changing every strategy's context must still preserve strategy fairness");
+  // Thousands of cooperative time slices for a small fixed set of logical experiments must
+  // retain their scheduling evidence without turning metadata growth into an engine stop.
+  flux::RoutingExperimentScheduleState aggregated;
+  for (std::uint64_t slice = 1U; slice <= 5'000U; ++slice) {
+    flux::update_routing_experiment_trial(aggregated,
+        {1U, "stable", 10U, 10.0L, slice * 2U - 1U, false, false});
+    flux::update_routing_experiment_trial(aggregated,
+        {2U, "stable", 10U, 5.0L, slice * 2U, false, false});
+  }
+  require(aggregated.trials.size() == 2U &&
+              aggregated.trials[0].active_elapsed_us == 50'000U &&
+              aggregated.trials[0].physical_gain == 50'000.0L &&
+              aggregated.trials[0].throughput_history_size ==
+                  flux::routing_experiment_throughput_history_limit,
+          "time slices aggregate to bounded logical records with bounded rolling history");
+  const auto aggregate_throughput = flux::select_routing_experiment(
+      {{1U, "stable", true}, {2U, "stable", true}}, aggregated);
+  require(aggregate_throughput && aggregate_throughput->strategy == 1U,
+          "aggregated rolling samples preserve productive-throughput choice");
+  flux::update_routing_experiment_trial(aggregated,
+      {1U, "stable", 0U, 0.0L, 10'001U, true, false});
+  require(aggregated.trials.size() == 2U,
+          "terminal result must fold into the existing logical record");
+  const auto terminal_aggregate = flux::select_routing_experiment(
+      {{1U, "stable", true}, {2U, "stable", true}}, aggregated);
+  require(terminal_aggregate && terminal_aggregate->strategy == 2U,
+          "aggregated exhausted state remains suppressed");
+  const auto changed_aggregate = flux::select_routing_experiment(
+      {{1U, "changed", true}}, aggregated);
+  require(changed_aggregate && changed_aggregate->initial_exploration,
+          "terminal aggregation must not suppress a changed state key");
+  flux::RoutingExperimentScheduleState rolling;
+  for (std::uint64_t sequence = 1U; sequence <= 9U; ++sequence)
+    flux::update_routing_experiment_trial(rolling,
+        {1U, "A", 10U, 100.0L, sequence, false, false});
+  for (std::uint64_t sequence = 10U; sequence <= 17U; ++sequence)
+    flux::update_routing_experiment_trial(rolling,
+        {1U, "A", 10U, 0.0L, sequence, false, false});
+  flux::update_routing_experiment_trial(rolling,
+      {2U, "A", 10U, 1.0L, 18U, false, false});
+  const auto rolling_choice = flux::select_routing_experiment(
+      {{1U, "A", true}, {2U, "A", true}}, rolling);
+  require(rolling_choice && rolling_choice->strategy == 2U,
+          "fixed aggregate history preserves the prior recent-throughput horizon");
   require(flux::routing_physical_gain({true, 2U, 4U, 0U}, {true, 1U, 4U, 0U}) > 0.0L &&
               flux::routing_physical_gain({true, 2U, 4U, 0U}, {true, 1U, 5U, 0U}) == 0.0L &&
               flux::routing_physical_gain({false, 2U, 4U, 0U}, {true, 0U, 0U, 0U}) == 0.0L,

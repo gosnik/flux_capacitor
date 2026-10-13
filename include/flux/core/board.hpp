@@ -11,7 +11,7 @@
 
 namespace flux {
 
-inline constexpr std::uint32_t board_schema_version = 23;
+inline constexpr std::uint32_t board_schema_version = 24;
 inline constexpr std::int64_t max_abs_coordinate_nm = 1'000'000'000;
 
 struct Point {
@@ -226,6 +226,9 @@ struct Pad {
   std::optional<Polygon> custom_copper_polygon{};
   // KiCad's custom-pad anchor, retained to prove the supported contained-anchor subset at import.
   PadShape custom_anchor_shape{PadShape::unknown};
+  // KiCad pad number/name, retained because net-tie declarations refer to it rather than UUIDs.
+  // Kept at the end to preserve existing positional aggregate construction.
+  std::string number{};
 
   bool operator==(const Pad&) const = default;
 };
@@ -270,6 +273,10 @@ struct Footprint {
   std::vector<Pad> pads;
   std::vector<Keepout> keepouts;
   PlacementEnvelopeSource placement_envelope_source{PlacementEnvelopeSource::explicit_courtyard};
+  // Each group is a KiCad net_tie_pad_groups declaration resolved to canonical pad IDs. Nets
+  // deliberately remain distinct: this is a local DRC contact exception, never a net merge.
+  // Kept at the end to preserve existing positional aggregate construction.
+  std::vector<std::vector<ObjectId>> net_tie_pad_groups{};
 
   [[nodiscard]] bool has_exact_placement_envelope() const {
     return placement_envelope_source == PlacementEnvelopeSource::explicit_courtyard ||

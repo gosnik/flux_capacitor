@@ -28,6 +28,10 @@ struct KicadExportOptions {
   std::string generator{"flux_capacitor"};
   std::string generator_version{"0.140.0"};
   bool verify_round_trip{true};
+  // Permit the narrow, source-preserving transition from a saved zone fill to KiCad's native
+  // unfilled-zone state. Only filled_polygon children are removed; zone definitions remain
+  // unchanged and strict re-import must produce requires_refill.
+  bool defer_saved_zone_fills_to_refill{false};
   // Write a review-only copper artifact from a lossy/invalid canonical projection. Source byte
   // identity and supported-design-change checks remain enforced, but strict semantic round-trip
   // qualification is deliberately unavailable in this mode.

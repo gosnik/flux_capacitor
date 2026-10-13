@@ -4406,6 +4406,8 @@ void print_route_result(const flux::GlobalRouteResult& result,
                 << ",\"regional_configured_blocker_objects\":" << evidence.regional_configured_blocker_objects
                 << ",\"scene_evaluated\":" << (evidence.scene_evaluated ? "true" : "false")
                 << ",\"candidate_available\":" << (evidence.candidate_available ? "true" : "false")
+                << ",\"provisional_zone_refill_required\":"
+                << (evidence.provisional_zone_refill_required ? "true" : "false")
                 << ",\"diagnostic\":" << json_quote(evidence.diagnostic)
                 << ",\"diagnoses\":[";
       for (std::size_t j = 0; j < evidence.diagnoses.size(); ++j) {
@@ -4484,6 +4486,7 @@ void print_detailed_result(const flux::DetailedRouteResult& result,
                            std::optional<std::string_view> workflow = std::nullopt,
                            const flux::GlobalRouteResult* global = nullptr,
                            const flux::MaterializationFeedbackResult* session = nullptr) {
+  const bool retained_preview = session != nullptr && session->retained_scaffold_preview;
   const auto pair_gap_violations = static_cast<std::size_t>(std::count_if(
       result.copper_drc.violations.begin(), result.copper_drc.violations.end(),
       [](const auto& violation) { return violation.code == "differential_pair_gap"; }));
@@ -4510,12 +4513,21 @@ void print_detailed_result(const flux::DetailedRouteResult& result,
             << "  \"provisional_complete\": "
             << (result.provisional_zone_refill_candidate() ? "true" : "false") << ",\n"
             << "  \"zone_refill_required\": "
-            << (result.stop_reason == flux::DetailedRouterStopReason::zone_refill_required
+            << (result.stop_reason == flux::DetailedRouterStopReason::zone_refill_required ||
+                (retained_preview && result.candidate && std::any_of(
+                    result.candidate->zones.begin(), result.candidate->zones.end(),
+                    [](const auto& zone) { return zone.requires_refill; }))
                     ? "true"
                     : "false")
             << ",\n"
             << "  \"stop_reason\": \"" << stop_reason_name(result.stop_reason) << "\",\n"
             << "  \"candidate_available\": " << (result.candidate ? "true" : "false") << ",\n"
+            << "  \"candidate_is_retained_scaffold_preview\": "
+            << (retained_preview ? "true" : "false") << ",\n"
+            << "  \"candidate_final_validation_performed\": "
+            << (retained_preview || result.provisional_zone_refill_candidate() ? "false" :
+                (result.complete() ? "true" : "null"))
+            << ",\n"
             << "  \"global_complete\": "
             << (global == nullptr    ? "null"
                 : global->complete() ? "true"
@@ -5483,11 +5495,14 @@ void print_detailed_result(const flux::DetailedRouteResult& result,
     std::cout << "]}";
   }
   std::cout << "],\n"
-            << "  \"validation_errors\": " << result.validation.error_count() << ",\n"
-            << "  \"open_connections\": " << result.connectivity.open_connections << ",\n"
+            << "  \"validation_errors\": "
+            << (retained_preview ? "null" : std::to_string(result.validation.error_count())) << ",\n"
+            << "  \"open_connections\": "
+            << (retained_preview ? "null" : std::to_string(result.connectivity.open_connections)) << ",\n"
             << "  \"final_copper_clearance_epsilon_nm\": "
             << result.final_copper_clearance_epsilon.value() << ",\n"
-            << "  \"copper_violations\": " << result.copper_drc.violation_count() << ",\n"
+            << "  \"copper_violations\": "
+            << (retained_preview ? "null" : std::to_string(result.copper_drc.violation_count())) << ",\n"
             << "  \"open_net_details\": [";
   bool first_open_net = true;
   for (const auto& net : result.connectivity.nets) {
@@ -9616,10 +9631,11 @@ constrained_optimizer_config(const Board& board,
   const bool preview_exportable = write_incomplete_preview && detailed.candidate.has_value();
   if (!output_path || (!exportable && !preview_exportable) || !detailed.candidate) {
     print_detailed_result(detailed, std::nullopt, workflow, &global, session);
-    return exportable ? EXIT_SUCCESS : 5;
+    return detailed.complete() ? EXIT_SUCCESS : 5;
   }
   flux::io::KicadExportOptions export_options;
   export_options.allow_lossy_diagnostic_preview = diagnostic_lossy_preview;
+  export_options.defer_saved_zone_fills_to_refill = allow_provisional_zone_refill;
   export_options.verify_round_trip = !diagnostic_lossy_preview;
   const auto exported = flux::io::export_kicad_candidate_file(source_path, *output_path, source,
                                                               *detailed.candidate, export_options);
@@ -9634,12 +9650,12 @@ constrained_optimizer_config(const Board& board,
   }
   print_detailed_result(detailed,
                         ExportSummary{exported.ok(), error_count, exported.generated_id_map.size(),
-                                      std::move(issue_codes), !exportable},
+                                      std::move(issue_codes), !detailed.complete()},
                         workflow, &global, session);
   if (!exported.ok()) {
     return 7;
   }
-  return exportable ? EXIT_SUCCESS : 5;
+  return detailed.complete() ? EXIT_SUCCESS : 5;
 }
 
 [[nodiscard]] bool run_free_space_demo() {
@@ -10172,8 +10188,12 @@ int main(int argc, char** argv) {
             export_error("kicad_rule_context_staging_failed", std::move(context_diagnostic));
           } else {
             const auto temporary_candidate = staging.path() / source_path.filename();
+            flux::io::KicadExportOptions staging_options;
+            staging_options.defer_saved_zone_fills_to_refill =
+                execution.candidate_ready_for_zone_refill;
             *exported = flux::io::export_kicad_candidate_file(
-                source_path, temporary_candidate, prepared_source, *execution.candidate);
+                source_path, temporary_candidate, prepared_source, *execution.candidate,
+                staging_options);
             if (exported->ok()) {
               auto exact_candidate = temporary_candidate;
               if (execution.candidate_ready_for_zone_refill) {
@@ -11058,25 +11078,14 @@ int main(int argc, char** argv) {
     auto regional_plan = std::move(session.routing);
     auto global = regional_plan.coarse_global;
     auto detailed = std::move(session.detailed);
-    auto materialization_global = global;
-    const bool previewing_incomplete_global = tail->write_incomplete_preview &&
-        !detailed.complete() && !detailed.provisional_zone_refill_candidate() && !global.complete() &&
-        session.engine_outcome != flux::RoutingEngineOutcome::timed_out &&
-        session.engine_outcome != flux::RoutingEngineOutcome::cancelled;
-    if (previewing_incomplete_global) {
-      // Materialize the best paths only for a review artifact. Keep the original global result
-      // authoritative in JSON and for the process exit status.
-      materialization_global.stop_reason = flux::GlobalRouterStopReason::complete;
-      materialization_global.unrouted_nets.clear();
-      materialization_global.total_overflow = 0U;
-    }
-    if (previewing_incomplete_global) {
-      detailed = flux::materialize_detailed_route(*source, materialization_global, detailed_config);
-    }
-    if (previewing_incomplete_global && detailed.complete()) {
-      detailed.stop_reason = flux::DetailedRouterStopReason::incomplete_global_route;
-      detailed.diagnostic =
-          "review-only preview materialized from an incomplete global-route checkpoint";
+    // Every search/fitting action belongs to the persistent engine's shared deadline.
+    // A diagnostic export may copy its retained copper; it must not start another router
+    // after an exhausted/timed-out session and leave the result stream empty indefinitely.
+    if (tail->write_incomplete_preview && !detailed.candidate && session.retained_scaffold &&
+        !session.retained_scaffold->paths.empty()) {
+      detailed = flux::retained_scaffold_diagnostic_preview(
+          *source, *session.retained_scaffold, session.engine_outcome);
+      session.retained_scaffold_preview = true;
     }
     if (telemetry) {
       publish_telemetry_outcome(telemetry.get(), detailed.complete(),

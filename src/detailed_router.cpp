@@ -6323,12 +6323,25 @@ void constrain_straight_track_angles(Board& board, const std::set<ObjectId>& pro
   }
 }
 
+// A deferred-fill candidate is an explicit KiCad-refill transaction, not a board containing stale
+// source copper. Keep its zone definitions/identity, but remove only saved fills and mark the
+// definitions for native refill. Source remains immutable for preservation and ID comparisons.
+void normalize_deferred_zone_refill_candidate(Board& candidate, const DetailedRouterConfig& config) {
+  if (!config.defer_saved_zone_fill_clearance_to_refill) return;
+  for (auto& zone : candidate.zones) {
+    if (zone.fills.empty()) continue;
+    zone.fills.clear();
+    zone.requires_refill = true;
+  }
+}
+
 // One final acceptance gate is shared by ordinary construction and exact regional-scene reuse.
 // Reusing geometry never reuses authority: validation, connectivity and DRC run again.
 void validate_materialized_candidate(const Board& source, const GlobalRouteResult& global,
                                      const DetailedRouterConfig& config, Board candidate,
                                      DetailedRouteResult& result, bool bounded_conflict_handoff,
                                      const DetailedRouteResult* checkpoint) {
+  normalize_deferred_zone_refill_candidate(candidate, config);
   result.validation = validate_board(candidate);
   result.connectivity = analyze_connectivity(candidate);
   if (!global.configured_selected_nets.empty()) {
@@ -6344,11 +6357,7 @@ void validate_materialized_candidate(const Board& source, const GlobalRouteResul
     }
   }
   if (config.defer_saved_zone_fill_clearance_to_refill) {
-    auto refill_planning_candidate = candidate;
-    for (auto& zone : refill_planning_candidate.zones) {
-      zone.fills.clear();
-    }
-    result.copper_drc = check_copper_rules(refill_planning_candidate, config.final_copper_drc);
+    result.copper_drc = check_copper_rules(candidate, config.final_copper_drc);
     std::set<std::string> source_copper_ids;
     for (const auto& track : source.tracks) {
       source_copper_ids.insert(track.id.value());
@@ -6588,6 +6597,7 @@ materialize_impl(const Board& source, const GlobalRouteResult& global,
     // The caller has matched complete source/route identity. Recheck dimensions/policy above,
     // and the resulting copper below; no geometry regeneration or optimizer can alter it.
     Board candidate = *validated_regional_scene;
+    normalize_deferred_zone_refill_candidate(candidate, config);
     result.reused_validated_regional_scene = true;
     result.added_tracks = candidate.tracks.size() - source.tracks.size();
     result.added_track_arcs = candidate.track_arcs.size() - source.track_arcs.size();
@@ -6753,6 +6763,7 @@ materialize_impl(const Board& source, const GlobalRouteResult& global,
   }
 
   Board candidate = source;
+  normalize_deferred_zone_refill_candidate(candidate, config);
   for (const auto& proposal : global.selected_shove_proposals) {
     std::set<ObjectId> replaced(proposal.replaced_tracks.begin(), proposal.replaced_tracks.end());
     const auto found = static_cast<std::size_t>(
@@ -8571,6 +8582,8 @@ DetailedRouteResult materialize_detailed_route(const Board& source, const Routin
                                        ? collect_regional_native_realizations(plan.regional)
                                        : std::vector<RegionalSplineRealization>{};
   const auto& artifact = plan.regional.validated_copper_scene.data;
+  auto normalized_artifact_source = source;
+  normalize_deferred_zone_refill_candidate(normalized_artifact_source, config);
   const auto replacement_changes_source = [&](const auto& objects) {
     return config.existing_routing != ExistingRoutingPolicy::preserve &&
         std::any_of(objects.begin(), objects.end(), [&](const auto& object) {
@@ -8589,10 +8602,7 @@ DetailedRouteResult materialize_detailed_route(const Board& source, const Routin
     prefix.track_arcs.resize(source.track_arcs.size());
     prefix.track_beziers.resize(source.track_beziers.size());
     prefix.vias.resize(source.vias.size());
-    auto expected = source;
-    if (artifact->refillable_zone_fills)
-      for (auto& zone : expected.zones) zone.fills.clear();
-    return prefix == expected;
+    return prefix == normalized_artifact_source;
   };
   // A DRC certificate does not authorize bypassing requested geometry transforms.
   // Until artifacts carry a full materialization-policy fingerprint, reuse only
@@ -8604,7 +8614,7 @@ DetailedRouteResult materialize_detailed_route(const Board& source, const Routin
       !config.differential_pair_skew_tuning_batch_assignment &&
       artifact->scene.track_arcs.size() == source.track_arcs.size() &&
       artifact->scene.track_beziers.size() == source.track_beziers.size() &&
-      artifact->source == source && scene_preserves_source() &&
+      artifact->source == normalized_artifact_source && scene_preserves_source() &&
       artifact->paths == candidate.paths &&
       artifact->manifest == plan.regional.native_realization_manifest &&
       artifact->refillable_zone_fills == config.defer_saved_zone_fill_clearance_to_refill &&

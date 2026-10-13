@@ -193,6 +193,9 @@ struct RoutingPhysicalRepairEvidence {
   std::size_t regional_admitted_physical_requests{0U};
   std::size_t regional_configured_blocker_objects{0U};
   std::size_t regional_blocker_objects{0U};
+  // Local exact checks excluded saved zone-fill copper in this provisional scene. Native KiCad
+  // refill and final DRC remain mandatory before it can be accepted.
+  bool provisional_zone_refill_required{false};
   bool scene_evaluated{false};
   bool candidate_available{false};
   std::string diagnostic;
@@ -368,9 +371,16 @@ private:
   void start_speculative_preparation();
   void stop_speculative_preparation();
   void acquire_regional_preparation();
+  [[nodiscard]] const Board& provisional_planning_scene() const noexcept;
+  [[nodiscard]] const Board& provisional_materialization_scene() const noexcept;
 
   Board planning_board_;
   Board materialization_source_;
+  // Built once for the explicitly deferred-refill mode. They are internal exact-check scenes;
+  // materialization_source_ itself remains the immutable original used for final candidate
+  // preservation and native-refill comparison.
+  std::optional<Board> provisional_planning_board_;
+  std::optional<Board> provisional_materialization_source_;
   RoutingEngineConfig config_;
   RouterTelemetrySink* telemetry_{nullptr};
   std::weak_ptr<const CopperScaffoldResult> published_scaffold_;

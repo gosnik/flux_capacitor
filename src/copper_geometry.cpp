@@ -3,6 +3,7 @@
 #include "flux/core/geometry.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <limits>
@@ -403,6 +404,12 @@ std::vector<CopperPadShape> copper_pad_shapes(const Board& board) {
   std::vector<CopperPadShape> result;
   for (const auto& footprint : board.footprints) {
     for (const auto& pad : footprint.pads) {
+      std::vector<std::size_t> net_tie_groups;
+      for (std::size_t group = 0; group < footprint.net_tie_pad_groups.size(); ++group) {
+        const auto& members = footprint.net_tie_pad_groups[group];
+        if (std::find(members.begin(), members.end(), pad.id) != members.end())
+          net_tie_groups.push_back(group);
+      }
       const bool drill_only = !pad.plated && pad_has_drill(pad);
       const auto rotation_value =
           footprint.rotation.value() +
@@ -427,7 +434,8 @@ std::vector<CopperPadShape> copper_pad_shapes(const Board& board) {
           drill_only ? pad.drill_width : pad.width,
           drill_only ? pad.drill_height : pad.height,
           drill_only ? Nanometres{0} : pad.corner_radius,
-          Microdegrees{-rotation_value}, conservative_pad_radius_nm(pad), std::move(custom_polygon)});
+          Microdegrees{-rotation_value}, conservative_pad_radius_nm(pad), std::move(custom_polygon),
+          footprint.id, std::move(net_tie_groups)});
     }
   }
   return result;
@@ -604,6 +612,125 @@ bool pad_copper_intersects(const CopperPadShape& lhs, const CopperPadShape& rhs)
   const auto lhs_core = pad_core(lhs);
   const auto rhs_core = pad_core(rhs);
   return core_distance(lhs_core, rhs_core) <= lhs_core.radius_nm + rhs_core.radius_nm;
+}
+
+bool declared_net_tie_pad_pair_exempt(const CopperPadShape& lhs, const CopperPadShape& rhs) {
+  if (lhs.id == rhs.id || lhs.footprint_id != rhs.footprint_id || lhs.net_tie_groups.empty() ||
+      rhs.net_tie_groups.empty()) {
+    return false;
+  }
+  return std::any_of(lhs.net_tie_groups.begin(), lhs.net_tie_groups.end(), [&](const auto group) {
+    return std::find(rhs.net_tie_groups.begin(), rhs.net_tie_groups.end(), group) !=
+           rhs.net_tie_groups.end();
+  });
+}
+
+bool declared_net_tie_terminal_escape_exempt(const std::vector<CopperPadShape>& pads,
+                                             const NetId& net, const LayerId& layer, Point start,
+                                             Point end, Nanometres width,
+                                             const CopperPadShape& foreign_pad,
+                                             Nanometres /*clearance*/) {
+  if (!std::isfinite(static_cast<long double>(width.value())) || width.value() <= 0 ||
+      !std::any_of(foreign_pad.layers.begin(), foreign_pad.layers.end(),
+                   [&](const LayerId& value) { return value == layer; }) ||
+      foreign_pad.custom_copper_polygon) {
+    return false;
+  }
+  const auto supported_convex = [](const CopperPadShape& pad) {
+    return !pad.custom_copper_polygon &&
+           (pad.shape == PadShape::circle || pad.shape == PadShape::rectangle ||
+            pad.shape == PadShape::oval || pad.shape == PadShape::round_rectangle);
+  };
+  if (!supported_convex(foreign_pad) || foreign_pad.net_tie_groups.empty()) return false;
+  std::vector<const CopperPadShape*> eligible_own_pads;
+  for (const auto& own_pad : pads) {
+    if (own_pad.net != net || own_pad.footprint_id != foreign_pad.footprint_id ||
+        !supported_convex(own_pad) || !declared_net_tie_pad_pair_exempt(own_pad, foreign_pad) ||
+        !std::any_of(own_pad.layers.begin(), own_pad.layers.end(),
+                     [&](const LayerId& value) { return value == layer; })) {
+      continue;
+    }
+    if (point_to_pad_copper_distance_nm(start, own_pad) == 0.0L ||
+        point_to_pad_copper_distance_nm(end, own_pad) == 0.0L) {
+      eligible_own_pads.push_back(&own_pad);
+    }
+  }
+  if (eligible_own_pads.empty()) return false;
+  const auto trace_radius = static_cast<long double>(width.value()) / 2.0L;
+  // KiCad's exclusion is for a physical collision position, not a clearance-only near miss.
+  // This must be true before applying the deliberately conservative contact enclosure below.
+  if (segment_to_pad_copper_distance_nm(start, end, foreign_pad) > trace_radius) return false;
+
+  struct Bounds {
+    std::int64_t min_x;
+    std::int64_t min_y;
+    std::int64_t max_x;
+    std::int64_t max_y;
+  };
+  const auto lower_bound = [](long double value) {
+    return static_cast<std::int64_t>(std::max(
+        static_cast<long double>(std::numeric_limits<std::int64_t>::min()),
+        std::floor(value) - 1.0L));
+  };
+  const auto upper_bound = [](long double value) {
+    return static_cast<std::int64_t>(std::min(
+        static_cast<long double>(std::numeric_limits<std::int64_t>::max()),
+        std::ceil(value) + 1.0L));
+  };
+  const auto pad_bounds = [&](const CopperPadShape& pad) -> Bounds {
+    const auto radians = static_cast<long double>(pad.rotation.value()) * std::acos(-1.0L) /
+                         180'000'000.0L;
+    const auto cosine = std::abs(std::cos(radians));
+    const auto sine = std::abs(std::sin(radians));
+    const auto half_width = static_cast<long double>(pad.width.value()) / 2.0L;
+    const auto half_height = static_cast<long double>(pad.height.value()) / 2.0L;
+    long double x_extent = 0.0L;
+    long double y_extent = 0.0L;
+    if (pad.shape == PadShape::circle) {
+      x_extent = y_extent = std::max(half_width, half_height);
+    } else if (pad.shape == PadShape::oval) {
+      const auto radius = std::min(half_width, half_height);
+      const auto half_line = std::max(half_width, half_height) - radius;
+      x_extent = radius + (half_width >= half_height ? cosine : sine) * half_line;
+      y_extent = radius + (half_width >= half_height ? sine : cosine) * half_line;
+    } else if (pad.shape == PadShape::round_rectangle) {
+      const auto radius = static_cast<long double>(pad.corner_radius.value());
+      x_extent = radius + cosine * (half_width - radius) + sine * (half_height - radius);
+      y_extent = radius + sine * (half_width - radius) + cosine * (half_height - radius);
+    } else {
+      x_extent = cosine * half_width + sine * half_height;
+      y_extent = sine * half_width + cosine * half_height;
+    }
+    return {lower_bound(pad.position.x.value() - x_extent),
+            lower_bound(pad.position.y.value() - y_extent),
+            upper_bound(pad.position.x.value() + x_extent),
+            upper_bound(pad.position.y.value() + y_extent)};
+  };
+  const auto foreign_bounds = pad_bounds(foreign_pad);
+  const Bounds trace_bounds{
+      lower_bound(std::min(start.x.value(), end.x.value()) - trace_radius),
+      lower_bound(std::min(start.y.value(), end.y.value()) - trace_radius),
+      upper_bound(std::max(start.x.value(), end.x.value()) + trace_radius),
+      upper_bound(std::max(start.y.value(), end.y.value()) + trace_radius)};
+  const Bounds contact_bounds{std::max(foreign_bounds.min_x, trace_bounds.min_x),
+                              std::max(foreign_bounds.min_y, trace_bounds.min_y),
+                              std::min(foreign_bounds.max_x, trace_bounds.max_x),
+                              std::min(foreign_bounds.max_y, trace_bounds.max_y)};
+  if (contact_bounds.min_x > contact_bounds.max_x || contact_bounds.min_y > contact_bounds.max_y)
+    return false;
+  for (const auto* own_pad : eligible_own_pads) {
+    const std::array<Point, 4U> corners{
+        Point{Nanometres{contact_bounds.min_x}, Nanometres{contact_bounds.min_y}},
+        Point{Nanometres{contact_bounds.min_x}, Nanometres{contact_bounds.max_y}},
+        Point{Nanometres{contact_bounds.max_x}, Nanometres{contact_bounds.min_y}},
+        Point{Nanometres{contact_bounds.max_x}, Nanometres{contact_bounds.max_y}}};
+    if (std::all_of(corners.begin(), corners.end(), [&](const Point corner) {
+          return point_to_pad_copper_distance_nm(corner, *own_pad) == 0.0L;
+        })) {
+      return true;
+    }
+  }
+  return false;
 }
 
 bool pad_copper_overlaps_polygon(const CopperPadShape& pad, const Polygon& polygon) {

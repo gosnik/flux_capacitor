@@ -222,6 +222,26 @@ void cancellation_and_deadline_dispose_parked_engine_work() {
           "deadline expiry must remain distinct from cancellation without publishing checkpoints");
 }
 
+void retained_checkpoint_preview_never_claims_final_assessment() {
+  const auto source = two_pad_board();
+  CopperScaffoldResult retained;
+  retained.copper = source;
+  retained.complete = true;
+  retained.copper.tracks.push_back({ObjectId{"preview-added-track"}, source.nets.front().id,
+      LayerId{"F.Cu"}, mm(10, 10), mm(20, 10), Nanometres::from_mm(0.25), false});
+  const auto before = retained.copper;
+  for (const auto outcome : {RoutingEngineOutcome::exhausted, RoutingEngineOutcome::timed_out,
+                             RoutingEngineOutcome::cancelled}) {
+    const auto preview = retained_scaffold_diagnostic_preview(source, retained, outcome);
+    require(preview.candidate && *preview.candidate == before && preview.added_tracks == 1U &&
+                !preview.complete() && !preview.provisional_zone_refill_candidate() &&
+                preview.diagnostic.find("unassessed") != std::string::npos,
+            "retained export must copy committed copper without inventing final DRC or curve success");
+  }
+  require(retained.copper == before,
+          "diagnostic export must leave the retained transaction checkpoint immutable");
+}
+
 void continuation_dependencies_and_knowledge_merge_are_bounded() {
   require(routing_engine_action_uses_physical_continuation(
               RoutingEngineAction::regional_realization) &&
@@ -1019,6 +1039,7 @@ int main() {
   legal_scaffold_bypasses_regional_preparation();
   parked_engine_resumes_without_committing_partial_state();
   cancellation_and_deadline_dispose_parked_engine_work();
+  retained_checkpoint_preview_never_claims_final_assessment();
   continuation_dependencies_and_knowledge_merge_are_bounded();
   external_rejection_switches_a_real_experiment_pool_before_safe_cancellation();
   std::cout << "routing engine experiment continuation tests passed\n";

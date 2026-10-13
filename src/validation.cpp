@@ -500,6 +500,26 @@ ValidationReport validate_board_impl(const Board& board, bool reuse_static_zone_
       }
     }
 
+    std::unordered_set<std::string> footprint_pad_ids;
+    for (const auto& pad : footprint.pads) {
+      footprint_pad_ids.insert(pad.id.value());
+    }
+    std::unordered_set<std::string> declared_net_tie_members;
+    for (const auto& group : footprint.net_tie_pad_groups) {
+      std::unordered_set<std::string> members;
+      bool invalid = group.size() < 2U;
+      for (const auto& pad_id : group) {
+        invalid = invalid || !footprint_pad_ids.contains(pad_id.value()) ||
+                  !members.insert(pad_id.value()).second ||
+                  !declared_net_tie_members.insert(pad_id.value()).second;
+      }
+      if (invalid) {
+        add_issue(report, IssueSeverity::error, "invalid_net_tie_pad_group",
+                  "net-tie groups must contain at least two distinct pads of their footprint",
+                  {footprint.id.value()});
+      }
+    }
+
     for (const auto& pad : footprint.pads) {
       if (!insert_unique(object_ids, pad.id.value())) {
         add_issue(report, IssueSeverity::error, "duplicate_or_empty_object_id",

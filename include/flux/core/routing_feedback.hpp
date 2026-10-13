@@ -49,6 +49,10 @@ struct MaterializationFeedbackResult {
   std::vector<RoutingEngineAttempt> engine_attempts;
   // Latest retained scaffold snapshot, not cumulative timings across engine actions.
   std::optional<CopperScaffoldCounters> retained_scaffold_counters;
+  // Already committed in-process transactions; export may retain this subset without
+  // launching another search after the engine's deadline or stagnation limit.
+  std::shared_ptr<const CopperScaffoldResult> retained_scaffold{};
+  bool retained_scaffold_preview{false};
   std::size_t engine_tightening_actions{0U};
   std::size_t engine_tightening_improvements{0U};
   std::size_t engine_decision_points{0U};
@@ -78,6 +82,11 @@ struct MaterializationFeedbackResult {
   std::size_t engine_speculative_preparations_discarded{0U};
 
 };
+
+// Copies a retained subset for explicit diagnostic export. No final connectivity, curve or
+// whole-board DRC assessment is performed and the returned result can never be complete.
+[[nodiscard]] DetailedRouteResult retained_scaffold_diagnostic_preview(
+    const Board& source, const CopperScaffoldResult& scaffold, RoutingEngineOutcome outcome);
 
 struct PersistentRoutingSessionConfig {
   RoutingPlannerConfig planner;

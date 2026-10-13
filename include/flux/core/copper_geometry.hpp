@@ -22,6 +22,8 @@ struct CopperPadShape {
   long double conservative_radius_nm{0.0L};
   // World-space exact copper for the supported contained-anchor custom-pad subset.
   std::optional<Polygon> custom_copper_polygon{};
+  ObjectId footprint_id{};
+  std::vector<std::size_t> net_tie_groups{};
 };
 
 [[nodiscard]] long double conservative_pad_radius_nm(const Pad& pad);
@@ -74,6 +76,11 @@ polygonal_pad_outline(const CopperPadShape& pad,
 [[nodiscard]] long double pad_to_pad_copper_distance_nm(const CopperPadShape& lhs,
                                                         const CopperPadShape& rhs);
 [[nodiscard]] bool pad_copper_intersects(const CopperPadShape& lhs, const CopperPadShape& rhs);
+[[nodiscard]] bool declared_net_tie_pad_pair_exempt(const CopperPadShape& lhs,
+                                                     const CopperPadShape& rhs);
+[[nodiscard]] bool declared_net_tie_terminal_escape_exempt(
+    const std::vector<CopperPadShape>& pads, const NetId& net, const LayerId& layer, Point start,
+    Point end, Nanometres width, const CopperPadShape& foreign_pad, Nanometres clearance);
 [[nodiscard]] bool pad_copper_overlaps_polygon(const CopperPadShape& pad, const Polygon& polygon);
 [[nodiscard]] long double pad_to_polygon_boundary_distance_nm(const CopperPadShape& pad,
                                                               const Polygon& polygon);

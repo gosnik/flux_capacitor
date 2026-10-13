@@ -325,7 +325,8 @@ template <typename Item>
   };
   return lhs.id == rhs.id && lhs.reference == rhs.reference && lhs.position == rhs.position &&
          lhs.rotation == rhs.rotation && lhs.side == rhs.side && lhs.locked == rhs.locked &&
-         same_envelope(lhs, rhs) && lhs.pads == rhs.pads && lhs.keepouts == rhs.keepouts;
+         same_envelope(lhs, rhs) && lhs.pads == rhs.pads &&
+         lhs.net_tie_pad_groups == rhs.net_tie_pad_groups && lhs.keepouts == rhs.keepouts;
 }
 
 [[nodiscard]] bool same_kicad_net(const Net& lhs, const Net& rhs) {
@@ -367,7 +368,36 @@ template <typename Item>
          lhs.keepouts == rhs.keepouts;
 }
 
+[[nodiscard]] bool is_saved_zone_fill_deferred(const CopperZone& source,
+                                                const CopperZone& candidate) {
+  return source.id == candidate.id && source.net == candidate.net && source.name == candidate.name &&
+         source.locked == candidate.locked && !source.fills.empty() && !source.requires_refill &&
+         candidate.fills.empty() && candidate.requires_refill;
+}
+
+[[nodiscard]] bool compatible_zones_for_export(const std::vector<CopperZone>& source,
+                                                const std::vector<CopperZone>& candidate,
+                                                const KicadExportOptions& options,
+                                                std::vector<ObjectId>& deferred_zone_ids) {
+  if (source.size() != candidate.size()) {
+    return false;
+  }
+  for (std::size_t index = 0; index < source.size(); ++index) {
+    if (source[index] == candidate[index]) {
+      continue;
+    }
+    if (!options.defer_saved_zone_fills_to_refill ||
+        !is_saved_zone_fill_deferred(source[index], candidate[index])) {
+      return false;
+    }
+    deferred_zone_ids.push_back(source[index].id);
+  }
+  return true;
+}
+
 [[nodiscard]] bool compatible_design(const Board& source, const Board& candidate,
+                                     const KicadExportOptions& options,
+                                     std::vector<ObjectId>& deferred_zone_ids,
                                      KicadExportResult& result) {
   if (candidate.schema_version != source.schema_version || candidate.outline != source.outline ||
       candidate.cutouts != source.cutouts || candidate.rules != source.rules ||
@@ -377,13 +407,19 @@ template <typename Item>
       candidate.differential_pairs != source.differential_pairs ||
       candidate.routing_buses != source.routing_buses ||
       candidate.placement_groups != source.placement_groups ||
-      candidate.placement_regions != source.placement_regions || candidate.zones != source.zones ||
+      candidate.placement_regions != source.placement_regions ||
       candidate.relative_placement_constraints != source.relative_placement_constraints ||
       candidate.keepouts != source.keepouts ||
       candidate.footprints.size() != source.footprints.size()) {
     error(result, "unsupported_design_change",
           "candidate changes board structure, rules, stackup, layers, nets, or footprint "
           "membership");
+    return false;
+  }
+  if (!compatible_zones_for_export(source.zones, candidate.zones, options, deferred_zone_ids)) {
+    error(result, "unsupported_design_change",
+          "candidate changes copper-zone definitions or saved fills outside the explicit refill "
+          "transition");
     return false;
   }
   const auto candidate_footprints = by_id(candidate.footprints);
@@ -468,6 +504,28 @@ source_objects(const SExpression& root, std::string_view object_head, std::strin
   std::size_t index = 0;
   for (const auto* expression : find_children(root, object_head)) {
     auto token = stable_token(*expression, std::string(fallback) + std::to_string(index++));
+    auto& occurrence = occurrences[token];
+    ++occurrence;
+    if (occurrence != 1U) {
+      token += "#" + std::to_string(occurrence);
+    }
+    result.emplace(ObjectId{std::move(token)}, expression);
+  }
+  return result;
+}
+
+// Keep fallback IDs aligned with the strict importer, which assigns copper-zone ordinals only
+// after excluding keepout zones.
+[[nodiscard]] std::map<ObjectId, const SExpression*>
+source_copper_zone_objects(const SExpression& root) {
+  std::map<ObjectId, const SExpression*> result;
+  std::map<std::string, std::size_t> occurrences;
+  std::size_t index = 0;
+  for (const auto* expression : find_children(root, "zone")) {
+    if (find_child(*expression, "keepout") != nullptr) {
+      continue;
+    }
+    auto token = stable_token(*expression, "zone-" + std::to_string(index++));
     auto& occurrence = occurrences[token];
     ++occurrence;
     if (occurrence != 1U) {
@@ -659,7 +717,8 @@ KicadExportResult export_kicad_candidate(std::string_view source_contents, const
     warning(result, "invalid_diagnostic_preview",
             "review-only artifact contains a structurally invalid source or candidate projection");
   }
-  if (!compatible_design(source, candidate, result)) {
+  std::vector<ObjectId> deferred_zone_ids;
+  if (!compatible_design(source, candidate, options, deferred_zone_ids, result)) {
     return result;
   }
 
@@ -683,6 +742,22 @@ KicadExportResult export_kicad_candidate(std::string_view source_contents, const
                      "(generator_version " + quote_string(options.generator_version) + ")"});
   } else {
     insertion += "\n  (generator_version " + quote_string(options.generator_version) + ")";
+  }
+
+  if (!deferred_zone_ids.empty()) {
+    const auto source_zone_syntax = source_copper_zone_objects(root);
+    for (const auto& id : deferred_zone_ids) {
+      const auto zone = source_zone_syntax.find(id);
+      if (zone == source_zone_syntax.end()) {
+        error(result, "zone_mapping_failed", "source zone cannot be mapped to source syntax",
+              {id.value()});
+        return result;
+      }
+      for (const auto* filled_polygon : find_children(*zone->second, "filled_polygon")) {
+        edits.push_back(
+            {filled_polygon->location.offset, filled_polygon->end_offset, {}});
+      }
+    }
   }
 
   const auto source_footprints = source_objects(root, "footprint", "footprint-");

@@ -55,6 +55,17 @@ struct RoutingExperimentCandidate {
   std::size_t diagnostic_priority{0U};
 };
 
+// Keep the same recent-throughput horizon used by selection without retaining one scheduler
+// record per time slice.  This is part of the logical pair record, so its storage is bounded.
+inline constexpr std::size_t routing_experiment_throughput_history_limit = 8U;
+
+struct RoutingExperimentThroughputSample {
+  std::uint64_t dispatched_sequence{0U};
+  std::uint64_t active_elapsed_us{0U};
+  long double physical_gain{0.0L};
+  bool operator==(const RoutingExperimentThroughputSample&) const = default;
+};
+
 struct RoutingExperimentTrial {
   RoutingExperimentStrategyId strategy{0U};
   std::string state_key;
@@ -63,6 +74,11 @@ struct RoutingExperimentTrial {
   std::uint64_t dispatched_sequence{0U};
   bool exhausted{false};
   bool stagnant{false};
+  // Chronological suffix of physical samples.  Empty means legacy/directly constructed data,
+  // for which the aggregate fields above are treated as one sample by selection.
+  std::array<RoutingExperimentThroughputSample,
+             routing_experiment_throughput_history_limit> throughput_history{};
+  std::size_t throughput_history_size{0U};
   bool operator==(const RoutingExperimentTrial&) const = default;
 };
 
@@ -80,9 +96,16 @@ struct RoutingExperimentSelection {
   long double rolling_gain_per_us{0.0L};
 };
 
+// Fold a completed, yielded, invalidated, or evicted trial into its strategy/state record.
+// The state retains one record per logical pair, terminal suppression is monotonic, total
+// elapsed/gain remains available for diagnostics, and only the last fixed number of samples is
+// retained for the existing rolling-throughput scheduler.
+void update_routing_experiment_trial(RoutingExperimentScheduleState& state,
+                                     RoutingExperimentTrial trial);
+
 // Pure deterministic selection.  A trial marked exhausted or stagnant suppresses only that
 // strategy/state pair; a changed state key gets fresh initial exploration.  Callers append the
-// resulting trial after execution and assign sequence monotonically.
+// resulting trial through update_routing_experiment_trial after execution.
 [[nodiscard]] std::optional<RoutingExperimentSelection>
 select_routing_experiment(const std::vector<RoutingExperimentCandidate>& candidates,
                           const RoutingExperimentScheduleState& state);

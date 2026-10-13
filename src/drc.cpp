@@ -504,7 +504,10 @@ CopperDrcReport check_copper_rules(const Board& board, const CopperDrcConfig& co
       const auto actual = segment_to_pad_copper_distance_nm(lhs.start, lhs.end, pad);
       const auto required =
           static_cast<long double>(lhs.width.value()) / 2.0L + clearance(lhs.net, pad.net);
-      if (violates_electrical_clearance(actual, static_cast<long double>(lhs.width.value()) / 2.0L, required, config)) {
+      if (violates_electrical_clearance(actual, static_cast<long double>(lhs.width.value()) / 2.0L, required, config) &&
+          !( !pad.net_tie_groups.empty() && declared_net_tie_terminal_escape_exempt(
+                pads, lhs.net, lhs.layer, lhs.start, lhs.end, lhs.width, pad,
+                resolve_pairwise_clearance(board, lhs.net, pad.net)))) {
         add_violation(report, CopperViolationKind::track_pad_clearance, "track_pad_clearance",
                       {lhs.id.value(), pad.id.value()}, required, actual);
       }
@@ -657,8 +660,9 @@ CopperDrcReport check_copper_rules(const Board& board, const CopperDrcConfig& co
       }
       const auto actual = pad_to_pad_copper_distance_nm(pads[i], pads[j]);
       const auto required = clearance(pads[i].net, pads[j].net);
-      if (violates_electrical_clearance(actual, 0.0L, required, config) ||
-          (required == 0.0L && pad_copper_intersects(pads[i], pads[j]))) {
+      if ((!declared_net_tie_pad_pair_exempt(pads[i], pads[j])) &&
+          (violates_electrical_clearance(actual, 0.0L, required, config) ||
+          (required == 0.0L && pad_copper_intersects(pads[i], pads[j])))) {
         add_violation(report, CopperViolationKind::pad_clearance, "pad_clearance",
                       {pads[i].id.value(), pads[j].id.value()}, required, actual);
       }
@@ -1105,7 +1109,10 @@ CopperDrcReport check_dynamic_copper_rules(const Board& board,
       const auto actual = segment_to_pad_copper_distance_nm(lhs.start, lhs.end, pad);
       const auto required =
           static_cast<long double>(lhs.width.value()) / 2.0L + clearance(lhs.net, pad.net);
-      if (actual < required) {
+      if (actual < required &&
+          !(!pad.net_tie_groups.empty() && declared_net_tie_terminal_escape_exempt(
+              pads, lhs.net, lhs.layer, lhs.start, lhs.end, lhs.width, pad,
+              resolve_pairwise_clearance(board, lhs.net, pad.net)))) {
         add_violation(report, CopperViolationKind::track_pad_clearance, "track_pad_clearance",
                       {lhs.id.value(), pad.id.value()}, required, actual);
       }

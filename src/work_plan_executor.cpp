@@ -667,12 +667,12 @@ WorkPlanExecutionResult execute_impl(const Board& source, const FluxWorkPlan& pl
     result.candidate = std::move(current);
   }
   result.final_acceptance = acceptance(*result.candidate);
-  result.whole_board_accepted =
-      result.internally_complete && result.final_acceptance.exact_internal_acceptance;
   result.zone_refill_required =
       std::any_of(result.steps.begin(), result.steps.end(), [](const auto& step) {
         return step.provisional_zone_refill_required;
       });
+  result.whole_board_accepted = result.internally_complete && !result.zone_refill_required &&
+                                result.final_acceptance.exact_internal_acceptance;
   result.candidate_ready_for_zone_refill = result.internally_complete && !result.preview &&
                                            result.zone_refill_required && result.candidate.has_value();
   result.candidate_ready_for_export = result.internally_complete && !result.preview &&

@@ -26,6 +26,11 @@ add_test(NAME flux_clearance_shadow_tests COMMAND flux_clearance_shadow_tests)
 set_tests_properties(flux_clearance_shadow_tests PROPERTIES LABELS "risk;routing")
 
 add_executable(flux_routing_engine_policy_tests unit/routing_engine_policy_tests.cpp)
+add_executable(flux_net_tie_tests unit/net_tie_tests.cpp)
+target_link_libraries(flux_net_tie_tests PRIVATE flux::core)
+target_compile_features(flux_net_tie_tests PRIVATE cxx_std_20)
+add_test(NAME flux_net_tie_tests COMMAND flux_net_tie_tests)
+set_tests_properties(flux_net_tie_tests PROPERTIES LABELS "risk;routing")
 target_link_libraries(flux_routing_engine_policy_tests PRIVATE flux::core)
 target_compile_features(flux_routing_engine_policy_tests PRIVATE cxx_std_20)
 add_test(NAME flux_routing_engine_policy_tests COMMAND flux_routing_engine_policy_tests)
@@ -153,6 +158,12 @@ set_tests_properties(
   LABELS "risk;telemetry")
 
 find_package(Python3 COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+  add_test(NAME flux_routing_retained_preview_cli
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/python/test_routing_retained_preview.py"
+      "$<TARGET_FILE:flux-cli>" "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/minimal.kicad_pcb")
+  set_tests_properties(flux_routing_retained_preview_cli PROPERTIES TIMEOUT 180 LABELS "risk;routing")
+endif()
 if(Python3_Interpreter_FOUND)
   execute_process(COMMAND "${Python3_EXECUTABLE}" -c "import pcbnew"
     RESULT_VARIABLE FLUX_KICAD_PYTHON_STATUS OUTPUT_QUIET ERROR_QUIET)

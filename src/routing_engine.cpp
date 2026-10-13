@@ -40,8 +40,21 @@ std::size_t plus(std::size_t a, std::size_t b) {
 std::size_t difference(std::size_t newer, std::size_t older) {
   return newer > older ? newer - older : 0U;
 }
+// KiCad owns regeneration of zone copper in the explicitly provisional refill workflow. Keep
+// the definitions so the candidate can be refilled, while removing only stale filled polygons
+// from all internal physical scenes. Keepouts are separate board objects and remain represented.
+[[nodiscard]] Board provisional_refill_scene(Board source, const DetailedRouterConfig& detailed) {
+  if (!detailed.defer_saved_zone_fill_clearance_to_refill) return source;
+  for (auto& zone : source.zones) {
+    if (zone.fills.empty()) continue;
+    zone.fills.clear();
+    zone.requires_refill = true;
+  }
+  return source;
+}
 std::optional<Board> scaffold_physical_scene(Board source, const DetailedRouterConfig& detailed,
                                              const GlobalRouteResult& global) {
+  source = provisional_refill_scene(std::move(source), detailed);
   std::set<NetId> routed;
   for (const auto& path : global.paths) routed.insert(path.net);
   // The scaffold can repair a coarse-unrouted connection through fallback requests, so its
@@ -825,8 +838,10 @@ void RoutingEngine::start_speculative_preparation() {
         config.prioritize_frozen_scope_expansion = false;
         config.require_legal_linear_scaffold = false;
       }
-      prepared = prepare_regional_routing(job->physical ? retained->copper : planning_board_,
-                                           GlobalRouteResult{}, config, stop);
+      // Retained scaffold copper was constructed from the same cached provisional source. Do
+      // not copy it merely to clear fills again; normal preparation uses the cached scene too.
+      const auto& scene = job->physical ? retained->copper : provisional_planning_scene();
+      prepared = prepare_regional_routing(scene, GlobalRouteResult{}, config, stop);
     } catch (...) {
       // Speculation is optional; foreground preparation remains authoritative.
     }
@@ -1001,11 +1016,15 @@ std::string routing_engine_continuation_dependency_key(
 }
 RoutingEngine::RoutingEngine(Board p, Board m, RoutingEngineConfig c, RouterTelemetrySink* t)
     : planning_board_(std::move(p)), materialization_source_(std::move(m)), config_(std::move(c)), telemetry_(t) {
-  // Saved fills are provisional only in this explicitly authorized workflow.  A scaffold
-  // certifies fixed copper, so its blocked-fill evidence is inapplicable until refill; retain
-  // the existing provisional materialization path and its mandatory external refill gate.
-  if (config_.detailed.defer_saved_zone_fill_clearance_to_refill)
-    config_.copper_scaffold.enabled = false;
+  // Saved fills are omitted only from explicitly provisional physical scenes. A scaffold still
+  // exactly checks every represented fixed-copper object; native refill and final DRC remain
+  // mandatory before the candidate can be accepted.
+  if (config_.detailed.defer_saved_zone_fill_clearance_to_refill) {
+    config_.copper_scaffold.progressive_attachment_search = true;
+    provisional_planning_board_ = provisional_refill_scene(planning_board_, config_.detailed);
+    provisional_materialization_source_ =
+        provisional_refill_scene(materialization_source_, config_.detailed);
+  }
   // Keep a finite engine-level ceiling even if a caller uses zero for the initial grant.  The
   // latter means "start at the configured ceiling", which is useful for compatibility probes
   // without creating an unbounded regional continuation.
@@ -1036,6 +1055,8 @@ RoutingEngine::RoutingEngine(Board p, Board m, RoutingEngineConfig c, RouterTele
           config_.planner.max_routability_feedback_retries > 0U);
   config_.planner.regional.enable_spline_realization = config_.planner.curved_tracks;
   config_.planner.regional.enable_straight_realization = !config_.planner.curved_tracks;
+  if (config_.detailed.defer_saved_zone_fill_clearance_to_refill)
+    config_.planner.global.treat_saved_zone_fills_as_refillable = true;
   config_.planner.regional.treat_saved_zone_fills_as_refillable =
       config_.planner.global.treat_saved_zone_fills_as_refillable;
   if (config_.shared_deadline.count() > 0)
@@ -1045,6 +1066,13 @@ RoutingEngine::~RoutingEngine() {
   pending_.reset();
   parked_.clear();
   stop_speculative_preparation();
+}
+const Board& RoutingEngine::provisional_planning_scene() const noexcept {
+  return provisional_planning_board_ ? *provisional_planning_board_ : planning_board_;
+}
+const Board& RoutingEngine::provisional_materialization_scene() const noexcept {
+  return provisional_materialization_source_ ? *provisional_materialization_source_
+                                              : materialization_source_;
 }
 bool RoutingEngine::terminal() const noexcept {
   return state_.outcome == RoutingEngineOutcome::complete ||
@@ -1186,6 +1214,9 @@ std::string RoutingEngine::physical_dependency_key(bool retained_scene, bool inc
   }
   auto key = routing_engine_continuation_dependency_key(
       RoutingEngineAction::regional_realization, dependency_plan, state_.live_copper_terrain, {});
+  const std::string refill_mode = "provisional-refill:" +
+      std::string(config_.detailed.defer_saved_zone_fill_clearance_to_refill ? "true" : "false");
+  key += std::to_string(refill_mode.size()) + ":" + refill_mode;
   if (state_.legal_scaffold) {
     std::string coverage = "checked-requests:";
     for (const auto index : state_.legal_scaffold->satisfied_indices)
@@ -1233,8 +1264,7 @@ std::string RoutingEngine::continuation_key(RoutingEngineAction action) const {
   return routing_engine_action_uses_physical_continuation(action)
       ? physical_dependency_key(action == RoutingEngineAction::regional_realization &&
                                 config_.max_physical_region_requests != 0U &&
-                                has_pending_physical_repair(state_.legal_scaffold.get()) &&
-                                !config_.detailed.defer_saved_zone_fill_clearance_to_refill)
+                                has_pending_physical_repair(state_.legal_scaffold.get()))
       : experiment_state_key();
 }
 void RoutingEngine::release_pending() {
@@ -1261,9 +1291,9 @@ void RoutingEngine::prune_parked_experiments() {
   std::erase_if(parked_, [&](const auto& item) {
     if (item->dependency_key == continuation_key(item->action)) return false;
     ++state_.experiment_invalidated;
-    state_.experiment_schedule.trials.push_back({static_cast<std::size_t>(item->action),
-        item->experiment_state_key, 0U, 0.0L, ++state_.experiment_dispatch_sequence, true, false});
-    state_.experiment_schedule.last_dispatched_sequence = state_.experiment_dispatch_sequence;
+    update_routing_experiment_trial(state_.experiment_schedule,
+        {static_cast<std::size_t>(item->action), item->experiment_state_key, 0U, 0.0L,
+         ++state_.experiment_dispatch_sequence, true, false});
     return true; // unique_ptr destruction stops and joins the obsolete private transaction
   });
   bool pressure = false;
@@ -1282,9 +1312,9 @@ void RoutingEngine::prune_parked_experiments() {
     // FIFO eviction is deterministic. Retire this strategy/input rather than restarting the
     // same expensive preparation immediately after evicting its frontier.
     const auto& victim = *parked_.front();
-    state_.experiment_schedule.trials.push_back({static_cast<std::size_t>(victim.action),
-        victim.experiment_state_key, 0U, 0.0L, ++state_.experiment_dispatch_sequence, true, false});
-    state_.experiment_schedule.last_dispatched_sequence = state_.experiment_dispatch_sequence;
+    update_routing_experiment_trial(state_.experiment_schedule,
+        {static_cast<std::size_t>(victim.action), victim.experiment_state_key, 0U, 0.0L,
+         ++state_.experiment_dispatch_sequence, true, false});
     parked_.erase(parked_.begin());
     ++state_.experiment_memory_evictions;
   }
@@ -1360,8 +1390,7 @@ void RoutingEngine::record_experiment(const RoutingEngineAttempt& attempt, bool 
   trial.stagnant = !attempt.accepted && !attempt.physical_improvement;
   trial.exhausted = finished;
   if (trial.exhausted) ++state_.experiment_retired;
-  state_.experiment_schedule.last_dispatched_sequence = trial.dispatched_sequence;
-  state_.experiment_schedule.trials.push_back(std::move(trial));
+  update_routing_experiment_trial(state_.experiment_schedule, std::move(trial));
 
 }
 void RoutingEngine::replace_live_copper_terrain(LiveCopperTerrainSnapshot snapshot) {
@@ -1383,7 +1412,8 @@ RoutingEngineAction RoutingEngine::select_action(RoutingEngineAction excluded) {
     return RoutingEngineAction::global_allocation;
   const bool terminal_rebind_ready = [&] {
     if (!state_.legal_scaffold || state_.legal_scaffold->requests.empty()) return false;
-    return !derive_scaffold_terminal_rebinds(materialization_source_, *state_.legal_scaffold,
+    return !derive_scaffold_terminal_rebinds(
+        provisional_materialization_scene(), *state_.legal_scaffold,
         state_.scaffold_terminal_rebind_attempted_proofs, physical_dependency_key(true, false)).second.empty();
   }();
   if (config_.copper_scaffold.enabled && !state_.working_plan->legal_scaffold_complete &&
@@ -1406,8 +1436,7 @@ RoutingEngineAction RoutingEngine::select_action(RoutingEngineAction excluded) {
     return RoutingEngineAction::none;
   if (excluded != RoutingEngineAction::regional_realization &&
       config_.max_physical_region_requests != 0U &&
-      has_pending_physical_repair(state_.legal_scaffold.get()) &&
-      !config_.detailed.defer_saved_zone_fill_clearance_to_refill) {
+      has_pending_physical_repair(state_.legal_scaffold.get())) {
     const bool new_scene = physical_request_attempt_key_ != physical_dependency_key(true);
     const bool untouched = std::any_of(state_.legal_scaffold->missing_indices.begin(),
         state_.legal_scaffold->missing_indices.end(), [&](const auto index) {
@@ -1421,7 +1450,6 @@ RoutingEngineAction RoutingEngine::select_action(RoutingEngineAction excluded) {
   if (state_.working_plan->legal_scaffold_complete && state_.working_detailed)
     return RoutingEngineAction::none;
   if (has_pending_physical_repair(state_.legal_scaffold.get()) &&
-      !config_.detailed.defer_saved_zone_fill_clearance_to_refill &&
       excluded != RoutingEngineAction::regional_realization &&
       std::none_of(state_.attempts.begin(), state_.attempts.end(), [&](const auto& attempt) {
         return attempt.action == RoutingEngineAction::regional_realization &&
@@ -1757,8 +1785,7 @@ RoutingEngineStepResult RoutingEngine::advance(RoutingEngineStepBudget budget,
     // Keep XPBD/erosion's whole-plan alternatives available if the retained topology is trapped.
     pending_->scaffold_regional = config_.max_physical_region_requests != 0U &&
         action == RoutingEngineAction::regional_realization &&
-        has_pending_physical_repair(state_.legal_scaffold.get()) &&
-        !config_.detailed.defer_saved_zone_fill_clearance_to_refill;
+        has_pending_physical_repair(state_.legal_scaffold.get());
     if (pending_->scaffold_regional) {
       ++state_.scaffold_regional_actions;
       pending_->scaffold_physical_key = physical_dependency_key(true);
@@ -1855,7 +1882,8 @@ RoutingEngineStepResult RoutingEngine::advance(RoutingEngineStepBudget budget,
     const auto retained_scaffold = state_.legal_scaffold;
     std::optional<std::vector<GlobalRoutePath>> rebound_requests;
     if (action == RoutingEngineAction::construct_copper_scaffold && retained_scaffold) {
-      auto rebound = derive_scaffold_terminal_rebinds(materialization_source_, *retained_scaffold,
+      auto rebound = derive_scaffold_terminal_rebinds(
+          provisional_materialization_scene(), *retained_scaffold,
           state_.scaffold_terminal_rebind_attempted_proofs, physical_dependency_key(true, false));
       if (!rebound.second.empty()) {
         rebound_requests = std::move(rebound.first);
@@ -1875,12 +1903,13 @@ RoutingEngineStepResult RoutingEngine::advance(RoutingEngineStepBudget budget,
         ? static_cast<std::size_t>(config_.initial_global_preparation_timeout.count()) : 0U;
     auto* tx = pending_.get();
     auto* board = &planning_board_;
+    const auto* provisional_board = &provisional_planning_scene();
     auto* source = &materialization_source_;
     auto* telemetry = telemetry_;
     emit_engine_event(telemetry_, "begin", action, state_.generation, 0U, "kernel created");
     tx->kernel = std::make_unique<RoutingKernel>([tx, action, prior, accepted, diagnoses, planner,
                                                   detail, scaffold_config, retained_scaffold, rebound_requests,
-                                                  mode, sampled_repair, repair_cones, board,
+                                                  mode, sampled_repair, repair_cones, board, provisional_board,
                                                   source, preparation, decisions,
                                                   progressive_global_preparation,
                                                   progressive_global_preparation_timeout,
@@ -2105,7 +2134,9 @@ RoutingEngineStepResult RoutingEngine::advance(RoutingEngineStepBudget budget,
         RegionalDecisionObserver observer;
         if (decisions) {
           r.max_spline_window_workers = 1U;
-          observer = [tx, probe = planner.routability_probe](const RegionalDecisionPoint& point) {
+          observer = [tx, probe = planner.routability_probe,
+                      provisional_refill = detail.defer_saved_zone_fill_clearance_to_refill]
+              (const RegionalDecisionPoint& point) {
             tx->decision = point;
             if (tx->scaffold_regional && point.checkpoint) {
               auto diagnoses = diagnose_regional_routability(*point.checkpoint, probe);
@@ -2127,6 +2158,7 @@ RoutingEngineStepResult RoutingEngine::advance(RoutingEngineStepBudget budget,
                   .regional_configured_blocker_objects =
                       point.checkpoint->configured_physical_repair_blockers,
                   .regional_blocker_objects = point.checkpoint->resolved_physical_repair_blockers,
+                  .provisional_zone_refill_required = provisional_refill,
                   .scene_evaluated = point.scene_evaluated,
                   .candidate_available = point.checkpoint->spline_candidate_available,
                   .diagnostic = point.diagnostic};
@@ -2217,6 +2249,7 @@ RoutingEngineStepResult RoutingEngine::advance(RoutingEngineStepBudget budget,
               .regional_configured_blocker_objects =
                   regional.configured_physical_repair_blockers,
               .regional_blocker_objects = regional.resolved_physical_repair_blockers,
+              .provisional_zone_refill_required = detail.defer_saved_zone_fill_clearance_to_refill,
               .scene_evaluated = regional.native_scene_evaluated || regional.straight_scene_evaluated,
               .candidate_available = regional.spline_candidate_available,
               .diagnostic = regional.diagnostic};
@@ -2240,7 +2273,9 @@ RoutingEngineStepResult RoutingEngine::advance(RoutingEngineStepBudget budget,
                                              planner.quantized_copper_oracle, token, tx->scaffold_oracle);
           return;
         }
-        p.regional = analyze_regional_conflicts(*board, p.coarse_global, r, token, telemetry,
+        const auto& regional_scene = detail.defer_saved_zone_fill_clearance_to_refill
+            ? *provisional_board : *board;
+        p.regional = analyze_regional_conflicts(regional_scene, p.coarse_global, r, token, telemetry,
                                                 std::move(observer), preparation);
         p.regional_evaluated = true;
         accumulate_regional_candidate_pipeline_stats(p.cumulative_candidate_pipeline_stats,

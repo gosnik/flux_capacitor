@@ -1892,6 +1892,7 @@ public:
       }
     }
     for (const auto& pad : copper_pad_shapes(board)) {
+      if (!pad.net_tie_groups.empty()) mutable_geometry_->net_tie_pads.push_back(pad);
       for (const auto& layer_id : pad.layers) {
         const auto layer = layer_index(layer_id);
         if (layer) {
@@ -2149,6 +2150,9 @@ private:
     std::string diagnostic;
     std::size_t spatial_reference_count{0};
     std::vector<IndexedObstacle> obstacles;
+    // Immutable declared contact regions, shared with worker obstacle indices. Ordinary pad
+    // queries do not pay for net-tie discovery or broaden the electrical net identity.
+    std::vector<CopperPadShape> net_tie_pads;
     std::vector<std::vector<std::size_t>> bins;
   };
 
@@ -2486,6 +2490,14 @@ private:
                                                            obstacle.arc_geometry->end)
               : geometry::point_segment_distance_nm(obstacle.start, start, end);
       if (actual < required) {
+        if (is_pad && !obstacle.pad_geometry->net_tie_groups.empty() &&
+            !planned_via && !treat_all_copper_as_foreign &&
+            declared_net_tie_terminal_escape_exempt(
+                geometry_->net_tie_pads, net, grid_.layers[obstacle.layer], start, end,
+                Nanometres{static_cast<std::int64_t>(std::ceil(planned_radius_nm * 2.0L))},
+                *obstacle.pad_geometry,
+                Nanometres{static_cast<std::int64_t>(std::ceil(planned_pair_clearance))}))
+          continue;
         result.obstacles.push_back(obstacle.id);
       }
     }

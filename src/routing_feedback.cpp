@@ -251,8 +251,10 @@ run_persistent_routing_session(const Board& planning_board, const Board& materia
     }
   }
   result.engine_attempts = engine.state().attempts;
-  if (engine.state().legal_scaffold)
+  if (engine.state().legal_scaffold) {
     result.retained_scaffold_counters = engine.state().legal_scaffold->counters;
+    result.retained_scaffold = engine.state().legal_scaffold;
+  }
   result.engine_tightening_actions = engine.state().tightening_actions;
   result.engine_tightening_improvements = engine.state().tightening_improvements;
   result.engine_decision_points = engine.state().decision_points;
@@ -283,6 +285,30 @@ run_persistent_routing_session(const Board& planning_board, const Board& materia
 
   if (!result.detailed.complete())
     result.detailed.diagnostic += std::string("; routing engine: ") + to_string(result.engine_outcome);
+  return result;
+}
+
+DetailedRouteResult retained_scaffold_diagnostic_preview(
+    const Board& source, const CopperScaffoldResult& scaffold, RoutingEngineOutcome outcome) {
+  DetailedRouteResult result;
+  result.candidate = scaffold.copper;
+  const auto added_count = [](const auto& before, const auto& after) {
+    std::set<ObjectId> existing;
+    for (const auto& object : before) existing.insert(object.id);
+    return static_cast<std::size_t>(std::count_if(after.begin(), after.end(),
+        [&](const auto& object) { return !existing.contains(object.id); }));
+  };
+  result.added_tracks = added_count(source.tracks, scaffold.copper.tracks);
+  result.added_track_arcs = added_count(source.track_arcs, scaffold.copper.track_arcs);
+  result.added_track_beziers = added_count(source.track_beziers, scaffold.copper.track_beziers);
+  result.added_vias = added_count(source.vias, scaffold.copper.vias);
+  result.stop_reason = outcome == RoutingEngineOutcome::timed_out ||
+                               outcome == RoutingEngineOutcome::cancelled
+                           ? DetailedRouterStopReason::cancelled
+                           : DetailedRouterStopReason::incomplete_global_route;
+  result.diagnostic = "retained physical copper subset; final connectivity, curvature and "
+                      "whole-board DRC are unassessed; routing engine: " +
+                      std::string(to_string(outcome));
   return result;
 }
 

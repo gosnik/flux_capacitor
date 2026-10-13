@@ -1947,6 +1947,7 @@ void import_footprints(const SExpression& root, Board& board, Importer& importer
                                                 std::to_string(pad_index++) + "-" +
                                                 std::string(pad_name),
                                             importer)};
+      pad.number = std::string(pad_name);
       pad.net = pad_net(*pad_expression, importer);
       // A missing board-file pad angle is zero in the placed board frame, not zero relative
       // to the footprint. Explicit angles below use this same absolute-to-local conversion.
@@ -2038,6 +2039,68 @@ void import_footprints(const SExpression& root, Board& board, Importer& importer
       pad.drill_offset = {Nanometres{-drill.offset.x.value()}, Nanometres{-drill.offset.y.value()}};
       pad.plated = atom_at(*pad_expression, 2) != std::optional<std::string_view>{"np_thru_hole"};
       footprint.pads.push_back(std::move(pad));
+    }
+    // KiCad references net-tie groups by pad number. Resolve them immediately to canonical IDs
+    // so later geometry checks cannot accidentally infer a global net equivalence.
+    std::set<ObjectId> declared_net_tie_members;
+    for (const auto* declaration : find_children(*expression, "net_tie_pad_groups")) {
+      for (std::size_t atom = 1; atom < declaration->children.size(); ++atom) {
+        std::vector<ObjectId> group;
+        std::set<std::string> group_numbers;
+        const auto value = atom_at(*declaration, atom);
+        if (!value) continue;
+        const std::string_view text = *value;
+        std::size_t begin = 0;
+        while (begin <= text.size()) {
+          const auto end = text.find(',', begin);
+          auto number = text.substr(begin, end == std::string_view::npos ? text.size() - begin
+                                                                          : end - begin);
+          const auto first = number.find_first_not_of(" \t");
+          const auto last = number.find_last_not_of(" \t");
+          if (first == std::string_view::npos) {
+            importer.error("invalid_net_tie_pad_group", "net-tie pad group contains an empty pad number",
+                           declaration->location);
+            group.clear();
+            break;
+          }
+          number = number.substr(first, last - first + 1U);
+          if (!group_numbers.insert(std::string(number)).second) {
+            importer.error("invalid_net_tie_pad_group", "net-tie pad group repeats a pad number",
+                           declaration->location);
+            group.clear();
+            break;
+          }
+          std::vector<ObjectId> matches;
+          for (const auto& pad : footprint.pads) {
+            if (pad.number == number) matches.push_back(pad.id);
+          }
+          if (matches.empty()) {
+            importer.error("unknown_net_tie_pad", "net-tie pad group references an unknown pad number",
+                           declaration->location);
+            group.clear();
+            break;
+          }
+          if (std::any_of(matches.begin(), matches.end(), [&](const ObjectId& id) {
+                return declared_net_tie_members.contains(id);
+              })) {
+            importer.error("overlapping_net_tie_pad_group",
+                           "a pad may belong to only one declared net-tie group",
+                           declaration->location);
+            group.clear();
+            break;
+          }
+          group.insert(group.end(), matches.begin(), matches.end());
+          if (end == std::string_view::npos) break;
+          begin = end + 1U;
+        }
+        if (group.size() >= 2U) {
+          declared_net_tie_members.insert(group.begin(), group.end());
+          footprint.net_tie_pad_groups.push_back(std::move(group));
+        }
+        else if (!group.empty()) importer.error("invalid_net_tie_pad_group",
+                                                 "net-tie pad group requires at least two pads",
+                                                 declaration->location);
+      }
     }
     if (footprint.side == BoardSide::back) {
       // KiCad serializes already-reflected local coordinates. Canonical footprints retain

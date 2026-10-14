@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <chrono>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <stop_token>
 #include <string>
@@ -14,6 +15,10 @@
 #include <vector>
 
 namespace flux {
+
+// Deliberately opaque: only the scaffold implementation can issue a checkpoint certificate.
+// It authorizes restoration only after the source scene and every owned copper object match.
+struct CopperScaffoldResumeCertificate;
 
 // A deliberately conservative, straight-copper bridge between topology planning and continuous
 // realization.  It only publishes complete connections that pass the same dynamic DRC used for
@@ -94,8 +99,9 @@ struct CopperScaffoldConfig {
   // legal paths still replay for the complete request domain; excluded requests remain
   // `not_attempted` so regional admission cannot mistake them for failed work.
   std::optional<std::vector<std::size_t>> admitted_request_indices{std::nullopt};
-  // Resume an evicted bounded sweep from only requests that have not yet been attempted. This
-  // is effective only when the retained legal scene and ordered request domain replay exactly.
+  // Resume an evicted bounded sweep from only requests that have not yet been attempted. An
+  // implementation-issued certificate may restore an unchanged retained prefix directly; it is
+  // effective only when the retained legal scene and ordered request domain match exactly.
   bool resume_unattempted_requests{false};
 
   bool operator==(const CopperScaffoldConfig&) const = default;
@@ -272,6 +278,8 @@ struct CopperScaffoldCounters {
   std::size_t survivor_tracks_preserved{0U};
   std::size_t survivor_vias_preserved{0U};
   std::size_t completed_transactions{0U};
+  // Exact, engine-issued retained checkpoints restored without replaying their legal prefix.
+  std::size_t certified_prefix_reuses{0U};
   bool cancelled{false};
 };
 
@@ -309,6 +317,9 @@ struct CopperScaffoldResult {
   std::vector<std::size_t> attempted_request_indices;
   std::vector<std::size_t> failed_request_indices;
   std::size_t request_count{0U};
+  // This is not caller-constructible proof. It is emitted only after the implementation has
+  // captured the exact generated copper delta for this immutable source scene.
+  std::shared_ptr<const CopperScaffoldResumeCertificate> resume_certificate;
 };
 
 // This event is emitted only after a complete request transaction or a bounded request failure.

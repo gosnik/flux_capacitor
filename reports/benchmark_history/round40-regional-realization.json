@@ -1,0 +1,301 @@
+{
+  "round": 40,
+  "recorded_at": "2026-10-14T10:19:34.692327+00:00",
+  "status": "validated_implementation_esc_incomplete",
+  "source_build_manifest": "reports/validation/regional-realization-round40-20261014/source-build.json",
+  "binary_sha256": "ea2d8fbeab3a9952919657c5f400b292b149b107132b3fd6fbc5297d2c25f52e",
+  "baseline": {
+    "revision": "59e7b41",
+    "esc_wall_seconds": 2786.633,
+    "satisfied_requests": 543,
+    "total_requests": 981,
+    "deferred_requests": 423,
+    "regional_passes": 15,
+    "regional_seconds": 1425.41,
+    "accepted_repairs": 0,
+    "final_drc": "unassessed"
+  },
+  "local_validation": {
+    "release": "pass",
+    "viewer": "pass",
+    "focused": "3/3",
+    "core": "79/79",
+    "risk": "35/35"
+  },
+  "esc_diagnostic": {
+    "status": "intentionally_stopped_diagnostic",
+    "wall_seconds": 590.262350418001,
+    "first_rejection_stage": "native_copper_illegal",
+    "rejections": [
+      {
+        "monotonic_time_us": 540444643,
+        "message": "regional realization rejected: first_stage=native_copper_illegal, candidate_rank=0, template=none, owner=owned, net=kicad-net-name:HALL_M1_U, connection=0, run=0, fragment=0",
+        "active_group": "regional-realization-rejection:0:0"
+      },
+      {
+        "monotonic_time_us": 543160965,
+        "message": "regional realization rejected: first_stage=native_copper_illegal, candidate_rank=0, template=none, owner=owned, net=kicad-net-name:M1_SHUNT_U_KN, connection=0, run=2, fragment=1",
+        "active_group": "regional-realization-rejection:1:0"
+      },
+      {
+        "monotonic_time_us": 552942465,
+        "message": "regional realization rejected: first_stage=native_copper_illegal, candidate_rank=0, template=none, owner=owned, net=kicad-net-name:HALL_M1_U, connection=0, run=0, fragment=0",
+        "active_group": "regional-realization-rejection:0:0"
+      },
+      {
+        "monotonic_time_us": 557768794,
+        "message": "regional realization rejected: first_stage=native_copper_illegal, candidate_rank=0, template=none, owner=owned, net=kicad-net-name:M1_SHUNT_U_KN, connection=0, run=2, fragment=1",
+        "active_group": "regional-realization-rejection:1:0"
+      }
+    ],
+    "last_scaffold_decision": null,
+    "physical_cause": "not yet identified; distinguish unassessed native proof from actual collision",
+    "final_drc": "unassessed"
+  },
+  "positive_native_guide_integration": "not exercised by deterministic unit fixture; ESC measurement pending",
+  "pre_scoped_admission_tiers": [
+    {
+      "tier": 0,
+      "board": "pt2399_delay",
+      "passed": true,
+      "detail_seconds": 38.33436694300326,
+      "previous_detail_seconds": 37.62565801299934,
+      "global_seconds": 23.11585555000056,
+      "opens": 0,
+      "internal_copper_violations": 0,
+      "copper_violation_categories": {},
+      "tracks": 162,
+      "beziers": 396,
+      "arcs": 24,
+      "vias": 3,
+      "copper_identical": true,
+      "kicad_violations": 0,
+      "kicad_reported_unconnected_items": 0,
+      "peak_process_tree_rss_kib": 634356,
+      "scaffold_search_expansions": 24,
+      "router_global_iterations": 0,
+      "recorded_telemetry": "reports/validation/regional-realization-round40-20261014/pre-scoped-admission/tier0/telemetry"
+    },
+    {
+      "tier": 1,
+      "board": "bm_svf",
+      "passed": true,
+      "detail_seconds": 117.74782170300023,
+      "previous_detail_seconds": 121.88763217900123,
+      "global_seconds": 80.82207926800038,
+      "opens": 0,
+      "internal_copper_violations": 0,
+      "copper_violation_categories": {},
+      "tracks": 499,
+      "beziers": 359,
+      "arcs": 125,
+      "vias": 57,
+      "copper_identical": true,
+      "kicad_violations": 0,
+      "kicad_reported_unconnected_items": 0,
+      "peak_process_tree_rss_kib": 628036,
+      "scaffold_search_expansions": 4876,
+      "router_global_iterations": 0,
+      "recorded_telemetry": "reports/validation/regional-realization-round40-20261014/pre-scoped-admission/tier1/telemetry"
+    },
+    {
+      "tier": 2,
+      "board": "ft2232h_jtag",
+      "passed": true,
+      "detail_seconds": 253.42864503299643,
+      "previous_detail_seconds": 249.18816444600088,
+      "global_seconds": 190.47220683399792,
+      "opens": 0,
+      "internal_copper_violations": 0,
+      "copper_violation_categories": {},
+      "tracks": 889,
+      "beziers": 421,
+      "arcs": 164,
+      "vias": 75,
+      "copper_identical": true,
+      "kicad_violations": 0,
+      "kicad_reported_unconnected_items": 0,
+      "peak_process_tree_rss_kib": 689988,
+      "scaffold_search_expansions": 538,
+      "router_global_iterations": 0,
+      "recorded_telemetry": "reports/validation/regional-realization-round40-20261014/pre-scoped-admission/tier2/telemetry"
+    }
+  ],
+  "pre_scoped_admission_binary_sha256": "2103e0a38c3d9129561a09f05a73a0ad2c9102b5ac3fe66403a3e578239c2d1f",
+  "tiers": [
+    {
+      "tier": 0,
+      "board": "pt2399_delay",
+      "passed": true,
+      "detail_seconds": 38.176340180005354,
+      "previous_detail_seconds": 37.62565801299934,
+      "global_seconds": 22.543897720999666,
+      "opens": 0,
+      "internal_copper_violations": 0,
+      "copper_violation_categories": {},
+      "tracks": 162,
+      "beziers": 396,
+      "arcs": 24,
+      "vias": 3,
+      "copper_identical": true,
+      "kicad_violations": 0,
+      "kicad_reported_unconnected_items": 0,
+      "peak_process_tree_rss_kib": 636704,
+      "scaffold_search_expansions": 24,
+      "router_global_iterations": 0,
+      "recorded_telemetry": "reports/validation/regional-realization-round40-20261014/tier0/telemetry"
+    },
+    {
+      "tier": 1,
+      "board": "bm_svf",
+      "passed": true,
+      "detail_seconds": 115.95297718000074,
+      "previous_detail_seconds": 121.88763217900123,
+      "global_seconds": 80.15486738400068,
+      "opens": 0,
+      "internal_copper_violations": 0,
+      "copper_violation_categories": {},
+      "tracks": 499,
+      "beziers": 359,
+      "arcs": 125,
+      "vias": 57,
+      "copper_identical": true,
+      "kicad_violations": 0,
+      "kicad_reported_unconnected_items": 0,
+      "peak_process_tree_rss_kib": 631860,
+      "scaffold_search_expansions": 4876,
+      "router_global_iterations": 0,
+      "recorded_telemetry": "reports/validation/regional-realization-round40-20261014/tier1/telemetry"
+    },
+    {
+      "tier": 2,
+      "board": "ft2232h_jtag",
+      "passed": true,
+      "detail_seconds": 249.87680729499698,
+      "previous_detail_seconds": 249.18816444600088,
+      "global_seconds": 191.2996533609985,
+      "opens": 0,
+      "internal_copper_violations": 0,
+      "copper_violation_categories": {},
+      "tracks": 889,
+      "beziers": 421,
+      "arcs": 164,
+      "vias": 75,
+      "copper_identical": true,
+      "kicad_violations": 0,
+      "kicad_reported_unconnected_items": 0,
+      "peak_process_tree_rss_kib": 688028,
+      "scaffold_search_expansions": 538,
+      "router_global_iterations": 0,
+      "recorded_telemetry": "reports/validation/regional-realization-round40-20261014/tier2/telemetry"
+    }
+  ],
+  "final_focused": "3/3",
+  "final_risk": "35/35",
+  "esc_check": {
+    "status": "stopped_diagnostic",
+    "wall_seconds": 609.7575493570039,
+    "stop_reason": "two completed regional probes and certified prefix reuse captured",
+    "final_connectivity_and_drc": "unassessed",
+    "certificate_reuse_observed": true,
+    "last_scaffold_decision": {
+      "time_seconds": 507.387366,
+      "message": "action=copper-scaffold, generation=2, work=56986; batch=1; failed=4; deferred=477; satisfied=496; certified_prefix_reuses_this_scaffold_invocation=1"
+    },
+    "regional_probes": [
+      {
+        "time_seconds": 494.713413,
+        "active_seconds": 33.365515,
+        "accepted": false,
+        "message": "action=regional, generation=1, work=923359; accepted=no, elapsed_us=33365515, scheduler=deadline_experiments; preparation_work=264109; repair_work=659250; active_us=492610470; suspended=1; resumed=0; invalidated=0"
+      },
+      {
+        "time_seconds": 575.597245,
+        "active_seconds": 66.81179,
+        "accepted": false,
+        "message": "action=regional, generation=2, work=1198768; accepted=no, elapsed_us=66811790, scheduler=deadline_experiments; preparation_work=531147; repair_work=1590980; active_us=571599432; suspended=2; resumed=0; invalidated=0"
+      }
+    ],
+    "accepted_regional_probes": 0,
+    "first_rejection_stage_counts": {
+      "native_copper_illegal": 22
+    },
+    "first_rejection_witness_code_counts": {
+      "track_via_clearance": 17,
+      "track_pad_clearance": 25,
+      "hole_to_hole_clearance": 4,
+      "track_clearance": 6
+    },
+    "representative_rejections": [
+      {
+        "time_seconds": 465.175183,
+        "message": "regional realization rejected: first_stage=native_copper_illegal, candidate_rank=0, template=none, owner=owned, net=kicad-net-name:M1_SHUNT_U_KN, connection=0, run=2, fragment=0, native_code=track_via_clearance, required_nm=600000, actual_nm=500000.000000, object=__flux-copper-scaffold-519-via-2, object=__flux-regional-native-0-2-1"
+      },
+      {
+        "time_seconds": 467.289051,
+        "message": "regional realization rejected: first_stage=native_copper_illegal, candidate_rank=0, template=none, owner=owned, net=kicad-net-name:M2_SHUNT_U_KP, connection=0, run=0, fragment=0, native_code=track_pad_clearance, required_nm=250378, actual_nm=50000.000000, object=77a74837-ccc0-4013-bc7f-541ab9aa3488, object=__flux-regional-native-1-0-0, native_code=track_pad_clearance, required_nm=250466, actual_nm=108404.000000, object=77a74837-ccc0-4013-bc7f-541ab9aa3488, object=__flux-regional-native-1-0-1, native_code=track_pad_clearance, required_nm=250720, actual_nm=166038.165950, object=77a74837-ccc0-4013-bc7f-541ab9aa3488, object=__flux-regional-native-1-0-2"
+      },
+      {
+        "time_seconds": 474.522695,
+        "message": "regional realization rejected: first_stage=native_copper_illegal, candidate_rank=0, template=none, owner=owned, net=kicad-net-name:M1_SHUNT_U_KN, connection=0, run=2, fragment=0, native_code=track_via_clearance, required_nm=600000, actual_nm=500000.000000, object=__flux-copper-scaffold-519-via-2, object=__flux-regional-native-0-2-1"
+      },
+      {
+        "time_seconds": 478.070463,
+        "message": "regional realization rejected: first_stage=native_copper_illegal, candidate_rank=0, template=none, owner=owned, net=kicad-net-name:M2_SHUNT_U_KP, connection=0, run=0, fragment=0, native_code=track_pad_clearance, required_nm=250036, actual_nm=50000.000000, object=77a74837-ccc0-4013-bc7f-541ab9aa3488, object=__flux-regional-native-1-0-0, native_code=track_pad_clearance, required_nm=250120, actual_nm=106743.000000, object=77a74837-ccc0-4013-bc7f-541ab9aa3488, object=__flux-regional-native-1-0-1, native_code=track_pad_clearance, required_nm=250139, actual_nm=166038.165950, object=77a74837-ccc0-4013-bc7f-541ab9aa3488, object=__flux-regional-native-1-0-2, native_code=track_pad_clearance, required_nm=250035, actual_nm=242344.010667, object=77a74837-ccc0-4013-bc7f-541ab9aa3488, object=__flux-regional-native-1-0-3"
+      },
+      {
+        "time_seconds": 485.05134,
+        "message": "regional realization rejected: first_stage=native_copper_illegal, candidate_rank=0, template=none, owner=owned, net=kicad-net-name:M2_SHUNT_V_KP, connection=0, run=0, fragment=0, native_code=track_pad_clearance, required_nm=250009, actual_nm=50000.000000, object=__flux-regional-native-2-0-0, object=b5657ea4-22e8-4d40-830c-d1b8bf85b363, native_code=track_pad_clearance, required_nm=250057, actual_nm=166599.000000, object=__flux-regional-native-2-0-1, object=b5657ea4-22e8-4d40-830c-d1b8bf85b363"
+      },
+      {
+        "time_seconds": 488.684673,
+        "message": "regional realization rejected: first_stage=native_copper_illegal, candidate_rank=0, template=none, owner=owned, net=kicad-net-name:M2_SHUNT_V_KN, connection=0, run=0, fragment=0, native_code=track_pad_clearance, required_nm=250000, actual_nm=50000.000000, object=__flux-regional-native-3-0-0, object=af09a0dd-4fd7-4a9f-98fb-fd7a954b5607"
+      },
+      {
+        "time_seconds": 493.896762,
+        "message": "regional realization rejected: first_stage=native_copper_illegal, candidate_rank=0, template=none, owner=owned, net=kicad-net-name:M1_SHUNT_U_KN, connection=0, run=2, fragment=0, native_code=track_via_clearance, required_nm=600000, actual_nm=500000.000000, object=__flux-copper-scaffold-519-via-2, object=__flux-regional-native-0-2-1"
+      },
+      {
+        "time_seconds": 493.933217,
+        "message": "regional realization rejected: first_stage=native_copper_illegal, candidate_rank=0, template=none, owner=owned, net=kicad-net-name:M1_SHUNT_U_KN, connection=0, run=2, fragment=0, native_code=track_via_clearance, required_nm=600000, actual_nm=500000.000000, object=__flux-copper-scaffold-519-via-2, object=__flux-regional-native-0-2-1"
+      }
+    ],
+    "scaffold_decisions": [
+      {
+        "time_seconds": 450.576403,
+        "message": "action=copper-scaffold, generation=1, work=7440; batch=1; failed=1; deferred=484; satisfied=496; certified_prefix_reuses_this_scaffold_invocation=0"
+      },
+      {
+        "time_seconds": 453.690999,
+        "message": "action=copper-scaffold, generation=1, work=15200; batch=1; failed=2; deferred=483; satisfied=496; certified_prefix_reuses_this_scaffold_invocation=0"
+      },
+      {
+        "time_seconds": 456.803342,
+        "message": "action=copper-scaffold, generation=1, work=24385; batch=1; failed=3; deferred=482; satisfied=496; certified_prefix_reuses_this_scaffold_invocation=0"
+      },
+      {
+        "time_seconds": 459.906679,
+        "message": "action=copper-scaffold, generation=1, work=33518; batch=1; failed=4; deferred=481; satisfied=496; certified_prefix_reuses_this_scaffold_invocation=0"
+      },
+      {
+        "time_seconds": 497.896384,
+        "message": "action=copper-scaffold, generation=2, work=9177; batch=1; failed=1; deferred=480; satisfied=496; certified_prefix_reuses_this_scaffold_invocation=1"
+      },
+      {
+        "time_seconds": 501.02576,
+        "message": "action=copper-scaffold, generation=2, work=18314; batch=1; failed=2; deferred=479; satisfied=496; certified_prefix_reuses_this_scaffold_invocation=1"
+      },
+      {
+        "time_seconds": 504.260717,
+        "message": "action=copper-scaffold, generation=2, work=49242; batch=1; failed=3; deferred=478; satisfied=496; certified_prefix_reuses_this_scaffold_invocation=1"
+      },
+      {
+        "time_seconds": 507.387366,
+        "message": "action=copper-scaffold, generation=2, work=56986; batch=1; failed=4; deferred=477; satisfied=496; certified_prefix_reuses_this_scaffold_invocation=1"
+      }
+    ],
+    "positive_native_guide_acceptance": "not demonstrated; final CLI counters unavailable after intentional signal stop"
+  },
+  "final_core": "79/79",
+  "final_review": "no remaining material correctness issues"
+}

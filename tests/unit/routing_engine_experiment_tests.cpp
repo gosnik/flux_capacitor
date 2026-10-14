@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <stop_token>
+#include <set>
 #include <string>
 #include <thread>
 
@@ -88,6 +89,10 @@ public:
 }
 
 void physical_regions_are_causal_bounded_and_fair() {
+  const RoutingEngineConfig defaults;
+  require(defaults.scaffold_failed_requests_per_regional_handoff == 4U &&
+              defaults.max_physical_region_requests == 6U,
+          "large scaffold sweeps must batch a small bounded failure prefix by default");
   CopperScaffoldResult scaffold;
   for (std::size_t i = 0; i < 4; ++i) {
     GlobalRoutePath request;
@@ -168,6 +173,31 @@ void physical_repair_evidence_reopens_only_changed_missing_demand() {
   reconcile_physical_repair_attempts(true, current_tokens, current_tokens, attempts);
   require(attempts == std::vector<std::size_t>{0U, 0U},
           "a retained-scene geometry change must reset every physical repair attempt");
+}
+
+void strict_scaffold_coverage_progress_excludes_numeric_and_metadata_changes() {
+  CopperScaffoldResult incumbent;
+  incumbent.request_count = 2U;
+  incumbent.request_identities = {"coverage-a", "coverage-b"};
+  incumbent.satisfied_indices = {0U};
+  auto numeric_only = incumbent;
+  numeric_only.counters.expansions = 99U;
+  numeric_only.diagnostic = "new search telemetry";
+  numeric_only.request_evidence.resize(2U);
+  numeric_only.request_evidence[1].termination = CopperScaffoldSearchTermination::search_exhausted;
+  require(!routing_scaffold_strict_coverage_improvement(numeric_only, incumbent),
+          "numeric counters and negative evidence must not reset scaffold stagnation");
+  auto lost_cover = incumbent;
+  lost_cover.satisfied_indices.clear();
+  require(!routing_scaffold_strict_coverage_improvement(lost_cover, incumbent),
+          "a checkpoint that drops checked coverage must not reset scaffold stagnation");
+  auto gained_cover = incumbent;
+  gained_cover.satisfied_indices.push_back(1U);
+  require(routing_scaffold_strict_coverage_improvement(gained_cover, incumbent),
+          "preserved same-domain checked coverage gain must reset scaffold stagnation");
+  gained_cover.request_identities[1] = "reconstructed-domain";
+  require(!routing_scaffold_strict_coverage_improvement(gained_cover, incumbent),
+          "coverage in a reconstructed request domain must not reset scaffold stagnation");
 }
 
 void parked_engine_resumes_without_committing_partial_state() {
@@ -647,6 +677,7 @@ void bounded_scaffold_hands_failed_requests_to_regional_before_sweep_completion(
   config.copper_scaffold.maximum_coupled_exchange_attempts = 0U;
   config.bounded_scaffold_request_threshold = 0U;
   config.scaffold_requests_per_decision = 1U;
+  config.scaffold_failed_requests_per_regional_handoff = 1U;
   config.max_physical_region_requests = 1U;
   config.initial_regional_work_units = 1U;
   config.max_regional_work_units = 1U;
@@ -690,6 +721,95 @@ void bounded_scaffold_hands_failed_requests_to_regional_before_sweep_completion(
           "a no-op regional repair must resume the parked scaffold and satisfy deferred easy requests");
 }
 
+void selected_physical_repair_survives_cancellation_before_exact_admission() {
+  const auto planning = two_pad_board();
+  auto source = planning;
+  source.nets.push_back({NetId{"obstacle"}, "OBSTACLE", 1U});
+  for (const auto& layer : {LayerId{"F.Cu"}, LayerId{"B.Cu"}})
+    source.tracks.push_back({ObjectId{"cancel-wall-" + layer.value()}, NetId{"obstacle"}, layer,
+                             mm(50.0, 0.0), mm(50.0, 80.0), Nanometres::from_mm(1.0), true});
+  auto config = experiment_config();
+  config.copper_scaffold.enabled = true;
+  config.copper_scaffold.maximum_expansions_per_connection = 0U;
+  config.copper_scaffold.maximum_victim_exchanges = 0U;
+  config.copper_scaffold.maximum_coupled_exchange_attempts = 0U;
+  config.bounded_scaffold_request_threshold = 0U;
+  config.scaffold_requests_per_decision = 1U;
+  config.scaffold_failed_requests_per_regional_handoff = 1U;
+  config.max_physical_region_requests = 1U;
+  RoutingEngine engine(planning, source, config);
+  for (std::size_t step = 0U; step < 20'000U && !engine.terminal() &&
+       engine.state().scaffold_repair_handoffs == 0U; ++step)
+    static_cast<void>(engine.advance({.work_units = 64U}));
+  require(engine.state().scaffold_repair_handoffs == 1U &&
+              engine.state().scaffold_newly_failed_requests.size() == 1U &&
+              engine.state().physical_repair_admitted_attempts == 0U,
+          "selecting a physical repair must retain its queue entry until exact admission");
+  const auto queued = engine.state().scaffold_newly_failed_requests;
+  std::stop_source stop;
+  stop.request_stop();
+  static_cast<void>(engine.advance({}, stop.get_token()));
+  require(engine.state().scaffold_newly_failed_requests == queued &&
+              engine.state().physical_repair_admitted_attempts == 0U,
+          "cancelling selected regional preparation must preserve fair retry eligibility");
+}
+
+void large_bounded_scaffold_batches_failures_without_losing_success_queue_context() {
+  auto planning = two_pad_board();
+  const auto append = [&](std::string name, Point first, Point second, std::uint32_t ordinal) {
+    const NetId net{std::move(name)};
+    planning.nets.push_back({net, net.value(), ordinal});
+    for (const auto [index, point] : {std::pair{0U, first}, std::pair{1U, second}}) {
+      Footprint footprint;
+      footprint.id = ObjectId{"B" + std::to_string(ordinal) + "-" + std::to_string(index)};
+      footprint.reference = footprint.id.value();
+      footprint.position = point;
+      footprint.courtyard = Polygon{{mm(-1, -1), mm(1, -1), mm(1, 1), mm(-1, 1)}};
+      footprint.pads = {{ObjectId{footprint.id.value() + "-pad"}, net, Point{}, {LayerId{"F.Cu"}}}};
+      planning.footprints.push_back(std::move(footprint));
+    }
+    return net;
+  };
+  const auto hard0 = append("batched-hard-0", mm(20, 10), mm(80, 10), 1U);
+  const auto hard1 = append("batched-hard-1", mm(20, 20), mm(80, 20), 2U);
+  const auto hard2 = append("batched-hard-2", mm(20, 30), mm(80, 30), 3U);
+  const auto easy = append("batched-easy", mm(10, 70), mm(30, 70), 4U);
+  const auto hard3 = append("batched-hard-3", mm(20, 50), mm(80, 50), 5U);
+  auto source = planning;
+  source.nets.push_back({NetId{"batched-wall"}, "WALL", 6U});
+  for (const auto& layer : {LayerId{"F.Cu"}, LayerId{"B.Cu"}})
+    source.tracks.push_back({ObjectId{"batched-wall-" + layer.value()}, NetId{"batched-wall"}, layer,
+                             mm(50, 0), mm(50, 80), Nanometres::from_mm(1.0), true});
+  auto config = experiment_config();
+  config.copper_scaffold.enabled = true;
+  config.planner.global.priority_nets = {NetId{"engine-experiment-net"}, hard0, hard1, hard2, easy, hard3};
+  config.copper_scaffold.maximum_expansions_per_connection = 0U;
+  config.copper_scaffold.maximum_victim_exchanges = 0U;
+  config.copper_scaffold.maximum_coupled_exchange_attempts = 0U;
+  config.bounded_scaffold_request_threshold = 5U;
+  config.scaffold_requests_per_decision = 1U;
+  config.scaffold_failed_requests_per_regional_handoff = 4U;
+  config.max_physical_region_requests = 6U;
+  config.max_actions_without_physical_progress = 2U;
+  RoutingEngine engine(planning, source, config);
+  bool success_preserved_queue = false;
+  for (std::size_t step = 0U; step < 100'000U && !engine.terminal() &&
+       engine.state().scaffold_repair_handoffs == 0U; ++step) {
+    static_cast<void>(engine.advance({.work_units = 64U}));
+    success_preserved_queue = success_preserved_queue ||
+        (!engine.state().scaffold_newly_failed_requests.empty() && engine.state().legal_scaffold &&
+         !engine.state().legal_scaffold->satisfied_indices.empty() &&
+         engine.state().scaffold_repair_handoffs == 0U);
+  }
+  const auto& queued = engine.state().scaffold_newly_failed_requests;
+  require(success_preserved_queue && engine.state().scaffold_repair_handoffs == 1U &&
+              queued.size() == 4U && std::set<std::size_t>(queued.begin(), queued.end()).size() == 4U &&
+              engine.state().scaffold_regional_missing_requests == 0U,
+          "a large bounded sweep must preserve failures across an ordinary success and hand off four distinct requests");
+  require(queued.size() <= config.max_physical_region_requests,
+          "the queued causal handoff must remain below the configured physical-region cap");
+}
+
 void forced_scaffold_eviction_does_not_preempt_unfinished_physical_regional_work() {
   auto planning = two_pad_board();
   for (int n = 0; n < 2; ++n) {
@@ -726,7 +846,9 @@ void forced_scaffold_eviction_does_not_preempt_unfinished_physical_regional_work
   config.copper_scaffold.maximum_coupled_exchange_attempts = 0U;
   config.bounded_scaffold_request_threshold = 0U;
   config.scaffold_requests_per_decision = 1U;
+  config.scaffold_failed_requests_per_regional_handoff = 1U;
   config.max_physical_region_requests = 1U;
+  config.max_actions_without_physical_progress = 2U;
   config.experiment_quantum = std::chrono::milliseconds{1U};
   config.max_parked_experiments = 0U;
   config.max_parked_experiment_bytes = 0U;
@@ -774,6 +896,8 @@ void forced_scaffold_eviction_does_not_preempt_unfinished_physical_regional_work
                                 }) != engine.state().legal_scaffold->paths.end();
                           }),
           "after the evaluated no-op repair, a reconstructed scaffold must reach deferred requests");
+  require(engine.state().checkpoint_progress_events > 0U,
+          "the later strict checked coverage gain must reset scaffold liveness after a failed prefix");
 }
 
 void changed_copper_invalidates_a_scaffold_continuation() {
@@ -1288,8 +1412,11 @@ int main() {
   physical_regions_are_causal_bounded_and_fair();
   physical_repair_evidence_token_is_canonical_and_causal();
   physical_repair_evidence_reopens_only_changed_missing_demand();
+  strict_scaffold_coverage_progress_excludes_numeric_and_metadata_changes();
   empty_scaffold_dispatches_missing_demand_to_regional_repair();
   bounded_scaffold_hands_failed_requests_to_regional_before_sweep_completion();
+  selected_physical_repair_survives_cancellation_before_exact_admission();
+  large_bounded_scaffold_batches_failures_without_losing_success_queue_context();
   forced_scaffold_eviction_does_not_preempt_unfinished_physical_regional_work();
   changed_copper_invalidates_a_scaffold_continuation();
   partial_scaffold_routes_missing_requests_against_retained_copper();

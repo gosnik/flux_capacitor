@@ -1887,6 +1887,9 @@ merge_residual_cone_checkpoint(const RegionalRouteResult& ordinary, RegionalRout
   combined.native_arc_pieces_checked += retry.native_arc_pieces_checked;
   combined.native_arc_copper_violations += retry.native_arc_copper_violations;
   combined.native_arc_legal_windows += retry.native_arc_legal_windows;
+  combined.native_polyline_guide_checks += retry.native_polyline_guide_checks;
+  combined.native_polyline_guide_exact_legal += retry.native_polyline_guide_exact_legal;
+  combined.native_polyline_guide_ph_accepted += retry.native_polyline_guide_ph_accepted;
   combined.spline_interpolation_rank_us += retry.spline_interpolation_rank_us;
   combined.spline_interpolation_exact_us += retry.spline_interpolation_exact_us;
   combined.spline_adaptive_assessment_us += retry.spline_adaptive_assessment_us;
@@ -11379,6 +11382,7 @@ struct NativeRegionalAssessment {
   std::vector<std::uint64_t> route_fit_us;
   std::vector<NativeSplineFitStats> route_fit_stats;
   std::vector<RegionalFrozenCopperConflict> frozen_conflicts;
+  std::vector<std::vector<RegionalNativeCopperViolation>> route_violations;
   std::size_t pieces{0U};
   std::size_t violations{0U};
   std::size_t fit_failures{0U};
@@ -11407,6 +11411,7 @@ assess_native_regional_window(const Board& source, const std::vector<WorkingRegi
                               bool include_candidate_vias) {
   NativeRegionalAssessment result;
   result.route_legal.assign(routes.size(), true);
+  result.route_violations.resize(routes.size());
   if (routes.empty() || pieces.size() != routes.size()) {
     result.violations = 1U;
     std::fill(result.route_legal.begin(), result.route_legal.end(), false);
@@ -11511,6 +11516,18 @@ assess_native_regional_window(const Board& source, const std::vector<WorkingRegi
     }
     result.violations += generated ? 1U : 0U;
     if (generated) {
+      const RegionalNativeCopperViolation witness{violation.code, violation.object_ids,
+                                                  violation.required_clearance,
+                                                  violation.actual_distance_nm};
+      for (const auto& id : violation.object_ids) {
+        const auto found = route_by_generated_id.find(id);
+        if (found == route_by_generated_id.end()) continue;
+        for (const auto route : found->second) {
+          auto& witnesses = result.route_violations[route];
+          if (std::find(witnesses.begin(), witnesses.end(), witness) == witnesses.end())
+            witnesses.push_back(witness);
+        }
+      }
       for (const auto& native_id : violation.object_ids) {
         const auto native = route_by_generated_id.find(native_id);
         if (native == route_by_generated_id.end()) continue;
@@ -11668,6 +11685,56 @@ void publish_regional_spline_assignment_telemetry(const RegionalBundleAssignment
   };
   publish_conflicts(assignment.frozen_copper_conflicts, "access");
   publish_conflicts(assignment.native_frozen_copper_conflicts, "native");
+  if (assignment.first_realization_rejection) {
+    const auto& rejection = *assignment.first_realization_rejection;
+    const auto stage_name = [](RegionalRealizationRejectionStage stage) -> std::string_view {
+      switch (stage) {
+      case RegionalRealizationRejectionStage::invalid_cross_section: return "invalid_cross_section";
+      case RegionalRealizationRejectionStage::missing_fragment: return "missing_fragment";
+      case RegionalRealizationRejectionStage::degenerate_fragment: return "degenerate_fragment";
+      case RegionalRealizationRejectionStage::missing_window: return "missing_window";
+      case RegionalRealizationRejectionStage::invalid_template: return "invalid_template";
+      case RegionalRealizationRejectionStage::missing_channel_topology: return "missing_channel_topology";
+      case RegionalRealizationRejectionStage::topology_seed_failed: return "topology_seed_failed";
+      case RegionalRealizationRejectionStage::sampled_route_too_short: return "sampled_route_too_short";
+      case RegionalRealizationRejectionStage::route_topology_illegal: return "route_topology_illegal";
+      case RegionalRealizationRejectionStage::route_shape_illegal: return "route_shape_illegal";
+      case RegionalRealizationRejectionStage::native_copper_illegal: return "native_copper_illegal";
+      case RegionalRealizationRejectionStage::quantized_copper_illegal: return "quantized_copper_illegal";
+      }
+      return "unknown";
+    };
+    RouterTelemetryEvent event;
+    event.kind = RouterTelemetryEventKind::search_summary;
+    event.minimum_level = minimum_level;
+    event.group_id = "regional-window:" + std::to_string(rejection.window_id);
+    event.stable_id = "regional-realization-rejection:" + std::to_string(rejection.window_id) + ":" +
+                      std::to_string(assignment.spline_candidate_rank);
+    if (rejection.fragment) event.net = rejection.fragment->net;
+    if (rejection.layer) event.layer = *rejection.layer;
+    if (rejection.geometry) {
+      event.x_nm = rejection.geometry->x.value();
+      event.y_nm = rejection.geometry->y.value();
+    }
+    event.detail = "regional realization rejected: first_stage=" + std::string(stage_name(rejection.stage)) +
+        ", candidate_rank=" + std::to_string(assignment.spline_candidate_rank) +
+        ", template=" + (rejection.template_id ? std::to_string(*rejection.template_id) : "none") +
+        ", owner=" + std::string(rejection.owned ? "owned" : "context");
+    if (rejection.fragment) {
+      event.detail += ", net=" + rejection.fragment->net.value() +
+          ", connection=" + std::to_string(rejection.fragment->connection_index) +
+          ", run=" + std::to_string(rejection.fragment->run_index) +
+          ", fragment=" + std::to_string(rejection.fragment->fragment_index);
+    }
+    for (const auto& violation : rejection.native_violations) {
+      event.detail += ", native_code=" + violation.code +
+          ", required_nm=" + std::to_string(violation.required_clearance.value()) +
+          ", actual_nm=" + std::to_string(static_cast<double>(violation.actual_distance_nm));
+      for (const auto& object : violation.object_ids)
+        event.detail += ", object=" + object;
+    }
+    static_cast<void>(telemetry->try_emit(std::move(event)));
+  }
   for (const auto& realization : assignment.spline_realizations) {
     RouterTelemetryEvent route;
     route.kind = RouterTelemetryEventKind::route_candidate_selected;
@@ -11768,6 +11835,8 @@ void merge_regional_spline_work(RegionalRouteResult& result, RegionalRouteResult
     FLUX_MERGE_SPLINE_DELTA(candidate_ranker_training_rows_failed);
     FLUX_MERGE_SPLINE_DELTA(joint_spline_candidates_evaluated);
     FLUX_MERGE_SPLINE_DELTA(joint_spline_candidates_legal);
+    FLUX_MERGE_SPLINE_DELTA(ordinary_spline_candidates_evaluated);
+    FLUX_MERGE_SPLINE_DELTA(ordinary_spline_candidates_legal);
     FLUX_MERGE_SPLINE_DELTA(joint_spline_failed_fallback_improvements);
     FLUX_MERGE_SPLINE_DELTA(spline_lane_targets);
     FLUX_MERGE_SPLINE_DELTA(spline_multi_target_fragments);
@@ -11824,6 +11893,9 @@ void merge_regional_spline_work(RegionalRouteResult& result, RegionalRouteResult
     FLUX_MERGE_SPLINE_DELTA(native_arc_pieces_checked);
     FLUX_MERGE_SPLINE_DELTA(native_arc_copper_violations);
     FLUX_MERGE_SPLINE_DELTA(native_arc_legal_windows);
+    FLUX_MERGE_SPLINE_DELTA(native_polyline_guide_checks);
+    FLUX_MERGE_SPLINE_DELTA(native_polyline_guide_exact_legal);
+    FLUX_MERGE_SPLINE_DELTA(native_polyline_guide_ph_accepted);
     FLUX_MERGE_SPLINE_DELTA(quantization_feedback_attempts);
     FLUX_MERGE_SPLINE_DELTA(quantization_feedback_accepted);
     FLUX_MERGE_SPLINE_DELTA(quantization_feedback_windows_legalized);
@@ -11925,6 +11997,8 @@ void merge_regional_spline_work(RegionalRouteResult& result, RegionalRouteResult
   snapshot.candidate_ranker_training_rows_failed = source.candidate_ranker_training_rows_failed;
   snapshot.joint_spline_candidates_evaluated = source.joint_spline_candidates_evaluated;
   snapshot.joint_spline_candidates_legal = source.joint_spline_candidates_legal;
+  snapshot.ordinary_spline_candidates_evaluated = source.ordinary_spline_candidates_evaluated;
+  snapshot.ordinary_spline_candidates_legal = source.ordinary_spline_candidates_legal;
   snapshot.joint_spline_failed_fallback_improvements = source.joint_spline_failed_fallback_improvements;
   snapshot.spline_lane_targets = source.spline_lane_targets;
   snapshot.spline_multi_target_fragments = source.spline_multi_target_fragments;
@@ -11981,6 +12055,9 @@ void merge_regional_spline_work(RegionalRouteResult& result, RegionalRouteResult
   snapshot.native_arc_pieces_checked = source.native_arc_pieces_checked;
   snapshot.native_arc_copper_violations = source.native_arc_copper_violations;
   snapshot.native_arc_legal_windows = source.native_arc_legal_windows;
+  snapshot.native_polyline_guide_checks = source.native_polyline_guide_checks;
+  snapshot.native_polyline_guide_exact_legal = source.native_polyline_guide_exact_legal;
+  snapshot.native_polyline_guide_ph_accepted = source.native_polyline_guide_ph_accepted;
   snapshot.quantization_feedback_attempts = source.quantization_feedback_attempts;
   snapshot.quantization_feedback_accepted = source.quantization_feedback_accepted;
   snapshot.quantization_feedback_windows_legalized = source.quantization_feedback_windows_legalized;
@@ -12335,6 +12412,12 @@ void realize_bundle_splines_serial(const Board& board, RegionalRouteResult& resu
         (!assignment.joint_spline_candidate && !assignment.spline_realizations.empty())) {
       continue;
     }
+    // Count only candidates that enter physical realization. Preflight-only or skipped portfolio
+    // entries are intentionally excluded: they were never curve-fit or copper-assessed.
+    if (assignment.joint_spline_candidate)
+      ++result.joint_spline_candidates_evaluated;
+    else
+      ++result.ordinary_spline_candidates_evaluated;
     const auto candidate_realization_started = std::chrono::steady_clock::now();
     const auto phase_elapsed_us = [](auto started) {
       return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
@@ -12349,6 +12432,20 @@ void realize_bundle_splines_serial(const Board& board, RegionalRouteResult& resu
     std::uint64_t post_polish_us = 0U;
     std::uint64_t quantization_us = 0U;
     assignment.native_frozen_copper_conflicts.clear();
+    assignment.first_realization_rejection.reset();
+    const auto reject_realization =
+        [&](RegionalRealizationRejectionStage stage,
+            std::optional<RegionalRouteFragmentId> fragment = std::nullopt,
+            std::optional<LayerId> layer = std::nullopt,
+            std::optional<Point> geometry = std::nullopt, bool owned = false,
+            std::optional<std::size_t> template_id = std::nullopt) {
+          if (!assignment.first_realization_rejection) {
+            assignment.first_realization_rejection = RegionalRealizationRejection{
+                stage, assignment.window_id, template_id, std::move(fragment), std::move(layer),
+                std::move(geometry), owned, {}};
+          }
+          assignment.stop_reason = RegionalBundleStopReason::spline_realization_failed;
+        };
     if (telemetry != nullptr) {
       RouterTelemetryEvent progress;
       progress.kind = RouterTelemetryEventKind::search_summary;
@@ -12381,7 +12478,8 @@ void realize_bundle_splines_serial(const Board& board, RegionalRouteResult& resu
                                                      cross_section.first_wall.y.value());
       const auto cross_length = std::hypotl(cross_dx, cross_dy);
       if (!(cross_length > 0.0L)) {
-        assignment.stop_reason = RegionalBundleStopReason::spline_realization_failed;
+        reject_realization(RegionalRealizationRejectionStage::invalid_cross_section,
+                           std::nullopt, cross_section.layer, cross_section.first_wall);
         break;
       }
       for (const auto& placement : cross_section.placements) {
@@ -12399,7 +12497,9 @@ void realize_bundle_splines_serial(const Board& board, RegionalRouteResult& resu
             std::find_if(result.fragments.begin(), result.fragments.end(),
                          [&](const auto& candidate) { return candidate.id == placement.fragment; });
         if (fragment == result.fragments.end()) {
-          assignment.stop_reason = RegionalBundleStopReason::spline_realization_failed;
+          reject_realization(RegionalRealizationRejectionStage::missing_fragment,
+                             placement.fragment, cross_section.layer,
+                             quantize_regional_spline(lane_position));
           break;
         }
         if (!geometry::segments_intersect(fragment->start, fragment->end, cross_section.first_wall,
@@ -12412,7 +12512,8 @@ void realize_bundle_splines_serial(const Board& board, RegionalRouteResult& resu
             static_cast<long double>(fragment->end.y.value() - fragment->start.y.value());
         const auto fragment_length_squared = fragment_dx * fragment_dx + fragment_dy * fragment_dy;
         if (!(fragment_length_squared > 0.0L)) {
-          assignment.stop_reason = RegionalBundleStopReason::spline_realization_failed;
+          reject_realization(RegionalRealizationRejectionStage::degenerate_fragment,
+                             fragment->id, fragment->layer, fragment->start);
           break;
         }
         const auto parameter = std::clamp(
@@ -12444,7 +12545,7 @@ void realize_bundle_splines_serial(const Board& board, RegionalRouteResult& resu
         std::find_if(result.windows.begin(), result.windows.end(),
                      [&](const auto& candidate) { return candidate.id == assignment.window_id; });
     if (window == result.windows.end()) {
-      assignment.stop_reason = RegionalBundleStopReason::spline_realization_failed;
+      reject_realization(RegionalRealizationRejectionStage::missing_window);
       continue;
     }
     for (const auto& fragment : window->fragments) {
@@ -12456,7 +12557,8 @@ void realize_bundle_splines_serial(const Board& board, RegionalRouteResult& resu
     std::vector<WorkingRegionalSpline> routes;
     for (const auto template_id : assignment.selected_templates) {
       if (template_id >= assignment.templates.size()) {
-        assignment.stop_reason = RegionalBundleStopReason::spline_realization_failed;
+        reject_realization(RegionalRealizationRejectionStage::invalid_template, std::nullopt,
+                           std::nullopt, std::nullopt, false, template_id);
         break;
       }
       const auto& route_template = assignment.templates[template_id];
@@ -12464,7 +12566,11 @@ void realize_bundle_splines_serial(const Board& board, RegionalRouteResult& resu
           result.fragments.begin(), result.fragments.end(),
           [&](const auto& candidate) { return candidate.id == route_template.fragment; });
       if (fragment == result.fragments.end() || route_template.channel_sequence.empty()) {
-        assignment.stop_reason = RegionalBundleStopReason::spline_realization_failed;
+        reject_realization(fragment == result.fragments.end()
+                               ? RegionalRealizationRejectionStage::missing_fragment
+                               : RegionalRealizationRejectionStage::missing_channel_topology,
+                           route_template.fragment, route_template.routing_layer, std::nullopt,
+                           false, route_template.id);
         break;
       }
       std::vector<Polygon> cells;
@@ -12489,7 +12595,9 @@ void realize_bundle_splines_serial(const Board& board, RegionalRouteResult& resu
         topology_signature = make_navmesh_topology_signature(std::move(channel_gates));
       }
       if (cells.empty()) {
-        assignment.stop_reason = RegionalBundleStopReason::spline_realization_failed;
+        reject_realization(RegionalRealizationRejectionStage::missing_channel_topology,
+                           route_template.fragment, route_template.routing_layer,
+                           std::nullopt, false, route_template.id);
         break;
       }
       const auto selected_via =
@@ -12572,18 +12680,20 @@ void realize_bundle_splines_serial(const Board& board, RegionalRouteResult& resu
       };
       const auto entry_runup = selected_runup(entry_via, true);
       const auto exit_runup = selected_runup(exit_via, false);
+      const auto owned = std::binary_search(window->owned_fragments.begin(),
+                                            window->owned_fragments.end(), fragment->id);
       const auto dx = static_cast<long double>(route_end.x.value() - route_start.x.value());
       const auto dy = static_cast<long double>(route_end.y.value() - route_start.y.value());
       const auto length = std::hypotl(dx, dy);
       if (!(length > 0.0L)) {
-        assignment.stop_reason = RegionalBundleStopReason::spline_realization_failed;
+        reject_realization(RegionalRealizationRejectionStage::degenerate_fragment,
+                           fragment->id, route_template.routing_layer, route_start, owned,
+                           route_template.id);
         break;
       }
       const auto resource_width_fixed =
           fragment->explicit_width &&
           fragment->width_kind != GlobalRouteSegmentWidthKind::terminal_neck_down;
-      const auto owned = std::binary_search(window->owned_fragments.begin(),
-                                            window->owned_fragments.end(), fragment->id);
       auto targets = resource_width_fixed ? std::vector<LaneTarget>{} : lane_targets[fragment->id];
       std::sort(targets.begin(), targets.end(), [](const auto& lhs, const auto& rhs) {
         return lhs.parameter != rhs.parameter ? lhs.parameter < rhs.parameter
@@ -12709,7 +12819,10 @@ void realize_bundle_splines_serial(const Board& board, RegionalRouteResult& resu
                             std::to_string(point.y.value()) + ")";
           static_cast<void>(telemetry->try_emit(std::move(event)));
         }
-        assignment.stop_reason = RegionalBundleStopReason::spline_realization_failed;
+        reject_realization(RegionalRealizationRejectionStage::topology_seed_failed,
+                           fragment->id, route_template.routing_layer,
+                           seed.empty() ? std::optional<Point>{} : std::optional<Point>{seed.front()},
+                           owned, route_template.id);
         break;
       }
       if (route_template.selected_global_topology) {
@@ -13170,6 +13283,7 @@ void realize_bundle_splines_serial(const Board& board, RegionalRouteResult& resu
     }
     routes = std::move(merged_routes);
     bool topology_seed_failure = false;
+    std::optional<std::size_t> topology_seed_failure_index;
     for (std::size_t route_index = 0U; route_index < routes.size(); ++route_index) {
       auto& route = routes[route_index];
       if (route.topology_signature.valid) {
@@ -13208,11 +13322,18 @@ void realize_bundle_splines_serial(const Board& board, RegionalRouteResult& resu
           static_cast<void>(telemetry->try_emit(std::move(event)));
         }
         topology_seed_failure = true;
+        topology_seed_failure_index = route_index;
         break;
       }
     }
     if (topology_seed_failure) {
-      assignment.stop_reason = RegionalBundleStopReason::spline_realization_failed;
+      if (topology_seed_failure_index && *topology_seed_failure_index < routes.size()) {
+        const auto& failed = routes[*topology_seed_failure_index];
+        reject_realization(RegionalRealizationRejectionStage::topology_seed_failed,
+                           failed.fragment, failed.layer, failed.source_start, failed.owned);
+      } else {
+        reject_realization(RegionalRealizationRejectionStage::topology_seed_failed);
+      }
       continue;
     }
     std::vector<std::vector<SplineVector>> route_samples(routes.size());
@@ -13668,7 +13789,15 @@ void realize_bundle_splines_serial(const Board& board, RegionalRouteResult& resu
     };
     if (std::any_of(route_samples.begin(), route_samples.end(),
                     [](const auto& samples) { return samples.size() < 2U; })) {
-      assignment.stop_reason = RegionalBundleStopReason::spline_realization_failed;
+      const auto failed = std::find_if(routes.begin(), routes.end(), [&](const auto& route) {
+        const auto index = static_cast<std::size_t>(&route - routes.data());
+        return route_samples[index].size() < 2U;
+      });
+      if (failed != routes.end())
+        reject_realization(RegionalRealizationRejectionStage::sampled_route_too_short,
+                           failed->fragment, failed->layer, failed->source_start, failed->owned);
+      else
+        reject_realization(RegionalRealizationRejectionStage::sampled_route_too_short);
       continue;
     }
     publish_phase_started("xpbd relaxation");
@@ -15262,6 +15391,7 @@ void realize_bundle_splines_serial(const Board& board, RegionalRouteResult& resu
     std::vector<std::uint64_t> native_fit_us(routes.size(), 0U);
     std::vector<NativeSplineFitStats> native_fit_stats(routes.size());
     for (std::size_t index = 0U; index < routes.size(); ++index) {
+      if (stop_token.stop_requested()) break;
       const auto fit_started = std::chrono::steady_clock::now();
       native_pieces[index] = fit_quintic_ph_to_cubic_copper(
           routes[index].spline, result.configured.native_fit, stop_token);
@@ -15282,14 +15412,152 @@ void realize_bundle_splines_serial(const Board& board, RegionalRouteResult& resu
         native_source = context->second ? &*context->second : nullptr;
       }
       if (native_source) {
+        if (stop_token.stop_requested()) {
+          native_assessment.route_legal.assign(routes.size(), false);
+          native_assessment.violations = 1U;
+        } else {
         native_assessment =
           assess_native_regional_window(*native_source, routes, native_pieces, assignment.window_id,
                                         result.configured.treat_saved_zone_fills_as_refillable,
                                         frozen_owners[assignment.window_id],
                                         result.configured.frozen_copper_context);
+        }
       } else {
         native_assessment.route_legal.assign(routes.size(), false);
         native_assessment.violations = 1U;
+      }
+      // A native-copper failure can be caused by PH interpolation leaving a narrow, otherwise
+      // usable corridor.  Before changing topology, prove the retained corridor polyline as a
+      // complete native scene.  A clean polyline is only a guide: it is never published from a
+      // curved run.  We then retry PH from that exact guide and retain it only if its own native
+      // representation is clean; the normal topology, shape, mutual and final-scene gates below
+      // still decide acceptance.
+      if (native_source && !native_assessment.legal() &&
+          result.configured.max_native_polyline_guide_retries > 0U &&
+          !stop_token.stop_requested()) {
+        ++result.native_polyline_guide_checks;
+        std::vector<std::vector<SplineFittedPiece>> polyline_pieces(routes.size());
+        bool complete_polyline = true;
+        for (std::size_t index = 0U; index < routes.size(); ++index) {
+          const auto& guide = routes[index].topology_seed;
+          if (guide.size() < 2U) {
+            complete_polyline = false;
+            break;
+          }
+          for (std::size_t point = 1U; point < guide.size(); ++point) {
+            if (guide[point - 1U] == guide[point]) continue;
+            polyline_pieces[index].push_back(
+                {SplineFittedPieceKind::segment, guide[point - 1U], {}, guide[point]});
+          }
+          complete_polyline = complete_polyline && !polyline_pieces[index].empty();
+        }
+        if (complete_polyline && !stop_token.stop_requested()) {
+          const auto polyline_assessment = assess_native_regional_window(
+              *native_source, routes, polyline_pieces, assignment.window_id,
+              result.configured.treat_saved_zone_fills_as_refillable,
+              frozen_owners[assignment.window_id], result.configured.frozen_copper_context);
+          if (polyline_assessment.legal()) {
+            ++result.native_polyline_guide_exact_legal;
+            auto guided_routes = routes;
+            bool rebuilt = true;
+            for (std::size_t index = 0U; index < guided_routes.size(); ++index) {
+              if (index >= native_assessment.route_legal.size() ||
+                  native_assessment.route_legal[index]) continue;
+              // A guide may only reconstruct the owned route whose represented copper failed.
+              // Frozen boundaries retain their endpoint/via anchors and remain context.
+              if (!guided_routes[index].owned || guided_routes[index].frozen_boundary) {
+                rebuilt = false;
+                break;
+              }
+              PHInterpolationConfig interpolation;
+              interpolation.parameter_exponent =
+                  guided_routes[index].spline.parameter_exponent;
+              interpolation.tangent_scale = guided_routes[index].spline.tangent_scale;
+              auto guide = make_quintic_ph_route(guided_routes[index].topology_seed,
+                                                  interpolation);
+              const auto corridor = regional_spline_convex_corridor(guided_routes[index]);
+              if (!guide || !set_quintic_ph_corridor(*guide, corridor) ||
+                  !certify_regional_spline_topology(guided_routes[index], *guide).legal() ||
+                  !certify_quintic_ph_shape(*guide).legal) {
+                rebuilt = false;
+                break;
+              }
+              guided_routes[index].spline = std::move(*guide);
+            }
+            if (rebuilt && !stop_token.stop_requested()) {
+              std::vector<std::vector<SplineFittedPiece>> guided_pieces(routes.size());
+              std::vector<std::uint64_t> guided_fit_us(routes.size(), 0U);
+              std::vector<NativeSplineFitStats> guided_fit_stats(routes.size());
+              for (std::size_t index = 0U; index < guided_routes.size(); ++index) {
+                if (stop_token.stop_requested()) {
+                  rebuilt = false;
+                  break;
+                }
+                const auto fit_started = std::chrono::steady_clock::now();
+                guided_pieces[index] = fit_quintic_ph_to_cubic_copper(
+                    guided_routes[index].spline, result.configured.native_fit, stop_token);
+                guided_fit_stats[index].attempts = 1U;
+                guided_fit_us[index] = static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<std::chrono::microseconds>(
+                        std::chrono::steady_clock::now() - fit_started).count());
+              }
+              if (!rebuilt || stop_token.stop_requested()) continue;
+              const auto guided_assessment = assess_native_regional_window(
+                  *native_source, guided_routes, guided_pieces, assignment.window_id,
+                  result.configured.treat_saved_zone_fills_as_refillable,
+                  frozen_owners[assignment.window_id], result.configured.frozen_copper_context);
+              if (guided_assessment.legal()) {
+                // This changes the PH curve, never the final copper representation. Refresh
+                // every derived geometry before its ordinary certificates/materialisation use
+                // it; cached samples or a previous scene fingerprint must not certify the
+                // rejected curve.
+                const auto routes_before_guide = routes;
+                const auto native_pieces_before_guide = native_pieces;
+                const auto native_assessment_before_guide = native_assessment;
+                const auto native_fit_us_before_guide = native_fit_us;
+                const auto native_fit_stats_before_guide = native_fit_stats;
+                routes = std::move(guided_routes);
+                native_pieces = std::move(guided_pieces);
+                native_assessment = guided_assessment;
+                native_fit_us = std::move(guided_fit_us);
+                native_fit_stats = std::move(guided_fit_stats);
+                for (std::size_t index = 0U; index < routes.size(); ++index)
+                  refresh_route_samples(index);
+                refresh_final_samples();
+                const auto guided_continuous =
+                    assess_adaptive_regional_window(routes, &geometry_cache, &result);
+                auto guided_quantized = assess_quantized_regional_window(
+                    routes, quantized_route_samples,
+                    result.configured.max_quantized_segment_pair_checks_per_window);
+                result.quantized_segment_pair_checks += guided_quantized.exact_checks;
+                quantization_budget_seen =
+                    quantization_budget_seen || guided_quantized.budget_exhausted;
+                // The later realization gate consumes these refreshed values. Retain the
+                // previous PH curve when the guide cannot survive the same continuous and
+                // quantized preconditions that every final curve must satisfy.
+                const auto guided_continuous_legal =
+                    guided_continuous.owned_topology_illegal_routes == 0U &&
+                    guided_continuous.owned_mutual_illegal_routes == 0U;
+                if (!guided_continuous_legal || guided_quantized.budget_exhausted ||
+                    guided_quantized.conflicts > 0U) {
+                  // Rebuild all derived state for the unchanged original curve before its
+                  // normal rejection path below.
+                  routes = routes_before_guide;
+                  native_pieces = native_pieces_before_guide;
+                  native_assessment = native_assessment_before_guide;
+                  native_fit_us = native_fit_us_before_guide;
+                  native_fit_stats = native_fit_stats_before_guide;
+                  for (std::size_t index = 0U; index < routes.size(); ++index)
+                    refresh_route_samples(index);
+                  refresh_final_samples();
+                } else {
+                  quantized_assessment = std::move(guided_quantized);
+                  ++result.native_polyline_guide_ph_accepted;
+                }
+              }
+            }
+          }
+        }
       }
       result.native_arc_pieces_checked += native_assessment.pieces;
       result.native_arc_fit_failures += native_assessment.fit_failures;
@@ -15508,12 +15776,32 @@ void realize_bundle_splines_serial(const Board& board, RegionalRouteResult& resu
       all_legal = all_legal && realized.centerline.size() >= 2U && realized.topology_legal &&
                   realized.shape_legal && realized.mutually_legal &&
                   realized.quantized_mutually_legal;
+      if ((!realized.topology_legal || !realized.shape_legal || !realized.mutually_legal ||
+           !realized.quantized_mutually_legal) && !assignment.first_realization_rejection) {
+        const auto stage = !realized.topology_legal
+            ? RegionalRealizationRejectionStage::route_topology_illegal
+            : !realized.shape_legal
+                ? RegionalRealizationRejectionStage::route_shape_illegal
+                : !realized.native_copper_legal
+                    ? RegionalRealizationRejectionStage::native_copper_illegal
+                    : RegionalRealizationRejectionStage::quantized_copper_illegal;
+        assignment.first_realization_rejection = RegionalRealizationRejection{
+            stage, assignment.window_id, std::nullopt, realized.fragment, realized.layer,
+            realized.centerline.empty() ? std::optional<Point>{}
+                                       : std::optional<Point>{realized.centerline.front()},
+            routes[index].owned,
+            index < native_assessment.route_violations.size()
+                ? native_assessment.route_violations[index]
+                : std::vector<RegionalNativeCopperViolation>{}};
+      }
       if (routes[index].emit_replacement) {
         assignment.spline_realizations.push_back(std::move(realized));
       }
     }
     if (!all_legal) {
       assignment.stop_reason = RegionalBundleStopReason::spline_realization_failed;
+    } else if (!assignment.joint_spline_candidate && assignment.complete()) {
+      ++result.ordinary_spline_candidates_legal;
     }
     if (telemetry != nullptr && telemetry->accepts(RouterTelemetryLevel::diagnostic)) {
       RouterTelemetryEvent timing;
@@ -15647,7 +15935,6 @@ void realize_bundle_splines_serial(const Board& board, RegionalRouteResult& resu
            result.bundle_assignments[end].window_id == window_id) {
       ++end;
     }
-    result.joint_spline_candidates_evaluated += end - index;
     const auto legal_candidates = static_cast<std::size_t>(
         std::count_if(result.bundle_assignments.begin() + static_cast<std::ptrdiff_t>(index),
                       result.bundle_assignments.begin() + static_cast<std::ptrdiff_t>(end),
@@ -15691,6 +15978,7 @@ void realize_bundle_splines_serial(const Board& board, RegionalRouteResult& resu
           result.bundle_assignments[candidate].via_assignment_region_order,
           result.bundle_assignments[candidate].packed_cross_sections, profile.short_routes,
           profile.topology, profile.shape, profile.mutual, profile.quantization,
+          result.bundle_assignments[candidate].first_realization_rejection,
           regional_assignment_is_no_good_certificate(
               result.bundle_assignments[candidate].stop_reason),
           result.bundle_assignments[candidate].complete()});
@@ -16953,6 +17241,25 @@ void publish_regional_telemetry(const Board& board, const RegionalRouteResult& r
           std::to_string(assignment.partial_pairwise_access_checks) +
           ", packing=" + std::to_string(assignment.packing_rejected_states) +
           ", spline_candidates=" + std::to_string(assignment.spline_candidates_evaluated) +
+          ", first_realization_stage=" +
+          [&]() -> std::string {
+            if (!assignment.first_realization_rejection) return "none";
+            switch (assignment.first_realization_rejection->stage) {
+            case RegionalRealizationRejectionStage::invalid_cross_section: return "invalid_cross_section";
+            case RegionalRealizationRejectionStage::missing_fragment: return "missing_fragment";
+            case RegionalRealizationRejectionStage::degenerate_fragment: return "degenerate_fragment";
+            case RegionalRealizationRejectionStage::missing_window: return "missing_window";
+            case RegionalRealizationRejectionStage::invalid_template: return "invalid_template";
+            case RegionalRealizationRejectionStage::missing_channel_topology: return "missing_channel_topology";
+            case RegionalRealizationRejectionStage::topology_seed_failed: return "topology_seed_failed";
+            case RegionalRealizationRejectionStage::sampled_route_too_short: return "sampled_route_too_short";
+            case RegionalRealizationRejectionStage::route_topology_illegal: return "route_topology_illegal";
+            case RegionalRealizationRejectionStage::route_shape_illegal: return "route_shape_illegal";
+            case RegionalRealizationRejectionStage::native_copper_illegal: return "native_copper_illegal";
+            case RegionalRealizationRejectionStage::quantized_copper_illegal: return "quantized_copper_illegal";
+            }
+            return "unknown";
+          }() +
           ", xpbd_attempted=" + std::string(assignment.xpbd_attempted ? "yes" : "no") +
           ", xpbd_topology_escape=" +
           std::string(assignment.xpbd_topology_escape_required ? "yes" : "no");
@@ -17221,6 +17528,8 @@ void publish_regional_telemetry(const Board& board, const RegionalRouteResult& r
       std::to_string(result.joint_spline_fallback_promotion_waves) + ", joint_spline_remaining=" +
       std::to_string(result.joint_spline_fallback_candidates_remaining) +
       ", joint_spline_candidates=" + std::to_string(result.joint_spline_candidates_evaluated) +
+      ", ordinary_spline_candidates=" +
+      std::to_string(result.ordinary_spline_candidates_evaluated) +
       ", joint_spline_recovered=" + std::to_string(result.joint_spline_windows_recovered) +
       ", joint_spline_fallback_recovered=" +
       std::to_string(result.joint_spline_fallback_windows_recovered) +

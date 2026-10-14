@@ -46,6 +46,22 @@ int main() {
   require(!regional_assignment_is_no_good_certificate(
               RegionalBundleStopReason::spline_realization_failed, true),
           "a shape-sample budget exhaustion must never become a hard no-good");
+  { Fixture fixture;
+    fixture.assignment.first_realization_rejection = RegionalRealizationRejection{
+        RegionalRealizationRejectionStage::topology_seed_failed, fixture.assignment.window_id,
+        std::size_t{0U}, fixture.first, fixture.layer, nm(10, 20), true,
+        {{"clearance", {"generated-route", "fixed-track"}, Nanometres{100}, 25.0L}}};
+    const RegionalSplineCandidateSummary summary{
+        0U, {}, {}, {}, {}, 0U, 0U, 0U, 0U, 0U,
+        fixture.assignment.first_realization_rejection, false, false};
+    require(summary.first_realization_rejection &&
+                summary.first_realization_rejection->stage ==
+                    RegionalRealizationRejectionStage::topology_seed_failed &&
+                summary.first_realization_rejection->fragment == fixture.first &&
+                summary.first_realization_rejection->geometry == nm(10, 20) &&
+                summary.first_realization_rejection->native_violations.size() == 1U &&
+                summary.first_realization_rejection->native_violations.front().code == "clearance",
+            "candidate summaries must retain typed realization and native-copper evidence"); }
   { Fixture fixture; fixture.fragments(nm(0, 0), nm(100, 0));
     const auto preflight = preflight_regional_candidate(fixture.board, fixture.regional, fixture.assignment);
     require(preflight.definitively_infeasible() &&

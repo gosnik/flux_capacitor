@@ -6271,6 +6271,12 @@ void obstacle_aware_diagonals_and_curves_remain_capacity_and_drc_gated() {
               regional.confined_anisotropic_erosion_gpu_routes +
                   regional.confined_anisotropic_erosion_cpu_routes &&
           regional.unmapped_clearance_shadow_conflicts == 0U && !regional.fragments.empty() &&
+          // The fixed one-layer crossing is an exact native-DCR negative fixture: its retained
+          // topology polylines cross too, so the bounded guide is assessed once and cannot be
+          // mistaken for final straight copper.
+          regional.native_polyline_guide_checks > 0U &&
+          regional.native_polyline_guide_exact_legal == 0U &&
+          regional.native_polyline_guide_ph_accepted == 0U &&
           !regional.conflict_edges.empty() && regional.components.size() == 1U &&
           regional.components.front().nets.size() == 2U &&
           regional.complete() == regional.spline_candidate_available &&
@@ -6291,6 +6297,41 @@ void obstacle_aware_diagonals_and_curves_remain_capacity_and_drc_gated() {
           "/native=" + std::to_string(regional.native_arc_windows_checked) + "/" +
           std::to_string(regional.native_arc_pieces_checked) + "/" +
           std::to_string(regional.native_arc_copper_violations));
+
+  // Native guide retries are bounded candidate-local proposals. If one survives the exact
+  // scene and reaches materialization, its committed samples must come from the replacement PH
+  // curve itself; a stale pre-guide tessellation would pass a counter-only assertion but fail
+  // this fixture's emitted-geometry check.
+  const auto require_native_guide_contract = [](const flux::RegionalRouteResult& scene) {
+    require(scene.native_polyline_guide_exact_legal <= scene.native_polyline_guide_checks &&
+                scene.native_polyline_guide_ph_accepted <=
+                    scene.native_polyline_guide_exact_legal &&
+                scene.native_polyline_guide_checks <=
+                    scene.joint_spline_candidates_evaluated +
+                        scene.ordinary_spline_candidates_evaluated,
+            "native polyline guide retries must remain one exact proposal per evaluated PH candidate");
+    if (scene.native_polyline_guide_ph_accepted == 0U) return;
+    require(scene.native_realization_manifest_available &&
+                std::all_of(scene.native_realization_manifest.begin(),
+                            scene.native_realization_manifest.end(), [](const auto& route) {
+                              return !route.straight_realization && route.ph_route &&
+                                     route.native_copper_legal && route.topology_legal &&
+                                     route.shape_legal;
+                            }),
+            "a native guide may only commit certified PH materialization");
+    for (const auto& route : scene.native_realization_manifest) {
+      std::vector<Point> expected;
+      for (const auto& sample : flux::adaptive_tessellate_quintic_ph(
+               *route.ph_route, Nanometres::from_mm(0.02), 10U, 512U)) {
+        const Point point{Nanometres{static_cast<std::int64_t>(std::llround(sample.position.x))},
+                          Nanometres{static_cast<std::int64_t>(std::llround(sample.position.y))}};
+        if (expected.empty() || expected.back() != point) expected.push_back(point);
+      }
+      require(route.centerline == expected,
+              "accepted native guide must refresh the emitted centerline from its PH curve");
+    }
+  };
+  require_native_guide_contract(regional);
 
   // A bounded joint shortlist must have identical authoritative selection whether alternatives
   // are realized serially or against private immutable snapshots in a parallel batch. Deliberately
@@ -6344,6 +6385,8 @@ void obstacle_aware_diagonals_and_curves_remain_capacity_and_drc_gated() {
               ", paths_equal=" + std::to_string(serial_candidates.spline_candidate_paths == parallel_candidates.spline_candidate_paths) +
               ", assignments=" + std::to_string(serial_candidates.bundle_assignments.size()) + "/" +
               std::to_string(parallel_candidates.bundle_assignments.size()));
+  require_native_guide_contract(serial_candidates);
+  require_native_guide_contract(parallel_candidates);
   for (std::size_t index = 0U; index < serial_candidates.bundle_assignments.size(); ++index) {
     const auto& serial_assignment = serial_candidates.bundle_assignments[index];
     const auto& parallel_assignment = parallel_candidates.bundle_assignments[index];

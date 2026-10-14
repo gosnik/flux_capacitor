@@ -539,15 +539,6 @@ scaffold_satisfied_request_identities(const CopperScaffoldResult& scaffold) {
     if (index < scaffold.request_identities.size()) result.insert(scaffold.request_identities[index]);
   return result;
 }
-[[nodiscard]] bool strict_scaffold_coverage_improvement(const CopperScaffoldResult& candidate,
-                                                         const CopperScaffoldResult& incumbent) {
-  if (!same_scaffold_request_domain(candidate, incumbent)) return false;
-  const auto candidate_satisfied = scaffold_satisfied_request_identities(candidate);
-  const auto incumbent_satisfied = scaffold_satisfied_request_identities(incumbent);
-  return candidate_satisfied.size() > incumbent_satisfied.size() &&
-      std::includes(candidate_satisfied.begin(), candidate_satisfied.end(),
-                    incumbent_satisfied.begin(), incumbent_satisfied.end());
-}
 // A scaffold can satisfy a request by attaching it to copper that is already part of the same
 // connected component. Such a request legitimately contributes no new path, so `paths.size()`
 // is not a measure of checkpoint progress. Request identities scope the comparison: a changed
@@ -558,7 +549,7 @@ scaffold_satisfied_request_identities(const CopperScaffoldResult& scaffold) {
     return scaffold_preserves_satisfied_requests(candidate, incumbent);
   if (incumbent.complete && !candidate.complete) return false;
   if (candidate.complete != incumbent.complete) return candidate.complete;
-  if (strict_scaffold_coverage_improvement(candidate, incumbent)) return true;
+  if (routing_scaffold_strict_coverage_improvement(candidate, incumbent)) return true;
   // Fresh negative evidence matters even when no route was added. Only refresh an identical
   // checked scene/domain, so blocker ownership never migrates onto a different checkpoint.
   return candidate.satisfied_indices == incumbent.satisfied_indices && candidate.paths == incumbent.paths &&
@@ -620,6 +611,33 @@ void emit_engine_event(RouterTelemetrySink* sink, const char* phase, RoutingEngi
   return std::move(out).str();
 }
 } // namespace
+
+bool routing_scaffold_strict_coverage_improvement(const CopperScaffoldResult& candidate,
+                                                   const CopperScaffoldResult& incumbent) {
+  const auto same_domain = [&] {
+    if (candidate.request_count != incumbent.request_count ||
+        candidate.request_identities.size() != candidate.request_count ||
+        incumbent.request_identities.size() != incumbent.request_count)
+      return false;
+    auto left = candidate.request_identities;
+    auto right = incumbent.request_identities;
+    std::sort(left.begin(), left.end());
+    std::sort(right.begin(), right.end());
+    return left == right;
+  };
+  if (!same_domain()) return false;
+  const auto satisfied = [](const CopperScaffoldResult& scaffold) {
+    std::set<std::string> identities;
+    for (const auto index : scaffold.satisfied_indices)
+      if (index < scaffold.request_identities.size()) identities.insert(scaffold.request_identities[index]);
+    return identities;
+  };
+  const auto candidate_satisfied = satisfied(candidate);
+  const auto incumbent_satisfied = satisfied(incumbent);
+  return candidate_satisfied.size() > incumbent_satisfied.size() &&
+      std::includes(candidate_satisfied.begin(), candidate_satisfied.end(),
+                    incumbent_satisfied.begin(), incumbent_satisfied.end());
+}
 
 std::vector<std::string> routing_scaffold_copper_scene_records(const Board& copper) {
   const auto text = [](const auto& id) {
@@ -863,8 +881,15 @@ struct RoutingEngine::Pending {
   std::optional<QuantizedCopperOracleResult> scaffold_oracle;
   std::string scaffold_physical_key;
   std::vector<ScaffoldTerminalRebind> scaffold_terminal_rebinds;
+  // Set only after the selected requests reach the exact zero-search scaffold admission. This
+  // separates a real repair attempt from speculative preparation that can be parked or lost.
+  bool physical_requests_consumed{false};
   bool physical_improvement{false};
   bool evidence_recorded{false};
+  // A strict retained-scaffold coverage gain resets liveness immediately, while this mutable
+  // continuation is still alive.  Its eventual finished action must not charge one artificial
+  // stagnant step after that reset.
+  bool checkpoint_progress_noted{false};
   ~Pending() {
     deadline_link.reset();
     kernel.reset(); // Join before any callback target or checkpoint member is destroyed.
@@ -1887,9 +1912,17 @@ RoutingEngineStepResult RoutingEngine::advance(RoutingEngineStepBudget budget,
   if (state_.outcome == RoutingEngineOutcome::awaiting_materialization ||
       state_.outcome == RoutingEngineOutcome::awaiting_external_validation)
     return out;
+  const bool bounded_untouched_scaffold_requests = state_.legal_scaffold &&
+      state_.legal_scaffold->sweep_in_progress && config_.scaffold_requests_per_decision != 0U &&
+      state_.legal_scaffold->request_count >= config_.bounded_scaffold_request_threshold &&
+      std::any_of(state_.legal_scaffold->request_evidence.begin(),
+                  state_.legal_scaffold->request_evidence.end(), [](const auto& evidence) {
+                    return evidence.termination == CopperScaffoldSearchTermination::not_attempted;
+                  });
   if (!pending_ && (state_.attempts.size() >= config_.max_actions ||
       (config_.max_actions_without_physical_progress > 0U &&
-       actions_without_physical_progress_ >= config_.max_actions_without_physical_progress))) {
+       actions_without_physical_progress_ >= config_.max_actions_without_physical_progress &&
+       !bounded_untouched_scaffold_requests))) {
     parked_.clear();
     state_.outcome = RoutingEngineOutcome::exhausted;
     out.outcome = state_.outcome;
@@ -1970,15 +2003,23 @@ RoutingEngineStepResult RoutingEngine::advance(RoutingEngineStepBudget budget,
       reconcile_physical_repair_attempts(physical_request_geometry_key_ != geometry_key,
                                          physical_request_evidence_tokens_, evidence_tokens,
                                          physical_request_attempts_);
+      // A committed scene change invalidates failure causality. Evidence-only changes retain
+      // still-missing queued demands, but resolved or no-longer-failed indices cannot leak into
+      // a later regional admission.
+      // Keep selected IDs queued until the exact admission below. A changed scene reconciles
+      // stale IDs against its new failed ledger, but cannot make parked preparation look tried.
+      std::erase_if(state_.scaffold_newly_failed_requests, [&](const auto index) {
+        return index >= evidence_tokens.size() || evidence_tokens[index].empty() ||
+            std::find(state_.legal_scaffold->failed_request_indices.begin(),
+                      state_.legal_scaffold->failed_request_indices.end(), index) ==
+                state_.legal_scaffold->failed_request_indices.end();
+      });
       physical_request_attempt_key_ = pending_->scaffold_physical_key;
       physical_request_geometry_key_ = geometry_key;
       physical_request_evidence_tokens_ = evidence_tokens;
       pending_->physical_requests = select_physical_repair_requests(*state_.legal_scaffold,
           physical_request_attempts_, config_.max_physical_region_requests,
           state_.scaffold_newly_failed_requests);
-      state_.scaffold_newly_failed_requests.clear();
-      for (const auto index : pending_->physical_requests)
-        ++physical_request_attempts_[index];
       state_.scaffold_regional_missing_requests = pending_->physical_requests.size();
       if (speculation_) {
         bool finished = false;
@@ -2233,6 +2274,8 @@ RoutingEngineStepResult RoutingEngine::advance(RoutingEngineStepBudget budget,
           emit_engine_event(telemetry, "scaffold-search-result", action, tx->ordinal, c.expansions,
               "satisfied=" + std::to_string(result.satisfied_indices.size()) +
               "; missing=" + std::to_string(result.missing_indices.size()) +
+              "; certified_prefix_reuses_this_scaffold_invocation=" +
+                  std::to_string(c.certified_prefix_reuses) +
               "; search_us=" + std::to_string(c.search_microseconds) +
               "; edge_validation_us=" + std::to_string(c.edge_validation_microseconds) +
               "; attachment_us=" + std::to_string(c.attachment_generation_microseconds) +
@@ -2469,10 +2512,16 @@ RoutingEngineStepResult RoutingEngine::advance(RoutingEngineStepBudget budget,
           checks.maximum_coupled_exchange_attempts = 0U;
           checks.maximum_displacement_attempts = 0U;
           checks.maximum_joint_passage_candidates = 0U;
+          checks.maximum_terminal_pocket_probes = 0U;
+          checks.maximum_terminal_pocket_expansions = 0U;
           if (retained_scaffold->sweep_in_progress)
             checks.admitted_request_indices = tx->physical_requests;
           tx->scaffold = std::make_shared<CopperScaffoldResult>(construct_copper_scaffold(
               *physical_source, retained_scaffold->requests, checks, token, &proposals));
+          // This exact zero-search reconstruction is the first point at which the selected
+          // failed requests have actually been admitted to a repair transaction. Earlier
+          // regional preparation is cancellable and must remain fair for a later retry.
+          if (!token.stop_requested()) tx->physical_requests_consumed = true;
           // A regional probe may have no admissible replacement for its failed demand. Its
           // proposal seed contains speculative paths, so it cannot itself be the checkpoint
           // used to decide whether the bounded sweep may resume. If the actual reconstructed
@@ -2612,26 +2661,50 @@ RoutingEngineStepResult RoutingEngine::advance(RoutingEngineStepBudget budget,
   }
   if (status == RoutingKernelStatus::yielded) {
     ++pending_->yields;
+    const auto retained_scaffold_before = state_.legal_scaffold;
     if (action == RoutingEngineAction::construct_copper_scaffold && pending_->scaffold &&
         (!state_.legal_scaffold ||
          better_scaffold_checkpoint(*pending_->scaffold, *state_.legal_scaffold)))
       state_.legal_scaffold = pending_->scaffold;
+    const bool strict_scaffold_checkpoint_progress =
+        action == RoutingEngineAction::construct_copper_scaffold && retained_scaffold_before &&
+        state_.legal_scaffold &&
+        routing_scaffold_strict_coverage_improvement(*state_.legal_scaffold, *retained_scaffold_before);
+    if (strict_scaffold_checkpoint_progress) {
+      actions_without_physical_progress_ = 0U;
+      pending_->checkpoint_progress_noted = true;
+      ++state_.checkpoint_progress_events;
+    }
     if (action == RoutingEngineAction::construct_copper_scaffold) publish_retained_copper();
     if (action == RoutingEngineAction::construct_copper_scaffold && pending_->scaffold_decision) {
       const auto decision = std::move(*pending_->scaffold_decision);
       pending_->scaffold_decision.reset();
       ++state_.scaffold_decision_points;
-      state_.scaffold_newly_failed_requests.clear();
       for (const auto index : decision.batch)
         if (std::find(decision.failed.begin(), decision.failed.end(), index) != decision.failed.end())
-          state_.scaffold_newly_failed_requests.push_back(index);
+          if (std::find(state_.scaffold_newly_failed_requests.begin(),
+                        state_.scaffold_newly_failed_requests.end(), index) ==
+              state_.scaffold_newly_failed_requests.end())
+            state_.scaffold_newly_failed_requests.push_back(index);
       emit_engine_event(telemetry_, "scaffold-decision", action, state_.generation,
           pending_->kernel->work_units(), "batch=" + std::to_string(decision.batch.size()) +
           "; failed=" + std::to_string(state_.scaffold_newly_failed_requests.size()) +
           "; deferred=" + std::to_string(decision.deferred) +
           "; satisfied=" + std::to_string(state_.legal_scaffold
-              ? state_.legal_scaffold->satisfied_indices.size() : 0U), pending_->active_us);
-      if (decision.sweep_in_progress && !state_.scaffold_newly_failed_requests.empty() &&
+              ? state_.legal_scaffold->satisfied_indices.size() : 0U) +
+          "; certified_prefix_reuses_this_scaffold_invocation=" +
+              std::to_string(state_.legal_scaffold
+                  ? state_.legal_scaffold->counters.certified_prefix_reuses : 0U), pending_->active_us);
+      const bool large_bounded_scaffold = state_.legal_scaffold &&
+          state_.legal_scaffold->request_count >= config_.bounded_scaffold_request_threshold &&
+          config_.scaffold_requests_per_decision != 0U;
+      const auto effective_handoff_size = large_bounded_scaffold ? std::min(
+          std::max<std::size_t>(1U, config_.scaffold_failed_requests_per_regional_handoff),
+          std::max<std::size_t>(1U, config_.max_physical_region_requests)) : 1U;
+      const bool handoff_ready = !state_.scaffold_newly_failed_requests.empty() &&
+          (state_.scaffold_newly_failed_requests.size() >= effective_handoff_size ||
+           !decision.sweep_in_progress || decision.deferred == 0U);
+      if (handoff_ready &&
           yield_experiment(true)) {
         ++state_.scaffold_repair_handoffs;
         out.outcome = RoutingEngineOutcome::progressed;
@@ -2841,9 +2914,20 @@ RoutingEngineStepResult RoutingEngine::advance(RoutingEngineStepBudget budget,
   }
   if (pending_->scaffold) {
     // Only the builder's published, exact-checked subset is visible, including on cancellation.
+    const auto retained_scaffold_before = state_.legal_scaffold;
     if (!state_.legal_scaffold ||
         better_scaffold_checkpoint(*pending_->scaffold, *state_.legal_scaffold))
       state_.legal_scaffold = pending_->scaffold;
+    // A short bounded sweep can finish immediately after publishing its final decision instead
+    // of yielding back to the engine. Count that exact same-domain coverage gain too; otherwise
+    // liveness would depend on scheduling granularity rather than checked copper evidence.
+    if (action == RoutingEngineAction::construct_copper_scaffold && retained_scaffold_before &&
+        state_.legal_scaffold &&
+        routing_scaffold_strict_coverage_improvement(*state_.legal_scaffold, *retained_scaffold_before)) {
+      actions_without_physical_progress_ = 0U;
+      pending_->checkpoint_progress_noted = true;
+      ++state_.checkpoint_progress_events;
+    }
     publish_retained_copper(true);
     if (state_.legal_scaffold) {
       replace_live_copper_terrain(make_live_copper_terrain_snapshot(state_.legal_scaffold->copper, false, 4'096U));
@@ -2871,6 +2955,14 @@ RoutingEngineStepResult RoutingEngine::advance(RoutingEngineStepBudget budget,
     out.outcome = state_.outcome;
     out.diagnostic = "kernel stopped; checkpoint retained";
     return out;
+  }
+  if (pending_->physical_requests_consumed) {
+    for (const auto index : pending_->physical_requests) {
+      if (index < physical_request_attempts_.size()) ++physical_request_attempts_[index];
+      std::erase(state_.scaffold_newly_failed_requests, index);
+      ++state_.physical_repair_admitted_attempts;
+    }
+    pending_->physical_requests_consumed = false;
   }
   if (pending_->plan) {
     if (action == RoutingEngineAction::global_allocation ||
@@ -3019,7 +3111,7 @@ RoutingEngineStepResult RoutingEngine::advance(RoutingEngineStepBudget budget,
         baseline.satisfied_indices.push_back(request);
     const bool same_domain = same_scaffold_request_domain(scaffold, baseline);
     const bool scaffold_progress = same_domain
-        ? strict_scaffold_coverage_improvement(scaffold, baseline)
+        ? routing_scaffold_strict_coverage_improvement(scaffold, baseline)
         : !scaffold.satisfied_indices.empty();
     // A checked subset is a real, recoverable transaction even though it remains ineligible for
     // plan completion until the whole-scene quantized oracle succeeds. Marking it accepted keeps
@@ -3034,8 +3126,13 @@ RoutingEngineStepResult RoutingEngine::advance(RoutingEngineStepBudget budget,
             ? difference(satisfied, pending_->scaffold_satisfied_before) : satisfied) +
         ", domain=" + (same_domain ? "compatible" : "reconstructed");
   }
-  actions_without_physical_progress_ = attempt.physical_improvement ? 0U
-      : plus(actions_without_physical_progress_, 1U);
+  if (attempt.physical_improvement)
+    actions_without_physical_progress_ = 0U;
+  else if (!pending_->checkpoint_progress_noted)
+    actions_without_physical_progress_ = plus(actions_without_physical_progress_, 1U);
+  // A finished scaffold continuation may follow a progress checkpoint with only negative
+  // evidence. Do not let that bookkeeping-only completion immediately consume a liveness slot.
+  state_.stagnant_actions_final = actions_without_physical_progress_;
   state_.attempts.push_back(std::move(attempt));
   record_experiment(state_.attempts.back());
   if (pending_->evidence_recorded && state_.best_partial_plan && state_.working_plan &&

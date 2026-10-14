@@ -223,6 +223,10 @@ void failed_causal_exchange_rolls_back_the_legal_subset() {
   admission.maximum_expansions_per_connection = 0U;
   admission.maximum_victim_exchanges = 0U;
   admission.maximum_coupled_exchange_attempts = 0U;
+  admission.maximum_displacement_attempts = 0U;
+  admission.maximum_joint_passage_candidates = 0U;
+  admission.maximum_terminal_pocket_probes = 0U;
+  admission.maximum_terminal_pocket_expansions = 0U;
   const auto rechecked = construct_copper_scaffold(board, {horizontal, vertical}, admission, {}, &result);
   require(rechecked.paths == result.paths && rechecked.copper == result.copper &&
               rechecked.request_evidence == result.request_evidence &&
@@ -525,23 +529,32 @@ void callback_cancellation_publishes_only_legal_checkpoint() {
   const auto board = fixture();
   const auto first = request(NetId{"a"}, mm(2,2), LayerId{"F.Cu"}, mm(18,2), LayerId{"F.Cu"});
   const auto second = request(NetId{"b"}, mm(2,18), LayerId{"F.Cu"}, mm(18,18), LayerId{"F.Cu"});
+  CopperScaffoldConfig config;
+  config.maximum_requests_per_decision_batch = 1U;
   std::stop_source stop;
   std::size_t callbacks = 0U;
   CopperScaffoldResult checkpoint;
   const auto result = construct_copper_scaffold(
-      board, {first, second}, {}, stop.get_token(), nullptr,
-      [&](const CopperScaffoldResult& published) {
+      board, {first, second}, config, stop.get_token(), nullptr, {},
+      [&](const CopperScaffoldDecisionEvent& published) {
         ++callbacks;
-        checkpoint = published;
-        if (published.paths.size() == 1U) stop.request_stop();
+        checkpoint = published.retained;
+        if (published.retained.paths.size() == 1U) stop.request_stop();
       });
   require(callbacks == 1U && result.counters.cancelled && !result.complete &&
               result.paths == std::vector<GlobalRoutePath>{first} &&
               result.missing_indices == std::vector<std::size_t>{1U},
           "callback cancellation must retain exactly the first legal checkpoint");
   require(checkpoint.paths == result.paths && checkpoint.missing_indices == std::vector<std::size_t>{1U} &&
-              check_copper_rules(checkpoint.copper).ok() && check_copper_rules(result.copper).ok(),
+              checkpoint.resume_certificate && check_copper_rules(checkpoint.copper).ok() &&
+              check_copper_rules(result.copper).ok(),
           "published cancellation checkpoint and final result must contain only legal retained copper");
+  CopperScaffoldConfig resume_config;
+  resume_config.resume_unattempted_requests = true;
+  const auto resumed = construct_copper_scaffold(board, {first, second}, resume_config, {}, &checkpoint);
+  require(resumed.complete && resumed.counters.certified_prefix_reuses == 1U &&
+              resumed.counters.completed_transactions == 1U && check_copper_rules(resumed.copper).ok(),
+          "a callback-published checkpoint must certify its prefix before cancellation can evict it");
 }
 void decision_events_separate_attempted_failures_from_deferred_requests() {
   auto board = fixture();
@@ -614,6 +627,148 @@ void scoped_admission_leaves_excluded_requests_unattempted() {
               result.request_evidence[1].termination == CopperScaffoldSearchTermination::not_attempted &&
               result.missing_indices == std::vector<std::size_t>{1U} && check_copper_rules(result.copper).ok(),
           "scoped admission must retain legal selected copper while leaving excluded work deferred");
+}
+void certified_resume_skips_only_an_unchanged_prefix() {
+  const auto board = fixture();
+  const auto first = request(NetId{"a"}, mm(2, 2), LayerId{"F.Cu"}, mm(18, 2), LayerId{"F.Cu"});
+  const auto second = request(NetId{"b"}, mm(2, 18), LayerId{"F.Cu"}, mm(18, 18), LayerId{"F.Cu"});
+  CopperScaffoldConfig staged_config;
+  staged_config.admitted_request_indices = std::vector<std::size_t>{0U};
+  const auto staged = construct_copper_scaffold(board, {first, second}, staged_config);
+  require(staged.resume_certificate && staged.paths == std::vector<GlobalRoutePath>{first} &&
+              staged.request_evidence[1].termination == CopperScaffoldSearchTermination::not_attempted,
+          "a legal staged prefix must receive an implementation-issued resume certificate");
+
+  auto resume_config = staged_config;
+  resume_config.admitted_request_indices.reset();
+  resume_config.resume_unattempted_requests = true;
+  const auto resumed = construct_copper_scaffold(board, {first, second}, resume_config, {}, &staged);
+  require(resumed.complete && resumed.counters.certified_prefix_reuses == 1U &&
+              resumed.counters.completed_transactions == 1U && check_copper_rules(resumed.copper).ok(),
+          "an unchanged certified prefix must bypass per-path reconstruction and route only deferred work");
+
+  auto changed_copper = board;
+  changed_copper.tracks.push_back({ObjectId{"resume-source-change"}, NetId{"b"}, LayerId{"F.Cu"},
+                                   mm(2, 10), mm(4, 10), Nanometres::from_mm(0.2), false});
+  const auto copper_changed = construct_copper_scaffold(changed_copper, {first, second}, resume_config, {}, &staged);
+  require(copper_changed.complete && copper_changed.counters.certified_prefix_reuses == 0U &&
+              copper_changed.counters.completed_transactions == 2U,
+          "a source copper change must invalidate direct checkpoint restoration");
+
+  auto retained_changed = staged;
+  retained_changed.copper.tracks.front().width = Nanometres::from_mm(0.25);
+  const auto checkpoint_changed = construct_copper_scaffold(board, {first, second}, resume_config, {}, &retained_changed);
+  require(checkpoint_changed.complete && checkpoint_changed.counters.certified_prefix_reuses == 0U &&
+              checkpoint_changed.counters.completed_transactions == 2U,
+          "an edited retained copper checkpoint must fall back to exact path revalidation");
+
+  auto rules_changed = board;
+  rules_changed.rules.default_track_width = Nanometres::from_mm(0.25);
+  auto retained_rules_changed = staged;
+  retained_rules_changed.copper.rules = rules_changed.rules;
+  const auto rule_changed = construct_copper_scaffold(
+      rules_changed, {first, second}, resume_config, {}, &retained_rules_changed);
+  require(rule_changed.complete && rule_changed.counters.certified_prefix_reuses == 0U &&
+              rule_changed.counters.completed_transactions == 2U,
+          "matching source and retained routing-rule changes must invalidate the issuing scene certificate");
+
+  const auto reordered = construct_copper_scaffold(board, {second, first}, resume_config, {}, &staged);
+  require(reordered.complete && reordered.counters.certified_prefix_reuses == 0U &&
+              reordered.counters.completed_transactions == 2U,
+          "request order must remain part of the certified resume domain");
+
+  auto colliding_source = board;
+  colliding_source.tracks.push_back({ObjectId{"resume-colliding-source"}, NetId{"b"}, LayerId{"F.Cu"},
+                                     mm(2, 2), mm(18, 2), Nanometres::from_mm(0.2), false});
+  auto colliding_retained = staged;
+  colliding_retained.copper.tracks.push_back(colliding_source.tracks.back());
+  const auto collision_changed = construct_copper_scaffold(
+      colliding_source, {first, second}, resume_config, {}, &colliding_retained);
+  require(collision_changed.counters.certified_prefix_reuses == 0U && check_copper_rules(collision_changed.copper).ok(),
+          "matching edits to source and retained copper must not authorize stale, now-colliding prefix copper");
+
+  auto keepout_source = board;
+  keepout_source.keepouts.push_back({ObjectId{"resume-new-keepout"},
+                                     Polygon{{mm(8, 8), mm(12, 8), mm(12, 12), mm(8, 12)}},
+                                     {LayerId{"F.Cu"}}, {true, false, false, false, false}, "resume"});
+  auto keepout_retained = staged;
+  keepout_retained.copper.keepouts = keepout_source.keepouts;
+  const auto keepout_changed = construct_copper_scaffold(
+      keepout_source, {first, second}, resume_config, {}, &keepout_retained);
+  require(keepout_changed.complete && keepout_changed.counters.certified_prefix_reuses == 0U &&
+              check_copper_rules(keepout_changed.copper).ok(),
+          "matching source and retained keepout edits must invalidate the issuing scene certificate");
+
+  auto invalid = second;
+  invalid.points.pop_back();
+  CopperScaffoldConfig retained_config;
+  retained_config.resume_unattempted_requests = true;
+  const auto retained_with_negative = construct_copper_scaffold(board, {first, invalid}, retained_config);
+  require(retained_with_negative.resume_certificate && retained_with_negative.paths == std::vector<GlobalRoutePath>{first} &&
+              retained_with_negative.request_evidence[1].termination ==
+                  CopperScaffoldSearchTermination::invalid_request,
+          "an exact retained prefix must carry its typed negative evidence into scoped admission");
+  CopperScaffoldConfig zero_search_admission;
+  zero_search_admission.maximum_expansions_per_connection = 0U;
+  zero_search_admission.maximum_victim_exchanges = 0U;
+  zero_search_admission.maximum_coupled_exchange_attempts = 0U;
+  zero_search_admission.maximum_displacement_attempts = 0U;
+  zero_search_admission.maximum_joint_passage_candidates = 0U;
+  zero_search_admission.maximum_terminal_pocket_probes = 0U;
+  zero_search_admission.maximum_terminal_pocket_expansions = 0U;
+  zero_search_admission.admitted_request_indices = std::vector<std::size_t>{1U};
+  const auto scoped_recheck = construct_copper_scaffold(
+      board, {first, invalid}, zero_search_admission, {}, &retained_with_negative);
+  require(!scoped_recheck.complete && scoped_recheck.counters.certified_prefix_reuses == 1U &&
+              scoped_recheck.counters.completed_transactions == 0U &&
+              scoped_recheck.paths == retained_with_negative.paths &&
+              scoped_recheck.copper == retained_with_negative.copper &&
+              scoped_recheck.request_evidence == retained_with_negative.request_evidence,
+          "zero-search scoped admission must restore only an exact certified prefix while preserving negative evidence");
+
+  auto speculative = retained_with_negative;
+  auto proposal = first;
+  proposal.points = {{mm(2, 2), LayerId{"F.Cu"}}, {mm(10, 4), LayerId{"F.Cu"}},
+                     {mm(18, 2), LayerId{"F.Cu"}}};
+  speculative.paths.push_back(proposal);
+  const auto proposal_recheck = construct_copper_scaffold(
+      board, {first, invalid}, zero_search_admission, {}, &speculative);
+  require(proposal_recheck.counters.certified_prefix_reuses == 0U &&
+              proposal_recheck.counters.completed_transactions == 1U &&
+              proposal_recheck.paths == retained_with_negative.paths,
+          "an appended speculative proposal must force retained-path reconstruction instead of certificate reuse");
+
+  auto scoped_board = fixture();
+  scoped_board.layers.resize(1U);
+  scoped_board.tracks.push_back({ObjectId{"scoped-admission-barrier"}, NetId{"a"}, LayerId{"F.Cu"},
+                                  mm(10, 5), mm(10, 15), Nanometres::from_mm(0.8), false});
+  const auto scoped_prefix = request(NetId{"a"}, mm(2, 2), LayerId{"F.Cu"}, mm(8, 2), LayerId{"F.Cu"});
+  const auto scoped_blocked = request(NetId{"b"}, mm(2, 10), LayerId{"F.Cu"}, mm(18, 10), LayerId{"F.Cu"});
+  CopperScaffoldConfig deferred_prefix;
+  deferred_prefix.admitted_request_indices = std::vector<std::size_t>{0U};
+  const auto deferred = construct_copper_scaffold(
+      scoped_board, {scoped_prefix, scoped_blocked}, deferred_prefix);
+  require(deferred.resume_certificate && deferred.request_evidence[1].termination ==
+              CopperScaffoldSearchTermination::not_attempted,
+          "the blocked valid request must remain deferred before scoped zero-search admission");
+  auto blocked_admission = zero_search_admission;
+  const auto blocked_recheck = construct_copper_scaffold(
+      scoped_board, {scoped_prefix, scoped_blocked}, blocked_admission, {}, &deferred);
+  require(blocked_recheck.counters.certified_prefix_reuses == 1U &&
+              blocked_recheck.counters.completed_transactions == 0U &&
+              blocked_recheck.request_evidence[0] == deferred.request_evidence[0] &&
+              blocked_recheck.request_evidence[1].termination ==
+                  CopperScaffoldSearchTermination::expansion_budget_exhausted,
+          "an admitted deferred valid request must retain its new bounded failure instead of reverting to not_attempted");
+
+  auto pocket_enabled_admission = blocked_admission;
+  pocket_enabled_admission.maximum_terminal_pocket_probes = 1U;
+  pocket_enabled_admission.maximum_terminal_pocket_expansions = 1U;
+  const auto pocket_recheck = construct_copper_scaffold(
+      scoped_board, {scoped_prefix, scoped_blocked}, pocket_enabled_admission, {}, &deferred);
+  require(pocket_recheck.counters.certified_prefix_reuses == 0U &&
+              pocket_recheck.counters.completed_transactions == 1U,
+          "nonzero terminal-pocket recovery caps must disable scoped direct restoration");
 }
 void existing_component_is_a_completed_transaction_without_new_copper() {
   auto board = fixture();
@@ -1156,4 +1311,5 @@ int main() {
   decision_events_separate_attempted_failures_from_deferred_requests();
   decision_callback_cancellation_leaves_next_request_unattempted();
   scoped_admission_leaves_excluded_requests_unattempted();
+  certified_resume_skips_only_an_unchanged_prefix();
 }

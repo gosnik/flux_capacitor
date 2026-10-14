@@ -1,0 +1,30 @@
+{
+  "status": "intentionally_stopped_diagnostic",
+  "wall_seconds": 590.262350418001,
+  "first_rejection_stage": "native_copper_illegal",
+  "rejections": [
+    {
+      "monotonic_time_us": 540444643,
+      "message": "regional realization rejected: first_stage=native_copper_illegal, candidate_rank=0, template=none, owner=owned, net=kicad-net-name:HALL_M1_U, connection=0, run=0, fragment=0",
+      "active_group": "regional-realization-rejection:0:0"
+    },
+    {
+      "monotonic_time_us": 543160965,
+      "message": "regional realization rejected: first_stage=native_copper_illegal, candidate_rank=0, template=none, owner=owned, net=kicad-net-name:M1_SHUNT_U_KN, connection=0, run=2, fragment=1",
+      "active_group": "regional-realization-rejection:1:0"
+    },
+    {
+      "monotonic_time_us": 552942465,
+      "message": "regional realization rejected: first_stage=native_copper_illegal, candidate_rank=0, template=none, owner=owned, net=kicad-net-name:HALL_M1_U, connection=0, run=0, fragment=0",
+      "active_group": "regional-realization-rejection:0:0"
+    },
+    {
+      "monotonic_time_us": 557768794,
+      "message": "regional realization rejected: first_stage=native_copper_illegal, candidate_rank=0, template=none, owner=owned, net=kicad-net-name:M1_SHUNT_U_KN, connection=0, run=2, fragment=1",
+      "active_group": "regional-realization-rejection:1:0"
+    }
+  ],
+  "last_scaffold_decision": null,
+  "physical_cause": "not yet identified; distinguish unassessed native proof from actual collision",
+  "final_drc": "unassessed"
+}

@@ -129,6 +129,10 @@ struct RoutingEngineConfig {
   // failure. Small scenes retain their existing ordering and search allowances.
   std::size_t bounded_scaffold_request_threshold{256U};
   std::size_t scaffold_requests_per_decision{8U};
+  // On a bounded scaffold sweep, collect this many distinct failed demands before opening a
+  // frozen-scene regional repair.  One preserves the former immediate-handoff behavior for
+  // focused experiments; the effective value never exceeds max_physical_region_requests.
+  std::size_t scaffold_failed_requests_per_regional_handoff{4U};
   std::size_t scaffold_request_search_work{200'000U};
   std::chrono::milliseconds scaffold_request_active_time{3000};
   std::size_t max_actions{256U};
@@ -214,6 +218,11 @@ struct RoutingPhysicalRepairEvidence {
     const CopperScaffoldResult&, const std::vector<std::size_t>& attempts, std::size_t limit,
     const std::vector<std::size_t>& newly_failed = {});
 
+// Exact liveness predicate for retained scaffold checkpoints. Search counters and negative
+// evidence are deliberately excluded: only same-domain preserved coverage may reset stagnation.
+[[nodiscard]] bool routing_scaffold_strict_coverage_improvement(
+    const CopperScaffoldResult& candidate, const CopperScaffoldResult& incumbent);
+
 // Negative-evidence updates can reuse a parked sweep; changed committed copper cannot.
 [[nodiscard]] bool routing_scaffold_continuation_compatible(
     const CopperScaffoldResult* parked, const CopperScaffoldResult* current);
@@ -295,6 +304,14 @@ struct RoutingEngineState {
   std::size_t scaffold_regional_actions{0U};
   std::size_t scaffold_decision_points{0U};
   std::size_t scaffold_repair_handoffs{0U};
+  // Strict same-domain, preservation-safe retained-scaffold coverage gains.  Numeric search
+  // counters and negative evidence do not contribute to this liveness signal.
+  std::size_t checkpoint_progress_events{0U};
+  // Snapshot of the action-level stagnation counter after the most recently completed action.
+  std::size_t stagnant_actions_final{0U};
+  // Selected physical requests count only after the regional transaction reaches its exact
+  // zero-search scaffold admission. Parked, cancelled, or evicted preparation is not an attempt.
+  std::size_t physical_repair_admitted_attempts{0U};
   std::vector<std::size_t> scaffold_newly_failed_requests{};
   std::size_t physical_preparation_reuses{0U};
   std::vector<RoutingPhysicalRepairEvidence> physical_repair_evidence;

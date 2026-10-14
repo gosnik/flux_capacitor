@@ -3253,6 +3253,16 @@ void print_route_result(const flux::GlobalRouteResult& result,
   print_regional_diagnosis_metric("regional_native_arc_windows_checked",
                                   regional == nullptr ? 0U
                                                       : regional->native_arc_windows_checked);
+  print_regional_diagnosis_metric("regional_native_polyline_guide_checks",
+                                  regional == nullptr ? 0U : regional->native_polyline_guide_checks);
+  print_regional_diagnosis_metric("regional_native_polyline_guide_exact_legal",
+                                  regional == nullptr ? 0U : regional->native_polyline_guide_exact_legal);
+  print_regional_diagnosis_metric("regional_native_polyline_guide_ph_accepted",
+                                  regional == nullptr ? 0U : regional->native_polyline_guide_ph_accepted);
+  print_regional_diagnosis_metric("regional_ordinary_spline_candidates_evaluated",
+                                  regional == nullptr ? 0U : regional->ordinary_spline_candidates_evaluated);
+  print_regional_diagnosis_metric("regional_ordinary_spline_candidates_legal",
+                                  regional == nullptr ? 0U : regional->ordinary_spline_candidates_legal);
   print_regional_diagnosis_metric("regional_spline_tightening_routes_examined",
                                   regional == nullptr ? 0U : regional->spline_tightening_routes_examined);
   print_regional_diagnosis_metric("regional_spline_tightening_routes_accepted",
@@ -4257,6 +4267,7 @@ void print_route_result(const flux::GlobalRouteResult& result,
                 << ", \"goal_rejections\": " << scaffold.counters.goal_rejections
                 << ", \"compact_search_attempts\": " << scaffold.counters.compact_search_attempts
                 << ", \"compact_search_expansions\": " << scaffold.counters.compact_search_expansions
+                << ", \"certified_prefix_reuses\": " << scaffold.counters.certified_prefix_reuses
                 << ", \"compact_search_successes\": " << scaffold.counters.compact_search_successes
                 << ", \"compact_search_fallbacks\": " << scaffold.counters.compact_search_fallbacks
                 << ", \"attachment_search_rounds\": " << scaffold.counters.attachment_search_rounds
@@ -4380,6 +4391,10 @@ void print_route_result(const flux::GlobalRouteResult& result,
     std::cout << ",\n  \"routing_engine_scaffold_decision_points\": " << engine_state->scaffold_decision_points;
     std::cout << ",\n  \"routing_engine_scaffold_repair_handoffs\": " << engine_state->scaffold_repair_handoffs;
     std::cout << ",\n  \"routing_engine_scaffold_regional_missing_requests\": " << engine_state->scaffold_regional_missing_requests;
+    std::cout << ",\n  \"routing_engine_checkpoint_progress_events\": " << engine_state->checkpoint_progress_events;
+    std::cout << ",\n  \"routing_engine_stagnant_actions_final\": " << engine_state->stagnant_actions_final;
+    std::cout << ",\n  \"routing_engine_physical_repair_admitted_attempts\": "
+              << engine_state->physical_repair_admitted_attempts;
 
     std::cout << ",\n  \"routing_engine_scaffold_terminal_rebinds\": " << engine_state->scaffold_terminal_rebinds;
     std::cout << ",\n  \"routing_engine_scaffold_terminal_rebind_attempts\": " << engine_state->scaffold_terminal_rebind_attempted_proofs.size();
@@ -5591,6 +5606,7 @@ void print_detailed_result(const flux::DetailedRouteResult& result,
       std::cout << ",\n  \"retained_scaffold_search\": {";
       std::cout << "\"expansions\": " << counters.expansions;
       std::cout << ", \"compact_search_expansions\": " << counters.compact_search_expansions;
+      std::cout << ", \"certified_prefix_reuses\": " << counters.certified_prefix_reuses;
       std::cout << ", \"terminal_pocket_probes\": " << counters.terminal_pocket_probes;
       std::cout << ", \"terminal_pocket_probe_expansions\": " << counters.terminal_pocket_probe_expansions;
       std::cout << ", \"terminal_pockets_exhausted\": " << counters.terminal_pockets_exhausted;

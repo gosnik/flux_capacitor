@@ -235,6 +235,9 @@ struct RegionalRouterConfig {
   // Decide the final regional window using the native arcs/segments Flux would emit. Expensive
   // continuous PH offsets remain available to diagnose a rejected native scene.
   bool native_arc_materialization_authority{true};
+  // One exact polyline guide may be considered for a native-illegal PH candidate. The guide is
+  // diagnostic input to a fresh PH fit and is never accepted as final copper.
+  std::size_t max_native_polyline_guide_retries{1U};
   // Experimental conservative local check: retain every global fragment not owned by the
   // current window. Other windows may eventually move that copper, so this is opt-in.
   bool frozen_copper_context{false};
@@ -639,6 +642,48 @@ enum class RegionalBundleStopReason {
   spline_realization_failed
 };
 
+// The first failed gate while turning a discrete regional template into its PH route.  This is
+// deliberately candidate-local evidence: none of these failures authorizes a topology no-good.
+enum class RegionalRealizationRejectionStage {
+  invalid_cross_section,
+  missing_fragment,
+  degenerate_fragment,
+  missing_window,
+  invalid_template,
+  missing_channel_topology,
+  topology_seed_failed,
+  sampled_route_too_short,
+  route_topology_illegal,
+  route_shape_illegal,
+  native_copper_illegal,
+  quantized_copper_illegal
+};
+
+// Exact dynamic-copper witnesses retained only for a rejected regional candidate. Object IDs are
+// DRC identities (including generated copper), so they explain a failure without becoming a
+// mutable no-good clause.
+struct RegionalNativeCopperViolation {
+  std::string code;
+  std::vector<std::string> object_ids;
+  Nanometres required_clearance;
+  long double actual_distance_nm{0.0L};
+
+  bool operator==(const RegionalNativeCopperViolation&) const = default;
+};
+
+struct RegionalRealizationRejection {
+  RegionalRealizationRejectionStage stage{RegionalRealizationRejectionStage::invalid_template};
+  std::size_t window_id{0U};
+  std::optional<std::size_t> template_id;
+  std::optional<RegionalRouteFragmentId> fragment;
+  std::optional<LayerId> layer;
+  std::optional<Point> geometry;
+  bool owned{false};
+  std::vector<RegionalNativeCopperViolation> native_violations;
+
+  bool operator==(const RegionalRealizationRejection&) const = default;
+};
+
 enum class RegionalAccessBlockerKind { via_pair, terminal_via };
 
 // Bounded diagnostic evidence from the partial template/access CSP. Choice IDs reference the
@@ -807,6 +852,7 @@ struct RegionalSplineCandidateSummary {
   std::size_t shape_rejections{0};
   std::size_t mutual_clearance_rejections{0};
   std::size_t quantized_clearance_rejections{0};
+  std::optional<RegionalRealizationRejection> first_realization_rejection;
   // Only a monotonic structural certificate can create a conflict-directed no-good. A failed
   // continuous realization remains candidate-specific evidence: another deformation in the
   // same corridor/lane assignment may still be legal.
@@ -827,6 +873,9 @@ struct RegionalBundleAssignment {
   std::vector<std::size_t> via_assignment_region_order;
   std::vector<RegionalCrossSection> packed_cross_sections;
   std::vector<RegionalSplineRealization> spline_realizations;
+  // First pre-realization failure for this candidate. Retaining it prevents empty realization
+  // vectors from being reported as an unexplained "spline_realization_failed".
+  std::optional<RegionalRealizationRejection> first_realization_rejection;
   // Discrete access-search evidence survives native spline candidate changes.
   std::vector<RegionalFrozenCopperConflict> frozen_copper_conflicts;
   // Native copper assessment is specific to the currently evaluated spline candidate.
@@ -1220,6 +1269,9 @@ struct RegionalRouteResult {
   // Straight scenes are evaluated only when the oracle both ran and materialized every path.
   bool straight_scene_evaluated{false};
   std::size_t native_arc_fit_failures{0U};
+  std::size_t native_polyline_guide_checks{0U};
+  std::size_t native_polyline_guide_exact_legal{0U};
+  std::size_t native_polyline_guide_ph_accepted{0U};
   std::vector<RegionalMultilayerRoutePlan> multilayer_route_plans;
   std::size_t complete_via_dependent_routes{0};
   std::size_t planned_layer_runs{0};
@@ -1291,6 +1343,8 @@ struct RegionalRouteResult {
   bool local_layer_bypass_budget_exhausted{false};
   std::size_t joint_spline_candidates_evaluated{0};
   std::size_t joint_spline_candidates_legal{0};
+  std::size_t ordinary_spline_candidates_evaluated{0};
+  std::size_t ordinary_spline_candidates_legal{0};
   bool candidate_ranker_requested{false};
   bool candidate_ranker_loaded{false};
   std::size_t candidate_ranker_trees{0};

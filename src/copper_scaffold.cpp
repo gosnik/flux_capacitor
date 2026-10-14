@@ -31,6 +31,19 @@
 #include <tuple>
 
 namespace flux {
+struct CopperScaffoldResumeCertificate {
+  std::shared_ptr<const Board> issuing_source;
+  std::vector<GlobalRoutePath> requests;
+  std::vector<std::string> request_identities;
+  std::vector<GlobalRoutePath> paths;
+  std::vector<std::size_t> satisfied_indices;
+  std::vector<std::vector<ObjectId>> dynamic_ids_by_request;
+  std::vector<ObjectId> dynamic_ids;
+  std::vector<TrackSegment> dynamic_tracks;
+  std::vector<Via> dynamic_vias;
+  bool terminal_neckdown_enabled{false};
+  Nanometres maximum_terminal_neckdown_length{Nanometres{0}};
+};
 namespace {
 
 struct Node {
@@ -173,6 +186,54 @@ struct CounterTimer {
 
 [[nodiscard]] bool all_copper_legal(const Board& board) {
   return spatially_legal(check_copper_rules(board));
+}
+
+[[nodiscard]] bool erase_certified_dynamic_copper(Board& board,
+                                                   const CopperScaffoldResumeCertificate& certificate) {
+  const std::set<ObjectId> ids(certificate.dynamic_ids.begin(), certificate.dynamic_ids.end());
+  std::set<ObjectId> removed;
+  std::vector<TrackSegment> retained_tracks;
+  retained_tracks.reserve(board.tracks.size());
+  for (const auto& track : board.tracks) {
+    if (ids.contains(track.id)) removed.insert(track.id);
+    else retained_tracks.push_back(track);
+  }
+  std::vector<Via> retained_vias;
+  retained_vias.reserve(board.vias.size());
+  for (const auto& via : board.vias) {
+    if (ids.contains(via.id)) removed.insert(via.id);
+    else retained_vias.push_back(via);
+  }
+  if (removed != ids) return false;
+  board.tracks = std::move(retained_tracks);
+  board.vias = std::move(retained_vias);
+  return true;
+}
+
+[[nodiscard]] bool certificate_matches_retained(const Board& source,
+                                                 const std::vector<GlobalRoutePath>& requests,
+                                                 const std::vector<std::string>& request_identities,
+                                                 const CopperScaffoldConfig& config,
+                                                 const CopperScaffoldResult& retained) {
+  const auto& certificate = retained.resume_certificate;
+  if (!certificate || !certificate->issuing_source || *certificate->issuing_source != source ||
+      certificate->requests != requests || retained.requests != requests ||
+      certificate->request_identities != request_identities ||
+      certificate->paths != retained.paths ||
+      certificate->satisfied_indices != retained.satisfied_indices ||
+      certificate->dynamic_ids_by_request.size() != request_identities.size() ||
+      retained.request_evidence.size() != request_identities.size() ||
+      certificate->terminal_neckdown_enabled != config.enable_terminal_neckdown ||
+      certificate->maximum_terminal_neckdown_length != config.maximum_terminal_neckdown_length)
+    return false;
+  Board recovered = retained.copper;
+  if (!erase_certified_dynamic_copper(recovered, *certificate) || recovered != source) return false;
+  std::vector<TrackSegment> tracks;
+  std::vector<Via> vias;
+  const std::set<ObjectId> ids(certificate->dynamic_ids.begin(), certificate->dynamic_ids.end());
+  for (const auto& track : retained.copper.tracks) if (ids.contains(track.id)) tracks.push_back(track);
+  for (const auto& via : retained.copper.vias) if (ids.contains(via.id)) vias.push_back(via);
+  return tracks == certificate->dynamic_tracks && vias == certificate->dynamic_vias;
 }
 
 // PNS replaces a straight generated segment with a connected set of dogleg tracks.  Keep this
@@ -1270,6 +1331,36 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
       if (!complete[request]) target.failed_request_indices.push_back(request);
     }
   };
+  // A source clone is created only if this invocation can hand out a resumable checkpoint. All
+  // checkpoints from the invocation share it, so decision publishing does not retain one board
+  // copy per transaction.
+  std::shared_ptr<const Board> certificate_source;
+  const auto issue_resume_certificate = [&](CopperScaffoldResult& target) {
+    if (!config.resume_unattempted_requests && !config.admitted_request_indices && !decision)
+      return;
+    auto certificate = std::make_shared<CopperScaffoldResumeCertificate>();
+    certificate->requests = target.requests;
+    certificate->request_identities = target.request_identities;
+    certificate->paths = target.paths;
+    certificate->satisfied_indices = target.satisfied_indices;
+    certificate->dynamic_ids_by_request = request_dynamic_ids;
+    certificate->terminal_neckdown_enabled = config.enable_terminal_neckdown;
+    certificate->maximum_terminal_neckdown_length = config.maximum_terminal_neckdown_length;
+    std::set<ObjectId> unique_ids;
+    for (const auto& owned : request_dynamic_ids)
+      for (const auto& id : owned)
+        if (unique_ids.insert(id).second) certificate->dynamic_ids.push_back(id);
+    for (const auto& track : target.copper.tracks)
+      if (unique_ids.contains(track.id)) certificate->dynamic_tracks.push_back(track);
+    for (const auto& via : target.copper.vias)
+      if (unique_ids.contains(via.id)) certificate->dynamic_vias.push_back(via);
+    if (certificate->dynamic_tracks.size() + certificate->dynamic_vias.size() != unique_ids.size()) return;
+    Board recovered = target.copper;
+    if (!erase_certified_dynamic_copper(recovered, *certificate) || recovered != board) return;
+    if (!certificate_source) certificate_source = std::make_shared<Board>(board);
+    certificate->issuing_source = certificate_source;
+    target.resume_certificate = std::move(certificate);
+  };
   if (!config.enabled) {
     account_requests(result);
     result.diagnostic = "copper scaffold disabled";
@@ -1297,6 +1388,7 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
     event.retained = result;
     account_requests(event.retained);
     classify_request_progress(event.retained);
+    issue_resume_certificate(event.retained);
     event.retained.complete = event.retained.missing_indices.empty() && !event.retained.counters.cancelled;
     event.request_batch_indices = decision_batch;
     for (const auto request : decision_batch) {
@@ -1339,8 +1431,33 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
           duplicate_request[prior] = true;
     }
   }
+  // An implementation-issued certificate may restore an unchanged legal prefix directly. Its
+  // source is reconstructed by removing the captured generated delta and compared exactly; a
+  // copied, coarse, or edited retained result therefore falls through to ordinary revalidation.
+  bool certified_prefix_reused = false;
+  // A physical-region admission with every recovery/search cap at zero is an exact retained
+  // scene check, not a request-domain rewrite. It may restore the certified prefix, but must
+  // still visit only its admitted unresolved requests below so their typed evidence is refreshed.
+  const bool zero_search_scoped_admission = config.admitted_request_indices &&
+      config.maximum_expansions_per_connection == 0U && config.maximum_victim_exchanges == 0U &&
+      config.maximum_coupled_exchange_attempts == 0U && config.maximum_displacement_attempts == 0U &&
+      config.maximum_joint_passage_candidates == 0U && config.maximum_terminal_pocket_probes == 0U &&
+      config.maximum_terminal_pocket_expansions == 0U;
+  const bool ordinary_certified_resume = config.resume_unattempted_requests &&
+      !config.admitted_request_indices;
+  if ((ordinary_certified_resume || zero_search_scoped_admission) && retained != nullptr &&
+      certificate_matches_retained(board, result.requests, result.request_identities, config, *retained)) {
+    result.copper = retained->copper;
+    result.paths = retained->paths;
+    result.request_evidence = retained->request_evidence;
+    request_dynamic_ids = retained->resume_certificate->dynamic_ids_by_request;
+    for (const auto index : retained->satisfied_indices)
+      if (index < complete.size()) complete[index] = true;
+    ++result.counters.certified_prefix_reuses;
+    certified_prefix_reused = true;
+  }
   // Retained copper is only accepted where it can be reconstructed and dynamically revalidated.
-  if (retained != nullptr) for (const auto& prior : retained->paths) {
+  if (!certified_prefix_reused && retained != nullptr) for (const auto& prior : retained->paths) {
     if (stop_token.stop_requested()) {
       result.counters.cancelled = true;
       break;
@@ -2678,18 +2795,31 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
   // evidence rather than inheriting ownership from an obsolete obstacle layout.
   const bool evidence_only_revalidation = retained != nullptr && !result.counters.cancelled &&
       config.maximum_expansions_per_connection == 0U && config.maximum_victim_exchanges == 0U &&
-      config.maximum_coupled_exchange_attempts == 0U &&
+      config.maximum_coupled_exchange_attempts == 0U && config.maximum_displacement_attempts == 0U &&
+      config.maximum_joint_passage_candidates == 0U && config.maximum_terminal_pocket_probes == 0U &&
+      config.maximum_terminal_pocket_expansions == 0U &&
       retained->request_identities == result.request_identities && retained->paths == result.paths &&
       retained->copper == result.copper && retained->satisfied_indices == result.satisfied_indices &&
       retained->missing_indices == result.missing_indices &&
       retained->request_evidence.size() == result.request_evidence.size();
   if (evidence_only_revalidation) {
-    result.request_evidence = retained->request_evidence;
+    for (std::size_t index = 0U; index < result.request_evidence.size(); ++index) {
+      const bool admitted = config.admitted_request_indices &&
+          std::find(config.admitted_request_indices->begin(), config.admitted_request_indices->end(), index) !=
+              config.admitted_request_indices->end();
+      // A selected deferred request has now received a real bounded classification. Never turn
+      // it back into `not_attempted`; all prior evidence remains authoritative for excluded or
+      // previously attempted requests in this unchanged scene.
+      if (!admitted || retained->request_evidence[index].termination !=
+                           CopperScaffoldSearchTermination::not_attempted)
+        result.request_evidence[index] = retained->request_evidence[index];
+    }
     result.exchange_rollbacks = retained->exchange_rollbacks;
     result.blocked_passages = retained->blocked_passages;
   }
   classify_request_progress(result);
   result.complete = result.missing_indices.empty() && !result.counters.cancelled;
+  issue_resume_certificate(result);
   if (result.complete) result.diagnostic = "all requested connections have a legal copper scaffold";
   else if (result.counters.cancelled) result.diagnostic = "copper scaffold cancelled; legal subset retained";
   else result.diagnostic = "some requested connections have no bounded legal scaffold";

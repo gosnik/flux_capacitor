@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "recorded_at": "2026-10-14T11:45:29.803948+00:00",
+  "board": "controller-layout",
+  "source": "/home/adam/qtbits/flux_capacitor/controller-layout.kicad_pcb",
+  "baseline_revision": "7356fc6f8f022d03baaf99f8807d4a12c3625411",
+  "binary_sha256": "4f2786f99e9d8be0613047ff61dc7ad92ee236fe95e94e83ee1813f524e6a045",
+  "preparation": {
+    "mode": "retain_existing_copper",
+    "source_tracks": 508,
+    "source_vias": 92,
+    "source_open_connections": 178,
+    "source_native_drc_violations": 0,
+    "fresh_copy_open_connections": 288,
+    "native_netclasses": {
+      "Default": 78,
+      "Gate": 6,
+      "Motor": 7
+    }
+  },
+  "import_fix": {
+    "mechanism": "odd-nanometre roundrect half-radius importer/validator rounding mismatch",
+    "core_errors_before": 20,
+    "core_errors_after": 0,
+    "core_tests": "80/80",
+    "risk_tests": "35/35",
+    "review": "clear"
+  },
+  "routing_status": "prepared",
+  "final_drc": "unassessed"
+}

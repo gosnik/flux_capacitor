@@ -551,7 +551,9 @@ ValidationReport validate_board_impl(const Board& board, bool reuse_static_zone_
       if ((pad.shape == PadShape::circle && pad.width != pad.height) ||
           pad.corner_radius.value() < 0 ||
           (pad.shape == PadShape::round_rectangle &&
-           pad.corner_radius > Nanometres{std::min(pad.width.value(), pad.height.value()) / 2}) ||
+           pad.corner_radius >
+               Nanometres{std::min(pad.width.value(), pad.height.value()) / 2 +
+                          std::min(pad.width.value(), pad.height.value()) % 2}) ||
           (pad.shape != PadShape::round_rectangle && pad.corner_radius.value() != 0)) {
         add_issue(report, IssueSeverity::error, "invalid_pad_shape_geometry",
                   "pad shape dimensions or corner radius are inconsistent", {pad.id.value()});

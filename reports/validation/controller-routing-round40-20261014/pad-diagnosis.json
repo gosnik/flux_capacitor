@@ -1,0 +1,8 @@
+{
+  "mechanism": "odd-nanometre roundrect half-radius importer/validator rounding mismatch",
+  "core_errors_before": 20,
+  "core_errors_after": 0,
+  "core_tests": "80/80",
+  "risk_tests": "35/35",
+  "review": "clear"
+}

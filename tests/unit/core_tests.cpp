@@ -20,6 +20,7 @@
 #include "flux/core/routing_kernel.hpp"
 #include "flux/core/routing_rules.hpp"
 #include "flux/core/spline_route.hpp"
+#include "flux/core/validation.hpp"
 #include "flux/io/kicad_export.hpp"
 #include "flux/io/kicad_import.hpp"
 #include "flux/io/kicad_netclass_snapshot.hpp"
@@ -8480,6 +8481,45 @@ void kicad_contained_custom_polygon_pads_preserve_exact_copper() {
           "custom copper spanning a reflex boundary must not be classified inside a zone hole");
 }
 
+void kicad_odd_dimension_roundrect_rounding_preserves_validation() {
+  auto contents = load_minimal_kicad_fixture();
+  const auto pad = contents.rfind("(pad \"1\" smd circle");
+  require(pad != std::string::npos, "roundrect fixture pad must remain identifiable");
+  contents.replace(pad + std::string{"(pad \"1\" smd "}.size(),
+                   std::string{"circle"}.size(), "roundrect");
+  const auto size = contents.find("(size 2 2)", pad);
+  require(size != std::string::npos, "roundrect fixture size must remain identifiable");
+  contents.replace(size, std::string{"(size 2 2)"}.size(), "(size 0.364007 1.742008)");
+  const auto layers = contents.find("(layers ", size);
+  require(layers != std::string::npos, "roundrect fixture layers must remain identifiable");
+  contents.insert(layers, "(roundrect_rratio 0.5)\n      ");
+
+  const auto imported = flux::io::import_kicad_pcb(contents);
+  require(imported.strict() && imported.board,
+          "an odd-nanometre KiCad roundrect must import strictly");
+  const auto& imported_pad = imported.board->footprints.back().pads.front();
+  require(imported_pad.corner_radius == Nanometres{182'004} &&
+              flux::validate_board(*imported.board).ok(),
+          "a half-ratio roundrect must accept the importer's conservative ceil-half radius");
+
+  const auto has_invalid_shape = [](const flux::ValidationReport& validation) {
+    return std::any_of(validation.issues.begin(), validation.issues.end(), [](const auto& issue) {
+      return issue.code == "invalid_pad_shape_geometry";
+    });
+  };
+  auto one_nm_over_odd_limit = *imported.board;
+  one_nm_over_odd_limit.footprints.back().pads.front().corner_radius = Nanometres{182'005};
+  require(has_invalid_shape(flux::validate_board(one_nm_over_odd_limit)),
+          "a roundrect one nanometre beyond the odd-dimension ceil-half limit must be rejected");
+
+  auto one_nm_over_even_limit = *imported.board;
+  auto& even_pad = one_nm_over_even_limit.footprints.back().pads.front();
+  even_pad.width = Nanometres{364'008};
+  even_pad.corner_radius = Nanometres{182'005};
+  require(has_invalid_shape(flux::validate_board(one_nm_over_even_limit)),
+          "a roundrect one nanometre beyond an even-dimension half-width must be rejected");
+}
+
 void cancellation_and_kicad_export_boundaries_fail_closed() {
   const auto board = two_pad_board();
   std::stop_source stop;
@@ -11827,6 +11867,8 @@ int main(int argc, char** argv) {
       {"kicad_pad_frames_match_placed_board_coordinates", kicad_pad_frames_match_placed_board_coordinates},
       {"kicad_contained_custom_polygon_pads_preserve_exact_copper",
        kicad_contained_custom_polygon_pads_preserve_exact_copper},
+      {"kicad_odd_dimension_roundrect_rounding_preserves_validation",
+       kicad_odd_dimension_roundrect_rounding_preserves_validation},
       {"units_remain_exact_and_saturating", units_remain_exact_and_saturating},
       {"multisource_terminal_membership_preserves_access_preference_order",
        multisource_terminal_membership_preserves_access_preference_order},

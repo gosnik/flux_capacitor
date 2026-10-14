@@ -1,0 +1,16 @@
+{
+  "recorded_at": "2026-10-14T11:30:58.322924+00:00",
+  "sources": [
+    {
+      "source": "/home/adam/qtbits/flux_capacitor/controller-layout.kicad_pcb",
+      "staged": "/home/adam/qtbits/flux_capacitor/reports/validation/controller-routing-round40-20261014/input/controller-layout.kicad_pcb",
+      "sha256": "18ab96a2af4e7801f0c083541ad6f3c34c13a9424f00f55cc62014cf0be2adc9"
+    },
+    {
+      "source": "/home/adam/qtbits/flux_capacitor/controller-layout.kicad_pro",
+      "staged": "/home/adam/qtbits/flux_capacitor/reports/validation/controller-routing-round40-20261014/input/controller-layout.kicad_pro",
+      "sha256": "f72f755dc68b9cadd070a97f13a3f7109dea4552dc72824880514a5028488bc2"
+    }
+  ],
+  "source_preservation": "staged copies; original copper retained"
+}

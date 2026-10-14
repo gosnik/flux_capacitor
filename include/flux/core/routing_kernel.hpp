@@ -44,6 +44,10 @@ void routing_kernel_checkpoint(std::size_t work = 1U);
 // numerical slice budget. The caller can schedule another operation before resuming it.
 void routing_kernel_decision_point();
 [[nodiscard]] bool routing_kernel_managed_thread();
+// Returns cumulative time spent executing the current managed kernel. Time while its
+// continuation is parked is excluded. Outside a managed kernel this is the steady-clock
+// epoch time, so callers can use the same clock for request-level elapsed budgets.
+[[nodiscard]] std::chrono::nanoseconds routing_kernel_active_time();
 
 // Runs independent routing tasks with at most `workers` child threads. In a managed routing
 // continuation, child checkpoints park behind a batch-local barrier before the parent reaches

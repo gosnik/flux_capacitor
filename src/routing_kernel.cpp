@@ -14,6 +14,7 @@ namespace flux {
 namespace {
 struct KernelCancelled {};
 thread_local std::function<void(std::size_t, bool)>* checkpoint_handler = nullptr;
+thread_local std::function<std::chrono::nanoseconds()>* active_time_handler = nullptr;
 } // namespace
 
 struct RoutingKernel::Impl {
@@ -26,6 +27,9 @@ struct RoutingKernel::Impl {
   std::size_t slice_work{0U};
   RoutingKernelBudget budget;
   std::chrono::steady_clock::time_point slice_start;
+  std::chrono::steady_clock::time_point active_segment_start;
+  std::chrono::steady_clock::duration active_elapsed{};
+  bool active_segment_running{false};
   std::exception_ptr error;
   std::thread worker;
 
@@ -40,6 +44,10 @@ struct RoutingKernel::Impl {
         if (!stop.stop_requested() &&
             (decision || slice_work >= budget.work_units ||
              std::chrono::steady_clock::now() - slice_start >= budget.time_slice)) {
+          if (active_segment_running) {
+            active_elapsed += std::chrono::steady_clock::now() - active_segment_start;
+            active_segment_running = false;
+          }
           running = false;
           changed.notify_all();
           changed.wait(lock, [this] { return running || stop.stop_requested(); });
@@ -52,6 +60,14 @@ struct RoutingKernel::Impl {
         changed.wait(lock, [this] { return running || stop.stop_requested(); });
       }
       checkpoint_handler = &checkpoint;
+      std::function<std::chrono::nanoseconds()> active_time = [this] {
+        std::lock_guard lock(mutex);
+        auto elapsed = active_elapsed;
+        if (active_segment_running)
+          elapsed += std::chrono::steady_clock::now() - active_segment_start;
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed);
+      };
+      active_time_handler = &active_time;
       try {
         if (!stop.stop_requested())
           task(stop.get_token());
@@ -61,8 +77,13 @@ struct RoutingKernel::Impl {
         error = std::current_exception();
       }
       checkpoint_handler = nullptr;
+      active_time_handler = nullptr;
       {
         std::lock_guard lock(mutex);
+        if (active_segment_running) {
+          active_elapsed += std::chrono::steady_clock::now() - active_segment_start;
+          active_segment_running = false;
+        }
         finished = true;
         running = false;
       }
@@ -105,6 +126,8 @@ RoutingKernelStatus RoutingKernel::advance(RoutingKernelBudget budget, std::stop
     impl_->budget = budget;
     impl_->slice_work = 0U;
     impl_->slice_start = std::chrono::steady_clock::now();
+    impl_->active_segment_start = impl_->slice_start;
+    impl_->active_segment_running = !impl_->stop.stop_requested();
     impl_->running = true;
     impl_->changed.notify_all();
     while (!impl_->changed.wait_for(lock, std::chrono::milliseconds{500},
@@ -130,6 +153,12 @@ void routing_kernel_decision_point() {
   if (checkpoint_handler != nullptr) (*checkpoint_handler)(0U, true);
 }
 bool routing_kernel_managed_thread() { return checkpoint_handler != nullptr; }
+std::chrono::nanoseconds routing_kernel_active_time() {
+  if (active_time_handler != nullptr)
+    return (*active_time_handler)();
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now().time_since_epoch());
+}
 
 void run_bounded_routing_tasks(std::size_t count, std::size_t workers, std::stop_token stop,
                                const std::function<void(std::size_t)>& task) {
@@ -186,7 +215,8 @@ void run_bounded_routing_tasks(std::size_t count, std::size_t workers, std::stop
     }
   };
 
-  const auto child = [&](std::stop_token) {
+  auto* const inherited_active_time_handler = active_time_handler;
+  const auto child = [&, inherited_active_time_handler](std::stop_token) {
     std::function<void(std::size_t, bool)> child_checkpoint = [&](std::size_t amount, bool decision) {
       std::unique_lock lock(state.mutex);
       if (stop.stop_requested() || state.cancelling) throw KernelCancelled{};
@@ -203,6 +233,7 @@ void run_bounded_routing_tasks(std::size_t count, std::size_t workers, std::stop
       if (stop.stop_requested() || state.cancelling) throw KernelCancelled{};
     };
     checkpoint_handler = &child_checkpoint;
+    active_time_handler = inherited_active_time_handler;
     while (!stop.stop_requested()) {
       const auto index = state.next.fetch_add(1U);
       if (index >= count) break;
@@ -219,6 +250,7 @@ void run_bounded_routing_tasks(std::size_t count, std::size_t workers, std::stop
       }
     }
     checkpoint_handler = nullptr;
+    active_time_handler = nullptr;
     {
       std::lock_guard lock(state.mutex);
       ++state.completed;

@@ -125,6 +125,12 @@ struct RoutingEngineConfig {
   // Bound each frozen-scene job; untouched demands remain in the canonical domain.
   std::size_t max_physical_region_requests{6U};
   std::size_t max_physical_failure_records{32U};
+  // Long scaffold sweeps return control after a bounded transaction batch or an attempted
+  // failure. Small scenes retain their existing ordering and search allowances.
+  std::size_t bounded_scaffold_request_threshold{256U};
+  std::size_t scaffold_requests_per_decision{8U};
+  std::size_t scaffold_request_search_work{200'000U};
+  std::chrono::milliseconds scaffold_request_active_time{3000};
   std::size_t max_actions{256U};
   std::size_t max_actions_without_physical_progress{16U};
   // Deprecated: exact state-key suppression is handled by RoutingExperimentScheduleState.
@@ -205,12 +211,21 @@ struct RoutingPhysicalRepairEvidence {
 // Pure, deterministic fair selection of a causal missing-demand component. A bounded search
 // failure only supplies adjacency; it never establishes an infeasible assignment.
 [[nodiscard]] std::vector<std::size_t> select_physical_repair_requests(
-    const CopperScaffoldResult&, const std::vector<std::size_t>& attempts, std::size_t limit);
+    const CopperScaffoldResult&, const std::vector<std::size_t>& attempts, std::size_t limit,
+    const std::vector<std::size_t>& newly_failed = {});
+
+// Negative-evidence updates can reuse a parked sweep; changed committed copper cannot.
+[[nodiscard]] bool routing_scaffold_continuation_compatible(
+    const CopperScaffoldResult* parked, const CopperScaffoldResult* current);
 
 // One canonical blocker token per request index. Satisfied or invalid indices have an empty
 // token, so an evidence-only update can reopen only the missing demands whose scope changed.
 [[nodiscard]] std::vector<std::string> physical_repair_evidence_tokens(
     const CopperScaffoldResult&);
+
+// Canonical exact records for tracks, arcs, Beziers, and vias. Ordering is independent of the
+// Board containers, enabling focused retained-scaffold retry tests.
+[[nodiscard]] std::vector<std::string> routing_scaffold_copper_scene_records(const Board&);
 
 // Reopen only missing requests whose canonical blocker scope changed. A retained-scene geometry
 // change invalidates every prior attempt regardless of the evidence tokens.
@@ -278,6 +293,9 @@ struct RoutingEngineState {
   std::size_t experiment_state_suppressions{0U};
   std::size_t experiment_started{0U};
   std::size_t scaffold_regional_actions{0U};
+  std::size_t scaffold_decision_points{0U};
+  std::size_t scaffold_repair_handoffs{0U};
+  std::vector<std::size_t> scaffold_newly_failed_requests{};
   std::size_t physical_preparation_reuses{0U};
   std::vector<RoutingPhysicalRepairEvidence> physical_repair_evidence;
   std::optional<QuantizedCopperOracleResult> scaffold_oracle;
@@ -396,6 +414,8 @@ private:
   mutable std::map<std::string, std::size_t> physical_records_;
   mutable std::size_t experiment_key_bytes_{0U};
   mutable bool experiment_metadata_exhausted_{false};
+  mutable std::weak_ptr<const CopperScaffoldResult> cached_scaffold_scene_;
+  mutable std::string cached_scaffold_scene_token_;
   std::shared_ptr<RegionalRoutingPreparation> regional_preparation_;
   std::shared_ptr<RegionalRoutingPreparation> physical_preparation_;
   std::string physical_preparation_key_;

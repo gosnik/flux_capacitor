@@ -4377,6 +4377,8 @@ void print_route_result(const flux::GlobalRouteResult& result,
       std::cout << "]}";
     }
     std::cout << ",\n  \"routing_engine_scaffold_regional_actions\": " << engine_state->scaffold_regional_actions;
+    std::cout << ",\n  \"routing_engine_scaffold_decision_points\": " << engine_state->scaffold_decision_points;
+    std::cout << ",\n  \"routing_engine_scaffold_repair_handoffs\": " << engine_state->scaffold_repair_handoffs;
     std::cout << ",\n  \"routing_engine_scaffold_regional_missing_requests\": " << engine_state->scaffold_regional_missing_requests;
 
     std::cout << ",\n  \"routing_engine_scaffold_terminal_rebinds\": " << engine_state->scaffold_terminal_rebinds;

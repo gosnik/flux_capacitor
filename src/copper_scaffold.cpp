@@ -22,6 +22,7 @@
 #include <chrono>
 #include <cmath>
 #include <deque>
+#include <exception>
 #include <limits>
 #include <map>
 #include <queue>
@@ -425,6 +426,7 @@ struct PassageSearch {
                                                   std::size_t index, const CopperScaffoldConfig& config,
                                                   CopperScaffoldCounters& counters,
                                                   std::stop_token token,
+                                                  std::optional<std::chrono::nanoseconds> active_deadline = std::nullopt,
                                                   std::set<std::string>* frontier_blockers = nullptr,
                                                   CopperScaffoldSearchTermination* termination = nullptr,
                                                   CopperScaffoldRequestEvidence* access_evidence = nullptr,
@@ -432,9 +434,15 @@ struct PassageSearch {
   const auto finish = [&](CopperScaffoldSearchTermination value) {
     if (termination != nullptr) *termination = value;
   };
+  const auto active_budget_exhausted = [&] {
+    return active_deadline && routing_kernel_active_time() >= *active_deadline;
+  };
   if (request.points.size() < 2U || !valid_widths(request) || config.grid_pitch.value() <= 0 ||
       config.planar_step_cost == 0U || config.diagonal_step_cost == 0U || config.via_cost == 0U)
     { finish(CopperScaffoldSearchTermination::invalid_request); return std::nullopt; }
+  if (active_budget_exhausted()) {
+    finish(CopperScaffoldSearchTermination::request_active_budget_exhausted); return std::nullopt;
+  }
   if (token.stop_requested()) {
     counters.cancelled = true;
     finish(CopperScaffoldSearchTermination::cancelled); return std::nullopt;
@@ -493,6 +501,9 @@ struct PassageSearch {
     finish(token.stop_requested() ? CopperScaffoldSearchTermination::cancelled :
                                    CopperScaffoldSearchTermination::domain_build_failed);
     return std::nullopt;
+  }
+  if (active_budget_exhausted()) {
+    finish(CopperScaffoldSearchTermination::request_active_budget_exhausted); return std::nullopt;
   }
   const auto collision_started = std::chrono::steady_clock::now();
   const ScaffoldCollisionIndex collision(base);
@@ -668,6 +679,9 @@ struct PassageSearch {
       if (std::max(std::abs(dx), std::abs(dy)) != cursor.ring) continue;
       ++probes; ++counters.attachment_search_probes;
       routing_kernel_checkpoint();
+      if (active_budget_exhausted()) {
+        finish(CopperScaffoldSearchTermination::request_active_budget_exhausted); break;
+      }
       if (token.stop_requested()) { counters.cancelled = true; break; }
       const auto layer = find_layer(endpoint.layer); if (!layer) continue;
       const auto stub = cursor.neckdown_phase ? std::optional<Point>{} :
@@ -745,6 +759,9 @@ struct PassageSearch {
     if (goals.empty() && !target_cursor.exhausted && !counters.cancelled)
       advance_attachments(target_cursor, access.goals, attachment_target,
                           config.progressive_attachment_search ? config.maximum_attachment_probes_per_round : 0U);
+  }
+  if (active_budget_exhausted()) {
+    finish(CopperScaffoldSearchTermination::request_active_budget_exhausted); return std::nullopt;
   }
   counters.source_attachments += starts.size(); counters.target_attachments += goals.size();
   if (access_evidence != nullptr) {
@@ -829,6 +846,9 @@ struct PassageSearch {
     while (!compact_open.empty() && round_used < round_expansion_limit &&
            goal_attempts < round_goal_limit) {
       routing_kernel_checkpoint();
+      if (active_budget_exhausted()) {
+        finish(CopperScaffoldSearchTermination::request_active_budget_exhausted); return std::nullopt;
+      }
       if (token.stop_requested()) {
         counters.cancelled = true; finish(CopperScaffoldSearchTermination::cancelled); return std::nullopt;
       }
@@ -840,6 +860,9 @@ struct PassageSearch {
       if (goal != goals_at.end()) for (const auto goal_id : goal->second) {
         if (goal_attempts >= round_goal_limit) break;
         routing_kernel_checkpoint();
+        if (active_budget_exhausted()) {
+          finish(CopperScaffoldSearchTermination::request_active_budget_exhausted); return std::nullopt;
+        }
         if (token.stop_requested()) {
         counters.cancelled = true; finish(CopperScaffoldSearchTermination::cancelled); return std::nullopt;
       }
@@ -1007,6 +1030,9 @@ struct PassageSearch {
   std::set<std::pair<SearchState, std::size_t>> rejected_goals;
   const auto assemble_goal = [&](const QueueEntry& current, std::size_t goal_id) -> std::optional<Trial> {
     routing_kernel_checkpoint();
+    if (active_budget_exhausted()) {
+      finish(CopperScaffoldSearchTermination::request_active_budget_exhausted); return std::nullopt;
+    }
     if (token.stop_requested()) { counters.cancelled = true; return std::nullopt; }
     if (!rejected_goals.emplace(current.state, goal_id).second) return std::nullopt;
     std::vector<Node> chain{current.state.node};
@@ -1053,6 +1079,9 @@ struct PassageSearch {
   while (!open.empty() && local_expansions < rich_budget &&
          goal_attempts < config.maximum_goal_attempts) {
     routing_kernel_checkpoint();
+    if (active_budget_exhausted()) {
+      finish(CopperScaffoldSearchTermination::request_active_budget_exhausted); return std::nullopt;
+    }
     if (token.stop_requested()) { counters.cancelled = true; return std::nullopt; }
     const auto current = open.top(); open.pop();
     if (distance.at(current.state) != current.g) continue;
@@ -1120,7 +1149,8 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
                                                const CopperScaffoldConfig& config,
                                                std::stop_token stop_token,
                                                const CopperScaffoldResult* retained,
-                                               const std::function<void(const CopperScaffoldResult&)>& publish) {
+                                               const std::function<void(const CopperScaffoldResult&)>& publish,
+                                               const std::function<void(const CopperScaffoldDecisionEvent&)>& decision) {
   // A coupled repair may prove that a coarse interior branch contact has become obsolete after
   // its producer is rebuilt.  Keep this domain mutable, but publish a changed demand only with
   // the exact transaction that realizes it.
@@ -1223,6 +1253,23 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
     target.counters.published_tracks = target.copper.tracks.size() - board.tracks.size();
     target.counters.published_vias = target.copper.vias.size() - board.vias.size();
   };
+  const auto classify_request_progress = [&](CopperScaffoldResult& target) {
+    target.sweep_in_progress = false;
+    for (std::size_t request = 0U; request < complete.size(); ++request)
+      if (!complete[request] && target.request_evidence[request].termination ==
+          CopperScaffoldSearchTermination::not_attempted) {
+        target.sweep_in_progress = true;
+        break;
+      }
+    target.attempted_request_indices.clear();
+    target.failed_request_indices.clear();
+    for (std::size_t request = 0U; request < complete.size(); ++request) {
+      if (target.request_evidence[request].termination == CopperScaffoldSearchTermination::not_attempted)
+        continue;
+      target.attempted_request_indices.push_back(request);
+      if (!complete[request]) target.failed_request_indices.push_back(request);
+    }
+  };
   if (!config.enabled) {
     account_requests(result);
     result.diagnostic = "copper scaffold disabled";
@@ -1233,8 +1280,52 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
     CopperScaffoldResult snapshot = result;
     snapshot.complete = false;
     account_requests(snapshot);
+    classify_request_progress(snapshot);
     snapshot.diagnostic = "legal connection checkpoint retained; scaffold search in progress";
     publish(snapshot);
+  };
+  // Decision events deliberately share neither a mutable result nor an unfinished transaction
+  // with the caller. This lets the engine park this continuation after a bounded request batch
+  // and admit repair from the exact retained subset.
+  std::vector<std::size_t> decision_batch;
+  const auto publish_decision_batch = [&](bool force = false) {
+    if (!decision || decision_batch.empty()) return;
+    const bool batch_limit = config.maximum_requests_per_decision_batch > 0U &&
+        decision_batch.size() >= config.maximum_requests_per_decision_batch;
+    if (!force && !batch_limit) return;
+    CopperScaffoldDecisionEvent event;
+    event.retained = result;
+    account_requests(event.retained);
+    classify_request_progress(event.retained);
+    event.retained.complete = event.retained.missing_indices.empty() && !event.retained.counters.cancelled;
+    event.request_batch_indices = decision_batch;
+    for (const auto request : decision_batch) {
+      if (request >= result.request_evidence.size() ||
+          result.request_evidence[request].termination == CopperScaffoldSearchTermination::not_attempted)
+        continue;
+      event.attempted_request_indices.push_back(request);
+      if (request < complete.size() && complete[request]) event.completed_request_indices.push_back(request);
+      else event.failed_request_indices.push_back(request);
+    }
+    for (std::size_t request = 0U; request < complete.size(); ++request)
+      if (!complete[request] && result.request_evidence[request].termination ==
+          CopperScaffoldSearchTermination::not_attempted)
+        event.unattempted_request_indices.push_back(request);
+    event.sweep_in_progress = event.retained.sweep_in_progress;
+    decision(event);
+    decision_batch.clear();
+    // Never park an ordinary one-shot scaffold just because it supplied a callback. Explicit
+    // bounds opt into scheduling decisions and preserve lower-tier execution behavior.
+    if (batch_limit || (force && (config.maximum_requests_per_decision_batch > 0U ||
+                                  config.maximum_request_search_work_units > 0U)))
+      routing_kernel_decision_point();
+  };
+  const auto finish_request_transaction = [&](std::size_t index) {
+    decision_batch.push_back(index);
+    const bool failed = index < complete.size() && !complete[index] &&
+        index < result.request_evidence.size() &&
+        result.request_evidence[index].termination != CopperScaffoldSearchTermination::not_attempted;
+    publish_decision_batch(failed);
   };
   std::vector<bool> duplicate_request(requests.size(), false);
   std::set<std::string> request_keys;
@@ -1269,17 +1360,53 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
     }
   }
   for (std::size_t index = 0U; index < requests.size(); ++index) {
-    if (complete[index] || duplicate_request[index]) {
-      if (duplicate_request[index])
-        result.request_evidence[index].termination = CopperScaffoldSearchTermination::invalid_request;
+    // Retained requests were reconstructed atomically before this sweep, so they are already
+    // satisfied rather than an attempted or deferred request transaction in this invocation.
+    if (complete[index]) continue;
+    // Cancellation before admission leaves this and every later request deferred. Do not create
+    // an evidence record that would make regional admission mistake it for a failed search.
+    if (stop_token.stop_requested()) {
+      result.counters.cancelled = true;
+      break;
+    }
+    if (config.admitted_request_indices &&
+        std::find(config.admitted_request_indices->begin(), config.admitted_request_indices->end(), index) ==
+            config.admitted_request_indices->end())
+      continue;
+    struct RequestDecisionScope {
+      std::function<void()> finish;
+      std::stop_token stop;
+      ~RequestDecisionScope() noexcept(false) {
+        if (std::uncaught_exceptions() == 0 && !stop.stop_requested()) finish();
+      }
+    } request_decision_scope{[&] { finish_request_transaction(index); }, stop_token};
+    const auto request_expansions_started = result.counters.expansions;
+    const auto request_active_started = routing_kernel_active_time();
+    const auto request_active_deadline = config.maximum_request_active_time.count() > 0 ?
+        std::optional{request_active_started + std::chrono::duration_cast<std::chrono::nanoseconds>(
+            config.maximum_request_active_time)} : std::nullopt;
+    const auto request_active_budget_exhausted = [&] {
+      return request_active_deadline && routing_kernel_active_time() >= *request_active_deadline;
+    };
+    const auto remaining_request_work = [&] {
+      if (config.maximum_request_search_work_units == 0U)
+        return std::numeric_limits<std::size_t>::max();
+      // Every scaffold maze invocation contributes to `expansions`; the joint and displacement
+      // counters are diagnostic subsets of that same work and must not be double charged.
+      const auto used = result.counters.expansions - request_expansions_started;
+      return used >= config.maximum_request_search_work_units ? 0U :
+          config.maximum_request_search_work_units - used;
+    };
+    const auto clamp_request_search = [&](CopperScaffoldConfig bounded) {
+      bounded.maximum_expansions_per_connection = std::min(
+          bounded.maximum_expansions_per_connection, remaining_request_work());
+      return bounded;
+    };
+    if (duplicate_request[index]) {
+      result.request_evidence[index].termination = CopperScaffoldSearchTermination::invalid_request;
       continue;
     }
     ++result.counters.searched_connections;
-    if (stop_token.stop_requested()) {
-      result.counters.cancelled = true;
-      result.request_evidence[index].termination = CopperScaffoldSearchTermination::cancelled;
-      break;
-    }
     if (requests[index].points.size() < 2U || !valid_widths(requests[index])) {
       result.request_evidence[index].termination = CopperScaffoldSearchTermination::invalid_request;
       continue;
@@ -1310,7 +1437,9 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
     }
     std::optional<Trial> routed;
     std::set<std::string> frontier_blockers;
-    routed = search_route(result.copper, requests[index], index, config, result.counters, stop_token,
+    auto primary_search_config = clamp_request_search(config);
+    routed = search_route(result.copper, requests[index], index, primary_search_config, result.counters, stop_token,
+                          request_active_deadline,
                           &frontier_blockers, &result.request_evidence[index].termination,
                           &result.request_evidence[index]);
     if (routed) {
@@ -1340,6 +1469,8 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
     const auto primary_termination = result.request_evidence[index].termination;
     const bool probe_terminal_pocket =
         !result.counters.cancelled && !stop_token.stop_requested() &&
+        !request_active_budget_exhausted() &&
+        remaining_request_work() > 0U &&
         config.maximum_terminal_pocket_probes > result.counters.terminal_pocket_probes &&
         config.maximum_terminal_pocket_expansions > 0U &&
         (primary_termination == CopperScaffoldSearchTermination::expansion_budget_exhausted ||
@@ -1354,6 +1485,7 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
       std::reverse(reversed.segment_width_kinds.begin(), reversed.segment_width_kinds.end());
       auto bounded = config;
       bounded.maximum_expansions_per_connection = config.maximum_terminal_pocket_expansions;
+      bounded = clamp_request_search(std::move(bounded));
       bounded.compact_search_expansions = 0U;
       CopperScaffoldSearchTermination pocket_termination = CopperScaffoldSearchTermination::not_attempted;
       CopperScaffoldCounters probe_counters;
@@ -1361,6 +1493,7 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
       {
         CounterTimer timer{result.counters.terminal_pocket_probe_microseconds};
         static_cast<void>(search_route(result.copper, reversed, index, bounded, probe_counters, stop_token,
+                                       request_active_deadline,
                                        &terminal_pocket_blockers, &pocket_termination));
       }
       result.counters.terminal_pocket_probe_expansions += probe_counters.expansions;
@@ -1379,6 +1512,10 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
         terminal_pocket_blockers.clear();
     }
     if (result.counters.cancelled) break;
+    if (request_active_budget_exhausted()) {
+      result.request_evidence[index].termination = CopperScaffoldSearchTermination::request_active_budget_exhausted;
+      continue;
+    }
     // Bounded causal exchange: retain survivor copper, remove one attributed victim, admit the
     // blocked request, then rebuild the victim. Failure leaves the published result untouched.
     std::vector<std::size_t> victim_order;
@@ -1409,6 +1546,8 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
     bool jointly_repaired = false;
     if (config.maximum_joint_passage_candidates > 0U && config.maximum_joint_blocker_owners > 0U &&
         config.maximum_joint_particles > 0U && config.maximum_joint_iterations > 0U &&
+        remaining_request_work() > 0U &&
+        !request_active_budget_exhausted() &&
         !stop_token.stop_requested()) {
       const auto maximum_owners = std::min<std::size_t>(6U, config.maximum_joint_blocker_owners);
       std::map<std::string, std::size_t> movable_ids;
@@ -1483,8 +1622,10 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
               retained_matches_request(board, previous.path, requests[index], config)) retain_proposal(previous.path);
         if (search.candidates.size() < search.maximum_candidates && config.maximum_joint_search_expansions > 0U) {
           auto bounded = config; bounded.maximum_expansions_per_connection = config.maximum_joint_search_expansions;
+          bounded = clamp_request_search(std::move(bounded));
           const auto before = result.counters.expansions;
           (void)search_route(hard_scene, requests[index], index, bounded, result.counters, stop_token,
+                             request_active_deadline,
                              nullptr, nullptr, nullptr, &search);
           const auto work = result.counters.expansions - before;
           result.counters.joint_search_expansions += work;
@@ -1771,6 +1912,10 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
     }
     if (stop_token.stop_requested()) result.counters.cancelled = true;
     if (result.counters.cancelled || jointly_repaired) continue;
+    if (request_active_budget_exhausted()) {
+      result.request_evidence[index].termination = CopperScaffoldSearchTermination::request_active_budget_exhausted;
+      continue;
+    }
 
     // Before ripping up an owner, probe the passage with only a small attributed owner set
     // omitted.  The probe is never committed.  Its candidate is reinserted into the original
@@ -1780,7 +1925,8 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
     std::size_t displacement_expansions = 0U;
     for (std::size_t attempt = 0U; !displaced && !result.counters.cancelled &&
                                 attempt < victim_order.size() &&
-                                attempt < config.maximum_displacement_attempts; ++attempt) {
+                                attempt < config.maximum_displacement_attempts &&
+                                remaining_request_work() > 0U && !request_active_budget_exhausted(); ++attempt) {
       const auto victim = victim_order[attempt];
       // PNS paths are reconstructed only for planar, generated owners.  Vias and authored
       // copper stay protected; those cases continue into causal reroute below.
@@ -1813,9 +1959,11 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
         // transaction cap, not the exhausted primary-search allowance.
         bounded.maximum_expansions_per_connection =
             config.maximum_displacement_expansions - displacement_expansions;
+        bounded = clamp_request_search(std::move(bounded));
         const auto before = result.counters.expansions;
         std::set<std::string> ignored_probe_blockers;
         passage = search_route(omitted, requests[index], index, bounded, result.counters, stop_token,
+                               request_active_deadline,
                                &ignored_probe_blockers);
         const auto used = result.counters.expansions - before;
         displacement_expansions += used;
@@ -1948,6 +2096,10 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
       publish_legal_subset();
     }
     if (result.counters.cancelled || displaced) continue;
+    if (request_active_budget_exhausted()) {
+      result.request_evidence[index].termination = CopperScaffoldSearchTermination::request_active_budget_exhausted;
+      continue;
+    }
     bool exchanged = false;
     const auto record_rollback = [&](CopperScaffoldExchangeRollbackReason reason,
                                      const std::vector<std::size_t>& victims,
@@ -1968,7 +2120,8 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
       result.exchange_rollbacks.push_back(std::move(record));
     };
     for (std::size_t attempt = 0U; attempt < victim_order.size() && !exchanged &&
-                                attempt < config.maximum_victim_exchanges; ++attempt) {
+                                attempt < config.maximum_victim_exchanges &&
+                                remaining_request_work() > 0U && !request_active_budget_exhausted(); ++attempt) {
       const auto victim = victim_order[attempt];
       ++result.counters.victim_exchanges_attempted;
       Board rebuilt = result.copper;
@@ -2012,7 +2165,8 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
             return survivor_ids.contains(via.id.value());
           }));
       std::set<std::string> exposed_blockers;
-      auto incoming = search_route(rebuilt, requests[index], index, config, result.counters, stop_token,
+      auto incoming = search_route(rebuilt, requests[index], index, clamp_request_search(config), result.counters, stop_token,
+                                   request_active_deadline,
                                    &exposed_blockers);
       if (!incoming) {
         extend_causal_victims(exposed_blockers);
@@ -2033,8 +2187,8 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
       victim_evidence.net = requests[victim].net;
       victim_evidence.connection_index = requests[victim].connection_index;
       const auto victim_expansions_before = result.counters.expansions;
-      auto replacement = search_route(rebuilt, requests[victim], victim, config,
-                                      result.counters, stop_token, &exposed_blockers,
+      auto replacement = search_route(rebuilt, requests[victim], victim, clamp_request_search(config),
+                                      result.counters, stop_token, request_active_deadline, &exposed_blockers,
                                       &victim_evidence.termination, &victim_evidence);
       std::optional<GlobalRoutePath> rebound_victim;
       if (!replacement && !result.counters.cancelled) {
@@ -2049,9 +2203,10 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
           bounded.maximum_expansions_per_connection =
               consumed >= config.maximum_expansions_per_connection ? 0U :
               config.maximum_expansions_per_connection - consumed;
+          bounded = clamp_request_search(std::move(bounded));
           replacement = bounded.maximum_expansions_per_connection == 0U ? std::optional<Trial>{} :
               search_route(rebuilt, *rebound_victim, victim, bounded, result.counters,
-                                     stop_token, &exposed_blockers);
+                                     stop_token, request_active_deadline, &exposed_blockers);
         }
       }
       if (!replacement) {
@@ -2209,9 +2364,11 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
           limited.maximum_expansions_per_connection = std::min(
               {config.maximum_expansions_per_connection, config.maximum_coupled_expansions - coupled_expansions,
                fair_demand_cap});
+          limited = clamp_request_search(std::move(limited));
           const auto before = result.counters.expansions;
           CopperScaffoldSearchTermination termination = CopperScaffoldSearchTermination::not_attempted;
           auto trial = search_route(scene, demand, demand_index, limited, result.counters, stop_token,
+                                    request_active_deadline,
                                     &exposed_blockers, &termination, evidence);
           if (evidence != nullptr) evidence->termination = termination;
           const auto consumed = result.counters.expansions - before;
@@ -2489,6 +2646,7 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
       ++result.counters.coupled_expansion_budget_exhaustions;
     if (!exchanged) publish_legal_subset();
   }
+  publish_decision_batch(true);
   account_requests(result);
   // Regional admission may revalidate a retained subset with search and exchange budgets set to
   // zero.  When that reconstruction produced exactly the same checked scene, an immediate
@@ -2508,6 +2666,7 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
     result.exchange_rollbacks = retained->exchange_rollbacks;
     result.blocked_passages = retained->blocked_passages;
   }
+  classify_request_progress(result);
   result.complete = result.missing_indices.empty() && !result.counters.cancelled;
   if (result.complete) result.diagnostic = "all requested connections have a legal copper scaffold";
   else if (result.counters.cancelled) result.diagnostic = "copper scaffold cancelled; legal subset retained";

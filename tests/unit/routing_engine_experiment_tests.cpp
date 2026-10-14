@@ -97,6 +97,14 @@ void physical_regions_are_causal_bounded_and_fair() {
   require(select_physical_repair_requests(scaffold, {1U, 1U, 1U, 0U}, 2U) ==
               std::vector<std::size_t>{3U},
           "an unrelated unresolved component must receive its own job");
+  require(select_physical_repair_requests(scaffold, {0U, 0U, 3U, 0U}, 1U, {2U}) ==
+              std::vector<std::size_t>{2U},
+          "new failure evidence must receive its handoff before older failures are retried");
+  scaffold.sweep_in_progress = true;
+  scaffold.failed_request_indices = {2U};
+  require(select_physical_repair_requests(scaffold, {}, 3U) == std::vector<std::size_t>{2U},
+          "an ongoing scaffold must not admit deferred requests as failed regional demands");
+  scaffold.sweep_in_progress = false;
   require(select_physical_repair_requests(scaffold, {}, 0U).empty(),
           "zero regional request allowance must not dispatch work");
 }
@@ -593,6 +601,142 @@ void scaffold_replaces_all_routed_nets_when_scope_is_null() {
               !engine.state().legal_scaffold->paths.empty(),
           "null replacement scope must not let source copper complete the scaffold as a no-op");
 }
+void bounded_scaffold_hands_failed_requests_to_regional_before_sweep_completion() {
+  auto planning = two_pad_board();
+  for (int n = 0; n < 2; ++n) {
+    const NetId net{"deferred-" + std::to_string(n)};
+    planning.nets.push_back({net, "DEFERRED" + std::to_string(n), n + 1});
+    for (int i = 0; i < 2; ++i) {
+      Footprint footprint;
+      footprint.id = ObjectId{"D" + std::to_string(n) + "-" + std::to_string(i)};
+      footprint.reference = footprint.id.value();
+      footprint.position = mm(10 + i * 5, 10 + n * 10);
+      footprint.courtyard = Polygon{{mm(-1, -1), mm(1, -1), mm(1, 1), mm(-1, 1)}};
+      footprint.pads = {{ObjectId{footprint.id.value() + "-pad"}, net, Point{}, {LayerId{"F.Cu"}}}};
+      planning.footprints.push_back(footprint);
+    }
+  }
+  auto source = planning;
+  source.nets.push_back({NetId{"obstacle"}, "OBSTACLE", 3});
+  // This wall exists only in the physical source. Global/regional planning therefore retains
+  // the coarse straight crossing, while exact realization has no legal repair to commit.
+  Keepout source_only_wall;
+  source_only_wall.id = ObjectId{"source-only-regional-wall"};
+  source_only_wall.area = Polygon{{mm(49, 0), mm(51, 0), mm(51, 80), mm(49, 80)}};
+  source_only_wall.layers = {LayerId{"F.Cu"}, LayerId{"B.Cu"}};
+  source_only_wall.prohibit = {true, true, false, false, false};
+  source.keepouts.push_back(std::move(source_only_wall));
+  for (const auto& layer : {LayerId{"F.Cu"}, LayerId{"B.Cu"}})
+    source.tracks.push_back({ObjectId{"near-wall-" + layer.value()}, NetId{"obstacle"}, layer,
+        mm(21.5, 38), mm(21.5, 42), Nanometres::from_mm(0.5), true});
+  auto config = experiment_config();
+  config.copper_scaffold.enabled = true;
+  config.planner.global.priority_nets = {NetId{"engine-experiment-net"}};
+  config.copper_scaffold.maximum_expansions_per_connection = 128U;
+  config.copper_scaffold.maximum_victim_exchanges = 0U;
+  config.copper_scaffold.maximum_coupled_exchange_attempts = 0U;
+  config.bounded_scaffold_request_threshold = 0U;
+  config.scaffold_requests_per_decision = 1U;
+  config.max_physical_region_requests = 1U;
+  config.initial_regional_work_units = 1U;
+  config.max_regional_work_units = 1U;
+  config.max_regional_decisions_without_improvement = 1U;
+  CopperSnapshotSink sink;
+  RoutingEngine engine(planning, source, config, &sink);
+  for (std::size_t step = 0; step < 20'000U && !engine.terminal() &&
+       engine.state().scaffold_repair_handoffs == 0U; ++step)
+    static_cast<void>(engine.advance({.work_units = 128U}));
+  require(engine.state().scaffold_repair_handoffs == 1U && engine.state().legal_scaffold &&
+              engine.state().legal_scaffold->sweep_in_progress,
+          "a failed request must park the sweep and open regional repair before deferred work completes");
+  require(std::none_of(engine.state().attempts.begin(), engine.state().attempts.end(), [](const auto& attempt) {
+            return attempt.action == RoutingEngineAction::construct_copper_scaffold;
+          }), "early regional handoff must not fabricate a completed scaffold action");
+  require(engine.state().legal_scaffold->failed_request_indices.size() == 1U &&
+              engine.state().legal_scaffold->missing_indices.size() > 1U &&
+              check_copper_rules(engine.state().legal_scaffold->copper).ok(),
+          "only the attempted failure is admitted; deferred demands and source legality are preserved");
+  for (std::size_t step = 0; step < 20'000U && !engine.terminal() &&
+       engine.state().scaffold_regional_actions == 0U; ++step)
+    static_cast<void>(engine.advance({.work_units = 128U}));
+  require(engine.state().scaffold_regional_actions == 1U &&
+              engine.state().scaffold_regional_missing_requests == 1U,
+          "the next bounded action must receive exactly the failed request and its actual copper context");
+  for (std::size_t step = 0; step < 20'000U && !engine.terminal() &&
+       engine.state().legal_scaffold && engine.state().legal_scaffold->sweep_in_progress; ++step)
+    static_cast<void>(engine.advance({.work_units = 128U}));
+  require(engine.state().experiment_resumed > 0U && engine.state().legal_scaffold &&
+              !engine.state().legal_scaffold->sweep_in_progress &&
+              std::all_of(engine.state().legal_scaffold->requests.begin(),
+                          engine.state().legal_scaffold->requests.end(),
+                          [&](const auto& request) {
+                            if (!request.net.value().starts_with("deferred-")) return true;
+                            return std::find_if(engine.state().legal_scaffold->paths.begin(),
+                                engine.state().legal_scaffold->paths.end(), [&](const auto& path) {
+                                  return path.net == request.net &&
+                                      path.connection_index == request.connection_index;
+                                }) != engine.state().legal_scaffold->paths.end();
+                          }) && check_copper_rules(engine.state().legal_scaffold->copper).ok(),
+          "a no-op regional repair must resume the parked scaffold and satisfy deferred easy requests");
+}
+
+void changed_copper_invalidates_a_scaffold_continuation() {
+  CopperScaffoldResult retained;
+  retained.copper = two_pad_board();
+  auto unchanged = retained;
+  unchanged.diagnostic = "new negative evidence";
+  unchanged.request_evidence.push_back(CopperScaffoldRequestEvidence{});
+  require(routing_scaffold_continuation_compatible(&retained, &unchanged),
+          "evidence-only updates must preserve an unchanged private sweep and its preparation");
+  auto repaired = retained;
+  repaired.copper.tracks.push_back({ObjectId{"new-repair"}, NetId{"engine-experiment-net"},
+      LayerId{"F.Cu"}, mm(20, 40), mm(30, 40), Nanometres::from_mm(0.25)});
+  require(check_copper_rules(repaired.copper).ok() &&
+              !routing_scaffold_continuation_compatible(&retained, &repaired),
+          "a legal copper repair must invalidate the old continuation even when path metadata is unchanged");
+  require(routing_scaffold_copper_scene_records(retained.copper) !=
+              routing_scaffold_copper_scene_records(repaired.copper),
+          "changed copper with unchanged request/path metadata must reopen scaffold retry identity");
+  auto scene = repaired.copper;
+  scene.track_arcs.push_back({ObjectId{"arc"}, NetId{"engine-experiment-net"}, LayerId{"F.Cu"},
+      mm(30, 40), mm(35, 41), mm(40, 40), Nanometres::from_mm(0.25)});
+  scene.track_beziers.push_back({ObjectId{"curve"}, NetId{"engine-experiment-net"}, LayerId{"F.Cu"},
+      mm(40, 40), mm(45, 41), mm(50, 41), mm(55, 40), Nanometres::from_mm(0.25)});
+  scene.vias.push_back({ObjectId{"via"}, NetId{"engine-experiment-net"}, mm(55, 40),
+      Nanometres::from_mm(0.6), Nanometres::from_mm(0.3), {LayerId{"F.Cu"}, LayerId{"B.Cu"}}});
+  const auto records = routing_scaffold_copper_scene_records(scene);
+  auto reordered_scene = scene;
+  std::reverse(reordered_scene.tracks.begin(), reordered_scene.tracks.end());
+  std::reverse(reordered_scene.vias.front().layers.begin(), reordered_scene.vias.front().layers.end());
+  require(records == routing_scaffold_copper_scene_records(reordered_scene),
+          "container and via layer traversal order must preserve canonical copper identity");
+  const auto changed = [&](auto edit) {
+    auto copy = scene;
+    edit(copy);
+    require(records != routing_scaffold_copper_scene_records(copy),
+            "every routing copper primitive must participate in scaffold retry identity");
+  };
+  changed([](auto& b) { b.tracks.front().end = mm(31, 40); });
+  changed([](auto& b) { b.track_arcs.front().middle = mm(35, 42); });
+  changed([](auto& b) { b.track_beziers.front().control1 = mm(45, 42); });
+  changed([](auto& b) { b.vias.front().drill = Nanometres::from_mm(0.35); });
+  changed([](auto& b) { b.tracks.erase(b.tracks.begin()); });
+  auto covered = retained;
+  covered.satisfied_indices.push_back(0U);
+  require(!routing_scaffold_continuation_compatible(&retained, &covered),
+          "changed request coverage must not resume obsolete private bookkeeping");
+  auto ordered = retained;
+  ordered.requests.resize(2U);
+  ordered.requests[0].net = NetId{"a"};
+  ordered.requests[1].net = NetId{"b"};
+  ordered.request_identities = {"first", "second"};
+  auto reordered = ordered;
+  std::swap(reordered.requests[0], reordered.requests[1]);
+  std::swap(reordered.request_identities[0], reordered.request_identities[1]);
+  require(!routing_scaffold_continuation_compatible(&ordered, &reordered),
+          "reordered request identities must invalidate index-based private sweep state");
+}
+
 void partial_scaffold_routes_missing_requests_against_retained_copper() {
   auto planning = two_pad_board();
   const NetId easy{"easy-net"};
@@ -1025,6 +1169,8 @@ int main() {
   physical_repair_evidence_token_is_canonical_and_causal();
   physical_repair_evidence_reopens_only_changed_missing_demand();
   empty_scaffold_dispatches_missing_demand_to_regional_repair();
+  bounded_scaffold_hands_failed_requests_to_regional_before_sweep_completion();
+  changed_copper_invalidates_a_scaffold_continuation();
   partial_scaffold_routes_missing_requests_against_retained_copper();
   residual_physical_demands_preserve_checked_components();
   residual_demand_pair_budget_is_atomic();

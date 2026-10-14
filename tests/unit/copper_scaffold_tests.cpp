@@ -543,6 +543,78 @@ void callback_cancellation_publishes_only_legal_checkpoint() {
               check_copper_rules(checkpoint.copper).ok() && check_copper_rules(result.copper).ok(),
           "published cancellation checkpoint and final result must contain only legal retained copper");
 }
+void decision_events_separate_attempted_failures_from_deferred_requests() {
+  auto board = fixture();
+  board.layers.resize(1U);
+  board.tracks.push_back({ObjectId{"decision-barrier"}, NetId{"b"}, LayerId{"F.Cu"},
+                          mm(10, 1), mm(10, 19), Nanometres::from_mm(0.8), false});
+  const auto blocked = request(NetId{"a"}, mm(2, 10), LayerId{"F.Cu"}, mm(18, 10), LayerId{"F.Cu"});
+  auto deferred = request(NetId{"a"}, mm(2, 2), LayerId{"F.Cu"}, mm(4, 2), LayerId{"F.Cu"});
+  deferred.connection_index = 1U;
+  CopperScaffoldConfig config;
+  config.grid_pitch = Nanometres::from_mm(0.5);
+  config.maximum_requests_per_decision_batch = 8U;
+  config.maximum_request_search_work_units = 1U;
+  config.maximum_victim_exchanges = 0U;
+  config.maximum_joint_passage_candidates = 0U;
+  config.maximum_displacement_attempts = 0U;
+  std::vector<CopperScaffoldDecisionEvent> events;
+  const auto result = construct_copper_scaffold(board, {blocked, deferred}, config, {}, nullptr, {},
+      [&](const CopperScaffoldDecisionEvent& event) { events.push_back(event); });
+  require(events.size() == 2U && !events.front().retained.complete && events.front().sweep_in_progress &&
+              events.front().attempted_request_indices == std::vector<std::size_t>{0U} &&
+              events.front().failed_request_indices == std::vector<std::size_t>{0U} &&
+              events.front().completed_request_indices.empty() &&
+              events.front().unattempted_request_indices == std::vector<std::size_t>{1U} &&
+              events.front().retained.sweep_in_progress &&
+              events.front().retained.attempted_request_indices == std::vector<std::size_t>{0U} &&
+              events.front().retained.failed_request_indices == std::vector<std::size_t>{0U} &&
+              events.front().retained.request_evidence[0].termination ==
+                  CopperScaffoldSearchTermination::expansion_budget_exhausted &&
+              check_copper_rules(events.front().retained.copper).ok(),
+          "a bounded failed request must publish typed evidence without classifying deferred work as failed");
+  require(result.paths == std::vector<GlobalRoutePath>{deferred} && !events.back().retained.complete &&
+              events.back().attempted_request_indices == std::vector<std::size_t>{1U} &&
+              events.back().completed_request_indices == std::vector<std::size_t>{1U} &&
+              events.back().unattempted_request_indices.empty() && check_copper_rules(result.copper).ok(),
+          "the later transaction must retain the legal subset without falsely completing the failed request");
+}
+void decision_callback_cancellation_leaves_next_request_unattempted() {
+  const auto board = fixture();
+  const auto first = request(NetId{"a"}, mm(2, 2), LayerId{"F.Cu"}, mm(18, 2), LayerId{"F.Cu"});
+  auto second = request(NetId{"b"}, mm(2, 18), LayerId{"F.Cu"}, mm(18, 18), LayerId{"F.Cu"});
+  second.connection_index = 1U;
+  CopperScaffoldConfig config;
+  config.maximum_requests_per_decision_batch = 1U;
+  std::stop_source stop;
+  std::vector<CopperScaffoldDecisionEvent> events;
+  const auto result = construct_copper_scaffold(board, {first, second}, config, stop.get_token(), nullptr, {},
+      [&](const CopperScaffoldDecisionEvent& event) {
+        events.push_back(event);
+        stop.request_stop();
+      });
+  require(events.size() == 1U && events.front().completed_request_indices == std::vector<std::size_t>{0U} &&
+              events.front().unattempted_request_indices == std::vector<std::size_t>{1U} &&
+              result.counters.cancelled && result.request_evidence[0].termination ==
+                  CopperScaffoldSearchTermination::direct_route_accepted &&
+              result.request_evidence[1].termination == CopperScaffoldSearchTermination::not_attempted,
+          "a decision callback cancellation must defer the next request without fabricating a failed search");
+}
+void scoped_admission_leaves_excluded_requests_unattempted() {
+  const auto board = fixture();
+  const auto admitted = request(NetId{"a"}, mm(2, 2), LayerId{"F.Cu"}, mm(18, 2), LayerId{"F.Cu"});
+  auto deferred = request(NetId{"b"}, mm(2, 18), LayerId{"F.Cu"}, mm(18, 18), LayerId{"F.Cu"});
+  deferred.connection_index = 1U;
+  CopperScaffoldConfig config;
+  config.admitted_request_indices = std::vector<std::size_t>{0U};
+  const auto result = construct_copper_scaffold(board, {admitted, deferred}, config);
+  require(!result.complete && result.sweep_in_progress && result.paths == std::vector<GlobalRoutePath>{admitted} &&
+              result.attempted_request_indices == std::vector<std::size_t>{0U} &&
+              result.failed_request_indices.empty() &&
+              result.request_evidence[1].termination == CopperScaffoldSearchTermination::not_attempted &&
+              result.missing_indices == std::vector<std::size_t>{1U} && check_copper_rules(result.copper).ok(),
+          "scoped admission must retain legal selected copper while leaving excluded work deferred");
+}
 void existing_component_is_a_completed_transaction_without_new_copper() {
   auto board = fixture();
   board.tracks.push_back({ObjectId{"existing"}, NetId{"a"}, LayerId{"F.Cu"},
@@ -1081,4 +1153,7 @@ int main() {
   coupled_exchange_rebinds_obsolete_virtual_branch_terminal();
   three_victim_component_succeeds_only_when_the_component_bound_allows_it();
   callback_cancellation_publishes_only_legal_checkpoint();
+  decision_events_separate_attempted_failures_from_deferred_requests();
+  decision_callback_cancellation_leaves_next_request_unattempted();
+  scoped_admission_leaves_excluded_requests_unattempted();
 }

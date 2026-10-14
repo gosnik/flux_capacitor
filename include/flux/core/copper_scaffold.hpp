@@ -5,7 +5,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <chrono>
 #include <functional>
+#include <optional>
 #include <stop_token>
 #include <string>
 #include <string_view>
@@ -78,6 +80,21 @@ struct CopperScaffoldConfig {
   std::uint64_t diagonal_step_cost{14U};
   std::uint64_t via_cost{40U};
 
+  // A non-zero value creates a scheduling decision after this many request transactions.  A
+  // transaction is either an exact legal commit or a fully attributed bounded failure; no
+  // partially assembled copper is exposed. Zero preserves the historical one-shot behavior.
+  std::size_t maximum_requests_per_decision_batch{0U};
+  // Bounds cumulative maze work for one request across its primary and recovery searches.
+  // Zero retains `maximum_expansions_per_connection` and existing recovery caps unchanged.
+  std::size_t maximum_request_search_work_units{0U};
+  // Cooperative active-time allowance for one request. Managed-kernel parked time is excluded;
+  // zero preserves the historical unbounded request behavior.
+  std::chrono::milliseconds maximum_request_active_time{0};
+  // When present, only these incomplete requests are admitted to this invocation. Retained
+  // legal paths still replay for the complete request domain; excluded requests remain
+  // `not_attempted` so regional admission cannot mistake them for failed work.
+  std::optional<std::vector<std::size_t>> admitted_request_indices{std::nullopt};
+
   bool operator==(const CopperScaffoldConfig&) const = default;
 };
 
@@ -95,6 +112,7 @@ enum class CopperScaffoldSearchTermination {
   attachment_exhausted,
   expansion_budget_exhausted,
   goal_attempt_budget_exhausted,
+  request_active_budget_exhausted,
   search_exhausted,
 };
 
@@ -113,6 +131,7 @@ enum class CopperScaffoldSearchTermination {
   case CopperScaffoldSearchTermination::attachment_exhausted: return "attachment_exhausted";
   case CopperScaffoldSearchTermination::expansion_budget_exhausted: return "expansion_budget_exhausted";
   case CopperScaffoldSearchTermination::goal_attempt_budget_exhausted: return "goal_attempt_budget_exhausted";
+  case CopperScaffoldSearchTermination::request_active_budget_exhausted: return "request_active_budget_exhausted";
   case CopperScaffoldSearchTermination::search_exhausted: return "search_exhausted";
   }
   return "unknown";
@@ -281,7 +300,27 @@ struct CopperScaffoldResult {
   std::vector<std::string> request_identities;
   std::vector<CopperScaffoldRequestEvidence> request_evidence;
   std::vector<CopperScaffoldExchangeRollback> exchange_rollbacks;
+  // Decision classification is retained with the legal subset so a parked caller can later
+  // distinguish failed work from requests never admitted to this sweep.
+  bool sweep_in_progress{false};
+  std::vector<std::size_t> attempted_request_indices;
+  std::vector<std::size_t> failed_request_indices;
   std::size_t request_count{0U};
+};
+
+// This event is emitted only after a complete request transaction or a bounded request failure.
+// `retained` is a legal subset snapshot; it is never a claim that every request completed.
+// Failed means this invocation attempted the request and retained its final search evidence.
+// Unattempted requests have not been admitted into this batch and are distinct from failures so
+// a caller may schedule regional repair without treating deferred work as negative evidence.
+struct CopperScaffoldDecisionEvent {
+  CopperScaffoldResult retained;
+  std::vector<std::size_t> request_batch_indices;
+  std::vector<std::size_t> attempted_request_indices;
+  std::vector<std::size_t> completed_request_indices;
+  std::vector<std::size_t> failed_request_indices;
+  std::vector<std::size_t> unattempted_request_indices;
+  bool sweep_in_progress{false};
 };
 
 // `retained`, when supplied, is treated as a legal provisional subset produced for this same
@@ -290,6 +329,7 @@ struct CopperScaffoldResult {
     const Board& board, const std::vector<GlobalRoutePath>& requests,
     const CopperScaffoldConfig& config = {}, std::stop_token stop_token = {},
     const CopperScaffoldResult* retained = nullptr,
-    const std::function<void(const CopperScaffoldResult&)>& publish = {});
+    const std::function<void(const CopperScaffoldResult&)>& publish = {},
+    const std::function<void(const CopperScaffoldDecisionEvent&)>& decision = {});
 
 } // namespace flux

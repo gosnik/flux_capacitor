@@ -563,7 +563,10 @@ scaffold_satisfied_request_identities(const CopperScaffoldResult& scaffold) {
   // checked scene/domain, so blocker ownership never migrates onto a different checkpoint.
   return candidate.satisfied_indices == incumbent.satisfied_indices && candidate.paths == incumbent.paths &&
       (candidate.request_evidence != incumbent.request_evidence ||
-       candidate.exchange_rollbacks != incumbent.exchange_rollbacks);
+       candidate.exchange_rollbacks != incumbent.exchange_rollbacks ||
+       candidate.sweep_in_progress != incumbent.sweep_in_progress ||
+       candidate.attempted_request_indices != incumbent.attempted_request_indices ||
+       candidate.failed_request_indices != incumbent.failed_request_indices);
 }
 void emit_engine_event(RouterTelemetrySink* sink, const char* phase, RoutingEngineAction action,
                        std::size_t generation, std::size_t work, std::string detail,
@@ -618,15 +621,72 @@ void emit_engine_event(RouterTelemetrySink* sink, const char* phase, RoutingEngi
 }
 } // namespace
 
+std::vector<std::string> routing_scaffold_copper_scene_records(const Board& copper) {
+  const auto text = [](const auto& id) {
+    return std::to_string(id.value().size()) + ":" + id.value();
+  };
+  const auto point = [](Point p) {
+    return std::to_string(p.x.value()) + "," + std::to_string(p.y.value());
+  };
+  std::vector<std::string> records;
+  for (const auto& track : copper.tracks) {
+    records.push_back("retained-track:" + text(track.id) + ':' + text(track.net) + ':' +
+        text(track.layer) + ':' + point(track.start) + ':' + point(track.end) + ':' +
+        std::to_string(track.width.value()) + ':' + std::to_string(track.locked));
+  }
+  for (const auto& arc : copper.track_arcs) {
+    records.push_back("retained-arc:" + text(arc.id) + ':' + text(arc.net) + ':' +
+        text(arc.layer) + ':' + point(arc.start) + ':' + point(arc.middle) + ':' +
+        point(arc.end) + ':' + std::to_string(arc.width.value()) + ':' +
+        std::to_string(arc.locked));
+  }
+  for (const auto& bezier : copper.track_beziers) {
+    records.push_back("retained-bezier:" + text(bezier.id) + ':' + text(bezier.net) + ':' +
+        text(bezier.layer) + ':' + point(bezier.start) + ':' + point(bezier.control1) + ':' +
+        point(bezier.control2) + ':' + point(bezier.end) + ':' +
+        std::to_string(bezier.width.value()) + ':' + std::to_string(bezier.locked));
+  }
+  for (const auto& via : copper.vias) {
+    std::vector<std::string> layers;
+    layers.reserve(via.layers.size());
+    for (const auto& layer : via.layers) layers.push_back(text(layer));
+    std::sort(layers.begin(), layers.end());
+    std::ostringstream record;
+    record << "retained-via:" << text(via.id) << ':' << text(via.net) << ':' << point(via.position)
+           << ':' << via.diameter.value() << ':' << via.drill.value() << ':' << via.locked
+           // The canonical Board Via has no independent fabrication-type field: its exact
+           // layer span is the authoritative through/blind/buried type representation.
+           << ":span:" << layers.size();
+    for (const auto& layer : layers) record << ':' << layer;
+    records.push_back(record.str());
+  }
+  std::sort(records.begin(), records.end());
+  records.erase(std::unique(records.begin(), records.end()), records.end());
+  return records;
+}
+
+bool routing_scaffold_continuation_compatible(const CopperScaffoldResult* parked,
+                                               const CopperScaffoldResult* current) {
+  return parked && current && same_scaffold_request_domain(*parked, *current) &&
+      parked->request_identities == current->request_identities && parked->requests == current->requests &&
+      parked->satisfied_indices == current->satisfied_indices && parked->paths == current->paths &&
+      parked->copper == current->copper;
+}
+
 std::vector<std::size_t> select_physical_repair_requests(
     const CopperScaffoldResult& scaffold, const std::vector<std::size_t>& attempts,
-    std::size_t limit) {
+    std::size_t limit, const std::vector<std::size_t>& newly_failed) {
   std::vector<std::size_t> remaining;
   for (const auto index : scaffold.missing_indices)
-    if (index < scaffold.requests.size()) remaining.push_back(index);
+    if (index < scaffold.requests.size() && (!scaffold.sweep_in_progress ||
+        std::find(scaffold.failed_request_indices.begin(), scaffold.failed_request_indices.end(), index) !=
+            scaffold.failed_request_indices.end())) remaining.push_back(index);
   const auto count = [&](std::size_t i) { return i < attempts.size() ? attempts[i] : 0U; };
+  const auto priority = [&](std::size_t i) {
+    return std::find(newly_failed.begin(), newly_failed.end(), i) == newly_failed.end();
+  };
   std::sort(remaining.begin(), remaining.end(), [&](auto a, auto b) {
-    return std::pair{count(a), a} < std::pair{count(b), b};
+    return std::tuple{priority(a), count(a), a} < std::tuple{priority(b), count(b), b};
   });
   remaining.erase(std::unique(remaining.begin(), remaining.end()), remaining.end());
   if (remaining.empty() || limit == 0U) return {};
@@ -755,7 +815,16 @@ struct RoutingEngine::Pending {
   std::optional<RoutingPlanResult> plan;
   std::optional<DetailedRouteResult> detailed;
   std::shared_ptr<CopperScaffoldResult> scaffold;
+  std::shared_ptr<const CopperScaffoldResult> scaffold_parked_anchor{};
+  struct ScaffoldDecision {
+    std::vector<std::size_t> batch;
+    std::vector<std::size_t> failed;
+    std::size_t deferred{0U};
+    bool sweep_in_progress{false};
+  };
+  std::optional<ScaffoldDecision> scaffold_decision{};
   std::unique_ptr<RoutingKernel> kernel;
+  bool kernel_finished{false};
   std::unique_ptr<std::stop_callback<std::function<void()>>> deadline_link;
   std::chrono::steady_clock::time_point started{std::chrono::steady_clock::now()};
   std::chrono::steady_clock::time_point last_progress{started};
@@ -812,7 +881,9 @@ struct RoutingEngine::Speculation {
 [[nodiscard]] bool has_pending_physical_repair(const CopperScaffoldResult* scaffold) {
   return scaffold && !scaffold->complete &&
       std::any_of(scaffold->missing_indices.begin(), scaffold->missing_indices.end(),
-                  [&](const auto index) { return index < scaffold->requests.size(); });
+                  [&](const auto index) { return index < scaffold->requests.size() &&
+                      (!scaffold->sweep_in_progress || std::find(scaffold->failed_request_indices.begin(),
+                          scaffold->failed_request_indices.end(), index) != scaffold->failed_request_indices.end()); });
 }
 
 void RoutingEngine::start_speculative_preparation() {
@@ -1127,6 +1198,38 @@ std::string RoutingEngine::evidence_key(RoutingEngineAction action) const {
     if (state_.working_plan) for (const auto& path : state_.working_plan->coarse_global.paths) append(path);
     key << "retained:";
     if (state_.legal_scaffold) for (const auto& path : state_.legal_scaffold->paths) append(path);
+    if (state_.legal_scaffold) {
+      // Record the whole retained routing scene, including authorized source copper removals
+      // and replacements. Cache its compact token by immutable checkpoint identity.
+      // Exact records (rather than a hash) are interned once and keep A/B/A retry identity
+      // collision-free while a small numeric sequence is stored in the attempt key.
+      constexpr std::size_t maximum_key_bytes = 64U * 1024U * 1024U;
+      const auto intern = [&](std::string record) -> std::optional<std::size_t> {
+        if (const auto found = physical_records_.find(record); found != physical_records_.end())
+          return found->second;
+        if (experiment_key_bytes_ >= maximum_key_bytes ||
+            record.size() > maximum_key_bytes - experiment_key_bytes_) {
+          experiment_metadata_exhausted_ = true;
+          return std::nullopt;
+        }
+        experiment_key_bytes_ += record.size();
+        return physical_records_.try_emplace(std::move(record), physical_records_.size()).first->second;
+      };
+      const auto cached = cached_scaffold_scene_.lock();
+      if (cached && cached == state_.legal_scaffold) {
+        key << cached_scaffold_scene_token_;
+      } else {
+        std::string compact{"copper:"};
+        for (auto record : routing_scaffold_copper_scene_records(state_.legal_scaffold->copper)) {
+          const auto record_id = intern(std::move(record));
+          if (!record_id) return {};
+          compact += std::to_string(*record_id) + ':';
+        }
+        cached_scaffold_scene_ = state_.legal_scaffold;
+        cached_scaffold_scene_token_ = std::move(compact);
+        key << cached_scaffold_scene_token_;
+      }
+    }
     return key.str();
   }
   // Canonical content, never a telemetry revision or container traversal order. A/B/A
@@ -1261,6 +1364,14 @@ std::string RoutingEngine::physical_dependency_key(bool retained_scene, bool inc
   return std::to_string(entry->second);
 }
 std::string RoutingEngine::continuation_key(RoutingEngineAction action) const {
+  if (action == RoutingEngineAction::construct_copper_scaffold) {
+    // Ignore negotiation history, but never resume an old private copper scene after a
+    // repair changed routes, request coverage, or the incoming coarse proposals.
+    auto key = evidence_key(action);
+    if (state_.legal_scaffold) for (const auto index : state_.legal_scaffold->satisfied_indices)
+      key += ":satisfied=" + std::to_string(index);
+    return key;
+  }
   return routing_engine_action_uses_physical_continuation(action)
       ? physical_dependency_key(action == RoutingEngineAction::regional_realization &&
                                 config_.max_physical_region_requests != 0U &&
@@ -1289,7 +1400,9 @@ void RoutingEngine::release_pending() {
 }
 void RoutingEngine::prune_parked_experiments() {
   std::erase_if(parked_, [&](const auto& item) {
-    if (item->dependency_key == continuation_key(item->action)) return false;
+    const bool compatible_copper = item->action != RoutingEngineAction::construct_copper_scaffold ||
+        routing_scaffold_continuation_compatible(item->scaffold_parked_anchor.get(), state_.legal_scaffold.get());
+    if (compatible_copper && item->dependency_key == continuation_key(item->action)) return false;
     ++state_.experiment_invalidated;
     update_routing_experiment_trial(state_.experiment_schedule,
         {static_cast<std::size_t>(item->action), item->experiment_state_key, 0U, 0.0L,
@@ -1322,6 +1435,7 @@ void RoutingEngine::prune_parked_experiments() {
 bool RoutingEngine::yield_experiment(bool force) {
   const auto action = pending_->action;
   const bool schedulable = action == RoutingEngineAction::regional_realization ||
+      (action == RoutingEngineAction::construct_copper_scaffold && force) ||
       action == RoutingEngineAction::xpbd_repair || action == RoutingEngineAction::confined_erosion_repair ||
       action == RoutingEngineAction::feedback_global_replan || action == RoutingEngineAction::usped_global_replan;
   const auto elapsed = pending_->active_us - pending_->sampled_active_us;
@@ -1348,6 +1462,8 @@ bool RoutingEngine::yield_experiment(bool force) {
   const auto next = select_action();
   if (next == RoutingEngineAction::none || next == action) return false;
   pending_->dependency_key = continuation_key(action);
+  if (action == RoutingEngineAction::construct_copper_scaffold)
+    pending_->scaffold_parked_anchor = state_.legal_scaffold;
   emit_engine_event(telemetry_, "suspend", action, state_.generation,
       pending_->kernel->work_units(), "retaining experiment frontier; active_us=" +
           std::to_string(pending_->active_us), pending_->active_us);
@@ -1410,6 +1526,26 @@ void RoutingEngine::replace_live_copper_terrain(LiveCopperTerrainSnapshot snapsh
 RoutingEngineAction RoutingEngine::select_action(RoutingEngineAction excluded) {
   if (!state_.working_plan)
     return RoutingEngineAction::global_allocation;
+  const auto parked_scaffold = std::find_if(parked_.begin(), parked_.end(), [&](const auto& item) {
+    return item->action == RoutingEngineAction::construct_copper_scaffold &&
+        item->dependency_key == continuation_key(item->action) &&
+        routing_scaffold_continuation_compatible(item->scaffold_parked_anchor.get(), state_.legal_scaffold.get());
+  });
+  const bool active_scaffold = pending_ && !pending_->kernel_finished &&
+      pending_->action == RoutingEngineAction::construct_copper_scaffold;
+  if (active_scaffold) {
+    if (config_.max_physical_region_requests != 0U &&
+        has_pending_physical_repair(state_.legal_scaffold.get()) &&
+        !state_.scaffold_newly_failed_requests.empty())
+      return RoutingEngineAction::regional_realization;
+    return RoutingEngineAction::construct_copper_scaffold;
+  }
+  // A failed regional attempt must not strand the rest of the unattempted scaffold sweep.
+  const bool finished_attempt = pending_ &&
+      (excluded == pending_->action || pending_->kernel_finished);
+  if (parked_scaffold != parked_.end() && excluded != RoutingEngineAction::construct_copper_scaffold &&
+      (!pending_ || finished_attempt))
+    return RoutingEngineAction::construct_copper_scaffold;
   const bool terminal_rebind_ready = [&] {
     if (!state_.legal_scaffold || state_.legal_scaffold->requests.empty()) return false;
     return !derive_scaffold_terminal_rebinds(
@@ -1417,6 +1553,7 @@ RoutingEngineAction RoutingEngine::select_action(RoutingEngineAction excluded) {
         state_.scaffold_terminal_rebind_attempted_proofs, physical_dependency_key(true, false)).second.empty();
   }();
   if (config_.copper_scaffold.enabled && !state_.working_plan->legal_scaffold_complete &&
+      parked_scaffold == parked_.end() &&
       (!state_.working_plan->coarse_global.paths.empty() ||
        !state_.working_plan->coarse_global.unrouted_nets.empty()) &&
       excluded != RoutingEngineAction::construct_copper_scaffold &&
@@ -1440,7 +1577,12 @@ RoutingEngineAction RoutingEngine::select_action(RoutingEngineAction excluded) {
     const bool new_scene = physical_request_attempt_key_ != physical_dependency_key(true);
     const bool untouched = std::any_of(state_.legal_scaffold->missing_indices.begin(),
         state_.legal_scaffold->missing_indices.end(), [&](const auto index) {
-          return index >= physical_request_attempts_.size() || physical_request_attempts_[index] == 0U;
+          const bool admitted = !state_.legal_scaffold->sweep_in_progress ||
+              std::find(state_.legal_scaffold->failed_request_indices.begin(),
+                  state_.legal_scaffold->failed_request_indices.end(), index) !=
+                  state_.legal_scaffold->failed_request_indices.end();
+          return admitted &&
+              (index >= physical_request_attempts_.size() || physical_request_attempts_[index] == 0U);
         });
     // Retiring one bounded region must not retire the remaining demand components.
     if (new_scene || untouched) return RoutingEngineAction::regional_realization;
@@ -1798,7 +1940,9 @@ RoutingEngineStepResult RoutingEngine::advance(RoutingEngineStepBudget budget,
       physical_request_geometry_key_ = geometry_key;
       physical_request_evidence_tokens_ = evidence_tokens;
       pending_->physical_requests = select_physical_repair_requests(*state_.legal_scaffold,
-          physical_request_attempts_, config_.max_physical_region_requests);
+          physical_request_attempts_, config_.max_physical_region_requests,
+          state_.scaffold_newly_failed_requests);
+      state_.scaffold_newly_failed_requests.clear();
       for (const auto index : pending_->physical_requests)
         ++physical_request_attempts_[index];
       state_.scaffold_regional_missing_requests = pending_->physical_requests.size();
@@ -1878,7 +2022,16 @@ RoutingEngineStepResult RoutingEngine::advance(RoutingEngineStepBudget budget,
                                   : std::max<std::size_t>(1U, epoch));
     }
     const auto detail = config_.detailed;
-    const auto scaffold_config = config_.copper_scaffold;
+    auto scaffold_config = config_.copper_scaffold;
+    const auto scaffold_request_count = state_.legal_scaffold
+        ? state_.legal_scaffold->requests.size()
+        : prior ? scaffold_requests(materialization_source_, prior->coarse_global).size() : 0U;
+    if (config_.scaffold_requests_per_decision != 0U &&
+        scaffold_request_count >= config_.bounded_scaffold_request_threshold) {
+      scaffold_config.maximum_requests_per_decision_batch = config_.scaffold_requests_per_decision;
+      scaffold_config.maximum_request_search_work_units = config_.scaffold_request_search_work;
+      scaffold_config.maximum_request_active_time = config_.scaffold_request_active_time;
+    }
     const auto retained_scaffold = state_.legal_scaffold;
     std::optional<std::vector<GlobalRoutePath>> rebound_requests;
     if (action == RoutingEngineAction::construct_copper_scaffold && retained_scaffold) {
@@ -2009,7 +2162,15 @@ RoutingEngineStepResult RoutingEngine::advance(RoutingEngineStepBudget budget,
                   "requests=" + std::to_string(checkpoint.request_count) +
                   "; satisfied=" + std::to_string(checkpoint.satisfied_indices.size()) +
                   "; missing=" + std::to_string(checkpoint.missing_indices.size()));
-            }));
+            }, scaffold_config.maximum_requests_per_decision_batch == 0U
+                ? std::function<void(const CopperScaffoldDecisionEvent&)>{}
+                : std::function<void(const CopperScaffoldDecisionEvent&)>{
+                    [tx](const CopperScaffoldDecisionEvent& decision) {
+                      tx->scaffold = std::make_shared<CopperScaffoldResult>(decision.retained);
+                      tx->scaffold_decision = Pending::ScaffoldDecision{
+                          decision.request_batch_indices, decision.failed_request_indices,
+                          decision.unattempted_request_indices.size(), decision.retained.sweep_in_progress};
+                    }}));
         // Regional proposal admission can subsequently rebuild this checkpoint with no
         // search. Persist this pass's evidence now, rather than reporting those zeroed
         // counters as if they described the search that produced the retained copper.
@@ -2267,6 +2428,8 @@ RoutingEngineStepResult RoutingEngine::advance(RoutingEngineStepBudget budget,
           checks.maximum_coupled_exchange_attempts = 0U;
           checks.maximum_displacement_attempts = 0U;
           checks.maximum_joint_passage_candidates = 0U;
+          if (retained_scaffold->sweep_in_progress)
+            checks.admitted_request_indices = tx->physical_requests;
           tx->scaffold = std::make_shared<CopperScaffoldResult>(construct_copper_scaffold(
               *physical_source, retained_scaffold->requests, checks, token, &proposals));
           tx->plan = certified_scaffold_plan(*physical_source, *prior, *tx->scaffold,
@@ -2351,6 +2514,7 @@ RoutingEngineStepResult RoutingEngine::advance(RoutingEngineStepBudget budget,
        .time_slice =
            budget.time_slice.count() <= 0 ? std::chrono::milliseconds{50} : budget.time_slice},
       stop, publish_progress);
+  pending_->kernel_finished = status == RoutingKernelStatus::finished;
   const auto active_delta = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
       std::chrono::steady_clock::now() - active_start).count());
   pending_->active_us = plus(pending_->active_us, active_delta);
@@ -2394,6 +2558,31 @@ RoutingEngineStepResult RoutingEngine::advance(RoutingEngineStepBudget budget,
          better_scaffold_checkpoint(*pending_->scaffold, *state_.legal_scaffold)))
       state_.legal_scaffold = pending_->scaffold;
     if (action == RoutingEngineAction::construct_copper_scaffold) publish_retained_copper();
+    if (action == RoutingEngineAction::construct_copper_scaffold && pending_->scaffold_decision) {
+      const auto decision = std::move(*pending_->scaffold_decision);
+      pending_->scaffold_decision.reset();
+      ++state_.scaffold_decision_points;
+      state_.scaffold_newly_failed_requests.clear();
+      for (const auto index : decision.batch)
+        if (std::find(decision.failed.begin(), decision.failed.end(), index) != decision.failed.end())
+          state_.scaffold_newly_failed_requests.push_back(index);
+      emit_engine_event(telemetry_, "scaffold-decision", action, state_.generation,
+          pending_->kernel->work_units(), "batch=" + std::to_string(decision.batch.size()) +
+          "; failed=" + std::to_string(state_.scaffold_newly_failed_requests.size()) +
+          "; deferred=" + std::to_string(decision.deferred) +
+          "; satisfied=" + std::to_string(state_.legal_scaffold
+              ? state_.legal_scaffold->satisfied_indices.size() : 0U), pending_->active_us);
+      if (decision.sweep_in_progress && !state_.scaffold_newly_failed_requests.empty() &&
+          yield_experiment(true)) {
+        ++state_.scaffold_repair_handoffs;
+        out.outcome = RoutingEngineOutcome::progressed;
+        out.diagnostic = "bounded scaffold checkpoint parked for physical regional repair";
+        return out;
+      }
+      out.outcome = RoutingEngineOutcome::yielded;
+      out.diagnostic = "bounded scaffold transaction batch retained";
+      return out;
+    }
     // A kernel yield parks all mutable child work, including parallel candidate workers.
     // Paused transactions can be retained or retired without exposing their private scene.
     const bool active_limit = pending_regional_action && config_.max_experiment_active_time.count() > 0 &&

@@ -2,6 +2,8 @@
 
 #include <chrono>
 #include <atomic>
+#include <array>
+#include <cstdint>
 #include <iostream>
 #include <future>
 #include <stdexcept>
@@ -51,6 +53,41 @@ int main() {
             "semantic boundary must yield independently of numerical budget");
     require(semantic.advance({100000U, 1s}) == flux::RoutingKernelStatus::finished &&
                 semantic_steps == 2, "semantic resume restarted or lost work");
+
+    std::chrono::nanoseconds active_before_park;
+    std::chrono::nanoseconds active_after_resume;
+    flux::RoutingKernel active_clock([&](std::stop_token) {
+      active_before_park = flux::routing_kernel_active_time();
+      flux::routing_kernel_decision_point();
+      active_after_resume = flux::routing_kernel_active_time();
+    });
+    require(active_clock.advance({1'000U, 1s}) == flux::RoutingKernelStatus::yielded,
+            "active clock fixture failed to park");
+    std::this_thread::sleep_for(80ms);
+    require(active_clock.advance({1'000U, 1s}) == flux::RoutingKernelStatus::finished,
+            "active clock fixture failed to resume");
+    require(active_after_resume >= active_before_park &&
+                active_after_resume - active_before_park < 40ms,
+            "managed active clock counted a parked interval");
+
+    std::array<std::atomic<std::int64_t>, 2U> child_active{};
+    std::chrono::nanoseconds parent_before_children;
+    std::chrono::nanoseconds parent_after_children;
+    flux::RoutingKernel inherited_clock([&](std::stop_token stop) {
+      parent_before_children = flux::routing_kernel_active_time();
+      flux::run_bounded_routing_tasks(2U, 2U, stop, [&](std::size_t index) {
+        child_active[index].store(flux::routing_kernel_active_time().count(),
+                                  std::memory_order_relaxed);
+      });
+      parent_after_children = flux::routing_kernel_active_time();
+    });
+    require(inherited_clock.advance({1'000U, 1s}) == flux::RoutingKernelStatus::finished,
+            "child active clock fixture did not finish");
+    for (const auto& child_time : child_active) {
+      const auto value = std::chrono::nanoseconds{child_time.load(std::memory_order_relaxed)};
+      require(value >= parent_before_children && value <= parent_after_children,
+              "bounded child did not inherit its parent's managed active clock");
+    }
 
     int stopped_work = 0;
     flux::RoutingKernel cancelled([&](std::stop_token stop) {

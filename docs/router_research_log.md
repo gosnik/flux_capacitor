@@ -10257,3 +10257,24 @@ Native KiCad10.0.6 refill and DRC reported zero represented violations and499 re
 
 ### Full ESC rerun launch
 Implementation5235c1d was committed, tagged `codex/refill-physical-round-37`, and pushed. The full staged ESC run started2026-10-14 at00:48AWST with the3600s routing/4500s outer limit. First PathFinder iteration began17.282s into routing telemetry; allocation activity is provisional and no full physical result is claimed. Live status is in `reports/validation/esc-physical-round37-20261013/esc/run.json`, with telemetry alongside it. No tier runs overlap this attempt.
+
+
+## Round38 — Bounded scaffold transactions and early repair handoff
+
+### Failure
+The full Round37 ESC log stopped at2021.259s without a final result or live process; the stop cause is unknown. Global allocation consumed402.366s. Scaffold work then consumed1618.694s, satisfying568/981 requests, with413 missing and no completed regional action. Numerical kernel yields retained legal copper but resumed the same monolithic sweep. The last roughly264s showed no physical progress. This is a scheduler handoff failure, not evidence that the remaining413 requests are geometrically impossible.
+
+### Hypothesis and research
+Expose semantic boundaries after bounded request batches and attempted failures so the engine can repair actual blockers before enumerating the remaining sweep. Preserve a private continuation only while its exact copper scene and ordered requests remain compatible. [OMPL termination conditions](https://ompl.kavrakilab.org/plannerTerminationConditions.html) motivate separating bounded, inconclusive search from invalid input and cancellation. The experiment uses Flux's existing managed kernel, exact transaction checks and causal regional requests.
+
+### Change
+Large sweeps (default at least256 requests) use batches of eight, with200,000 cumulative maze expansions and3s cooperative active compute allowance per request. Parked time does not consume that allowance, including managed child workers. Failed attempted requests trigger causal regional repair; deferred requests remain unattempted. Unchanged no-op repair resumes the parked sweep and its preparation. Changed copper invalidates private state and restarts from the retained exact legal subset, with a changed scene reopening retry eligibility. Small-board one-shot policy remains unchanged.
+
+### Verification plan
+Test failed-versus-deferred bookkeeping, cancellation, scoped admission, active clocks, early handoff, no-op repair resumption, and stale scene/request-order rejection. Run independent review, core/risk tests and viewer compatibility. Freeze sources and binary, then run Tier0/1/2 sequentially with telemetry and external KiCad DRC before an extended ESC comparison. Final curved materialization and native refill/DRC remain acceptance gates.
+
+### Review and regression findings
+Review required exact retained-copper identity in the retry key: path metadata alone can suppress a useful retry after a geometry-only repair. Canonical primitive records are interned under the existing64MiB metadata cap and the compact scene token is reused per immutable checkpoint. The no-op repair regression exposed two progress-metadata errors: ordinary legal publications omitted sweep state, and an incomplete request could combine with a different satisfied request's legacy not_attempted evidence. Use one per-request classifier at ordinary publications, decision checkpoints and final results. The engine test now proves actual continuation resumption and legal completion of deferred requests.
+
+### Round38 verification
+Release and viewer builds passed. Focused CTest3/3, core79/79 and risk35/35 passed; independent review is clear. Frozen sequential telemetry Tier0/1/2 passed exact copper and native KiCad DRC with zero opens and zero violations. All outputs are byte-identical to Round37. Detailed times were38.248/115.349/252.500s versus38.109/119.673/248.359s; global times22.422/80.654/199.440s. Peak process-tree RSS655344/643164/712700KiB. These timings do not demonstrate a speedup; they show preserved qualified routing with modest run-to-run differences. Keep the experiment and test large-board handoff next. Evidence: `reports/validation/bounded-scaffold-round38-20261014/`; binary SHA256:a5d930e1884738ee52902c23b18a6b07e4035560428e23fa622f52fe7ceaaddd.

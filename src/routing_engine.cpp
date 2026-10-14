@@ -1403,6 +1403,9 @@ void RoutingEngine::prune_parked_experiments() {
     const bool compatible_copper = item->action != RoutingEngineAction::construct_copper_scaffold ||
         routing_scaffold_continuation_compatible(item->scaffold_parked_anchor.get(), state_.legal_scaffold.get());
     if (compatible_copper && item->dependency_key == continuation_key(item->action)) return false;
+    emit_engine_event(telemetry_, "invalidate", item->action, state_.generation,
+        item->kernel ? item->kernel->work_units() : 0U,
+        compatible_copper ? "reason=dependency-key" : "reason=scaffold-anchor");
     ++state_.experiment_invalidated;
     update_routing_experiment_trial(state_.experiment_schedule,
         {static_cast<std::size_t>(item->action), item->experiment_state_key, 0U, 0.0L,
@@ -1425,6 +1428,9 @@ void RoutingEngine::prune_parked_experiments() {
     // FIFO eviction is deterministic. Retire this strategy/input rather than restarting the
     // same expensive preparation immediately after evicting its frontier.
     const auto& victim = *parked_.front();
+    emit_engine_event(telemetry_, "evict", victim.action, state_.generation,
+        victim.kernel ? victim.kernel->work_units() : 0U,
+        pressure ? "reason=resident-memory-pressure" : "reason=parked-count-limit");
     update_routing_experiment_trial(state_.experiment_schedule,
         {static_cast<std::size_t>(victim.action), victim.experiment_state_key, 0U, 0.0L,
          ++state_.experiment_dispatch_sequence, true, false});
@@ -1459,7 +1465,11 @@ bool RoutingEngine::yield_experiment(bool force) {
   // Release stale continuations before admission. A full live pool must time-slice its
   // existing work instead of admitting fresh strategies and evicting unfinished setup.
   prune_parked_experiments();
-  const auto next = select_action();
+  // A forced scaffold yield is the deliberate SC-to-regional handoff. A forced regional
+  // yield instead represents proven access failure and must let another repair family win.
+  const auto next = select_action(force && action != RoutingEngineAction::construct_copper_scaffold
+                                      ? action
+                                      : RoutingEngineAction::none);
   if (next == RoutingEngineAction::none || next == action) return false;
   pending_->dependency_key = continuation_key(action);
   if (action == RoutingEngineAction::construct_copper_scaffold)
@@ -1540,6 +1550,30 @@ RoutingEngineAction RoutingEngine::select_action(RoutingEngineAction excluded) {
       return RoutingEngineAction::regional_realization;
     return RoutingEngineAction::construct_copper_scaffold;
   }
+  // Process-wide memory pressure may evict the parked scaffold frontier immediately after a
+  // handoff. Keep the active bounded physical repair alive through its own decision/retire
+  // gates rather than restarting that scaffold before the repair can produce evidence.
+  const bool active_physical_regional = pending_ && !pending_->kernel_finished &&
+      pending_->action == RoutingEngineAction::regional_realization && pending_->scaffold_regional &&
+      excluded != pending_->action &&
+      has_pending_physical_repair(state_.legal_scaffold.get());
+  if (active_physical_regional)
+    return RoutingEngineAction::regional_realization;
+  // A completed physical attempt has consumed the currently failed prefix. If its immutable
+  // scaffold checkpoint still has deferred requests, continue that suffix before allocating the
+  // same failed request another regional retry. This bounds no-op repair churn while preserving
+  // fresh probing when a repair changed the retained scene or request evidence.
+  const bool deferred_scaffold_request = state_.legal_scaffold && state_.legal_scaffold->sweep_in_progress &&
+      std::any_of(state_.legal_scaffold->request_evidence.begin(),
+                  state_.legal_scaffold->request_evidence.end(), [](const auto& evidence) {
+                    return evidence.termination == CopperScaffoldSearchTermination::not_attempted;
+                  });
+  const bool physical_prefix_attempted = physical_request_attempt_key_ == physical_dependency_key(true) &&
+      std::any_of(physical_request_attempts_.begin(), physical_request_attempts_.end(),
+                  [](const auto attempts) { return attempts != 0U; });
+  if (deferred_scaffold_request && physical_prefix_attempted &&
+      excluded != RoutingEngineAction::construct_copper_scaffold)
+    return RoutingEngineAction::construct_copper_scaffold;
   // A failed regional attempt must not strand the rest of the unattempted scaffold sweep.
   const bool finished_attempt = pending_ &&
       (excluded == pending_->action || pending_->kernel_finished);
@@ -2135,7 +2169,7 @@ RoutingEngineStepResult RoutingEngine::advance(RoutingEngineStepBudget budget,
         auto requests = retained_scaffold && !retained_scaffold->requests.empty()
             ? retained_scaffold->requests : scaffold_requests(*source, domain);
         if (rebound_requests) requests = *rebound_requests;
-        if (retained_scaffold) {
+        if (retained_scaffold && !retained_scaffold->sweep_in_progress) {
           auto residual_requests = append_residual_physical_demands(*retained_scaffold);
           if (residual_requests.size() > requests.size()) {
             // Preserve any proven terminal rebindings already staged for this pass.
@@ -2147,13 +2181,20 @@ RoutingEngineStepResult RoutingEngine::advance(RoutingEngineStepBudget budget,
                 "; preserved=" + std::to_string(retained_scaffold->requests.size()));
           }
         }
+        if (retained_scaffold && retained_scaffold->sweep_in_progress &&
+            !scaffold_config.admitted_request_indices && requests == retained_scaffold->requests)
+          scaffold_config.resume_unattempted_requests = true;
         domain.paths = requests;
         const auto scaffold = scaffold_physical_scene(*source, detail, domain);
         if (!scaffold) return;
         CopperScaffoldResult seed;
         if (retained_scaffold) seed = *retained_scaffold;
         // Coarse replans provide proposals, never replacement identities for checked demands.
-        append_scaffold_proposals(seed, prior->coarse_global.paths, requests);
+        // An unfinished bounded sweep carries index-based negative evidence. Regional repair
+        // has already examined its failed prefix, so do not mix unchecked coarse proposals into
+        // that retained path ledger before its exact deferred-suffix replay.
+        if (!retained_scaffold || !retained_scaffold->sweep_in_progress)
+          append_scaffold_proposals(seed, prior->coarse_global.paths, requests);
         tx->scaffold = std::make_shared<CopperScaffoldResult>(construct_copper_scaffold(
             *scaffold, requests, scaffold_config, token, &seed,
             [tx, telemetry, action](const CopperScaffoldResult& checkpoint) {
@@ -2432,6 +2473,24 @@ RoutingEngineStepResult RoutingEngine::advance(RoutingEngineStepBudget budget,
             checks.admitted_request_indices = tx->physical_requests;
           tx->scaffold = std::make_shared<CopperScaffoldResult>(construct_copper_scaffold(
               *physical_source, retained_scaffold->requests, checks, token, &proposals));
+          // A regional probe may have no admissible replacement for its failed demand. Its
+          // proposal seed contains speculative paths, so it cannot itself be the checkpoint
+          // used to decide whether the bounded sweep may resume. If the actual reconstructed
+          // subset is exactly the parked immutable scene, restore its negative ledger: the
+          // next scaffold pass must advance deferred requests instead of re-searching the old
+          // failed prefix. Any copper, path, request, or coverage change receives fresh search
+          // evidence normally.
+          if (retained_scaffold->sweep_in_progress && tx->scaffold->requests == retained_scaffold->requests &&
+              tx->scaffold->request_identities == retained_scaffold->request_identities &&
+              tx->scaffold->satisfied_indices == retained_scaffold->satisfied_indices &&
+              tx->scaffold->missing_indices == retained_scaffold->missing_indices &&
+              tx->scaffold->paths == retained_scaffold->paths &&
+              tx->scaffold->copper == retained_scaffold->copper) {
+            tx->scaffold->request_evidence = retained_scaffold->request_evidence;
+            tx->scaffold->attempted_request_indices = retained_scaffold->attempted_request_indices;
+            tx->scaffold->failed_request_indices = retained_scaffold->failed_request_indices;
+            tx->scaffold->sweep_in_progress = retained_scaffold->sweep_in_progress;
+          }
           tx->plan = certified_scaffold_plan(*physical_source, *prior, *tx->scaffold,
                                              planner.quantized_copper_oracle, token, tx->scaffold_oracle);
           return;

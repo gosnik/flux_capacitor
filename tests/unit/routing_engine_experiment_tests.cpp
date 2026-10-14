@@ -26,13 +26,23 @@ void require(bool value, const char* message) {
 class CopperSnapshotSink final : public RouterTelemetrySink {
 public:
   bool accepts(RouterTelemetryLevel) const noexcept override { return true; }
-  bool try_emit(RouterTelemetryEvent) noexcept override { return true; }
+  bool try_emit(RouterTelemetryEvent event) noexcept override {
+    if (event.kind == RouterTelemetryEventKind::search_summary) {
+      if (event.progress_phase == "copper-scaffold / begin") ++scaffold_begins;
+      if (event.progress_phase == "regional / begin") ++regional_begins;
+      if (event.progress_phase == "regional / end") ++regional_ends;
+    }
+    return true;
+  }
   void publish_generated_copper(const Board& board, std::string) override {
     latest = board;
     ++publications;
   }
   std::optional<Board> latest;
   std::size_t publications{0U};
+  std::size_t scaffold_begins{0U};
+  std::size_t regional_begins{0U};
+  std::size_t regional_ends{0U};
 };
 
 [[nodiscard]] Point mm(double x, double y) {
@@ -680,6 +690,92 @@ void bounded_scaffold_hands_failed_requests_to_regional_before_sweep_completion(
           "a no-op regional repair must resume the parked scaffold and satisfy deferred easy requests");
 }
 
+void forced_scaffold_eviction_does_not_preempt_unfinished_physical_regional_work() {
+  auto planning = two_pad_board();
+  for (int n = 0; n < 2; ++n) {
+    const NetId net{"deferred-" + std::to_string(n)};
+    planning.nets.push_back({net, "DEFERRED" + std::to_string(n), static_cast<std::uint32_t>(n + 1)});
+    for (int i = 0; i < 2; ++i) {
+      Footprint footprint;
+      footprint.id = ObjectId{"D" + std::to_string(n) + "-" + std::to_string(i)};
+      footprint.reference = footprint.id.value();
+      footprint.position = mm(10 + i * 5, 10 + n * 10);
+      footprint.courtyard = Polygon{{mm(-1, -1), mm(1, -1), mm(1, 1), mm(-1, 1)}};
+      footprint.pads = {{ObjectId{footprint.id.value() + "-pad"}, net, Point{}, {LayerId{"F.Cu"}}}};
+      planning.footprints.push_back(std::move(footprint));
+    }
+  }
+  auto source = planning;
+  source.nets.push_back({NetId{"forced-eviction-obstacle"}, "OBSTACLE", 2U});
+  Keepout wall;
+  wall.id = ObjectId{"forced-eviction-source-wall"};
+  wall.area = Polygon{{mm(49, 0), mm(51, 0), mm(51, 80), mm(49, 80)}};
+  wall.layers = {LayerId{"F.Cu"}, LayerId{"B.Cu"}};
+  wall.prohibit = {true, true, false, false, false};
+  source.keepouts.push_back(std::move(wall));
+  for (const auto& layer : {LayerId{"F.Cu"}, LayerId{"B.Cu"}})
+    source.tracks.push_back({ObjectId{"forced-eviction-near-wall-" + layer.value()},
+        NetId{"forced-eviction-obstacle"}, layer, mm(21.5, 38), mm(21.5, 42),
+        Nanometres::from_mm(0.5), true});
+
+  auto config = experiment_config();
+  config.copper_scaffold.enabled = true;
+  config.planner.global.priority_nets = {NetId{"engine-experiment-net"}};
+  config.copper_scaffold.maximum_expansions_per_connection = 128U;
+  config.copper_scaffold.maximum_victim_exchanges = 0U;
+  config.copper_scaffold.maximum_coupled_exchange_attempts = 0U;
+  config.bounded_scaffold_request_threshold = 0U;
+  config.scaffold_requests_per_decision = 1U;
+  config.max_physical_region_requests = 1U;
+  config.experiment_quantum = std::chrono::milliseconds{1U};
+  config.max_parked_experiments = 0U;
+  config.max_parked_experiment_bytes = 0U;
+  config.initial_regional_work_units = 1'000'000U;
+  config.max_regional_work_units = 1'000'000U;
+  config.max_regional_decisions_without_improvement = 32U;
+  CopperSnapshotSink sink;
+  RoutingEngine engine(planning, source, config, &sink);
+  const RoutingEngineStepBudget quantum{.work_units = 1U, .time_slice = std::chrono::milliseconds{1U}};
+  for (std::size_t step = 0U; step < 100'000U && !engine.terminal() &&
+       engine.state().scaffold_repair_handoffs == 0U; ++step)
+    static_cast<void>(engine.advance(quantum));
+  require(engine.state().scaffold_repair_handoffs == 1U && sink.scaffold_begins == 1U &&
+              engine.state().experiment_memory_evictions > 0U,
+          "the forced parked-cap fixture must evict the scaffold at its physical-repair handoff");
+
+  bool regional_yielded_before_finish = false;
+  std::optional<std::size_t> scaffold_begins_at_regional_finish;
+  for (std::size_t step = 0U; step < 100'000U && !engine.terminal() &&
+       !scaffold_begins_at_regional_finish; ++step) {
+    const auto result = engine.advance(quantum);
+    if (sink.regional_begins > 0U && sink.regional_ends == 0U &&
+        result.action == RoutingEngineAction::regional_realization &&
+        result.outcome == RoutingEngineOutcome::yielded) {
+      regional_yielded_before_finish = true;
+      require(sink.scaffold_begins == 1U,
+              "an unfinished physical regional continuation must run before a fresh scaffold begins");
+    }
+    if (sink.regional_ends > 0U) scaffold_begins_at_regional_finish = sink.scaffold_begins;
+  }
+  require(regional_yielded_before_finish && scaffold_begins_at_regional_finish &&
+              *scaffold_begins_at_regional_finish == 1U,
+          "forced eviction must preserve unfinished physical regional work through bounded yield and finish");
+  for (std::size_t step = 0U; step < 100'000U && !engine.terminal() &&
+       engine.state().legal_scaffold && engine.state().legal_scaffold->sweep_in_progress; ++step)
+    static_cast<void>(engine.advance(quantum));
+  require(engine.state().legal_scaffold && !engine.state().legal_scaffold->sweep_in_progress &&
+              std::all_of(engine.state().legal_scaffold->requests.begin(),
+                          engine.state().legal_scaffold->requests.end(), [&](const auto& request) {
+                            if (!request.net.value().starts_with("deferred-")) return true;
+                            return std::find_if(engine.state().legal_scaffold->paths.begin(),
+                                engine.state().legal_scaffold->paths.end(), [&](const auto& path) {
+                                  return path.net == request.net &&
+                                      path.connection_index == request.connection_index;
+                                }) != engine.state().legal_scaffold->paths.end();
+                          }),
+          "after the evaluated no-op repair, a reconstructed scaffold must reach deferred requests");
+}
+
 void changed_copper_invalidates_a_scaffold_continuation() {
   CopperScaffoldResult retained;
   retained.copper = two_pad_board();
@@ -735,6 +831,30 @@ void changed_copper_invalidates_a_scaffold_continuation() {
   std::swap(reordered.request_identities[0], reordered.request_identities[1]);
   require(!routing_scaffold_continuation_compatible(&ordered, &reordered),
           "reordered request identities must invalidate index-based private sweep state");
+
+  const GlobalRoutePath request{NetId{"engine-experiment-net"}, 0U,
+      {{mm(20, 40), LayerId{"F.Cu"}}, {mm(80, 40), LayerId{"F.Cu"}}}};
+  const auto base_scene = two_pad_board();
+  auto parked_negative = construct_copper_scaffold(base_scene, {request}, CopperScaffoldConfig{});
+  parked_negative.copper = base_scene;
+  parked_negative.paths.clear();
+  parked_negative.satisfied_indices.clear();
+  parked_negative.missing_indices = {0U};
+  parked_negative.complete = false;
+  parked_negative.sweep_in_progress = true;
+  parked_negative.attempted_request_indices = {0U};
+  parked_negative.failed_request_indices = {0U};
+  parked_negative.request_evidence.front().termination = CopperScaffoldSearchTermination::search_exhausted;
+  auto changed_scene = base_scene;
+  changed_scene.tracks.push_back({ObjectId{"changed-resume-scene"}, NetId{"engine-experiment-net"},
+      LayerId{"F.Cu"}, mm(10, 10), mm(15, 10), Nanometres::from_mm(0.25), true});
+  CopperScaffoldConfig resume_config;
+  resume_config.resume_unattempted_requests = true;
+  const auto fresh_probe = construct_copper_scaffold(
+      changed_scene, {request}, resume_config, {}, &parked_negative);
+  require(fresh_probe.request_evidence.front().termination != CopperScaffoldSearchTermination::search_exhausted &&
+              fresh_probe.request_evidence.front().termination != CopperScaffoldSearchTermination::not_attempted,
+          "changed copper must disable retained negative-ledger replay and probe the request again");
 }
 
 void partial_scaffold_routes_missing_requests_against_retained_copper() {
@@ -1170,6 +1290,7 @@ int main() {
   physical_repair_evidence_reopens_only_changed_missing_demand();
   empty_scaffold_dispatches_missing_demand_to_regional_repair();
   bounded_scaffold_hands_failed_requests_to_regional_before_sweep_completion();
+  forced_scaffold_eviction_does_not_preempt_unfinished_physical_regional_work();
   changed_copper_invalidates_a_scaffold_continuation();
   partial_scaffold_routes_missing_requests_against_retained_copper();
   residual_physical_demands_preserve_checked_components();

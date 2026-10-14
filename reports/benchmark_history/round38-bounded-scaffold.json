@@ -97,5 +97,17 @@
   ],
   "evidence_directory": "reports/validation/bounded-scaffold-round38-20261014",
   "binary_sha256": "a5d930e1884738ee52902c23b18a6b07e4035560428e23fa622f52fe7ceaaddd",
-  "decision": "keep; lower-tier copper unchanged, synthetic early handoff verified; full ESC outcome pending"
+  "decision": "keep bounded handoff; refine unfinished regional scheduling under forced frontier eviction",
+  "esc": {
+    "status": "stopped_for_scheduler_repair",
+    "elapsed_seconds": 629.1934,
+    "global_end_seconds": 385.169,
+    "first_scaffold_decision_seconds": 418.665,
+    "first_regional_begin_seconds": 418.75,
+    "satisfied_at_handoff": 381,
+    "deferred_at_handoff": 599,
+    "peak_process_tree_rss_kib": 3236472,
+    "diagnosis": "whole-process RSS exceeded parked cap, evicting SC, then fresh scaffold preempted unfinished regional work",
+    "final_copper_qualified": false
+  }
 }

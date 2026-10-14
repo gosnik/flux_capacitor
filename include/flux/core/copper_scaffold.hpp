@@ -94,6 +94,9 @@ struct CopperScaffoldConfig {
   // legal paths still replay for the complete request domain; excluded requests remain
   // `not_attempted` so regional admission cannot mistake them for failed work.
   std::optional<std::vector<std::size_t>> admitted_request_indices{std::nullopt};
+  // Resume an evicted bounded sweep from only requests that have not yet been attempted. This
+  // is effective only when the retained legal scene and ordered request domain replay exactly.
+  bool resume_unattempted_requests{false};
 
   bool operator==(const CopperScaffoldConfig&) const = default;
 };

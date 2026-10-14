@@ -10278,3 +10278,22 @@ Review required exact retained-copper identity in the retry key: path metadata a
 
 ### Round38 verification
 Release and viewer builds passed. Focused CTest3/3, core79/79 and risk35/35 passed; independent review is clear. Frozen sequential telemetry Tier0/1/2 passed exact copper and native KiCad DRC with zero opens and zero violations. All outputs are byte-identical to Round37. Detailed times were38.248/115.349/252.500s versus38.109/119.673/248.359s; global times22.422/80.654/199.440s. Peak process-tree RSS655344/643164/712700KiB. These timings do not demonstrate a speedup; they show preserved qualified routing with modest run-to-run differences. Keep the experiment and test large-board handoff next. Evidence: `reports/validation/bounded-scaffold-round38-20261014/`; binary SHA256:a5d930e1884738ee52902c23b18a6b07e4035560428e23fa622f52fe7ceaaddd.
+
+### Round38 ESC handoff and eviction diagnosis
+Committed34ee0ca, tagged `codex/bounded-scaffold-round-38`, pushed. Global ended385.169s; first failed-request decision at418.665s retained381/981 requests with599 deferred, and regional began418.750s. The early handoff mechanism works. However regional yielded after only1.4s/42 work and a fresh scaffold restarted, repeatedly replaying retained paths. Root intentionally stopped the run at629.193s (return143), preserving telemetry; no final routed copper or timeout is claimed.
+
+Peak RSS3236472KiB exceeds the default2GiB parking threshold. The process-wide pressure test immediately evicts the parked scaffold; the hard fresh-scaffold priority then preempts unfinished regional work because a yielded scaffold is not a completed attempt. Initial suspicion of proposal-key drift was not established: physical-regional preparation does not update parent coarse proposals in this cycle. The measured cause is memory eviction plus scheduler precedence. Keep bounded handoff and refine the liveness rule; do not increase the memory cap.
+
+## Round39 — Complete bounded physical repair despite frontier eviction
+
+### Hypothesis and change
+A discarded parked scaffold must not displace the active bounded physical-regional action before it reaches its existing decision/termination gates. Retain unfinished physical regional work unless explicitly excluded at a retirement boundary or its kernel has finished. Emit eviction/invalidation reasons distinguishing process RSS, parked-count limits, exact scaffold-anchor changes and dependency keys. Preserve exact scene guards, memory limits and final acceptance.
+
+### Experiment
+Force zero parked continuations in a synthetic blocked physical scene, use a short scheduler quantum, and verify unfinished regional yields do not start another scaffold. Then run core/risk tests, independent review and sequential telemetry lower tiers before the next extended ESC check.
+
+### Reconstruction and forced escape
+Forced access-infeasible decisions exclude the active regional action, preserving immediate escape while ordinary yields retain its bounded work. The forced-eviction test then exposed repeated reconstruction of the failed prefix. Reconstruct only the untouched suffix after exact replay matches ordered requests, identities, coverage, paths and copper; account replayed coverage before comparing it. Keep unchecked new coarse proposals and appended residual demands out of an unfinished sweep's index-based checkpoint; they remain available after that sweep. No-op regional admission restores the attributed negative ledger only against the original identical physical anchor. A physical attempt unlocks deferred-suffix scheduling; changed geometry or evidence reopens fresh probing.
+
+### Round39 verification
+Release/viewer builds, focused3/3, core79/79 and risk35/35 passed. Independent review is clear. Forced zero-retention tests prove unfinished regional work survives scheduler yields, then an evicted scaffold serves deferred requests instead of repeating the old failed prefix. Changed-copper tests require a fresh probe. Frozen sequential telemetry Tier0/1/2 passed exact copper and native KiCad DRC with zero opens/violations. All copper is byte-identical to Round38. Detailed times37.626/121.888/249.188s; global times22.689/80.602/189.437s; RSS634828/636276/716116KiB. No material lower-tier regression is observed; ESC end-to-end qualification remains pending. Evidence: `reports/validation/eviction-liveness-round39-20261014/`; binary SHA256:13bab7d53b4e3daaf96254ab91a2931576910c55b244927b1a01614ec82e31cc.

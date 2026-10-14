@@ -1359,6 +1359,25 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
       publish_legal_subset();
     }
   }
+  // Exact resumption compares request coverage after retained paths have been revalidated.
+  // The final accounting pass below will refresh these counters after new transactions too.
+  account_requests(result);
+  // An evicted sweep may restart from this exact legal subset. Preserve its attributed failed
+  // transactions and admit only its untouched suffix, but only after an exact scene/domain
+  // replay; changed geometry or request order must receive fresh search evidence.
+  std::optional<std::vector<std::size_t>> resumed_unattempted;
+  if (config.resume_unattempted_requests && !config.admitted_request_indices && retained != nullptr &&
+      retained->requests == result.requests &&
+      retained->request_identities == result.request_identities &&
+      retained->satisfied_indices == result.satisfied_indices && retained->paths == result.paths &&
+      retained->copper == result.copper &&
+      retained->request_evidence.size() == result.request_evidence.size()) {
+    result.request_evidence = retained->request_evidence;
+    resumed_unattempted.emplace();
+    for (std::size_t index = 0U; index < result.request_evidence.size(); ++index)
+      if (result.request_evidence[index].termination == CopperScaffoldSearchTermination::not_attempted)
+        resumed_unattempted->push_back(index);
+  }
   for (std::size_t index = 0U; index < requests.size(); ++index) {
     // Retained requests were reconstructed atomically before this sweep, so they are already
     // satisfied rather than an attempted or deferred request transaction in this invocation.
@@ -1372,6 +1391,9 @@ CopperScaffoldResult construct_copper_scaffold(const Board& board,
     if (config.admitted_request_indices &&
         std::find(config.admitted_request_indices->begin(), config.admitted_request_indices->end(), index) ==
             config.admitted_request_indices->end())
+      continue;
+    if (resumed_unattempted && std::find(resumed_unattempted->begin(), resumed_unattempted->end(), index) ==
+            resumed_unattempted->end())
       continue;
     struct RequestDecisionScope {
       std::function<void()> finish;

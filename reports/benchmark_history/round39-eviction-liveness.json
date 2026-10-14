@@ -81,5 +81,33 @@
   ],
   "evidence_directory": "reports/validation/eviction-liveness-round39-20261014",
   "binary_sha256": "13bab7d53b4e3daaf96254ab91a2931576910c55b244927b1a01614ec82e31cc",
-  "decision": "keep; forced-eviction suffix completion and changed-scene fresh probing verified; lower-tier copper unchanged"
+  "decision": "keep; forced-eviction suffix completion and changed-scene fresh probing verified; lower-tier copper unchanged",
+  "esc": {
+    "recorded_at": "2026-10-14T07:07:21.613458+00:00",
+    "board": "ESC stm32g474_3x350w_bldc",
+    "git_revision": "59e7b4126ec0c04831ec7d7f568e4fd7f639723a",
+    "status": "exhausted_incomplete",
+    "wall_seconds": 2786.6327240089995,
+    "routing_engine_active_seconds": 2707.867336,
+    "global_seconds": 424.375497,
+    "regional_seconds": 1425.410161,
+    "other_active_seconds": 858.0816779999998,
+    "requests": 981,
+    "satisfied_requests": 543,
+    "missing_requests": 438,
+    "attempted_failed_requests": 15,
+    "deferred_requests": 423,
+    "regional_attempts": 15,
+    "accepted_regional_attempts": 0,
+    "memory_evictions": 15,
+    "regional_bundle_failures": {
+      "spline_realization_failed": 53
+    },
+    "complete_spline_candidates_in_failed_bundles": 0,
+    "final_connectivity_assessed": false,
+    "final_drc_assessed": false,
+    "stop_mechanism": "16 actions without recorded physical improvement; unfinished scaffold checkpoints do not reset this counter",
+    "suspected_earliest_failure": "Selected regional assignments produce provisional PH/XPBD fragment geometry but no complete evaluable spline bundle; per-template rejection cause is unreported.",
+    "next_experiment": "Typed per-fragment realization rejection evidence and exact-admitted fallback geometry; causal endpoint/via/topology diversification from real failures; reduce whole-prefix replay and defer repeated repair while collecting unattempted demand."
+  }
 }

@@ -1,0 +1,11 @@
+{
+  "candidate": "/home/adam/qtbits/flux_capacitor/reports/validation/controller-routing-round40-20261014/output/controller-layout-refilled.kicad_pcb",
+  "kicad_version": "10.0.6",
+  "normalized_fills": [],
+  "ok": true,
+  "operation": "refill",
+  "provisional": "/home/adam/qtbits/flux_capacitor/reports/validation/controller-routing-round40-20261014/output/controller-layout-routed.kicad_pcb",
+  "zone_layers_normalized": 0,
+  "zone_refill_required": true,
+  "zones_refilled": 31
+}
